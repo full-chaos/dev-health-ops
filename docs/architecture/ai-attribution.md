@@ -170,6 +170,28 @@ ClickHouse: SELECT * FROM ai_attribution_resolved
 
 Returns: one row per subject with the effective attribution (highest precedence, non-superseded).
 
+### GraphQL: `aiAttributionOverview` (CHAOS-2744)
+
+The dedicated `/ai/attribution` page reads `ai_attribution_resolved` directly through
+`AIAttributionClickHouseLoader` (`metrics/loaders/ai_attribution.py`) and the
+`aiAttributionOverview` resolver (`api/graphql/resolvers/ai.py`). It returns two
+projections of the same org-scoped window, never fabricated or recomputed client-side:
+
+- `mix: [AIAttributionMixRow!]!` — `GROUP BY kind` counts + share over the resolved
+  view. There is intentionally **no synthesized `human` bucket** here: this view only
+  ever contains subjects with a detected signal, so a human count would require the
+  full PR population — that inference already lives in `ai_impact_metrics_daily` /
+  `aiImpactSummary` and must not be duplicated with a second, undocumented method.
+- `rows: [AIAttributionEvidenceRow!]!` — one row per resolved record with
+  `source`, `confidence`, `evidence`, and `actor` always populated (non-nullable on
+  the base table), plus `teamId` resolved the same way as `aiAttributedPrs`
+  (`RepoPatternTeamResolver` over `teams.repo_patterns`, never a SQL join on UUID).
+
+This is additive: `aiImpactSummary`, `aiGovernanceSummary`, and `aiAttributedPrs` are
+unchanged and remain the source for impact/governance/drilldown-selector use cases.
+
+---
+
 ---
 
 ## Supersession (MANUAL overrides)

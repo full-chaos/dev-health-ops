@@ -2,13 +2,14 @@ import asyncio
 import logging
 import zipfile
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
     ComplexityScanner,
 )
 from dev_health_ops.credentials.types import GitHubCredentials
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
@@ -27,18 +28,18 @@ from dev_health_ops.processors.base_git import (
     backfill_file_records,
     blame_backfill_needed,
     build_ci_pipeline_run,
-    build_connector_pull_request,
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
+    historical_backfill_day,
     resolve_commit_stats_limit,
     resolve_incident_labels,
     select_unblamed_paths,
+    write_historical_complexity,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
     SyncBatchCollector,
-    extract_retry_after,
 )
 from dev_health_ops.processors.fetch_utils import (
     safe_parse_datetime as _coerce_datetime,
@@ -52,6 +53,7 @@ from dev_health_ops.processors.testops_ingest import (
 )
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
 from dev_health_ops.providers.pr_state import normalize_pr_state
+from dev_health_ops.providers.usage import drain_provider_usage
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
     BATCH_SIZE,
@@ -71,6 +73,10 @@ if TYPE_CHECKING:
     )
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+    from dev_health_ops.providers.github.code_client import (
+        GitHubCodeClient,
+        GitHubRepositoryData,
+    )
 elif CONNECTORS_AVAILABLE:
     from github import RateLimitExceededException
 
@@ -98,186 +104,156 @@ else:
 # --- GitHub Sync Helpers ---
 
 
-def _fetch_github_repo_info_sync(connector, owner, repo_name):
-    """Sync helper to fetch GitHub repository info."""
-    gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
-    _ = gh_repo.id
-    return gh_repo
+def _repository_from_code_repo(repo: "GitHubRepositoryData") -> Repository:
+    return Repository(
+        id=repo.id,
+        name=repo.name,
+        full_name=repo.full_name,
+        default_branch=repo.default_branch,
+        description=repo.description,
+        url=repo.url,
+        created_at=repo.created_at,
+        updated_at=repo.updated_at,
+        language=repo.language,
+        stars=repo.stars,
+        forks=repo.forks,
+    )
 
 
-def _fetch_github_commits_sync(
-    gh_repo,
+async def _fetch_github_repo_info_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> Repository:
+    client = _github_code_client_from_connector(connector)
+    try:
+        return _repository_from_code_repo(await client.get_repo(owner, repo_name))
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_fetch_github_repo_info_async: drained %d repo usage observations",
+                len(observations),
+            )
+
+
+def _github_commit_to_model(commit: Any, repo_id: Any) -> GitCommit:
+    return GitCommit(
+        repo_id=repo_id,
+        hash=commit.sha,
+        message=commit.message,
+        author_name=commit.author_name,
+        author_email=commit.author_email,
+        author_when=commit.author_when or datetime.now(timezone.utc),
+        committer_name=commit.committer_name,
+        committer_email=commit.committer_email,
+        committer_when=commit.committer_when or datetime.now(timezone.utc),
+        parents=commit.parent_count,
+    )
+
+
+def _github_commit_stat_to_model(stat: Any, repo_id: Any) -> GitCommitStat:
+    return GitCommitStat(
+        repo_id=repo_id,
+        commit_hash=stat.commit_hash,
+        file_path=stat.file_path,
+        additions=stat.additions,
+        deletions=stat.deletions,
+        old_file_mode=stat.old_file_mode,
+        new_file_mode=stat.new_file_mode,
+    )
+
+
+async def _fetch_github_commits_async(
+    connector: Any,
+    owner: str,
+    repo_name: str,
+    repo_id: Any,
     max_commits: int | None,
-    repo_id,
     since: datetime | None = None,
     until: datetime | None = None,
-):
-    """Sync helper to fetch and parse GitHub commits."""
-    raw_commits = []
-    commits_kwargs: dict[str, Any] = {}
-    if since is not None:
-        commits_kwargs["since"] = since
-    if until is not None:
-        commits_kwargs["until"] = until
-    commits_iter = gh_repo.get_commits(**commits_kwargs)
-
-    for commit in commits_iter:
-        raw_commits.append(commit)
-        if max_commits is not None and len(raw_commits) >= max_commits:
-            break
-
-    commit_objects = []
-    for commit in raw_commits:
-        if since is not None:
-            commit_when = None
-            if getattr(commit, "commit", None) and getattr(
-                commit.commit, "committer", None
-            ):
-                commit_when = getattr(commit.commit.committer, "date", None)
-            if (
-                commit_when is None
-                and getattr(commit, "commit", None)
-                and getattr(commit.commit, "author", None)
-            ):
-                commit_when = getattr(commit.commit.author, "date", None)
-
-            if (
-                isinstance(commit_when, datetime)
-                and commit_when.astimezone(timezone.utc) < since
-            ):
-                continue
-
-        # Prefer GitHub user `login` when available; do not store emails.
-        author_login = getattr(commit, "author", None)
-        committer_login = getattr(commit, "committer", None)
-
-        author_name = getattr(author_login, "login", None) or (
-            commit.commit.author.name if commit.commit.author else "Unknown"
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> tuple[list[Any], list[GitCommit], bool]:
+    client = _github_code_client_from_connector(connector)
+    try:
+        raw_commits, window_truncated = await client.get_commits(
+            owner,
+            repo_name,
+            max_commits=max_commits,
+            since=since,
+            until=until,
         )
-        committer_name = getattr(committer_login, "login", None) or (
-            commit.commit.committer.name if commit.commit.committer else "Unknown"
-        )
-
-        # Safely obtain emails: prefer commit metadata (no extra API calls),
-        # fallback to user.email but guard against API-triggered exceptions (e.g., 404).
-        def _safe_user_email(user):
-            try:
-                return getattr(user, "email", None)
-            except Exception:
-                return None
-
-        author_email = None
-        if getattr(commit, "commit", None) and getattr(commit.commit, "author", None):
-            author_email = getattr(commit.commit.author, "email", None)
-        if not author_email:
-            author_email = _safe_user_email(author_login)
-
-        committer_email = None
-        if getattr(commit, "commit", None) and getattr(
-            commit.commit, "committer", None
-        ):
-            committer_email = getattr(commit.commit.committer, "email", None)
-        if not committer_email:
-            committer_email = _safe_user_email(committer_login)
-
-        git_commit = GitCommit(
-            repo_id=repo_id,
-            hash=commit.sha,
-            message=commit.commit.message,
-            author_name=author_name,
-            author_email=author_email,
-            author_when=(
-                commit.commit.author.date
-                if commit.commit.author
-                else datetime.now(timezone.utc)
-            ),
-            committer_name=committer_name,
-            committer_email=committer_email,
-            committer_when=(
-                commit.commit.committer.date
-                if commit.commit.committer
-                else datetime.now(timezone.utc)
-            ),
-            parents=len(commit.parents),
-        )
-        commit_objects.append(git_commit)
-    return raw_commits, commit_objects
-
-
-def _fetch_github_commit_stats_sync(
-    raw_commits,
-    repo_id,
-    max_stats,
-    since: datetime | None = None,
-    gate=None,
-):
-    """Sync helper to fetch detailed commit stats (files).
-
-    Accessing ``commit.files`` lazy-loads commit detail — one REST call per
-    commit — so each iteration waits on the rate-limit gate.
-    """
-    gate = BaseGitProcessor.ensure_gate(gate)
-    stats_objects = []
-    for commit in raw_commits[:max_stats]:
-        if since is not None:
-            commit_when = None
-            if getattr(commit, "commit", None) and getattr(
-                commit.commit, "committer", None
-            ):
-                commit_when = getattr(commit.commit.committer, "date", None)
-            if (
-                commit_when is None
-                and getattr(commit, "commit", None)
-                and getattr(commit.commit, "author", None)
-            ):
-                commit_when = getattr(commit.commit.author, "date", None)
-
-            if (
-                isinstance(commit_when, datetime)
-                and commit_when.astimezone(timezone.utc) < since
-            ):
-                continue
-
-        try:
-            if gate is not None:
-                gate.wait_sync()
-            files = commit.files
-            if files is None:
-                continue
-
-            for file in files:
-                stat = GitCommitStat(
-                    repo_id=repo_id,
-                    commit_hash=commit.sha,
-                    file_path=file.filename,
-                    additions=file.additions,
-                    deletions=file.deletions,
-                    old_file_mode="unknown",
-                    new_file_mode="unknown",
-                )
-                stats_objects.append(stat)
-        except Exception as e:
-            logging.warning(
-                "Failed to get stats for commit %s: %s",
-                commit.sha,
-                e,
+        commit_objects = [
+            _github_commit_to_model(commit, repo_id) for commit in raw_commits
+        ]
+        return raw_commits, commit_objects, window_truncated
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_fetch_github_commits_async: drained %d git usage observations",
+                len(observations),
             )
-    return stats_objects
 
 
-def _fetch_github_prs_sync(connector, owner, repo_name, repo_id, max_prs):
-    """Sync helper to fetch Pull Requests."""
-    prs = connector.get_pull_requests(
-        owner,
-        repo_name,
-        state="all",
-        max_prs=max_prs,
-    )
-    pr_objects = []
-    for pr in prs:
-        git_pr = build_connector_pull_request(pr, repo_id=repo_id)
-        pr_objects.append(git_pr)
-    return pr_objects
+async def _fetch_github_commit_stats_async(
+    connector: Any,
+    owner: str,
+    repo_name: str,
+    raw_commits: list[Any],
+    repo_id: Any,
+    max_stats: int,
+    since: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[GitCommitStat]:
+    client = _github_code_client_from_connector(connector)
+    try:
+        stats_objects: list[GitCommitStat] = []
+        for commit in raw_commits[:max_stats]:
+            commit_when = getattr(commit, "committer_when", None) or getattr(
+                commit, "author_when", None
+            )
+            if (
+                since is not None
+                and isinstance(commit_when, datetime)
+                and commit_when.astimezone(timezone.utc) < since
+            ):
+                continue
+            try:
+                file_stats = await client.get_commit_file_stats(
+                    owner, repo_name, commit.sha
+                )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as exc:
+                logging.debug(
+                    "Failed commit stat fetch for %s/%s@%s: %s",
+                    owner,
+                    repo_name,
+                    commit.sha,
+                    exc,
+                )
+                continue
+            for stat in file_stats:
+                stats_objects.append(_github_commit_stat_to_model(stat, repo_id))
+        return stats_objects
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_fetch_github_commit_stats_async: drained %d commit_stats usage observations",
+                len(observations),
+            )
 
 
 def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
@@ -330,152 +306,312 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
     return runs
 
 
-def _resolve_github_deployment_pr(gh_repo, sha, gate):
-    """Resolve the merged PR for a deployed commit via /commits/{sha}/pulls.
-
-    Costs up to two gated API calls per deployment. Failure-soft: any
-    lookup error leaves the deployment without PR attribution rather than
-    failing the sync.
-    """
-    if not sha:
-        return None, None
+async def _fetch_github_workflow_runs_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    max_runs: int,
+    since: datetime | None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[CiPipelineRun]:
+    runs: list[CiPipelineRun] = []
+    client = _github_code_client_from_connector(connector)
     try:
-        if gate is not None:
-            gate.wait_sync()
-        commit = gh_repo.get_commit(sha)
-        if gate is not None:
-            gate.wait_sync()
-        pulls = list(commit.get_pulls()[:10])
-    except Exception as exc:
-        logging.debug("Failed PR lookup for deployed commit %s: %s", sha, exc)
-        return None, None
-    merged = [pr for pr in pulls if getattr(pr, "merged_at", None) is not None]
-    # Prefer the PR that directly merged this commit: get_pulls() also
-    # returns PRs that merely contain the SHA (e.g. stacked merges).
-    direct = [pr for pr in merged if getattr(pr, "merge_commit_sha", None) == sha]
-    chosen = (
-        direct[0]
-        if direct
-        else (merged[0] if merged else (pulls[0] if pulls else None))
-    )
-    if chosen is None:
-        return None, None
-    return getattr(chosen, "number", None), getattr(chosen, "merged_at", None)
-
-
-def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since, gate=None):
-    gate = BaseGitProcessor.ensure_gate(gate)
-    deployments: list[Deployment] = []
-    if not hasattr(gh_repo, "get_deployments"):
-        return deployments
-    release_objects = []
-    if hasattr(gh_repo, "get_releases"):
         try:
-            release_objects = list(gh_repo.get_releases()[:max_deployments])
+            raw_runs = await client.get_workflow_runs(
+                owner,
+                repo_name,
+                max_runs=max_runs,
+            )
+        except Exception as exc:
+            logging.debug("Failed to fetch workflow runs: %s", exc)
+            return runs
+
+        for run in raw_runs:
+            started_at = run.started_at
+            if started_at is None:
+                continue
+            if since is not None and started_at.astimezone(timezone.utc) < since:
+                continue
+            runs.append(
+                build_ci_pipeline_run(
+                    repo_id=repo_id,
+                    run_id=run.run_id,
+                    status=run.status,
+                    queued_at=run.queued_at,
+                    started_at=started_at,
+                    finished_at=run.finished_at,
+                    retry_count=run.retry_count,
+                )
+            )
+        return runs
+    finally:
+        drained = client.drain_usage_observations()
+        if usage_sink is not None:
+            usage_sink.extend(drained)
+        elif drained:
+            logging.debug(
+                "_fetch_github_workflow_runs_async: drained %d cicd usage "
+                "observation(s) for %s/%s with no adapter-owned sink (legacy "
+                "entry point) -- logging only, not persisted",
+                len(drained),
+                owner,
+                repo_name,
+            )
+        await client.close()
+
+
+async def _fetch_github_deployments_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    max_deployments: int | None,
+    since: datetime | None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[Deployment]:
+    deployments: list[Deployment] = []
+    client = _github_code_client_from_connector(connector)
+    release_objects = []
+    try:
+        try:
+            release_objects = await client.get_deployment_releases(
+                owner,
+                repo_name,
+                max_releases=max_deployments,
+            )
         except Exception as exc:
             logging.debug("Failed to fetch GitHub releases for release_ref: %s", exc)
-    try:
-        raw_deployments = list(gh_repo.get_deployments()[:max_deployments])
-    except Exception as exc:
-        logging.debug("Failed to fetch deployments: %s", exc)
-        return deployments
-
-    for dep in raw_deployments:
-        created_at = getattr(dep, "created_at", None)
-        if not isinstance(created_at, datetime):
-            continue
-        if since is not None and created_at.astimezone(timezone.utc) < since:
-            continue
-        enrichment = get_release_ref_enrichment(
-            dep,
-            "github",
-            releases=release_objects,
-        )
-        pr_number, pr_merged_at = _resolve_github_deployment_pr(
-            gh_repo, getattr(dep, "sha", None), gate
-        )
-        deployments.append(
-            build_deployment(
-                repo_id=repo_id,
-                deployment_id=str(getattr(dep, "id", "")),
-                status=getattr(dep, "state", None),
-                environment=getattr(dep, "environment", None),
-                started_at=created_at,
-                finished_at=None,
-                deployed_at=created_at,
-                merged_at=pr_merged_at,
-                pull_request_number=pr_number,
-                release_ref=enrichment.release_ref,
-                release_ref_confidence=enrichment.confidence,
+        try:
+            raw_deployments = await client.get_deployments(
+                owner,
+                repo_name,
+                max_deployments=max_deployments,
             )
-        )
-    return deployments
+        except Exception as exc:
+            logging.debug("Failed to fetch deployments: %s", exc)
+            return deployments
+
+        for dep in raw_deployments:
+            created_at = dep.created_at
+            if not isinstance(created_at, datetime):
+                continue
+            if since is not None and created_at.astimezone(timezone.utc) < since:
+                continue
+            enrichment = get_release_ref_enrichment(
+                dep,
+                "github",
+                releases=release_objects,
+            )
+            pr_number, pr_merged_at = await client.get_deployment_pull_request(
+                owner, repo_name, dep.sha
+            )
+            deployments.append(
+                build_deployment(
+                    repo_id=repo_id,
+                    deployment_id=dep.deployment_id,
+                    status=dep.state,
+                    environment=dep.environment,
+                    started_at=created_at,
+                    finished_at=None,
+                    deployed_at=created_at,
+                    merged_at=pr_merged_at,
+                    pull_request_number=pr_number,
+                    release_ref=enrichment.release_ref,
+                    release_ref_confidence=enrichment.confidence,
+                )
+            )
+        return deployments
+    finally:
+        drained = client.drain_usage_observations()
+        if usage_sink is not None:
+            usage_sink.extend(drained)
+        elif drained:
+            logging.debug(
+                "_fetch_github_deployments_async: drained %d deployments usage "
+                "observation(s) for %s/%s with no adapter-owned sink (legacy "
+                "entry point) -- logging only, not persisted",
+                len(drained),
+                owner,
+                repo_name,
+            )
+        await client.close()
 
 
-def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
+async def _fetch_github_incidents_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    max_issues: int,
+    since: datetime | None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[Incident]:
     incidents: list[Incident] = []
-    if not hasattr(gh_repo, "get_issues"):
-        return incidents
     labels = resolve_incident_labels()
     raw_issues = []
     seen_issue_ids: set = set()
-    for label in labels:
-        try:
-            label_issues = list(
-                gh_repo.get_issues(state="all", labels=[label])[:max_issues]
-            )
-        except Exception as exc:
-            logging.debug(
-                "Failed to fetch incident issues for label %r: %s", label, exc
-            )
-            continue
-        for issue in label_issues:
-            # The GitHub issues API returns PRs alongside issues; a PR
-            # carrying an incident label is not an incident.
-            if getattr(issue, "pull_request", None) is not None:
+    client = _github_code_client_from_connector(connector)
+    try:
+        for label in labels:
+            try:
+                label_issues = await client.iter_issues(
+                    owner,
+                    repo_name,
+                    state="all",
+                    labels=[label],
+                    max_issues=max_issues,
+                )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as exc:
+                logging.debug(
+                    "Failed to fetch incident issues for label %r: %s", label, exc
+                )
                 continue
-            issue_id = getattr(issue, "id", None)
-            if issue_id in seen_issue_ids:
-                continue
-            seen_issue_ids.add(issue_id)
-            raw_issues.append(issue)
-    logging.info(
-        "Fetched %d incident issue(s) (labels searched: %s)",
-        len(raw_issues),
-        ", ".join(labels),
-    )
-
-    for issue in raw_issues:
-        created_at = getattr(issue, "created_at", None)
-        if not isinstance(created_at, datetime):
-            continue
-        if since is not None and created_at.astimezone(timezone.utc) < since:
-            continue
-        incidents.append(
-            Incident(
-                repo_id=repo_id,
-                incident_id=str(getattr(issue, "id", "")),
-                status=getattr(issue, "state", None),
-                started_at=created_at,
-                resolved_at=getattr(issue, "closed_at", None),
-            )
+            for issue in label_issues:
+                issue_id = getattr(issue, "issue_id", None)
+                if issue_id in seen_issue_ids:
+                    continue
+                seen_issue_ids.add(issue_id)
+                raw_issues.append(issue)
+        logging.info(
+            "Fetched %d incident issue(s) (labels searched: %s)",
+            len(raw_issues),
+            ", ".join(labels),
         )
-    return incidents
+
+        for issue in raw_issues:
+            created_at = getattr(issue, "created_at", None)
+            if not isinstance(created_at, datetime):
+                continue
+            if since is not None and created_at.astimezone(timezone.utc) < since:
+                continue
+            incidents.append(
+                Incident(
+                    repo_id=repo_id,
+                    incident_id=str(getattr(issue, "issue_id", "")),
+                    status=getattr(issue, "state", None),
+                    started_at=created_at,
+                    resolved_at=getattr(issue, "closed_at", None),
+                )
+            )
+        return incidents
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_fetch_github_incidents_async: drained %d incidents usage observations",
+                len(observations),
+            )
 
 
-def _fetch_github_security_alerts_sync(
-    connector, owner, repo_name, repo_id, max_alerts, since
-):
-    """Sync helper to fetch GitHub security alerts (Dependabot, code scanning, advisories)."""
+def _github_code_client_from_connector(connector) -> "GitHubCodeClient":
+    """Build a ``GitHubCodeClient`` from an already-authenticated connector.
+
+    Mirrors ``_github_work_client_from_connector`` (below): the connector has
+    already resolved a plain PAT or a GitHub App installation token onto
+    ``self.token`` (and, for GHE, its REST base URL onto
+    ``_rest_base_url()``), so this helper reuses that resolution rather than
+    duplicating GitHub App auth in the httpx client (CHAOS-2773 CS3 scope).
+    """
+    rest_base_url = getattr(connector, "_rest_base_url", None)
+    raw_base_url = rest_base_url() if callable(rest_base_url) else None
+    base_url = raw_base_url if isinstance(raw_base_url, str) else None
+    token = getattr(connector, "token", None)
+    from dev_health_ops.providers.github.code_client import GitHubCodeClient
+
+    return GitHubCodeClient(auth=GitHubAuth(token=token, base_url=base_url))
+
+
+async def _list_github_repositories_for_batch(
+    connector,
+    *,
+    org_name: str | None,
+    user_name: str | None,
+    pattern: str | None,
+    max_repos: int | None,
+    usage_sink: list[dict[str, Any]] | None,
+) -> list[Repository]:
+    effective_org = org_name
+    effective_user = user_name
+    if not org_name and not user_name and pattern and "/" in pattern:
+        owner_part = pattern.split("/", 1)[0]
+        if owner_part and "*" not in owner_part and "?" not in owner_part:
+            effective_user = owner_part
+            logging.info("Extracted owner '%s' from pattern '%s'", owner_part, pattern)
+
+    client = _github_code_client_from_connector(connector)
+    try:
+        repos = await client.list_repositories(
+            org_name=effective_org,
+            user_name=effective_user,
+            pattern=pattern,
+            max_repos=max_repos,
+        )
+        return [_repository_from_code_repo(repo) for repo in repos]
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_list_github_repositories_for_batch: drained %d repo usage observations",
+                len(observations),
+            )
+
+
+async def _fetch_github_security_alerts_async(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    max_alerts: int | None,
+    since: datetime | None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> list[Any]:
+    """Fetch GitHub security alerts (Dependabot, code scanning, advisories) via
+    the instrumented httpx ``GitHubCodeClient`` (CHAOS-2773 CS3), replacing
+    the frozen connector's ``get_dependabot_alerts`` / ``get_code_scanning_alerts``
+    / ``get_security_advisories``.
+
+    Preserves the pre-existing per-endpoint degrade-and-log semantics
+    byte-for-byte: a fetch failure on any ONE of the three endpoints
+    (including an exhausted ``RateLimitException``) is logged at debug level
+    and does NOT fail the other two endpoints or the overall repo sync --
+    security alerts are optional enrichment, never a blocking dataset. This
+    was already true of the pre-migration sync helper (each ``fetch_fn`` call
+    was wrapped in its own ``try/except Exception``); the client swap changes
+    WHERE the alerts come from, not this contract.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, is drained into in a
+    ``finally:`` block on BOTH the success and failure path, so a mid-sync
+    raise elsewhere in the caller still carries these actuals via the
+    adapter's ``attach_partial_observations`` at the outer boundary
+    (``processors/dataset_adapters.py``). ``usage_sink=None`` (the legacy
+    ``process_github_repos_batch`` entry point, which owns no sink) still
+    drains the client so its recorder never leaks across calls, but only
+    logs the observations at debug level -- never persisted.
+    """
     security_alert_cls = getattr(git_models, "SecurityAlert")
-    alerts = []
-    for fetch_fn in [
-        connector.get_dependabot_alerts,
-        connector.get_code_scanning_alerts,
-        connector.get_security_advisories,
-    ]:
-        try:
-            raw_alerts = fetch_fn(owner, repo_name, max_alerts=max_alerts)
+    alerts: list[Any] = []
+    client = _github_code_client_from_connector(connector)
+    try:
+        for fetch in (
+            client.get_dependabot_alerts,
+            client.get_code_scanning_alerts,
+            client.get_security_advisories,
+        ):
+            try:
+                raw_alerts = await fetch(owner, repo_name, max_alerts=max_alerts)
+            except Exception as exc:
+                logging.debug("Failed to fetch %s: %s", fetch.__name__, exc)
+                continue
             for item in raw_alerts:
                 created_at = item.created_at
                 if not created_at:
@@ -499,21 +635,32 @@ def _fetch_github_security_alerts_sync(
                         dismissed_at=item.dismissed_at,
                     )
                 )
-        except Exception as exc:
-            logging.debug("Failed to fetch %s: %s", fetch_fn.__name__, exc)
-    return alerts
+        return alerts
+    finally:
+        drained = client.drain_usage_observations()
+        if usage_sink is not None:
+            usage_sink.extend(drained)
+        elif drained:
+            logging.debug(
+                "_fetch_github_security_alerts_async: drained %d security usage "
+                "observation(s) for %s/%s with no adapter-owned sink (legacy "
+                "entry point) -- logging only, not persisted",
+                len(drained),
+                owner,
+                repo_name,
+            )
+        await client.close()
 
 
-def _collect_github_pr_objects(
+async def _collect_github_pr_objects(
     connector,
     owner: str,
     repo_name: str,
     repo_id,
-    gh_repo,
-    gate: "RateLimitGate",
     state: str = "all",
     since: datetime | None = None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> tuple[list[GitPullRequest], list[Any]]:
     """Collect raw PR objects and build GitPullRequest records without per-PR review/comment API calls.
 
@@ -523,96 +670,98 @@ def _collect_github_pr_objects(
     pr_objects: list[GitPullRequest] = []
     raw_gh_prs: list[Any] = []
 
-    sorted_by_updated = True
+    client = _github_code_client_from_connector(connector)
     try:
-        pr_iter = iter(gh_repo.get_pulls(state=state, sort="updated", direction="desc"))
-    except TypeError:
-        sorted_by_updated = False
-        pr_iter = iter(gh_repo.get_pulls(state=state))
-
-    while True:
-        try:
-            gate.wait_sync()
-            gh_pr = next(pr_iter)
-            gate.reset()
-        except StopIteration:
-            break
-        except RateLimitExceededException as e:
-            retry_after = extract_retry_after(e, connector)
-            applied = gate.penalize(retry_after)
-            logging.info(
-                "GitHub rate limited fetching PRs; backoff %.1fs (%s)",
-                applied,
-                e,
-            )
-            continue
-        except Exception as e:
-            retry_after = extract_retry_after(e, connector=None)
-            if retry_after is not None:
-                applied = gate.penalize(retry_after)
-                logging.info(
-                    "GitHub rate limited fetching PRs; backoff %.1fs (%s)",
-                    applied,
-                    e,
-                )
-                continue
-            raise
-
-        if until is not None:
-            updated_at = getattr(gh_pr, "updated_at", None)
-            if (
-                isinstance(updated_at, datetime)
-                and updated_at.astimezone(timezone.utc) > until
-            ):
-                continue
-
-        if since is not None and sorted_by_updated:
-            updated_at = getattr(gh_pr, "updated_at", None)
-            if (
-                isinstance(updated_at, datetime)
-                and updated_at.astimezone(timezone.utc) < since
-            ):
-                break
-
-        author_name = "Unknown"
-        author_email = None
-        if getattr(gh_pr, "user", None):
-            author_name = getattr(gh_pr.user, "login", None) or author_name
-
-        merged_at = getattr(gh_pr, "merged_at", None)
-        closed_at = getattr(gh_pr, "closed_at", None)
-        additions = getattr(gh_pr, "additions", 0)
-        deletions = getattr(gh_pr, "deletions", 0)
-        changed_files = getattr(gh_pr, "changed_files", 0)
-        comments_count = getattr(gh_pr, "comments", 0)
-
-        pr_objects.append(
-            build_git_pull_request(
-                repo_id=repo_id,
-                number=int(getattr(gh_pr, "number", 0) or 0),
-                title=getattr(gh_pr, "title", None),
-                body=getattr(gh_pr, "body", None),
-                state=normalize_pr_state(getattr(gh_pr, "state", None), merged_at),
-                author_name=author_name,
-                author_email=author_email,
-                created_at=getattr(gh_pr, "created_at", None),
-                merged_at=merged_at,
-                closed_at=closed_at,
-                head_branch=getattr(getattr(gh_pr, "head", None), "ref", None),
-                base_branch=getattr(getattr(gh_pr, "base", None), "ref", None),
-                additions=additions,
-                deletions=deletions,
-                changed_files=changed_files,
-                first_review_at=None,
-                first_comment_at=None,
-                changes_requested_count=0,
-                reviews_count=0,
-                comments_count=comments_count,
-            )
+        raw_pulls = await client.iter_pulls(
+            owner,
+            repo_name,
+            state=state,
+            sort="updated",
+            direction="desc",
+            since=since,
         )
-        raw_gh_prs.append(gh_pr)
+        for listed_pr in raw_pulls:
+            if until is not None:
+                updated_at = getattr(listed_pr, "updated_at", None)
+                if (
+                    isinstance(updated_at, datetime)
+                    and updated_at.astimezone(timezone.utc) > until
+                ):
+                    continue
+
+            if since is not None:
+                updated_at = getattr(listed_pr, "updated_at", None)
+                if (
+                    isinstance(updated_at, datetime)
+                    and updated_at.astimezone(timezone.utc) < since
+                ):
+                    break
+
+            gh_pr = await client.get_pull_detail(
+                owner,
+                repo_name,
+                int(getattr(listed_pr, "number", 0) or 0),
+            )
+
+            author_name = "Unknown"
+            author_email = None
+            if getattr(gh_pr, "author_login", None):
+                author_name = getattr(gh_pr, "author_login", None) or author_name
+            merged_at = getattr(gh_pr, "merged_at", None)
+            closed_at = getattr(gh_pr, "closed_at", None)
+            additions = getattr(gh_pr, "additions", 0)
+            deletions = getattr(gh_pr, "deletions", 0)
+            changed_files = getattr(gh_pr, "changed_files", 0)
+            comments_count = getattr(gh_pr, "comments_count", None)
+            if comments_count is None:
+                comments_count = getattr(gh_pr, "comments", 0)
+
+            pr_objects.append(
+                build_git_pull_request(
+                    repo_id=repo_id,
+                    number=int(getattr(gh_pr, "number", 0) or 0),
+                    title=getattr(gh_pr, "title", None),
+                    body=getattr(gh_pr, "body", None),
+                    state=normalize_pr_state(getattr(gh_pr, "state", None), merged_at),
+                    author_name=author_name,
+                    author_email=author_email,
+                    created_at=getattr(gh_pr, "created_at", None),
+                    merged_at=merged_at,
+                    closed_at=closed_at,
+                    head_branch=getattr(gh_pr, "head_ref", None)
+                    or getattr(getattr(gh_pr, "head", None), "ref", None),
+                    base_branch=getattr(gh_pr, "base_ref", None)
+                    or getattr(getattr(gh_pr, "base", None), "ref", None),
+                    additions=additions,
+                    deletions=deletions,
+                    changed_files=changed_files,
+                    first_review_at=None,
+                    first_comment_at=None,
+                    changes_requested_count=0,
+                    reviews_count=0,
+                    comments_count=comments_count,
+                )
+            )
+            raw_gh_prs.append(gh_pr)
+    finally:
+        observations = client.drain_usage_observations()
+        await client.close()
+        if usage_sink is not None:
+            usage_sink.extend(observations)
+        elif observations:
+            logging.debug(
+                "_collect_github_pr_objects: drained %d prs usage observations",
+                len(observations),
+            )
 
     return pr_objects, raw_gh_prs
+
+
+# Route family this batch's GraphQL reviews traffic re-buckets to (CHAOS-2803
+# CS2 -- was previously mis-bucketed to work_item_prs via the transport
+# default, since the client emitted this operation with no family prefix; see
+# the CS1 short-circuit convention in providers/usage.py::OperationResolver).
+_PR_SOCIAL_ROUTE_FAMILY = "pr_social"
 
 
 def _enrich_prs_with_reviews_batch(
@@ -625,16 +774,39 @@ def _enrich_prs_with_reviews_batch(
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     gate: "RateLimitGate",
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> list[GitPullRequestReview]:
     """Batch-fetch reviews for all PRs and enrich pr_objects in place.
 
     Collects all review objects and returns them for a single bulk insert,
     replacing the N+1 pattern (one review API call per PR).
+
+    Constructs a local, per-call ``GitHubWorkClient`` (CHAOS-2803/CS2: this
+    was previously never drained, silently discarding its usage actuals).
+    ``usage_sink``, when given, is drained into in a ``finally:`` block on
+    BOTH the success and failure path. Failure semantics are split:
+    ``RateLimitException`` PROPAGATES (after the finally-drain) so the
+    adapter can attach the partial ``pr_social`` usage to the exception and
+    the worker can defer the unit to RETRYING; any other fetch error keeps
+    the pre-existing degrade-and-log behavior (reviews are optional
+    enrichment on top of the PR rows). ``usage_sink=None`` (a legacy entry
+    point with no adapter-owned sink -- CLI batch sync, webhooks) still
+    drains the client (so its recorder never leaks across calls) but only
+    logs the observations at debug level -- never persisted (CHAOS-2773 plan
+    §2, last bullet).
+
+    The reviews GraphQL call is labeled with the ``pr_social:`` family prefix
+    (CS1's explicit-prefix resolver short-circuit) so its traffic resolves to
+    the ``pr_social`` route family the estimator already budgets for, instead
+    of the unprefixed transport default (``work_item_prs``) that the
+    work-items PR-as-work-item path (``providers/github/provider.py``)
+    continues to emit unshifted.
     """
     all_review_objects: list[GitPullRequestReview] = []
     pr_objects_by_number = {int(pr.number): pr for pr in pr_objects}
     reviews_by_pr = {}
 
+    review_client: GitHubWorkClient | None = None
     try:
         review_client = _github_work_client_from_connector(connector, gate=gate)
         for pr_number, reviews in review_client.iter_pr_reviews_batch(
@@ -642,12 +814,43 @@ def _enrich_prs_with_reviews_batch(
             repo=repo_name,
             prs=raw_gh_prs,
             limit=None,
+            operation_family=_PR_SOCIAL_ROUTE_FAMILY,
         ):
             reviews_by_pr[int(pr_number)] = reviews
+    except RateLimitException:
+        # A rate limit must PROPAGATE (codex HIGH on CHAOS-2803): swallowing
+        # it here would stamp the unit SUCCESS with reviews silently missing
+        # and bypass both the adapter's partial-observation attach and the
+        # worker's RETRYING/not_before deferral branch (sync_units.py). The
+        # `finally:` below still runs during the unwind, so the partial
+        # pr_social usage recorded before the 429 is drained into the sink
+        # FIRST and travels with the exception (CHAOS-2754 failure-path
+        # preservation).
+        raise
     except Exception as e:
+        # Intentional degrade-and-log (pre-existing semantic): review data is
+        # optional enrichment garnish on top of the PR rows -- a non-rate-limit
+        # fetch failure (schema drift, permission edge, transient GraphQL
+        # error) must not fail the whole PR sync. Only rate limits are
+        # re-raised above, because they carry deferral semantics.
         logging.debug(
             "Failed to batch-fetch reviews for %s/%s: %s", owner, repo_name, e
         )
+    finally:
+        if review_client is not None:
+            drained = drain_provider_usage(review_client)
+            if usage_sink is not None:
+                usage_sink.extend(drained)
+            elif drained:
+                logging.debug(
+                    "_enrich_prs_with_reviews_batch: drained %d %s usage "
+                    "observation(s) for %s/%s with no adapter-owned sink "
+                    "(legacy entry point) -- logging only, not persisted",
+                    len(drained),
+                    _PR_SOCIAL_ROUTE_FAMILY,
+                    owner,
+                    repo_name,
+                )
 
     for gh_pr in raw_gh_prs:
         pr_number = int(getattr(gh_pr, "number", 0) or 0)
@@ -719,7 +922,7 @@ def _github_work_client_from_connector(
     return client
 
 
-def _sync_github_prs_to_store(
+async def _sync_github_prs_to_store_async(
     connector,
     owner: str,
     repo_name: str,
@@ -731,35 +934,33 @@ def _sync_github_prs_to_store(
     gate: RateLimitGate | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     """Fetch all PRs for a repo and insert them in batches.
 
-    Runs in a worker thread; uses run_coroutine_threadsafe to write batches.
     Reviews are fetched in a single batch pass after all PRs are collected,
-    avoiding N+1 API calls.
+    avoiding N+1 API calls. ``usage_sink`` is threaded through to the PR list
+    code client and ``_enrich_prs_with_reviews_batch``.
     """
     logging.info(
         "Fetching PRs for %s/%s...",
         owner,
         repo_name,
     )
-    gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
-
     gate = BaseGitProcessor.ensure_gate(gate)
     if gate is None:
         raise RuntimeError("Rate limit gate unavailable")
 
     # Phase 1: collect all PR objects without per-PR review/comment API calls
-    pr_objects, raw_gh_prs = _collect_github_pr_objects(
+    pr_objects, raw_gh_prs = await _collect_github_pr_objects(
         connector=connector,
         owner=owner,
         repo_name=repo_name,
         repo_id=repo_id,
-        gh_repo=gh_repo,
-        gate=gate,
         state=state,
         since=since,
         until=until,
+        usage_sink=usage_sink,
     )
     total = len(pr_objects)
 
@@ -774,14 +975,12 @@ def _sync_github_prs_to_store(
         ingestion_sink=ingestion_sink,
         loop=loop,
         gate=gate,
+        usage_sink=usage_sink,
     )
 
     # Phase 3: persist reviews in one bulk insert
     if review_objects:
-        BaseGitProcessor.persist_batch_threadsafe(
-            ingestion_sink.insert_git_pull_request_reviews(review_objects),
-            loop,
-        )
+        await ingestion_sink.insert_git_pull_request_reviews(review_objects)
         logging.debug(
             "Stored %d reviews for %s/%s",
             len(review_objects),
@@ -792,10 +991,7 @@ def _sync_github_prs_to_store(
     # Phase 4: persist PRs in batches
     for i in range(0, len(pr_objects), batch_size):
         batch = pr_objects[i : i + batch_size]
-        BaseGitProcessor.persist_batch_threadsafe(
-            ingestion_sink.insert_git_pull_requests(batch),
-            loop,
-        )
+        await ingestion_sink.insert_git_pull_requests(batch)
         logging.debug(
             "Stored batch of %d PRs for %s/%s (total so far: %d)",
             len(batch),
@@ -812,6 +1008,38 @@ def _sync_github_prs_to_store(
     )
 
     return total
+
+
+def _sync_github_prs_to_store(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    ingestion_sink: IngestionSink,
+    loop: asyncio.AbstractEventLoop,
+    batch_size: int,
+    state: str = "all",
+    gate: RateLimitGate | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> int:
+    return asyncio.run(
+        _sync_github_prs_to_store_async(
+            connector=connector,
+            owner=owner,
+            repo_name=repo_name,
+            repo_id=repo_id,
+            ingestion_sink=ingestion_sink,
+            loop=loop,
+            batch_size=batch_size,
+            state=state,
+            gate=gate,
+            since=since,
+            until=until,
+            usage_sink=usage_sink,
+        )
+    )
 
 
 def _fetch_github_blame_sync(gh_repo, repo_id, limit=50):
@@ -858,10 +1086,60 @@ CONTENT_FETCH_MAX_FILES = 2_000
 # onboarding; full coverage remains available via the dedicated blame sync
 # target (CHAOS-2376).
 BLAME_BACKFILL_MAX_FILES = 500
+BLAME_FAILURE_WARNING_LIMIT = 5
+
+
+class _BoundedBlameFailureLogger:
+    def __init__(
+        self, repo_full_name: str, warning_limit: int = BLAME_FAILURE_WARNING_LIMIT
+    ) -> None:
+        self._repo_full_name = repo_full_name
+        self._warning_limit = warning_limit
+        self._failed_count = 0
+
+    def record_failure(self, path: str, error: Exception) -> None:
+        self._failed_count += 1
+        if self._failed_count <= self._warning_limit:
+            logging.warning(
+                "Failed blame fetch for %s:%s: %s",
+                self._repo_full_name,
+                path,
+                error,
+            )
+
+    def log_summary(self, total_fetches: int) -> None:
+        if self._failed_count > self._warning_limit:
+            logging.warning(
+                "%d of %d blame fetches failed for %s",
+                self._failed_count,
+                total_fetches,
+                self._repo_full_name,
+            )
+
+
+class _GitHubFileContentClient(Protocol):
+    async def get_latest_commit_sha(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        ref: str,
+        until: datetime,
+    ) -> str | None: ...
+
+    async def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        paths: list[str],
+        *,
+        ref: str = "HEAD",
+        batch_size: int = 50,
+    ) -> dict[str, str]: ...
 
 
 async def _fetch_scannable_contents(
-    connector: GitHubConnector,
+    client: _GitHubFileContentClient,
     owner: str,
     repo_name: str,
     ref: str,
@@ -873,8 +1151,12 @@ async def _fetch_scannable_contents(
 
     Only paths matching the complexity scanner's include/exclude globs are
     fetched, keeping API volume proportional to what the metrics jobs can
-    actually use. Errors degrade to a paths-only backfill (contents stay
-    NULL) rather than failing the sync.
+    actually use. A non-rate-limit fetch failure degrades to a paths-only
+    backfill (contents stay NULL) rather than failing the sync; a
+    ``RateLimitException``/``RateLimitExceededException`` propagates so the
+    caller's deferral semantics apply, mirroring the commit-stats fetch path
+    (CHAOS-2773 CS7 -- previously this degraded a rate limit to empty too,
+    silently masking it for the files dataset).
     """
     scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
     scannable: list[str] = []
@@ -896,12 +1178,10 @@ async def _fetch_scannable_contents(
     if not scannable:
         return {}
 
-    loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(
-            None,
-            lambda: connector.get_file_contents(owner, repo_name, scannable, ref=ref),
-        )
+        return await client.get_file_contents(owner, repo_name, scannable, ref=ref)
+    except (RateLimitException, RateLimitExceededException):
+        raise
     except Exception as e:
         logging.warning("Failed to fetch file contents for %s: %s", repo_full_name, e)
         return {}
@@ -919,6 +1199,10 @@ async def _backfill_github_missing_data(
     include_files: bool = True,
     include_blame: bool = True,
     include_commit_stats: bool = True,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
+    metrics_sink: Any | None = None,
 ) -> None:
     # Logic matches the CLI sync orchestration.
     logging.info(
@@ -936,7 +1220,11 @@ async def _backfill_github_missing_data(
     # (contents NULL), which has_any_git_files treats as "done". Upgrade
     # them by re-running the files backfill when no contents exist yet;
     # ReplacingMergeTree(last_synced) supersedes the stale rows.
-    needs_files = needs.files if include_files else False
+    historical_day = historical_backfill_day(until)
+    needs_historical_complexity = include_files and historical_day is not None
+    needs_files = (
+        needs.files if include_files else False
+    ) or needs_historical_complexity
     if (
         include_files
         and not needs_files
@@ -963,220 +1251,317 @@ async def _backfill_github_missing_data(
 
     file_paths: list[str] = []
     blame_paths: list[str] = []
+    # Files and blame share ONE ``GitHubCodeClient`` (built once, drained and
+    # closed in the ``finally`` below) since both fetch over the same
+    # provider-owned GraphQL support (``providers/github/graphql.py``,
+    # CHAOS-2773 CS7) -- mirrors the commit/commit-stats helpers' one-client-
+    # per-fetch lifecycle, just shared across two call sites instead of one.
+    code_client: GitHubCodeClient | None = None
     if needs_files or needs_blame:
-        try:
-            branch = gh_repo.get_branch(default_branch)
-            tree = gh_repo.get_git_tree(branch.commit.sha, recursive=True)
-            blob_sizes: dict[str, int | None] = {}
-            for entry in getattr(tree, "tree", []) or []:
-                if getattr(entry, "type", None) != "blob":
-                    continue
-                path = getattr(entry, "path", None)
-                if not path:
-                    continue
-                file_paths.append(path)
-                blob_sizes[path] = getattr(entry, "size", None)
+        code_client = _github_code_client_from_connector(connector)
+    tree_ref = default_branch
+    try:
+        if needs_files or needs_blame:
+            try:
+                assert code_client is not None
+                tree_ref = default_branch
+                if until is not None:
+                    resolved_ref = await code_client.get_latest_commit_sha(
+                        owner, repo_name, ref=default_branch, until=until
+                    )
+                    if resolved_ref is None:
+                        logging.warning(
+                            "No GitHub commit found for %s at or before %s; "
+                            "skipping file backfill",
+                            repo_full_name,
+                            until.isoformat(),
+                        )
+                        needs_files = False
+                        needs_blame = False
+                    else:
+                        tree_ref = resolved_ref
+                else:
+                    branch = gh_repo.get_branch(default_branch)
+                    tree_ref = branch.commit.sha
+                if needs_files or needs_blame:
+                    tree = gh_repo.get_git_tree(tree_ref, recursive=True)
+                    blob_sizes: dict[str, int | None] = {}
+                    for entry in getattr(tree, "tree", []) or []:
+                        if getattr(entry, "type", None) != "blob":
+                            continue
+                        path = getattr(entry, "path", None)
+                        if not path:
+                            continue
+                        file_paths.append(path)
+                        blob_sizes[path] = getattr(entry, "size", None)
 
-            if needs_files and file_paths:
-                contents_by_path = await _fetch_scannable_contents(
+                    if needs_files and file_paths:
+                        contents_by_path = await _fetch_scannable_contents(
+                            code_client,
+                            owner,
+                            repo_name,
+                            tree_ref,
+                            file_paths,
+                            blob_sizes,
+                            repo_full_name,
+                        )
+                        if historical_day is None:
+                            await backfill_file_records(
+                                ingestion_sink,
+                                db_repo.id,
+                                file_paths,
+                                repo_full_name,
+                                contents_by_path=contents_by_path,
+                            )
+                        write_historical_complexity(
+                            store=store,
+                            metrics_sink=metrics_sink,
+                            repo_id=db_repo.id,
+                            day=historical_day,
+                            ref_value=tree_ref,
+                            contents_by_path=contents_by_path,
+                        )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as e:
+                logging.warning(
+                    f"Failed to backfill GitHub files for {repo_full_name}: {e}"
+                )
+
+        if needs_commit_stats:
+            try:
+                logging.info(
+                    "Backfilling commit stats for %s...",
+                    repo_full_name,
+                )
+                raw_commits, _, window_truncated = await _fetch_github_commits_async(
                     connector,
                     owner,
                     repo_name,
-                    default_branch,
-                    file_paths,
-                    blob_sizes,
-                    repo_full_name,
-                )
-                await backfill_file_records(
-                    ingestion_sink,
                     db_repo.id,
-                    file_paths,
-                    repo_full_name,
-                    contents_by_path=contents_by_path,
+                    max_commits,
+                    since,
+                    until,
+                    usage_sink,
                 )
-        except Exception as e:
-            logging.warning(
-                f"Failed to backfill GitHub files for {repo_full_name}: {e}"
-            )
+                stats_count = await _sync_github_commit_stats(
+                    connector=connector,
+                    owner=owner,
+                    repo_name=repo_name,
+                    db_repo=db_repo,
+                    ingestion_sink=ingestion_sink,
+                    max_commits=max_commits,
+                    since=since,
+                    until=until,
+                    raw_commits=raw_commits,
+                    window_truncated=window_truncated,
+                    usage_sink=usage_sink,
+                )
+                logging.info(
+                    "Backfilled %d commit-stat rows in %s",
+                    stats_count,
+                    repo_full_name,
+                )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as e:
+                logging.warning(
+                    "Failed to backfill GitHub commit stats for %s: %s",
+                    repo_full_name,
+                    e,
+                )
 
-    if needs_commit_stats:
-        commit_count = 0
-        try:
-            logging.info(
-                "Backfilling commit stats for %s...",
-                repo_full_name,
+        if needs_blame and file_paths:
+            # Bound the blame crawl: one GraphQL call per file, so cap the number
+            # of files we blame on a single sync to avoid quota exhaustion /
+            # timeouts on large repos (CHAOS-2376). Select the *next* unblamed batch
+            # (diffing the live tree against already-blamed paths) so each rerun
+            # advances coverage instead of reblaming the same capped prefix; the
+            # capped prefix is used only as a fallback when the store lacks per-path
+            # coverage.
+            blame_paths = await select_unblamed_paths(
+                store, db_repo.id, file_paths, BLAME_BACKFILL_MAX_FILES
             )
-            commits_iter = gh_repo.get_commits()
-            async with AsyncBatchCollector(
-                ingestion_sink.insert_git_commit_stats
-            ) as stats_collector:
-                for commit in commits_iter:
-                    if max_commits and commit_count >= max_commits:
-                        break
-                    commit_count += 1
-                    try:
-                        detailed = gh_repo.get_commit(commit.sha)
-                        for file in getattr(detailed, "files", []) or []:
-                            stats_collector.add(
-                                GitCommitStat(
-                                    repo_id=db_repo.id,
-                                    commit_hash=commit.sha,
-                                    file_path=getattr(
-                                        file, "filename", AGGREGATE_STATS_MARKER
-                                    ),
-                                    additions=getattr(file, "additions", 0),
-                                    deletions=getattr(file, "deletions", 0),
-                                    old_file_mode="unknown",
-                                    new_file_mode="unknown",
-                                )
+        if needs_blame and blame_paths:
+            assert code_client is not None
+            processed_files = 0
+            try:
+                logging.info(
+                    "Backfilling blame for %d unblamed files in %s (cap %d)...",
+                    len(blame_paths),
+                    repo_full_name,
+                    BLAME_BACKFILL_MAX_FILES,
+                )
+                async with AsyncBatchCollector(
+                    ingestion_sink.insert_blame_data
+                ) as blame_collector:
+                    failure_logger = _BoundedBlameFailureLogger(repo_full_name)
+                    for path in blame_paths:
+                        try:
+                            blame = await code_client.get_file_blame(
+                                owner=owner,
+                                repo=repo_name,
+                                path=path,
+                                ref=tree_ref,
                             )
-                            await stats_collector.maybe_flush()
-                    except Exception as e:
-                        logging.debug(
-                            "Failed commit stat fetch for %s@%s: %s",
-                            repo_full_name,
-                            commit.sha,
-                            e,
-                        )
-            logging.info(
-                "Backfilled commit stats for %d commits in %s",
-                commit_count,
-                repo_full_name,
-            )
-        except Exception as e:
-            logging.warning(
-                "Failed to backfill GitHub commit stats for %s: %s",
-                repo_full_name,
-                e,
-            )
+                            processed_files += 1
+                        except (RateLimitException, RateLimitExceededException):
+                            raise
+                        except Exception as e:
+                            failure_logger.record_failure(path, e)
+                            continue
 
-    if needs_blame and file_paths:
-        # Bound the blame crawl: one GraphQL call per file, so cap the number
-        # of files we blame on a single sync to avoid quota exhaustion /
-        # timeouts on large repos (CHAOS-2376). Select the *next* unblamed batch
-        # (diffing the live tree against already-blamed paths) so each rerun
-        # advances coverage instead of reblaming the same capped prefix; the
-        # capped prefix is used only as a fallback when the store lacks per-path
-        # coverage.
-        blame_paths = await select_unblamed_paths(
-            store, db_repo.id, file_paths, BLAME_BACKFILL_MAX_FILES
-        )
-    if needs_blame and blame_paths:
-        processed_files = 0
-        try:
-            logging.info(
-                "Backfilling blame for %d unblamed files in %s (cap %d)...",
-                len(blame_paths),
-                repo_full_name,
-                BLAME_BACKFILL_MAX_FILES,
-            )
-            async with AsyncBatchCollector(
-                ingestion_sink.insert_blame_data
-            ) as blame_collector:
-                for path in blame_paths:
-                    try:
-                        blame = connector.get_file_blame(
-                            owner=owner,
-                            repo=repo_name,
-                            path=path,
-                            ref=default_branch,
-                        )
-                        processed_files += 1
-                    except Exception as e:
-                        logging.debug(
-                            f"Failed blame fetch for {repo_full_name}:{path}: {e}"
-                        )
-                        continue
-
-                    for rng in blame.ranges:
-                        for line_no in range(
-                            rng.starting_line,
-                            rng.ending_line + 1,
-                        ):
-                            blame_collector.add(
-                                GitBlame(
-                                    repo_id=db_repo.id,
-                                    path=path,
-                                    line_no=line_no,
-                                    author_email=rng.author_email,
-                                    author_name=rng.author,
-                                    author_when=None,
-                                    commit_hash=rng.commit_sha,
-                                    line=None,
+                        for rng in blame.ranges:
+                            for line_no in range(
+                                rng.starting_line,
+                                rng.ending_line + 1,
+                            ):
+                                blame_collector.add(
+                                    GitBlame(
+                                        repo_id=db_repo.id,
+                                        path=path,
+                                        line_no=line_no,
+                                        author_email=rng.author_email,
+                                        author_name=rng.author,
+                                        author_when=None,
+                                        commit_hash=rng.commit_sha,
+                                        line=None,
+                                    )
                                 )
-                            )
-                            await blame_collector.maybe_flush()
-            logging.info(
-                "Backfilled blame for %d files in %s",
-                processed_files,
-                repo_full_name,
-            )
-        except Exception as e:
-            logging.warning(
-                f"Failed to backfill GitHub blame for {repo_full_name}: {e}"
-            )
+                                await blame_collector.maybe_flush()
+                    failure_logger.log_summary(total_fetches=len(blame_paths))
+                logging.info(
+                    "Backfilled blame for %d files in %s",
+                    processed_files,
+                    repo_full_name,
+                )
+            except (RateLimitException, RateLimitExceededException):
+                raise
+            except Exception as e:
+                logging.warning(
+                    f"Failed to backfill GitHub blame for {repo_full_name}: {e}"
+                )
+    finally:
+        if code_client is not None:
+            observations = code_client.drain_usage_observations()
+            await code_client.close()
+            if usage_sink is not None:
+                usage_sink.extend(observations)
+            elif observations:
+                logging.debug(
+                    "_backfill_github_missing_data: drained %d files/blame usage "
+                    "observations",
+                    len(observations),
+                )
 
 
 async def _sync_github_commits(
     *,
-    gh_repo: Any,
+    connector: Any,
+    owner: str,
+    repo_name: str,
     db_repo: Repo,
     ingestion_sink: IngestionSink,
-    loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
     until: datetime | None = None,
-) -> tuple[list[Any], int]:
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> tuple[list[Any], int, bool]:
     if max_commits is None:
         logging.info("Fetching all commits from GitHub...")
     else:
         logging.info("Fetching up to %d commits from GitHub...", max_commits)
-    raw_commits, commit_objects = await loop.run_in_executor(
-        None,
-        _fetch_github_commits_sync,
-        gh_repo,
-        max_commits,
+    raw_commits, commit_objects, window_truncated = await _fetch_github_commits_async(
+        connector,
+        owner,
+        repo_name,
         db_repo.id,
+        max_commits,
         since,
         until,
+        usage_sink,
     )
     if commit_objects:
         await ingestion_sink.insert_git_commit_data(commit_objects)
         logging.info("Stored %d commits from GitHub", len(commit_objects))
-    return raw_commits, len(commit_objects)
+    return raw_commits, len(commit_objects), window_truncated
+
+
+def _windowed_commit_stats_truncated(
+    raw_commit_count: int,
+    window_truncated: bool,
+    max_commits: int | None,
+    since: datetime | None,
+) -> bool:
+    """Whether a since-bounded commit window is too large to cover fully.
+
+    Per-file commit stats cost one extra API call each, so the window is capped
+    (by ``max_commits`` and by ``resolve_commit_stats_limit``'s hard cap). When
+    the window exceeds a cap we skip stats entirely rather than persist a partial
+    day, which would corrupt churn/hotspot/bus-factor daily metrics. Full-history
+    syncs (``since is None``) intentionally use a capped sample and are never
+    treated as truncated.
+
+    ``window_truncated`` comes from the fetch (``GitHubCodeClient.get_commits`` peeks
+    one commit past ``max_commits``); it is the ONLY reliable signal for the
+    ``max_commits`` cap, because a complete window of exactly ``max_commits``
+    commits is otherwise indistinguishable from a truncated one — counting alone
+    (``raw_commit_count >= max_commits``) would false-positive on the exact-size
+    complete case and silently drop its stats. ``raw_commit_count > stats_limit``
+    independently catches the hard-cap case for uncapped fetches.
+    """
+    if since is None:
+        return False
+    stats_limit = resolve_commit_stats_limit(raw_commit_count, max_commits, since)
+    return window_truncated or raw_commit_count > stats_limit
 
 
 async def _sync_github_commit_stats(
     *,
-    gh_repo: Any,
+    connector: Any,
+    owner: str,
+    repo_name: str,
     db_repo: Repo,
     ingestion_sink: IngestionSink,
-    loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
     until: datetime | None = None,
     raw_commits: list[Any] | None = None,
+    window_truncated: bool = False,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     if raw_commits is None:
-        raw_commits, _ = await loop.run_in_executor(
-            None,
-            _fetch_github_commits_sync,
-            gh_repo,
-            max_commits,
+        raw_commits, _, window_truncated = await _fetch_github_commits_async(
+            connector,
+            owner,
+            repo_name,
             db_repo.id,
+            max_commits,
             since,
             until,
+            usage_sink,
         )
     logging.info("Fetching commit stats from GitHub...")
     stats_limit = resolve_commit_stats_limit(len(raw_commits), max_commits, since)
-    stats_objects = await loop.run_in_executor(
-        None,
-        _fetch_github_commit_stats_sync,
+    if _windowed_commit_stats_truncated(
+        len(raw_commits), window_truncated, max_commits, since
+    ):
+        logging.warning(
+            "Skipped GitHub commit-stat sync for repo %s after hitting cap %d; "
+            "narrow the sync window or raise the commit-stat cap",
+            db_repo.id,
+            stats_limit,
+        )
+        return 0
+    stats_objects = await _fetch_github_commit_stats_async(
+        connector,
+        owner,
+        repo_name,
         raw_commits,
         db_repo.id,
         stats_limit,
         since,
-        BaseGitProcessor.make_default_gate(),
+        usage_sink,
     )
     if stats_objects:
         await ingestion_sink.insert_git_commit_stats(stats_objects)
@@ -1293,6 +1678,7 @@ async def _sync_github_test_reports(
     loop: asyncio.AbstractEventLoop,
     since: datetime | None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """Ingest TestOps data for one GitHub repo (CHAOS-2370).
 
@@ -1314,16 +1700,30 @@ async def _sync_github_test_reports(
             base_url=connector._rest_base_url(), token=connector.token
         )
         processor = TestOpsPipelineProcessor(ingestion_sink)
-        async with adapter:
-            result = await processor.fetch_and_store(
-                adapter,
-                since_date=since,
-                until_date=until,
-                owner=owner,
-                repo=repo_name,
-                repo_id=repo_id,
-                org_id=org_id,
-            )
+        try:
+            async with adapter:
+                result = await processor.fetch_and_store(
+                    adapter,
+                    since_date=since,
+                    until_date=until,
+                    owner=owner,
+                    repo=repo_name,
+                    repo_id=repo_id,
+                    org_id=org_id,
+                )
+        finally:
+            drained = adapter.drain_usage_observations()
+            if usage_sink is not None:
+                usage_sink.extend(drained)
+            elif drained:
+                logging.debug(
+                    "_sync_github_test_reports: drained %d tests usage "
+                    "observation(s) for %s/%s with no adapter-owned sink "
+                    "(legacy entry point) -- logging only, not persisted",
+                    len(drained),
+                    owner,
+                    repo_name,
+                )
         logging.info(
             "TestOps GitHub %s/%s: %d pipelines, %d jobs",
             owner,
@@ -1434,9 +1834,18 @@ async def process_github_repo(
     sync_commit_stats: bool | None = None,
     sync_files: bool | None = None,
     sync_blame: bool | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process a GitHub repository using the GitHub connector.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, is the caller-owned list
+    every instrumented client this call constructs drains into (currently:
+    the PR review-batch's local ``GitHubWorkClient`` -- see
+    ``_enrich_prs_with_reviews_batch``). ``None`` (the default, used by the
+    legacy CLI batch/webhook entry points that do not own a sink) still
+    drains any such client but only logs the observations, never persisting
+    them.
     """
     if not CONNECTORS_AVAILABLE:
         raise RuntimeError("Connectors unavailable. Install required dependencies.")
@@ -1458,25 +1867,11 @@ async def process_github_repo(
         with connector:
             # 1. Fetch Repo Info
             logging.info("Fetching repository information...")
-            gh_repo = await loop.run_in_executor(
-                None, _fetch_github_repo_info_sync, connector, owner, repo_name
+            repo_info = await _fetch_github_repo_info_async(
+                connector, owner, repo_name, usage_sink=usage_sink
             )
 
             # Create/Insert Repo
-            repo_info = Repository(
-                id=gh_repo.id,
-                name=gh_repo.name,
-                full_name=gh_repo.full_name,
-                default_branch=gh_repo.default_branch,
-                description=gh_repo.description,
-                url=gh_repo.html_url,
-                created_at=gh_repo.created_at,
-                updated_at=gh_repo.updated_at,
-                language=gh_repo.language,
-                stars=gh_repo.stargazers_count,
-                forks=gh_repo.forks_count,
-            )
-
             db_repo = Repo(
                 repo_path=None,
                 repo=repo_info.full_name,
@@ -1508,6 +1903,9 @@ async def process_github_repo(
                     default_branch=repo_info.default_branch,
                     max_commits=max_commits,
                     blame_only=True,
+                    since=since,
+                    until=until,
+                    usage_sink=usage_sink,
                 )
                 logging.info(
                     "Completed blame-only sync for GitHub repository: %s/%s",
@@ -1517,58 +1915,64 @@ async def process_github_repo(
                 return
 
             raw_commits: list[Any] | None = None
+            window_truncated = False
             if run_commits:
-                raw_commits, _ = await _sync_github_commits(
-                    gh_repo=gh_repo,
+                raw_commits, _, window_truncated = await _sync_github_commits(
+                    connector=connector,
+                    owner=owner,
+                    repo_name=repo_name,
                     db_repo=db_repo,
                     ingestion_sink=ingestion_sink,
-                    loop=loop,
                     max_commits=max_commits,
                     since=since,
                     until=until,
+                    usage_sink=usage_sink,
                 )
 
             if run_commit_stats:
                 await _sync_github_commit_stats(
-                    gh_repo=gh_repo,
+                    connector=connector,
+                    owner=owner,
+                    repo_name=repo_name,
                     db_repo=db_repo,
                     ingestion_sink=ingestion_sink,
-                    loop=loop,
                     max_commits=max_commits,
                     since=since,
                     until=until,
                     raw_commits=raw_commits,
+                    window_truncated=window_truncated,
+                    usage_sink=usage_sink,
                 )
 
             if sync_prs:
                 # 4. Fetch PRs
                 logging.info("Fetching pull requests from GitHub...")
-                pr_total = await loop.run_in_executor(
-                    None,
-                    _sync_github_prs_to_store,
-                    connector,
-                    owner,
-                    repo_name,
-                    db_repo.id,
-                    ingestion_sink,
-                    loop,
-                    BATCH_SIZE,
-                    "all",
-                    None,
-                    since,
-                    until,
+                pr_total = await _sync_github_prs_to_store_async(
+                    connector=connector,
+                    owner=owner,
+                    repo_name=repo_name,
+                    repo_id=db_repo.id,
+                    ingestion_sink=ingestion_sink,
+                    loop=loop,
+                    batch_size=BATCH_SIZE,
+                    state="all",
+                    gate=None,
+                    since=since,
+                    until=until,
+                    usage_sink=usage_sink,
                 )
                 logging.info(f"Stored {pr_total} pull requests from GitHub")
 
             if sync_cicd:
                 logging.info("Fetching CI/CD workflow runs from GitHub...")
-                pipeline_runs = await loop.run_in_executor(
-                    None,
-                    _fetch_github_workflow_runs_sync,
-                    gh_repo,
+                pipeline_runs = await _fetch_github_workflow_runs_async(
+                    connector,
+                    owner,
+                    repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 pipeline_runs = _filter_after(pipeline_runs, until, "started_at")
                 if pipeline_runs:
@@ -1576,6 +1980,7 @@ async def process_github_repo(
                     logging.info("Stored %d workflow runs", len(pipeline_runs))
 
             if sync_tests:
+                gh_repo = connector.github.get_repo(repo_info.full_name)
                 await _sync_github_test_reports(
                     connector=connector,
                     gh_repo=gh_repo,
@@ -1587,17 +1992,19 @@ async def process_github_repo(
                     loop=loop,
                     since=since,
                     until=until,
+                    usage_sink=usage_sink,
                 )
 
             if sync_deployments:
                 logging.info("Fetching deployments from GitHub...")
-                deployments = await loop.run_in_executor(
-                    None,
-                    _fetch_github_deployments_sync,
-                    gh_repo,
+                deployments = await _fetch_github_deployments_async(
+                    connector,
+                    owner,
+                    repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 deployments = _filter_after(
                     deployments, until, "deployed_at", "started_at"
@@ -1608,13 +2015,14 @@ async def process_github_repo(
 
             if sync_incidents:
                 logging.info("Fetching incident issues from GitHub...")
-                incidents = await loop.run_in_executor(
-                    None,
-                    _fetch_github_incidents_sync,
-                    gh_repo,
+                incidents = await _fetch_github_incidents_async(
+                    connector,
+                    owner,
+                    repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 incidents = _filter_after(incidents, until, "started_at")
                 if incidents:
@@ -1623,15 +2031,14 @@ async def process_github_repo(
 
             if sync_security:
                 logging.info("Fetching security alerts from GitHub...")
-                security_alerts = await loop.run_in_executor(
-                    None,
-                    _fetch_github_security_alerts_sync,
+                security_alerts = await _fetch_github_security_alerts_async(
                     connector,
                     owner,
                     repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 security_alerts = _filter_after(security_alerts, until, "created_at")
                 if security_alerts:
@@ -1644,6 +2051,7 @@ async def process_github_repo(
             # 5. Fetch Blame (Optional & Stubbed)
             if fetch_blame:
                 logging.info("Fetching blame data (file list) from GitHub...")
+                gh_repo = connector.github.get_repo(repo_info.full_name)
                 await loop.run_in_executor(
                     None, _fetch_github_blame_sync, gh_repo, db_repo.id
                 )
@@ -1671,6 +2079,9 @@ async def process_github_repo(
                         include_files=run_files,
                         include_blame=run_blame,
                         include_commit_stats=False,
+                        since=since,
+                        until=until,
+                        usage_sink=usage_sink,
                     )
                 except Exception as e:
                     logging.warning(
@@ -1715,6 +2126,7 @@ async def process_github_repos_batch(
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process multiple GitHub repositories using batch processing with
@@ -1743,9 +2155,6 @@ async def process_github_repos_batch(
     # Track results for summary and incremental storage
     all_results: list[BatchResult] = []
     stored_count = 0
-
-    results_queue: asyncio.Queue | None = None
-    _queue_sentinel = object()
 
     async def store_result(result: BatchResult) -> None:
         """Store a single result in the database (upsert)."""
@@ -1788,6 +2197,8 @@ async def process_github_repos_batch(
                     default_branch=repo_info.default_branch,
                     max_commits=max_commits_per_repo,
                     blame_only=True,
+                    since=since,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
                 logging.debug(
@@ -1798,6 +2209,8 @@ async def process_github_repos_batch(
             return
 
         gh_repo = None
+        skipped_windowed_commit_stats = False
+        commit_stats_available = True
         if sync_git:
             # Fetch commits and stats to populate git_commits/git_commit_stats.
             commit_limit: int | None
@@ -1806,30 +2219,47 @@ async def process_github_repos_batch(
             else:
                 commit_limit = max_commits_per_repo
             try:
-                if gh_repo is None:
-                    gh_repo = connector.github.get_repo(repo_info.full_name)
-                raw_commits, commit_objects = await loop.run_in_executor(
-                    None,
-                    _fetch_github_commits_sync,
-                    gh_repo,
-                    commit_limit,
-                    db_repo.id,
-                    since,
+                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                raw_commits, _, window_truncated = await _sync_github_commits(
+                    connector=connector,
+                    owner=batch_owner,
+                    repo_name=batch_repo,
+                    db_repo=db_repo,
+                    ingestion_sink=ingestion_sink,
+                    max_commits=commit_limit,
+                    since=since,
+                    usage_sink=usage_sink,
                 )
-                if commit_objects:
-                    await ingestion_sink.insert_git_commit_data(commit_objects)
-
-                stats_objects = await loop.run_in_executor(
-                    None,
-                    _fetch_github_commit_stats_sync,
-                    raw_commits,
-                    db_repo.id,
-                    50 if commit_limit is None else min(commit_limit, 50),
-                    since,
+                stats_limit = resolve_commit_stats_limit(
+                    len(raw_commits), max_commits_per_repo, since
                 )
-                if stats_objects:
-                    await ingestion_sink.insert_git_commit_stats(stats_objects)
+                skipped_windowed_commit_stats = _windowed_commit_stats_truncated(
+                    len(raw_commits), window_truncated, max_commits_per_repo, since
+                )
+                if skipped_windowed_commit_stats:
+                    logging.warning(
+                        "Skipped GitHub commit stats for %s after hitting cap %d; "
+                        "narrow the sync window or raise the commit-stat cap",
+                        repo_info.full_name,
+                        stats_limit,
+                    )
+                else:
+                    await _sync_github_commit_stats(
+                        connector=connector,
+                        owner=batch_owner,
+                        repo_name=batch_repo,
+                        db_repo=db_repo,
+                        ingestion_sink=ingestion_sink,
+                        max_commits=max_commits_per_repo,
+                        since=since,
+                        raw_commits=raw_commits,
+                        window_truncated=window_truncated,
+                        usage_sink=usage_sink,
+                    )
+            except (RateLimitException, RateLimitExceededException):
+                raise
             except Exception as e:
+                commit_stats_available = False
                 logging.warning(
                     "Failed to fetch commits for GitHub repo %s: %s",
                     repo_info.full_name,
@@ -1845,19 +2275,18 @@ async def process_github_repos_batch(
                 if pr_semaphore_active is None:
                     raise RuntimeError("PR semaphore unavailable")
                 async with pr_semaphore_active:
-                    await loop.run_in_executor(
-                        None,
-                        _sync_github_prs_to_store,
-                        connector,
-                        owner,
-                        repo_name,
-                        db_repo.id,
-                        ingestion_sink,
-                        loop,
-                        BATCH_SIZE,
-                        "all",
-                        pr_gate,
-                        since,
+                    await _sync_github_prs_to_store_async(
+                        connector=connector,
+                        owner=owner,
+                        repo_name=repo_name,
+                        repo_id=db_repo.id,
+                        ingestion_sink=ingestion_sink,
+                        loop=loop,
+                        batch_size=BATCH_SIZE,
+                        state="all",
+                        gate=pr_gate,
+                        since=since,
+                        usage_sink=usage_sink,
                     )
             except Exception as e:
                 logging.error(
@@ -1869,15 +2298,15 @@ async def process_github_repos_batch(
 
         if sync_cicd:
             try:
-                if gh_repo is None:
-                    gh_repo = connector.github.get_repo(repo_info.full_name)
-                pipeline_runs = await loop.run_in_executor(
-                    None,
-                    _fetch_github_workflow_runs_sync,
-                    gh_repo,
+                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                pipeline_runs = await _fetch_github_workflow_runs_async(
+                    connector,
+                    batch_owner,
+                    batch_repo,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 if pipeline_runs:
                     await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
@@ -1903,6 +2332,7 @@ async def process_github_repos_batch(
                     ingestion_sink=ingestion_sink,
                     loop=loop,
                     since=since,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
                 logging.warning(
@@ -1913,15 +2343,15 @@ async def process_github_repos_batch(
 
         if sync_deployments:
             try:
-                if gh_repo is None:
-                    gh_repo = connector.github.get_repo(repo_info.full_name)
-                deployments = await loop.run_in_executor(
-                    None,
-                    _fetch_github_deployments_sync,
-                    gh_repo,
+                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                deployments = await _fetch_github_deployments_async(
+                    connector,
+                    batch_owner,
+                    batch_repo,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 if deployments:
                     await ingestion_sink.insert_deployments(deployments)
@@ -1934,18 +2364,20 @@ async def process_github_repos_batch(
 
         if sync_incidents:
             try:
-                if gh_repo is None:
-                    gh_repo = connector.github.get_repo(repo_info.full_name)
-                incidents = await loop.run_in_executor(
-                    None,
-                    _fetch_github_incidents_sync,
-                    gh_repo,
+                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                incidents = await _fetch_github_incidents_async(
+                    connector,
+                    batch_owner,
+                    batch_repo,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 if incidents:
                     await ingestion_sink.insert_incidents(incidents)
+            except (RateLimitException, RateLimitExceededException):
+                raise
             except Exception as e:
                 logging.warning(
                     "Failed to fetch incidents for GitHub repo %s: %s",
@@ -1956,15 +2388,14 @@ async def process_github_repos_batch(
         if sync_security:
             try:
                 owner, repo_name = _split_full_name(repo_info.full_name)
-                security_alerts = await loop.run_in_executor(
-                    None,
-                    _fetch_github_security_alerts_sync,
+                security_alerts = await _fetch_github_security_alerts_async(
                     connector,
                     owner,
                     repo_name,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    usage_sink=usage_sink,
                 )
                 if security_alerts:
                     insert_security_alerts = getattr(
@@ -1978,7 +2409,12 @@ async def process_github_repos_batch(
                     e,
                 )
 
-        if result.stats and sync_git:
+        if (
+            result.stats
+            and sync_git
+            and commit_stats_available
+            and not skipped_windowed_commit_stats
+        ):
             stat = GitCommitStat(
                 repo_id=db_repo.id,
                 commit_hash=AGGREGATE_STATS_MARKER,
@@ -2007,6 +2443,8 @@ async def process_github_repos_batch(
                     max_commits=max_commits_per_repo,
                     include_blame=True,
                     include_commit_stats=False,
+                    since=since,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
                 logging.debug(
@@ -2031,104 +2469,41 @@ async def process_github_repos_batch(
                 f"  ✗ Failed: {result.repository.full_name}: {result.error}"
             )
 
-        if results_queue is not None:
-            try:
-                running_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                running_loop = None
-
-            def _enqueue() -> None:
-                assert results_queue is not None
-                try:
-                    results_queue.put_nowait(result)
-                except asyncio.QueueFull:
-                    asyncio.create_task(results_queue.put(result))
-
-            if running_loop is loop:
-                _enqueue()
-            else:
-                loop.call_soon_threadsafe(_enqueue)
-
     try:
         with connector:
-            if sync_git:
-                results_queue = asyncio.Queue(maxsize=max(1, max_concurrent * 2))
+            repos = await _list_github_repositories_for_batch(
+                connector,
+                org_name=org_name,
+                user_name=user_name,
+                pattern=pattern,
+                max_repos=max_repos,
+                usage_sink=usage_sink,
+            )
+            semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
-                async def _consume_results() -> None:
-                    assert results_queue is not None
-                    while True:
-                        item = await results_queue.get()
-                        try:
-                            if item is _queue_sentinel:
-                                return
-                            await store_result(item)
-                        finally:
-                            results_queue.task_done()
-
-                consumer_task = asyncio.create_task(_consume_results())
-
-                if use_async:
-                    await connector.get_repos_with_stats_async(
-                        org_name=org_name,
-                        user_name=user_name,
-                        pattern=pattern,
-                        batch_size=batch_size,
-                        max_concurrent=max_concurrent,
-                        rate_limit_delay=rate_limit_delay,
-                        max_commits_per_repo=max_commits_per_repo,
-                        max_repos=max_repos,
-                        on_repo_complete=on_repo_complete,
+            async def _process_repo(repo_info) -> None:
+                async with semaphore:
+                    result = BatchResult(
+                        repository=repo_info,
+                        stats=None,
+                        success=True,
                     )
-                else:
-                    await loop.run_in_executor(
-                        None,
-                        lambda: connector.get_repos_with_stats(
-                            org_name=org_name,
-                            user_name=user_name,
-                            pattern=pattern,
-                            batch_size=batch_size,
-                            max_concurrent=max_concurrent,
-                            rate_limit_delay=rate_limit_delay,
-                            max_commits_per_repo=max_commits_per_repo,
-                            max_repos=max_repos,
-                            on_repo_complete=on_repo_complete,
-                        ),
-                    )
-
-                await results_queue.join()
-                await results_queue.put(_queue_sentinel)
-                await consumer_task
-            else:
-                repos = await loop.run_in_executor(
-                    None,
-                    lambda: connector.list_repositories(
-                        org_name=org_name,
-                        user_name=user_name,
-                        pattern=pattern,
-                        max_repos=max_repos,
-                    ),
-                )
-                semaphore = asyncio.Semaphore(max(1, max_concurrent))
-
-                async def _process_repo(repo_info) -> None:
-                    async with semaphore:
+                    try:
+                        await store_result(result)
+                    except (RateLimitException, RateLimitExceededException):
+                        raise
+                    except Exception as e:
                         result = BatchResult(
                             repository=repo_info,
                             stats=None,
-                            success=True,
+                            error=str(e),
+                            success=False,
                         )
-                        try:
-                            await store_result(result)
-                        except Exception as e:
-                            result = BatchResult(
-                                repository=repo_info,
-                                stats=None,
-                                error=str(e),
-                                success=False,
-                            )
-                        on_repo_complete(result)
+                    on_repo_complete(result)
 
-                tasks = [asyncio.create_task(_process_repo(repo)) for repo in repos]
+            for batch_start in range(0, len(repos), max(1, batch_size)):
+                batch = repos[batch_start : batch_start + max(1, batch_size)]
+                tasks = [asyncio.create_task(_process_repo(repo)) for repo in batch]
                 if tasks:
                     await asyncio.gather(*tasks)
 

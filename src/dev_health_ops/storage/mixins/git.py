@@ -35,6 +35,22 @@ class GitDataMixin(SQLAlchemyStoreMixinProtocol):
         )
         return (result.scalar() or 0) > 0
 
+    async def get_git_file_contents_by_path(self, repo_id) -> dict[str, str]:
+        """Non-empty ``git_files.contents`` per path for a repo.
+
+        Lets ``backfill_file_records`` preserve previously-fetched contents
+        across paths-only rewrites (CHAOS-2857).
+        """
+        assert self.session is not None
+        result = await self.session.execute(
+            select(GitFile.path, GitFile.contents).where(
+                GitFile.repo_id == repo_id,
+                GitFile.contents.is_not(None),
+                GitFile.contents != "",
+            )
+        )
+        return {str(path): str(contents) for path, contents in result.all()}
+
     async def has_any_git_commit_stats(self, repo_id) -> bool:
         assert self.session is not None
         result = await self.session.execute(

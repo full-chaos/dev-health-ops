@@ -66,6 +66,65 @@ def test_discover_repos_sets_source_from_provider():
     assert result_db[1].source == "github"
 
 
+def test_discover_repos_parses_json_string_settings():
+    """CHAOS-2763: ``repos.settings`` comes back from ClickHouse as a raw JSON
+    *string*, not a pre-parsed dict — the ``DiscoveredRepo.settings: dict[str,
+    object]`` annotation was previously lying (the query result was passed
+    through with ``r[2] or {}``, no ``json.loads``). Any per-provider match on
+    a settings key (e.g. gitlab ``project_id`` scoping) always missed on real
+    data before this fix."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[
+            (str(repo_id), "grp/proj-a", '{"project_id": 123}', "gitlab"),
+        ]
+    )
+
+    result = discover_repos(backend="clickhouse", primary_sink=mock_sink)
+
+    assert result[0].settings == {"project_id": 123}
+
+
+def test_discover_repos_malformed_json_settings_yields_empty_dict():
+    """A malformed/legacy ``settings`` string must not raise — it degrades to
+    ``{}`` so numeric-id gitlab matching fails closed instead of crashing
+    discovery for the whole org."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[
+            (str(repo_id), "grp/proj-a", "{not json", "gitlab"),
+        ]
+    )
+
+    result = discover_repos(backend="clickhouse", primary_sink=mock_sink)
+
+    assert result[0].settings == {}
+
+
+def test_discover_repos_null_settings_yields_empty_dict():
+    """A NULL ``settings`` column (Nullable(String)) must also degrade to
+    ``{}`` rather than raising."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[
+            (str(repo_id), "grp/proj-a", None, "gitlab"),
+        ]
+    )
+
+    result = discover_repos(backend="clickhouse", primary_sink=mock_sink)
+
+    assert result[0].settings == {}
+
+
 class TestSourceFilteringInWorkItemFetchers:
     """Verify that work-item fetcher functions correctly filter repos by source.
 
@@ -180,3 +239,62 @@ class TestSourceFilteringInWorkItemFetchers:
         gitlab_repos = [r for r in repos if r.source == "gitlab"]
         assert len(gitlab_repos) == 1
         assert gitlab_repos[0].repo_id == gl_id
+
+
+def test_discover_repos_query_dedupes_via_argmax_group_by():
+    """discover_repos' ClickHouse query must dedupe to the latest row per
+    (org_id, id) via a SINGLE argMax/GROUP BY rather than a plain ``SELECT *``
+    (CHAOS-2787).
+
+    ``repos`` is a ReplacingMergeTree(last_synced) ordered by (org_id, id)
+    (migration 027); ``insert_repo`` always writes a fresh row per sync
+    (CHAOS-1775), so pre-merge duplicates routinely exist. This pins the SQL
+    shape server-side dedup depends on: a single
+    ``argMax(tuple(repo, settings, provider), last_synced)`` (NOT three
+    independent argMax calls -- those could each resolve a last_synced TIE
+    to a *different* physical row, synthesizing a Frankenstein result) with
+    the three columns then unwrapped via ``tupleElement(latest, N)``. The
+    outer tuple() wrap also means the ``settings`` (Nullable(String)) column
+    is carried through even when NULL, since a bare
+    ``argMax(settings, last_synced)`` would skip NULLs entirely and let an
+    older non-NULL settings value mask a genuinely NULL latest value. Live
+    behavioral proof of the dedup, tie-consistency, and NULL-handling lives
+    in ``tests/test_discover_repos_dedup_live.py`` (opt-in, needs
+    ClickHouse)."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(result_rows=[])
+
+    discover_repos(backend="clickhouse", primary_sink=mock_sink, org_id="org-x")
+
+    query_arg = mock_sink.client.query.call_args.args[0]
+    assert "argMax(tuple(repo, settings, provider), last_synced) AS latest" in query_arg
+    assert "tupleElement(latest, 1) AS repo" in query_arg
+    assert "tupleElement(latest, 2) AS settings" in query_arg
+    assert "tupleElement(latest, 3) AS provider" in query_arg
+    assert "GROUP BY org_id, id" in query_arg
+    assert "WHERE org_id = {org_id:String}" in query_arg
+    # Guard against regressing to three independent argMax calls.
+    assert "argMax(repo, last_synced)" not in query_arg
+    assert "argMax(provider, last_synced)" not in query_arg
+
+    params = mock_sink.client.query.call_args.kwargs["parameters"]
+    assert params == {"org_id": "org-x"}
+
+
+def test_discover_repos_query_omits_where_without_org_id():
+    """No org_id => no WHERE clause, but the GROUP BY dedup still applies."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(result_rows=[])
+
+    discover_repos(backend="clickhouse", primary_sink=mock_sink)
+
+    query_arg = mock_sink.client.query.call_args.args[0]
+    assert "WHERE" not in query_arg
+    assert "GROUP BY org_id, id" in query_arg
+
+    params = mock_sink.client.query.call_args.kwargs["parameters"]
+    assert params == {}

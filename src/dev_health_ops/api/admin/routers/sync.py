@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
@@ -25,18 +26,28 @@ from dev_health_ops.api.admin.schemas import (
     SyncConfigRepositorySelectionUpdate,
     SyncConfigResponse,
     SyncConfigUpdate,
+    SyncCoverageRange,
+    SyncCoverageSummaryResponse,
+    SyncRunJobEnrichment,
 )
 from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
     SyncConfigurationService,
 )
 from dev_health_ops.api.services.licensing import TierLimitService
+from dev_health_ops.api.services.sync_coverage import (
+    HISTORY_LOOKBACK_DAYS,
+    build_sync_coverage_summary,
+    ensure_utc,
+)
 from dev_health_ops.models import SyncRun
 from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
     SyncRunStatus,
+    SyncRunUnit,
+    SyncRunUnitStatus,
 )
 from dev_health_ops.models.settings import (
     JobRun,
@@ -45,12 +56,22 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
-from dev_health_ops.sync.datasets import supported_datasets, supported_legacy_targets
-from dev_health_ops.sync.planner import plan_sync_run
+from dev_health_ops.sync.datasets import (
+    DatasetKey,
+    supported_datasets,
+    supported_legacy_targets,
+)
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
+from dev_health_ops.sync.execution_trigger import (
+    create_sync_execution_trigger,
+    ensure_pending_sync_job_run,
+    mark_job_run_failed,
+    merge_job_run_result,
+)
 from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
-    planner_request_for_config_if_routed,
 )
+from dev_health_ops.utils.datetime import validate_timezone_name
 from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
@@ -60,46 +81,30 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _mark_job_run_failed(sync_session, run_id: str, error: str) -> None:
-    completed_at = datetime.now(timezone.utc)
-    run = (
-        sync_session.query(JobRun)
-        .filter(JobRun.id == uuid.UUID(str(run_id)))
-        .one_or_none()
-    )
-    if run is None:
-        return
-    run.status = JobRunStatus.FAILED.value
-    run.completed_at = completed_at
-    run.error = error
-    started_at = getattr(run, "started_at", None)
-    if started_at is not None:
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=timezone.utc)
-        run.duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
-    sync_session.flush()
+def _mark_job_run_failed(sync_session, run_id: str, error: BaseException | str) -> None:
+    mark_job_run_failed(sync_session, run_id, error)
 
 
 def _merge_job_run_result(
     sync_session, run_id: str, result: dict[str, Any] | None = None
 ) -> None:
-    if result is None:
-        return
-    run = (
-        sync_session.query(JobRun)
-        .filter(JobRun.id == uuid.UUID(str(run_id)))
-        .one_or_none()
-    )
-    if run is None:
-        return
-    current = run.result if isinstance(run.result, dict) else {}
-    run.result = {**current, **result}
-    sync_session.flush()
+    merge_job_run_result(sync_session, run_id, result)
 
 
 def _mark_backfill_job_failed(
-    sync_session, backfill_job_id: str, error: str, completed_at: datetime
+    sync_session,
+    backfill_job_id: str,
+    error: BaseException | str,
+    completed_at: datetime,
 ) -> None:
+    """Terminalize a ``BackfillJob`` as failed.
+
+    ``error`` is sanitized here, at the sink (CHAOS-2766 codex review
+    finding), for the same reason as ``mark_job_run_failed``: a Celery/broker
+    enqueue-failure exception can embed the broker/result-backend URL
+    including credentials, and ``error_message`` surfaces through admin
+    backfill-job responses.
+    """
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
     bf_job = (
@@ -110,7 +115,7 @@ def _mark_backfill_job_failed(
     if bf_job is None:
         return
     bf_job.status = "failed"
-    bf_job.error_message = error
+    bf_job.error_message = sanitize_error_text(error)
     bf_job.completed_at = completed_at
     # The dispatch never enqueued (or its task id is meaningless), so drop any
     # pre-dispatch sync_run marker: the run is separately terminalized as failed.
@@ -118,8 +123,35 @@ def _mark_backfill_job_failed(
     sync_session.flush()
 
 
+def _sync_config_integration_credential_id(
+    sync_session, config, org_id: str
+) -> uuid.UUID | None:
+    """Resolve the credential a config's LINKED integration actually uses.
+
+    ``SyncConfiguration`` carries no credential of its own (CHAOS-2762) --
+    ``Integration.credential_id`` (reached via ``config.integration_id``) is
+    the single sanctioned surface. Returns ``None`` when the config has no
+    linked integration (a pre-planner legacy row; the trigger/backfill
+    endpoints already reject those with "no linked integration" downstream)
+    OR when the linked integration does not belong to ``org_id``: an
+    out-of-org ``integration_id`` (corrupt data / manual tampering) must never
+    leak another org's credential, so it is treated as no-credential -- the
+    same org-scoping ``sync/planner.py``'s ``_load_integration`` enforces.
+    """
+    integration_id = getattr(config, "integration_id", None)
+    if integration_id is None:
+        return None
+    integration = (
+        sync_session.query(Integration)
+        .filter(Integration.id == integration_id, Integration.org_id == org_id)
+        .one_or_none()
+    )
+    return getattr(integration, "credential_id", None) if integration else None
+
+
 def _preflight_planner_credential(sync_session, config) -> None:
-    credential_id = getattr(config, "credential_id", None)
+    org_id = str(getattr(config, "org_id"))
+    credential_id = _sync_config_integration_credential_id(sync_session, config, org_id)
     if credential_id is None:
         return
     from dev_health_ops.models.settings import IntegrationCredential
@@ -128,7 +160,7 @@ def _preflight_planner_credential(sync_session, config) -> None:
         sync_session.query(IntegrationCredential)
         .filter(
             IntegrationCredential.id == credential_id,
-            IntegrationCredential.org_id == getattr(config, "org_id"),
+            IntegrationCredential.org_id == org_id,
         )
         .one_or_none()
     )
@@ -148,59 +180,9 @@ def _ensure_pending_sync_job_run(
     triggered_by: str,
     result: dict[str, Any] | None = None,
 ) -> str:
-    """Find-or-create the ScheduledJob anchor and create a PENDING JobRun.
-
-    Returns the new JobRun id as a string.  Used by both the regular
-    /trigger handler and the legacy backfill path so the sync-activity list
-    shows the run immediately.
-    """
-    import uuid as _uuid
-
-    config_uuid = _uuid.UUID(str(config.id))
-    job = (
-        sync_session.query(ScheduledJob)
-        .filter(
-            ScheduledJob.org_id == org_id,
-            ScheduledJob.sync_config_id == config_uuid,
-            ScheduledJob.job_type == "sync",
-        )
-        .one_or_none()
+    return ensure_pending_sync_job_run(
+        sync_session, config, org_id, triggered_by, result
     )
-    if job is None:
-        _sync_options = dict(config.sync_options or {})
-        _provider = str(config.provider or "")
-        _explicit_cron = _sync_options.get("schedule_cron")
-        job = ScheduledJob(
-            name=f"sync-config-{config_uuid}",
-            job_type="sync",
-            schedule_cron=str(_explicit_cron or "0 * * * *"),
-            org_id=org_id,
-            provider=_provider,
-            job_config={
-                "provider": _provider,
-                "sync_config_id": str(config_uuid),
-            },
-            sync_config_id=config_uuid,
-            tz=str(_sync_options.get("timezone") or "UTC"),
-            # Manual-only configs keep the job row for JobRun anchoring
-            # but must not be picked up by the scheduler (CHAOS-2297).
-            status=(
-                JobStatus.ACTIVE.value
-                if bool(config.is_active) and _explicit_cron
-                else JobStatus.PAUSED.value
-            ),
-        )
-        sync_session.add(job)
-        sync_session.flush()
-    run = JobRun(
-        job_id=_uuid.UUID(str(job.id)),
-        triggered_by=triggered_by,
-        status=JobRunStatus.PENDING.value,
-    )
-    run.result = result
-    sync_session.add(run)
-    sync_session.flush()
-    return str(run.id)
 
 
 async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str) -> int:
@@ -216,10 +198,10 @@ async def _active_repo_usage_count_for_limit(session: AsyncSession, org_id: str)
         for config in active_config_rows
         if config.parent_id is None
         and bool(config.planner_managed)
-        and config.migrated_integration_id is not None
+        and config.integration_id is not None
     ]
     planner_integration_ids = [
-        config.migrated_integration_id
+        config.integration_id
         for config in active_config_rows
         if config.id in planner_parent_ids
     ]
@@ -263,20 +245,77 @@ class _MutableSyncConfiguration(Protocol):
     is_active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _SyncRunUnitRollup:
+    status_counts: Mapping[str, int]
+    requested_range: SyncCoverageRange | None
+    covered_range: SyncCoverageRange | None
+
+
+async def _integration_credential_id_for_config(
+    session: AsyncSession, config: object, org_id: str
+) -> uuid.UUID | None:
+    """Async counterpart of ``_sync_config_integration_credential_id``.
+
+    Resolves the ``credential_id`` of a config's linked ``Integration`` --
+    the single sanctioned surface (CHAOS-2762) -- for building API responses.
+    Scoped to ``org_id`` so an out-of-org ``integration_id`` (corrupt data)
+    can never leak another org's credential UUID into this response; treated
+    as no-credential, same as the planner's org-scoped integration lookup.
+    """
+    integration_id = getattr(config, "integration_id", None)
+    if integration_id is None:
+        return None
+    result = await session.execute(
+        select(Integration.credential_id).where(
+            Integration.id == integration_id, Integration.org_id == org_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _integration_credential_ids_for_configs(
+    session: AsyncSession, configs: Sequence[object], org_id: str
+) -> dict[str, uuid.UUID | None]:
+    """Batch variant of ``_integration_credential_id_for_config`` for list responses.
+
+    ONE query for the whole page via ``Integration.id.in_(...)`` -- callers
+    must use this (not a per-row ``_integration_credential_id_for_config``
+    call in a loop) when building a list response, or credential resolution
+    becomes an N+1 over ``Integration``. Also scoped to ``org_id`` (see
+    ``_integration_credential_id_for_config``) so an out-of-org
+    ``integration_id`` never leaks another org's credential.
+    """
+    integration_ids = {
+        getattr(config, "integration_id")
+        for config in configs
+        if getattr(config, "integration_id", None) is not None
+    }
+    if not integration_ids:
+        return {}
+    result = await session.execute(
+        select(Integration.id, Integration.credential_id).where(
+            Integration.org_id == org_id, Integration.id.in_(integration_ids)
+        )
+    )
+    return {
+        str(integration_id): credential_id
+        for integration_id, credential_id in result.all()
+    }
+
+
 def _sync_config_to_response(
     config: object,
     children_count: int | None = None,
+    *,
+    credential_id: uuid.UUID | str | None = None,
 ) -> SyncConfigResponse:
     return SyncConfigResponse.model_validate(
         {
             "id": str(getattr(config, "id")),
             "name": getattr(config, "name"),
             "provider": getattr(config, "provider"),
-            "credential_id": (
-                str(getattr(config, "credential_id"))
-                if getattr(config, "credential_id") is not None
-                else None
-            ),
+            "credential_id": str(credential_id) if credential_id is not None else None,
             "sync_targets": list(getattr(config, "sync_targets") or []),
             "sync_options": dict(getattr(config, "sync_options") or {}),
             "is_active": getattr(config, "is_active"),
@@ -301,6 +340,37 @@ def _aware_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _latest_datetime(*values: datetime | None) -> datetime | None:
+    aware_values = [aware for value in values if (aware := _aware_datetime(value))]
+    return max(aware_values) if aware_values else None
+
+
+def _effective_backfill_run_status(
+    run_status: str, status_counts: Mapping[str, int], total_units: int
+) -> str:
+    success_count = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
+    failed_count = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
+    settled_count = success_count + failed_count
+    if total_units > 0 and settled_count >= total_units:
+        if failed_count == 0:
+            return SyncRunStatus.SUCCESS.value
+        if success_count == 0:
+            return SyncRunStatus.FAILED.value
+        return SyncRunStatus.PARTIAL_FAILED.value
+
+    if (
+        settled_count > 0
+        or status_counts.get(SyncRunUnitStatus.RUNNING.value, 0) > 0
+        or status_counts.get(SyncRunUnitStatus.RETRYING.value, 0) > 0
+    ):
+        return SyncRunStatus.RUNNING.value
+    if status_counts.get(SyncRunUnitStatus.DISPATCHING.value, 0) > 0:
+        return SyncRunStatus.DISPATCHING.value
+    if status_counts.get(SyncRunUnitStatus.PLANNED.value, 0) > 0:
+        return SyncRunStatus.PLANNED.value
+    return run_status
 
 
 def _elapsed_seconds(
@@ -375,8 +445,169 @@ async def _planner_sync_runs_for_job_runs(
     return {str(sync_run.id): sync_run for sync_run in result.scalars().all()}
 
 
+async def _planner_sync_run_unit_rollups_for_job_runs(
+    session: AsyncSession, runs: Sequence[object], org_id: str
+) -> dict[str, _SyncRunUnitRollup]:
+    sync_run_ids = {
+        sync_run_id
+        for run in runs
+        if (sync_run_id := _planner_job_run_sync_run_id(run)) is not None
+    }
+    if not sync_run_ids:
+        return {}
+
+    status_result = await session.execute(
+        select(
+            SyncRunUnit.sync_run_id,
+            SyncRunUnit.status,
+            func.count(SyncRunUnit.id),
+        )
+        .where(
+            SyncRunUnit.sync_run_id.in_(sync_run_ids),
+            SyncRunUnit.org_id == org_id,
+        )
+        .group_by(SyncRunUnit.sync_run_id, SyncRunUnit.status)
+    )
+    status_counts_by_run: dict[str, dict[str, int]] = {}
+    for sync_run_id, status, count in status_result.all():
+        status_counts_by_run.setdefault(str(sync_run_id), {})[str(status)] = int(count)
+
+    requested_ranges = await _planner_sync_run_unit_ranges(
+        session, sync_run_ids, org_id, success_only=False
+    )
+    covered_ranges = await _planner_sync_run_unit_ranges(
+        session, sync_run_ids, org_id, success_only=True
+    )
+    return {
+        str(sync_run_id): _SyncRunUnitRollup(
+            status_counts=status_counts_by_run.get(str(sync_run_id), {}),
+            requested_range=requested_ranges.get(str(sync_run_id)),
+            covered_range=covered_ranges.get(str(sync_run_id)),
+        )
+        for sync_run_id in sync_run_ids
+    }
+
+
+async def _planner_sync_run_unit_ranges(
+    session: AsyncSession,
+    sync_run_ids: set[uuid.UUID],
+    org_id: str,
+    *,
+    success_only: bool,
+) -> dict[str, SyncCoverageRange]:
+    range_stmt = (
+        select(
+            SyncRunUnit.sync_run_id,
+            SyncRunUnit.source_id,
+            func.min(SyncRunUnit.since_at),
+            func.max(SyncRunUnit.before_at),
+        )
+        .where(
+            SyncRunUnit.sync_run_id.in_(sync_run_ids),
+            SyncRunUnit.org_id == org_id,
+            SyncRunUnit.since_at.is_not(None),
+            SyncRunUnit.before_at.is_not(None),
+        )
+        .group_by(SyncRunUnit.sync_run_id, SyncRunUnit.source_id)
+    )
+    if success_only:
+        range_stmt = range_stmt.where(
+            SyncRunUnit.status == SyncRunUnitStatus.SUCCESS.value
+        )
+
+    range_result = await session.execute(range_stmt)
+    since_by_run: dict[str, datetime] = {}
+    before_by_run: dict[str, datetime] = {}
+    source_ids_by_run: dict[str, set[str]] = {}
+    for sync_run_id, source_id, since_at, before_at in range_result.all():
+        run_id = str(sync_run_id)
+        since = ensure_utc(since_at)
+        before = ensure_utc(before_at)
+        since_by_run[run_id] = min(since_by_run.get(run_id, since), since)
+        before_by_run[run_id] = max(before_by_run.get(run_id, before), before)
+        source_ids_by_run.setdefault(run_id, set()).add(str(source_id))
+
+    return {
+        run_id: SyncCoverageRange(
+            since=since,
+            before=before_by_run[run_id],
+            source_ids=sorted(source_ids_by_run.get(run_id, set())),
+            run_ids=[run_id],
+        )
+        for run_id, since in since_by_run.items()
+    }
+
+
+def _sync_run_unit_range(
+    units: Sequence[SyncRunUnit], *, success_only: bool = False
+) -> SyncCoverageRange | None:
+    scoped_units = [
+        unit
+        for unit in units
+        if unit.since_at is not None
+        and unit.before_at is not None
+        and (not success_only or unit.status == SyncRunUnitStatus.SUCCESS.value)
+    ]
+    if not scoped_units:
+        return None
+    return SyncCoverageRange(
+        since=min(
+            ensure_utc(unit.since_at)
+            for unit in scoped_units
+            if unit.since_at is not None
+        ),
+        before=max(
+            ensure_utc(unit.before_at)
+            for unit in scoped_units
+            if unit.before_at is not None
+        ),
+        source_ids=sorted({str(unit.source_id) for unit in scoped_units}),
+        run_ids=sorted({str(unit.sync_run_id) for unit in scoped_units}),
+    )
+
+
+def _sync_run_unit_rollup(
+    sync_run: SyncRun, status_counts: Mapping[str, int]
+) -> tuple[int, int, int, str]:
+    total_units = max(sum(status_counts.values()), int(sync_run.total_units))
+    completed_units = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
+    failed_units = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
+    effective_status = _effective_backfill_run_status(
+        str(sync_run.status), status_counts, total_units
+    )
+    return total_units, completed_units, failed_units, effective_status
+
+
+def _sync_run_job_enrichment(
+    sync_run: SyncRun | None, unit_rollup: _SyncRunUnitRollup | None
+) -> SyncRunJobEnrichment | None:
+    if sync_run is None:
+        return None
+    sync_run_id = getattr(sync_run, "id", None)
+    mode = getattr(sync_run, "mode", None)
+    triggered_by = getattr(sync_run, "triggered_by", None)
+    if sync_run_id is None or mode is None or triggered_by is None:
+        return None
+    status_counts = unit_rollup.status_counts if unit_rollup is not None else {}
+    total_units, completed_units, failed_units, _ = _sync_run_unit_rollup(
+        sync_run, status_counts
+    )
+    return SyncRunJobEnrichment(
+        mode=str(mode),
+        triggered_by=str(triggered_by),
+        requested_range=unit_rollup.requested_range if unit_rollup else None,
+        covered_range=unit_rollup.covered_range if unit_rollup else None,
+        total_units=total_units,
+        completed_units=completed_units,
+        failed_units=failed_units,
+        sync_run_id=str(sync_run_id),
+    )
+
+
 def _job_run_response(
-    run: object, planner_sync_run: SyncRun | None = None
+    run: object,
+    planner_sync_run: SyncRun | None = None,
+    planner_sync_run_unit_rollup: _SyncRunUnitRollup | None = None,
 ) -> JobRunResponse:
     status_value = int(getattr(run, "status"))
     started_at = getattr(run, "started_at")
@@ -392,26 +623,34 @@ def _job_run_response(
         # Planner-managed JobRun rows are visibility anchors for Job History.
         # The linked SyncRun owns execution lifecycle and runtime stats.
         sync_result = getattr(planner_sync_run, "result")
+        total_units, completed_units, failed_units, effective_status = (
+            _sync_run_unit_rollup(
+                planner_sync_run,
+                planner_sync_run_unit_rollup.status_counts
+                if planner_sync_run_unit_rollup
+                else {},
+            )
+        )
         result = {
             **(result if isinstance(result, dict) else {}),
             **(sync_result if isinstance(sync_result, dict) else {}),
-            "sync_run_status": str(getattr(planner_sync_run, "status")),
-            "total_units": int(getattr(planner_sync_run, "total_units")),
-            "completed_units": int(getattr(planner_sync_run, "completed_units")),
-            "failed_units": int(getattr(planner_sync_run, "failed_units")),
+            "sync_run_status": effective_status,
+            "total_units": total_units,
+            "completed_units": completed_units,
+            "failed_units": failed_units,
         }
-        status_value = _planner_job_run_status(str(getattr(planner_sync_run, "status")))
+        status_value = _planner_job_run_status(effective_status)
         started_at = getattr(planner_sync_run, "started_at")
         completed_at = getattr(planner_sync_run, "completed_at")
         duration_seconds = _elapsed_seconds(started_at, completed_at)
         error = getattr(planner_sync_run, "error") or error
-        items_synced = int(getattr(planner_sync_run, "completed_units"))
+        items_synced = completed_units
 
     return JobRunResponse.model_validate(
         {
             "id": str(getattr(run, "id")),
             "job_id": str(getattr(run, "job_id")),
-            "status": JOB_RUN_STATUS_LABELS.get(status_value, "unknown"),
+            "status": JOB_RUN_STATUS_LABELS.get(status_value, "failed"),
             "started_at": started_at,
             "completed_at": completed_at,
             "duration_seconds": duration_seconds,
@@ -419,12 +658,19 @@ def _job_run_response(
             "result": result,
             "error": error,
             "triggered_by": getattr(run, "triggered_by"),
+            "sync_run": _sync_run_job_enrichment(
+                planner_sync_run, planner_sync_run_unit_rollup
+            ),
             "created_at": getattr(run, "created_at"),
         }
     )
 
 
-def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None):
+def _backfill_job_response(
+    job: object,
+    run_counts: dict[str, Any] | None = None,
+    metrics_diagnostics: Any | None = None,
+):
     from dev_health_ops.api.schemas.backfill import BackfillJobResponse
 
     run_counts = run_counts or {}
@@ -432,7 +678,13 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
     completed_chunks = int(
         run_counts.get("completed_chunks", getattr(job, "completed_chunks"))
     )
+    failed_chunks = int(run_counts.get("failed_chunks", getattr(job, "failed_chunks")))
     progress_pct = (completed_chunks / total_chunks * 100) if total_chunks > 0 else 0.0
+    job_updated_at = getattr(job, "updated_at")
+    effective_updated_at = _latest_datetime(
+        job_updated_at,
+        run_counts.get("updated_at"),
+    )
     return BackfillJobResponse(
         id=str(getattr(job, "id")),
         sync_config_id=str(getattr(job, "sync_config_id")),
@@ -441,14 +693,16 @@ def _backfill_job_response(job: object, run_counts: dict[str, Any] | None = None
         before_date=getattr(job, "before_date"),
         total_chunks=total_chunks,
         completed_chunks=completed_chunks,
-        failed_chunks=int(
-            run_counts.get("failed_chunks", getattr(job, "failed_chunks"))
-        ),
+        failed_chunks=failed_chunks,
         progress_pct=progress_pct,
         error_message=run_counts.get("error_message", getattr(job, "error_message")),
         started_at=getattr(job, "started_at"),
         completed_at=run_counts.get("completed_at", getattr(job, "completed_at")),
         created_at=getattr(job, "created_at"),
+        # Response-level updated_at is effective liveness: the raw BackfillJob
+        # row-write timestamp OR the latest linked fanout unit activity.
+        updated_at=effective_updated_at or job_updated_at,
+        metrics_diagnostics=metrics_diagnostics,
     )
 
 
@@ -478,14 +732,81 @@ async def _backfill_job_run_counts(
     run = result.scalar_one_or_none()
     if run is None:
         return None
+    activity_stmt = select(
+        func.max(SyncRunUnit.updated_at),
+        func.max(SyncRunUnit.last_heartbeat_at),
+    ).where(
+        SyncRunUnit.sync_run_id == run_uuid,
+        SyncRunUnit.org_id == str(getattr(job, "org_id")),
+    )
+    activity_result = await session.execute(activity_stmt)
+    latest_unit_updated_at, latest_unit_heartbeat_at = activity_result.one()
+    status_counts_result = await session.execute(
+        select(SyncRunUnit.status, func.count())
+        .where(
+            SyncRunUnit.sync_run_id == run_uuid,
+            SyncRunUnit.org_id == str(getattr(job, "org_id")),
+        )
+        .group_by(SyncRunUnit.status)
+    )
+    status_counts = {
+        str(status): int(count) for status, count in status_counts_result.all()
+    }
+    total_chunks = max(sum(status_counts.values()), int(getattr(run, "total_units")))
+    completed_chunks = status_counts.get(SyncRunUnitStatus.SUCCESS.value, 0)
+    failed_chunks = status_counts.get(SyncRunUnitStatus.FAILED.value, 0)
     return {
-        "status": getattr(run, "status"),
-        "total_chunks": int(getattr(run, "total_units")),
-        "completed_chunks": int(getattr(run, "completed_units")),
-        "failed_chunks": int(getattr(run, "failed_units")),
+        "status": _effective_backfill_run_status(
+            str(getattr(run, "status")), status_counts, total_chunks
+        ),
+        "total_chunks": total_chunks,
+        "completed_chunks": completed_chunks,
+        "failed_chunks": failed_chunks,
         "completed_at": getattr(run, "completed_at"),
         "error_message": getattr(run, "error"),
+        "updated_at": _latest_datetime(
+            latest_unit_updated_at,
+            latest_unit_heartbeat_at,
+        ),
     }
+
+
+async def _open_backfill_metrics_sink() -> AsyncIterator[Any | None]:
+    """Open a ClickHouse metrics sink for backfill diagnostics reads.
+
+    ``GET /backfill-jobs/{job_id}`` populates ``metrics_diagnostics`` from
+    ClickHouse analytics tables only -- no Postgres shortcuts (CHAOS-2888).
+    Yields ``None`` when ClickHouse is not configured so the detail
+    endpoint can omit diagnostics instead of failing.
+    """
+    from dev_health_ops.db import get_clickhouse_uri
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    uri = get_clickhouse_uri()
+    if not uri:
+        yield None
+        return
+    sink = ClickHouseMetricsSink(dsn=uri)
+    try:
+        yield sink
+    finally:
+        sink.close()
+
+
+def get_backfill_metrics_sink() -> Callable[
+    [], AbstractAsyncContextManager[Any | None]
+]:
+    """Return a lazy factory for the backfill-diagnostics ClickHouse sink.
+
+    Returns the factory itself -- not an opened sink -- so resolving this
+    FastAPI dependency performs no I/O. ``GET /backfill-jobs/{job_id}``
+    only calls the factory (opening ClickHouse) after confirming the job
+    exists; a 404 for a missing job never opens a ClickHouse client
+    (CHAOS-2888 Workstream C review fix). Tests override this dependency
+    with a factory returning their fake sink -- the same structural
+    contract ``metrics/compounding_risk.py`` already uses.
+    """
+    return asynccontextmanager(_open_backfill_metrics_sink)
 
 
 # Canonical mapping of provider → supported sync targets.
@@ -579,6 +900,8 @@ async def _upsert_scheduled_job(
 
 def _planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
     targets = {str(target) for target in sync_targets if target is not None}
+    if provider.lower() in {"github", "gitlab"} and "git" in targets:
+        targets.add(DatasetKey.BLAME.value)
     return [
         spec.dataset_key
         for spec in supported_datasets(provider)
@@ -670,7 +993,7 @@ def _is_planner_source_for_config(
 async def _planner_sources_for_config(
     session: AsyncSession, org_id: str, config: SyncConfiguration
 ) -> list[IntegrationSource]:
-    integration_id = getattr(config, "migrated_integration_id", None)
+    integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         return []
     result = await session.execute(
@@ -735,7 +1058,7 @@ async def _replace_planner_repository_selection(
     config: SyncConfiguration,
     payload: SyncConfigRepositorySelectionUpdate,
 ) -> SyncConfigRepositorySelection:
-    integration_id = getattr(config, "migrated_integration_id", None)
+    integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         raise HTTPException(
             status_code=409,
@@ -772,11 +1095,14 @@ async def _replace_planner_repository_selection(
     mutable_config = cast(_MutableSyncConfiguration, config)
     mutable_config.sync_options = sync_options
 
+    existing_credential_id = await _integration_credential_id_for_config(
+        session, config, org_id
+    )
     batch_payload = SyncConfigBatchCreate(
         name=str(getattr(config, "name")),
         provider=str(getattr(config, "provider")),
-        credential_id=str(getattr(config, "credential_id"))
-        if getattr(config, "credential_id", None)
+        credential_id=str(existing_credential_id)
+        if existing_credential_id is not None
         else None,
         sync_targets=list(getattr(config, "sync_targets") or []),
         sync_options=sync_options,
@@ -833,7 +1159,7 @@ async def _assert_single_planner_parent_for_integration(
     count_stmt = select(func.count(SyncConfiguration.id)).where(
         SyncConfiguration.org_id == org_id,
         SyncConfiguration.planner_managed.is_(True),
-        SyncConfiguration.migrated_integration_id == integration_id,
+        SyncConfiguration.integration_id == integration_id,
         SyncConfiguration.parent_id.is_(None),
     )
     planner_parent_count = (await session.execute(count_stmt)).scalar_one()
@@ -843,6 +1169,125 @@ async def _assert_single_planner_parent_for_integration(
             f"integration {integration_id} is linked to {planner_parent_count} "
             "planner-managed parent sync configurations"
         )
+
+
+def _non_git_source_rows(
+    provider: str,
+    sync_options: dict[str, Any],
+    name: str,
+    org_id: str,
+    integration_id: uuid.UUID,
+    config_id: uuid.UUID,
+) -> list[IntegrationSource]:
+    """Materialize the single planner source for a non-git provider config.
+
+    Non-git providers (jira, linear, launchdarkly) carry no repo list and have
+    no source-discovery path (``sync/discovery.py`` only maps github/gitlab).
+    The planner builds units as enabled sources x enabled datasets, so a config
+    with zero sources plans zero units. Resolve the source ``external_id`` from
+    ``sync_options`` (the run-time key the dataset adapters consume, e.g. the
+    Jira project key) so every non-git config materializes exactly one
+    planner-tagged source.
+    """
+    explicit_external_id = (
+        sync_options.get("project_id")
+        or sync_options.get("project_key")
+        or sync_options.get("team_id")
+        or sync_options.get("repo")
+    )
+    is_linear_org_wide = provider.lower() == "linear" and not explicit_external_id
+    external_id = str(
+        explicit_external_id or (provider.lower() if is_linear_org_wide else name)
+    )
+    source_type = "project" if provider.lower() in {"jira", "linear"} else "source"
+    full_name = str(sync_options.get("full_name") or external_id)
+    metadata: dict[str, Any] = {"planner_managed_sync_config_id": str(config_id)}
+    if is_linear_org_wide:
+        metadata["org_wide_placeholder"] = True
+    return [
+        IntegrationSource(
+            org_id=org_id,
+            integration_id=integration_id,
+            provider=provider,
+            source_type=source_type,
+            external_id=external_id,
+            name=name,
+            full_name=full_name,
+            metadata_=metadata,
+            is_enabled=True,
+        )
+    ]
+
+
+async def _create_planner_managed_config(
+    session: AsyncSession,
+    org_id: str,
+    *,
+    name: str,
+    provider: str,
+    credential_id: str | None,
+    sync_targets: list[str],
+    parent_options: dict[str, Any],
+    schedule_cron: str | None,
+    timezone: str | None,
+    build_source_rows: Callable[[uuid.UUID, uuid.UUID], list[IntegrationSource]],
+) -> tuple[SyncConfiguration, Integration]:
+    """Single integration-native write path for ALL providers.
+
+    Creates the ``Integration``, its planner-managed ``SyncConfiguration``
+    (``integration_id`` set, ``planner_managed=True``), the enabled
+    ``IntegrationDataset`` rows, the caller-built ``IntegrationSource`` rows, and
+    the scheduled-job anchor. There is no bare ``SyncConfiguration`` insert path
+    anywhere, so a config can never be created unlinked from its integration and
+    the planner can always route it.
+
+    The credential is stamped ONLY on ``Integration.credential_id`` (CHAOS-2762):
+    ``SyncConfiguration`` carries no credential column of its own, so there is
+    exactly one place a credential attaches to sync work.
+    """
+    credential_uuid = uuid.UUID(credential_id) if credential_id else None
+    integration = Integration(
+        org_id=org_id,
+        provider=provider,
+        credential_id=credential_uuid,
+        name=name,
+        config=parent_options,
+        is_active=True,
+        schedule_cron=schedule_cron,
+        timezone=timezone,
+    )
+    session.add(integration)
+    await session.flush()
+
+    parent = SyncConfiguration(
+        name=name,
+        provider=provider,
+        org_id=org_id,
+        sync_targets=sync_targets,
+        sync_options=parent_options,
+        is_active=True,
+        integration_id=integration.id,
+        planner_managed=True,
+    )
+    session.add(parent)
+    await session.flush()
+    await _assert_single_planner_parent_for_integration(session, org_id, integration.id)
+
+    source_rows = build_source_rows(integration.id, parent.id)
+    dataset_rows = [
+        IntegrationDataset(
+            org_id=org_id,
+            integration_id=integration.id,
+            dataset_key=dataset_key,
+            is_enabled=True,
+            options={"legacy_targets": list(sync_targets)},
+        )
+        for dataset_key in _planner_dataset_keys(provider, sync_targets)
+    ]
+    session.add_all([*source_rows, *dataset_rows])
+    await _upsert_scheduled_job(session, parent, org_id)
+    await session.flush()
+    return parent, integration
 
 
 @router.get("/sync-targets")
@@ -856,7 +1301,7 @@ async def get_provider_sync_targets() -> dict[str, list[str]]:
     description=(
         "List sync configurations. "
         "Child sync configs (rows with a non-null ``parent_id`` or linked to a "
-        "migrated integration via ``migrated_integration_id``/``migrated_source_id``) "
+        "migrated integration via ``integration_id``/``source_id``) "
         "are **deprecated** and hidden by default when the "
         "``HIDE_MIGRATED_CHILD_CONFIGS`` feature flag is enabled. "
         "Pass ``?include_migrated=true`` to include them (support/rollback)."
@@ -885,8 +1330,8 @@ async def list_sync_configs(
     # configs from the default list response. A config is considered a
     # "migrated child" when any of the following are true:
     #   - parent_id is set (legacy child config), OR
-    #   - migrated_source_id is set (linked to an integration-era source).
-    # The parent SyncConfiguration gets migrated_integration_id set by the
+    #   - source_id is set (linked to an integration-era source).
+    # The parent SyncConfiguration gets integration_id set by the
     # migration and is the rollback anchor, so it is NOT hidden.
     # Callers may pass ?include_migrated=true to bypass this filter for
     # support or rollback access.
@@ -902,7 +1347,7 @@ async def list_sync_configs(
             for c in configs
             if (
                 getattr(c, "parent_id", None) is None
-                and getattr(c, "migrated_source_id", None) is None
+                and getattr(c, "source_id", None) is None
             )
         ]
 
@@ -926,10 +1371,22 @@ async def list_sync_configs(
         rows = (await session.execute(stmt)).all()
         children_counts = {str(pid): cnt for pid, cnt in rows}
 
+    credential_ids_by_integration = await _integration_credential_ids_for_configs(
+        session, configs, org_id
+    )
+
     results = []
     for c in configs:
         cc = children_counts.get(str(getattr(c, "id")))
-        results.append(_sync_config_to_response(c, children_count=cc))
+        integration_id = getattr(c, "integration_id", None)
+        credential_id = (
+            credential_ids_by_integration.get(str(integration_id))
+            if integration_id is not None
+            else None
+        )
+        results.append(
+            _sync_config_to_response(c, children_count=cc, credential_id=credential_id)
+        )
     return results
 
 
@@ -943,6 +1400,15 @@ def _gitlab_group_from_options(sync_options: dict[str, Any]) -> str:
     # Strip CR/LF so the user-provided group can't forge log lines when it is
     # interpolated into warnings (CodeQL: log injection).
     return str(group).replace("\r", "").replace("\n", "").strip()
+
+
+async def _list_gitlab_group_projects(
+    *, gitlab_url: str, token: str, group: str
+) -> list[Any]:
+    from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
+
+    async with GitLabCodeClient(private_token=token, base_url=gitlab_url) as client:
+        return await client.list_projects(group_name=group)
 
 
 async def _resolve_gitlab_batch_projects(
@@ -1021,11 +1487,10 @@ async def _resolve_gitlab_batch_projects(
     # opportunistically when numeric entries could shadow project names.
     should_list = bool(named) or (bool(numeric) and bool(token) and bool(group))
     if should_list:
-        from dev_health_ops.connectors.gitlab import GitLabConnector
-
-        connector = GitLabConnector(url=gitlab_url, private_token=str(token))
         try:
-            projects = connector.list_repositories(org_name=group)
+            projects = await _list_gitlab_group_projects(
+                gitlab_url=gitlab_url, token=str(token), group=group
+            )
         except Exception as exc:
             if named:
                 raise HTTPException(
@@ -1171,63 +1636,30 @@ async def batch_create_sync_configs(
         if effective_gitlab_url != DEFAULT_GITLAB_URL:
             parent_options["gitlab_url"] = effective_gitlab_url
 
-    integration = Integration(
-        org_id=org_id,
-        provider=payload.provider,
-        credential_id=uuid.UUID(payload.credential_id)
-        if payload.credential_id
-        else None,
+    parent, integration = await _create_planner_managed_config(
+        session,
+        org_id,
         name=payload.name,
-        config=parent_options,
-        is_active=True,
+        provider=payload.provider,
+        credential_id=payload.credential_id,
+        sync_targets=payload.sync_targets,
+        parent_options=parent_options,
         schedule_cron=payload.schedule_cron,
         timezone=payload.timezone,
+        build_source_rows=lambda integration_id, config_id: _planner_source_rows(
+            payload,
+            parent_options,
+            gitlab_projects,
+            org_id,
+            integration_id,
+            config_id,
+        ),
     )
-    session.add(integration)
-    await session.flush()
-
-    parent = SyncConfiguration(
-        name=payload.name,
-        provider=payload.provider,
-        org_id=org_id,
-        credential_id=uuid.UUID(payload.credential_id)
-        if payload.credential_id
-        else None,
-        sync_targets=payload.sync_targets,
-        sync_options=parent_options,
-        is_active=True,
-        migrated_integration_id=integration.id,
-        planner_managed=True,
-    )
-    session.add(parent)
-    await session.flush()
-    await _assert_single_planner_parent_for_integration(session, org_id, integration.id)
-
-    source_rows = _planner_source_rows(
-        payload,
-        parent_options,
-        gitlab_projects,
-        org_id,
-        integration.id,
-        parent.id,
-    )
-    dataset_rows = [
-        IntegrationDataset(
-            org_id=org_id,
-            integration_id=integration.id,
-            dataset_key=dataset_key,
-            is_enabled=True,
-            options={"legacy_targets": list(payload.sync_targets)},
-        )
-        for dataset_key in _planner_dataset_keys(payload.provider, payload.sync_targets)
-    ]
-    session.add_all([*source_rows, *dataset_rows])
-
-    await _upsert_scheduled_job(session, parent, org_id)
-    await session.flush()
 
     return SyncConfigBatchResponse(
-        parent=_sync_config_to_response(parent, children_count=0),
+        parent=_sync_config_to_response(
+            parent, children_count=0, credential_id=integration.credential_id
+        ),
         children=[],
         total_created=0,
     )
@@ -1239,7 +1671,6 @@ async def create_sync_config(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
-    svc = SyncConfigurationService(session, org_id)
 
     # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
     await _acquire_repo_limit_create_lock(session, org_id)
@@ -1314,6 +1745,11 @@ async def create_sync_config(
                 status_code=422, detail=f"Invalid cron expression: {exc}"
             )
 
+        try:
+            validate_timezone_name(sync_options.get("timezone"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
         def _get_min_interval(sync_session) -> float | None:
             tier_svc = TierLimitService(sync_session)
             val = tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
@@ -1329,16 +1765,48 @@ async def create_sync_config(
                 ),
             )
 
-    config = await svc.create(
+    # github/gitlab specify repos either explicitly (via POST /sync-configs/batch)
+    # or token-wide via all_repos. A plain create with neither would materialize
+    # zero sources and plan zero units while still returning 202 (a silent no-op),
+    # so reject it and steer the caller to the right path.
+    if payload.provider.lower() in {"github", "gitlab"} and not bool(
+        sync_options.get("all_repos")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "github/gitlab sync configs require repository selection via "
+                "POST /sync-configs/batch, or sync_options.all_repos=true"
+            ),
+        )
+
+    def _build_sources(
+        integration_id: uuid.UUID, config_id: uuid.UUID
+    ) -> list[IntegrationSource]:
+        if payload.provider.lower() in {"github", "gitlab"}:
+            return []
+        return _non_git_source_rows(
+            payload.provider,
+            sync_options,
+            payload.name,
+            org_id,
+            integration_id,
+            config_id,
+        )
+
+    config, integration = await _create_planner_managed_config(
+        session,
+        org_id,
         name=payload.name,
         provider=payload.provider,
-        sync_targets=payload.sync_targets,
-        sync_options=sync_options,
         credential_id=payload.credential_id,
+        sync_targets=payload.sync_targets,
+        parent_options=sync_options,
+        schedule_cron=payload.schedule_cron,
+        timezone=payload.timezone,
+        build_source_rows=_build_sources,
     )
-    await _upsert_scheduled_job(session, config, org_id)
-    await session.flush()
-    return _sync_config_to_response(config)
+    return _sync_config_to_response(config, credential_id=integration.credential_id)
 
 
 @router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)
@@ -1351,7 +1819,8 @@ async def get_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
-    return _sync_config_to_response(config)
+    credential_id = await _integration_credential_id_for_config(session, config, org_id)
+    return _sync_config_to_response(config, credential_id=credential_id)
 
 
 @router.get(
@@ -1368,6 +1837,33 @@ async def get_sync_config_repositories(
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
     return await _repository_selection_for_config(session, org_id, config)
+
+
+@router.get(
+    "/sync-configs/{config_id}/coverage",
+    response_model=SyncCoverageSummaryResponse,
+)
+async def get_sync_config_coverage(
+    config_id: str,
+    history_lookback_days: int = Query(
+        default=HISTORY_LOOKBACK_DAYS,
+        ge=1,
+        le=3650,
+    ),
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> SyncCoverageSummaryResponse:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    payload = await build_sync_coverage_summary(
+        session,
+        org_id,
+        config,
+        lookback_days=history_lookback_days,
+    )
+    return SyncCoverageSummaryResponse.model_validate(payload)
 
 
 @router.put(
@@ -1458,6 +1954,11 @@ async def update_sync_config(
                 status_code=422, detail=f"Invalid cron expression: {exc}"
             )
 
+        try:
+            validate_timezone_name(sync_options.get("timezone"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
         def _get_min_interval(sync_session) -> float | None:
             tier_svc = TierLimitService(sync_session)
             val = tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
@@ -1523,7 +2024,10 @@ async def update_sync_config(
                 await _upsert_scheduled_job(session, child, org_id)
             await session.flush()
 
-    return _sync_config_to_response(updated)
+    credential_id = await _integration_credential_id_for_config(
+        session, updated, org_id
+    )
+    return _sync_config_to_response(updated, credential_id=credential_id)
 
 
 @router.delete("/sync-configs/{config_id}", status_code=204)
@@ -1600,56 +2104,59 @@ async def trigger_sync_config(
                 # ClickHouse unavailable — allow the sync to proceed rather than block it.
                 pass
 
-    plan_request = await session.run_sync(
-        lambda sync_session: planner_request_for_config_if_routed(
-            sync_session, config, triggered_by="manual", mode="incremental"
-        )
-    )
-    if plan_request is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Sync configuration is not linked to a migrated integration",
-        )
     await session.run_sync(
         lambda sync_session: _preflight_planner_credential(sync_session, config)
     )
     try:
-        plan = await session.run_sync(
-            lambda sync_session: plan_sync_run(sync_session, plan_request)
+        trigger = await session.run_sync(
+            lambda sync_session: create_sync_execution_trigger(
+                sync_session,
+                config,
+                org_id,
+                triggered_by="manual",
+                mode="incremental",
+            )
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    planner_pending_run_id = await session.run_sync(
-        lambda sync_session: _ensure_pending_sync_job_run(
-            sync_session,
-            config,
-            org_id,
-            "manual",
-            {"sync_run_id": plan.sync_run_id},
+        raise HTTPException(status_code=400, detail=sanitize_error_text(exc))
+    if trigger is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Sync configuration has no linked integration",
         )
-    )
     await session.commit()
     try:
         dispatch_result = getattr(dispatch_sync_run, "apply_async")(
-            args=(plan.sync_run_id,), queue="sync"
+            args=(trigger.sync_run_id,), queue="sync"
         )
     except Exception as exc:
-        error_message = f"dispatch enqueue failed: {exc}"
+        # Bind to a plain local before closing over it in the lambdas below:
+        # `except ... as exc` implicitly deletes `exc` at the end of THIS
+        # block, which a closure captures by reference, not by value (ruff
+        # F821 catches this). The raw exception is passed straight through
+        # to the sink (_mark_job_run_failed -> sanitize_error_text), not
+        # pre-formatted into a string here -- a Celery/broker enqueue
+        # failure can embed the broker/result-backend URL, credentials
+        # included (CHAOS-2766 codex review finding).
+        dispatch_exc = exc
         await session.run_sync(
             lambda s: mark_sync_run_failed(
-                s, plan.sync_run_id, "dispatch enqueue failed"
+                s, trigger.sync_run_id, "dispatch enqueue failed"
             )
         )
         await session.run_sync(
-            lambda s: _mark_job_run_failed(s, planner_pending_run_id, error_message)
+            lambda s: _mark_job_run_failed(s, trigger.job_run_id, dispatch_exc)
         )
         await session.commit()
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
+        )
     dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
     await session.run_sync(
         lambda s: _merge_job_run_result(
             s,
-            planner_pending_run_id,
+            trigger.job_run_id,
             {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
         )
     )
@@ -1657,9 +2164,9 @@ async def trigger_sync_config(
     return {
         "status": "triggered",
         "config_id": str(config.id),
-        "sync_run_id": plan.sync_run_id,
-        "run_id": planner_pending_run_id,
-        "total_units": plan.total_units,
+        "sync_run_id": trigger.sync_run_id,
+        "run_id": trigger.job_run_id,
+        "total_units": trigger.total_units,
     }
 
 
@@ -1692,98 +2199,95 @@ async def trigger_sync_config_backfill(
 
     from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
 
-    planner_backfill_request = await session.run_sync(
-        lambda sync_session: planner_request_for_config_if_routed(
-            sync_session, config, triggered_by="backfill", mode="backfill"
-        )
-    )
-    if planner_backfill_request is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Sync configuration is not linked to a migrated integration",
-        )
-    planner_backfill_request = replace(
-        planner_backfill_request,
-        since=datetime.combine(payload.since, datetime.min.time(), tzinfo=timezone.utc),
-        before=datetime.combine(
-            payload.before, datetime.max.time(), tzinfo=timezone.utc
-        ),
-    )
     await session.run_sync(
         lambda sync_session: _preflight_planner_credential(sync_session, config)
     )
-    backfill_job = BackfillJobModel(
-        org_id=org_id,
-        sync_config_id=uuid.UUID(config_id),
-        status="pending",
-        since_date=payload.since,
-        before_date=payload.before,
-        total_chunks=0,
-    )
-    session.add(backfill_job)
-    await session.flush()
-    backfill_job_id = str(backfill_job.id)
-
     try:
-        pending_run_id = await session.run_sync(
-            lambda sync_session: _ensure_pending_sync_job_run(
-                sync_session,
-                config,
-                org_id,
-                "backfill",
-                {"planner_managed": True},
+        # Planner ValueErrors (e.g. SyncPlanUnitCapExceededError when the
+        # window expands past the org's run unit cap) are client-fixable:
+        # surface them as 400 like the /trigger endpoint does, instead of
+        # letting the generic handler below report 503.
+        try:
+            trigger = await session.run_sync(
+                lambda sync_session: create_sync_execution_trigger(
+                    sync_session,
+                    config,
+                    org_id,
+                    triggered_by="backfill",
+                    mode="backfill",
+                    since=datetime.combine(
+                        payload.since, datetime.min.time(), tzinfo=timezone.utc
+                    ),
+                    before=datetime.combine(
+                        payload.before, datetime.max.time(), tzinfo=timezone.utc
+                    ),
+                    initial_job_result={"planner_managed": True},
+                )
             )
-        )
-        plan = await session.run_sync(
-            lambda sync_session: plan_sync_run(sync_session, planner_backfill_request)
-        )
-        await session.run_sync(
-            lambda s: _merge_job_run_result(
-                s, pending_run_id, {"sync_run_id": plan.sync_run_id}
+        except ValueError as plan_exc:
+            raise HTTPException(status_code=400, detail=sanitize_error_text(plan_exc))
+        if trigger is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Sync configuration has no linked integration",
             )
-        )
 
-        # Persist the sync_run marker BEFORE dispatch so a crash between enqueue
-        # and the post-dispatch commit still lets finalize_sync_run link this
-        # BackfillJob (matched via celery_task_id.contains("sync_run:<id>")). On
-        # enqueue failure the marker is cleared in _mark_backfill_job_failed.
-        backfill_job.celery_task_id = f"sync_run:{plan.sync_run_id}"
+        backfill_job = BackfillJobModel(
+            org_id=org_id,
+            sync_config_id=uuid.UUID(config_id),
+            status="pending",
+            since_date=payload.since,
+            before_date=payload.before,
+            total_chunks=0,
+        )
+        session.add(backfill_job)
+        await session.flush()
+        backfill_job_id = str(backfill_job.id)
+        backfill_job.celery_task_id = f"sync_run:{trigger.sync_run_id}"
 
         await session.commit()
 
         try:
             result = getattr(dispatch_sync_run, "apply_async")(
-                args=(plan.sync_run_id,), queue="sync"
+                args=(trigger.sync_run_id,), queue="sync"
             )
         except Exception as e:
-            error_message = f"enqueue failed: {e}"
+            # Bind to a plain local before closing over it below -- see the
+            # matching comment in trigger_sync_config above (ruff F821: a
+            # closure over a bare `except ... as e` name is unreliable,
+            # since the name is implicitly deleted at block exit). Same
+            # sink-sanitizes-not-caller rationale (CHAOS-2766 codex review
+            # finding).
+            dispatch_exc = e
             completed_at = datetime.now(timezone.utc)
             await session.run_sync(
                 lambda sync_session: _mark_backfill_job_failed(
-                    sync_session, backfill_job_id, error_message, completed_at
+                    sync_session, backfill_job_id, dispatch_exc, completed_at
                 )
             )
-            if pending_run_id is not None:
-                await session.run_sync(
-                    lambda sync_session: _mark_job_run_failed(
-                        sync_session, pending_run_id, error_message
-                    )
+            await session.run_sync(
+                lambda sync_session: _mark_job_run_failed(
+                    sync_session, trigger.job_run_id, dispatch_exc
                 )
+            )
             await session.run_sync(
                 lambda sync_session: mark_sync_run_failed(
-                    sync_session, plan.sync_run_id, "dispatch enqueue failed"
+                    sync_session, trigger.sync_run_id, "dispatch enqueue failed"
                 )
             )
             await session.commit()
-            raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
-        backfill_job.celery_task_id = f"{result.id}|sync_run:{plan.sync_run_id}"
+            raise HTTPException(
+                status_code=503,
+                detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
+            )
+        backfill_job.celery_task_id = f"{result.id}|sync_run:{trigger.sync_run_id}"
         await session.commit()
         return {
             "status": "accepted",
             "config_id": str(config.id),
             "task_id": result.id,
             "backfill_job_id": backfill_job_id,
-            "sync_run_id": plan.sync_run_id,
+            "sync_run_id": trigger.sync_run_id,
             "mode": "fanout",
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),
@@ -1791,12 +2295,17 @@ async def trigger_sync_config_backfill(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Task queue unavailable: {sanitize_error_text(e)}",
+        )
 
 
 @router.get("/sync-configs/{config_id}/jobs", response_model=list[JobRunResponse])
 async def list_sync_config_jobs(
     config_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[JobRunResponse]:
@@ -1826,16 +2335,23 @@ async def list_sync_config_jobs(
         select(JobRun)
         .where(job_run_job_id.in_(job_ids))
         .order_by(job_run_created_at.desc())
-        .limit(50)
+        .offset(offset)
+        .limit(limit)
     )
     runs_result = await session.execute(runs_stmt)
     runs = list(runs_result.scalars().all())
     planner_sync_runs = await _planner_sync_runs_for_job_runs(session, runs, org_id)
+    planner_sync_run_unit_rollups = await _planner_sync_run_unit_rollups_for_job_runs(
+        session, runs, org_id
+    )
 
     return [
         _job_run_response(
             run,
             planner_sync_runs.get(str(sync_run_id)) if sync_run_id else None,
+            planner_sync_run_unit_rollups.get(str(sync_run_id))
+            if sync_run_id
+            else None,
         )
         for run in runs
         for sync_run_id in [_planner_job_run_sync_run_id(run)]
@@ -1871,6 +2387,9 @@ async def get_backfill_job(
     job_id: str,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
+    metrics_sink_factory: Callable[
+        [], AbstractAsyncContextManager[Any | None]
+    ] = Depends(get_backfill_metrics_sink),
 ):
     from dev_health_ops.api.services.backfill import BackfillJobService
 
@@ -1879,4 +2398,22 @@ async def get_backfill_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Backfill job not found")
     run_counts = await _backfill_job_run_counts(session, job)
-    return _backfill_job_response(job, run_counts)
+    metrics_diagnostics = None
+    # The sink is opened lazily, only now that the job is confirmed to
+    # exist -- a 404 above never triggers a ClickHouse connection
+    # (CHAOS-2888 Workstream C review fix).
+    async with metrics_sink_factory() as metrics_sink:
+        if metrics_sink is not None:
+            from dev_health_ops.api.services.backfill_diagnostics import (
+                build_backfill_metrics_diagnostics,
+            )
+
+            metrics_diagnostics = build_backfill_metrics_diagnostics(
+                metrics_sink,
+                org_id=org_id,
+                range_start=getattr(job, "since_date"),
+                range_end=getattr(job, "before_date"),
+            )
+    return _backfill_job_response(
+        job, run_counts, metrics_diagnostics=metrics_diagnostics
+    )

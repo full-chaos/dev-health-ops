@@ -1,15 +1,142 @@
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
 from dev_health_ops.processors.gitlab import (
+    _fetch_gitlab_commit_stats_sync,
+    _fetch_gitlab_commits_sync,
     _fetch_gitlab_deployments_sync,
     _fetch_gitlab_incidents_sync,
+    _fetch_gitlab_mrs_sync,
     _fetch_gitlab_pipelines_sync,
+    _fetch_gitlab_project_info_sync,
+    _fetch_gitlab_repository_tree,
+    _fetch_gitlab_test_reports_sync,
     process_gitlab_project,
 )
+from dev_health_ops.providers.gitlab.code_client import (
+    GitLabCommitData,
+    GitLabCommitStatsData,
+    GitLabDeploymentData,
+    GitLabPipelineData,
+    GitLabProjectData,
+)
+
+
+class _FakeGitLabCodeClient:
+    def __init__(
+        self,
+        *,
+        pipelines=None,
+        deployments=None,
+        commits=None,
+        commit_stats=None,
+        commit_stats_errors=None,
+        releases=None,
+        merge_requests=None,
+        observations=None,
+        pipelines_raw=None,
+        test_reports=None,
+        jobs=None,
+        artifacts=None,
+        project=None,
+        tree_items=None,
+    ):
+        self.pipelines = pipelines or []
+        self.deployments = deployments or []
+        self.commits = commits or []
+        self.commit_stats = commit_stats or {}
+        self.commit_stats_errors = commit_stats_errors or {}
+        self.releases = releases or []
+        self.merge_requests = merge_requests or []
+        self.observations = observations or []
+        self.pipelines_raw = pipelines_raw or []
+        # CHAOS-2773 CS12: per-pipeline-id test_report / jobs / artifact-bytes
+        # fixtures for the ``tests`` family fetch.
+        self.test_reports = test_reports or {}
+        self.jobs = jobs or {}
+        self.artifacts = artifacts or {}
+        self.project = project
+        self.tree_items = tree_items if tree_items is not None else []
+        self.iter_merge_requests_calls: list[tuple[Any, str, int, int | None]] = []
+        self.get_merge_requests_page_calls: list[tuple[Any, int, str, int]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_pipelines(self, project_id, *, max_pipelines):
+        return self.pipelines[:max_pipelines]
+
+    async def get_deployment_releases(self, project_id, *, per_page):
+        return self.releases[:per_page]
+
+    async def get_deployments(self, project_id, *, max_deployments, per_page=None):
+        return self.deployments[:max_deployments]
+
+    async def get_deployment_merge_requests(self, project_id, sha):
+        return self.merge_requests
+
+    async def iter_merge_requests(self, project_id, *, state, per_page, max_items=None):
+        self.iter_merge_requests_calls.append((project_id, state, per_page, max_items))
+        return (
+            self.merge_requests[:max_items]
+            if max_items is not None
+            else self.merge_requests
+        )
+
+    async def get_merge_requests_page(self, project_id, *, page, state, per_page):
+        self.get_merge_requests_page_calls.append((project_id, page, state, per_page))
+        if page > 1:
+            return []
+        return self.merge_requests
+
+    async def get_mr_approvals(self, project_id, iid):
+        return {"approved_by": []}
+
+    async def iter_mr_notes(self, project_id, iid, *, per_page):
+        return []
+
+    async def get_commits(
+        self, project_id, *, max_commits, since=None, until=None, per_page=100
+    ):
+        return self.commits[:max_commits]
+
+    async def get_commit_stats(self, project_id, commit_sha):
+        if commit_sha in self.commit_stats_errors:
+            raise self.commit_stats_errors[commit_sha]
+        return self.commit_stats[commit_sha]
+
+    async def iter_pipelines_since(self, project_id, *, since=None, per_page=100):
+        return self.pipelines_raw
+
+    async def get_pipeline_test_report(self, project_id, pipeline_id):
+        return self.test_reports.get(pipeline_id, {})
+
+    async def iter_pipeline_jobs(self, project_id, pipeline_id, *, per_page=100):
+        return self.jobs.get(pipeline_id, [])
+
+    async def download_job_artifact(self, project_id, job_id, *, max_bytes=None):
+        return self.artifacts.get(job_id, b"")
+
+    async def get_project(self, project_id):
+        return self.project
+
+    async def list_repository_tree(
+        self, project_id, *, ref, per_page=100, max_items=1_000_000
+    ):
+        return self.tree_items
+
+    def drain_usage_observations(self):
+        observations = list(self.observations)
+        self.observations.clear()
+        return observations
 
 
 @pytest.mark.asyncio
@@ -174,19 +301,151 @@ async def test_process_gitlab_project_no_sync_flags(monkeypatch):
         mock_store.insert_incidents.assert_not_called()
 
 
-def test_fetch_gitlab_pipelines_sync():
-    mock_pipeline = Mock()
-    mock_pipeline.id = 1
-    mock_pipeline.status = "success"
-    mock_pipeline.created_at = "2023-01-01T00:00:00Z"
-    mock_pipeline.started_at = "2023-01-01T00:01:00Z"
-    mock_pipeline.finished_at = "2023-01-01T00:05:00Z"
+async def _run_process_gitlab_project_capture_repo(monkeypatch, *, gitlab_url):
+    """Run ``process_gitlab_project`` against a fully-stubbed connector and
+    return the ``Repo`` handed to ``store.insert_repo`` (CHAOS-2801 write-site
+    harness)."""
+    monkeypatch.setattr("dev_health_ops.processors.gitlab.CONNECTORS_AVAILABLE", True)
 
+    mock_store = AsyncMock()
     mock_gl_project = Mock()
-    mock_gl_project.pipelines.list.return_value = [mock_pipeline]
+    mock_gl_project.id = 123
+    mock_gl_project.name = "test-project"
+    mock_gl_project.path_with_namespace = "group/test-project"
+    mock_gl_project.web_url = "https://gitlab.com/group/test-project"
+    mock_gl_project.default_branch = "main"
+
+    with (
+        patch("dev_health_ops.processors.gitlab.GitLabConnector") as _MockConnector,  # noqa: F841
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_project_info_sync",
+            return_value=mock_gl_project,
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync",
+            return_value=([], []),
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync",
+            return_value=[],
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0
+        ),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_pipelines_sync"),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_deployments_sync"),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync"),
+        patch(
+            "dev_health_ops.processors.gitlab._backfill_gitlab_missing_data",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await process_gitlab_project(
+            store=mock_store,
+            project_id=123,
+            token="test-token",
+            gitlab_url=gitlab_url,
+            sync_cicd=False,
+            sync_deployments=False,
+            sync_incidents=False,
+        )
+
+    mock_store.insert_repo.assert_called_once()
+    return mock_store.insert_repo.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_project_persists_instance_discriminator(monkeypatch):
+    """[CHAOS-2801] process_gitlab_project must persist the connector's
+    configured base URL as ``settings.gitlab_instance_url`` on the written
+    ``Repo`` row -- the discriminator job_work_items.py's numeric-id scoping
+    uses to reject a same-``project_id`` row from a DIFFERENT GitLab
+    instance. Persisted in NORMALIZED form via the shared
+    ``normalize_gitlab_instance`` (the input below deliberately carries
+    mixed case, an explicit default :443 port, and a path suffix -- all of
+    which must be normalized away at persist time, codex MED PR #1148).
+    Independent of the project's own (optional) ``web_url`` (kept unchanged
+    in ``settings.url``)."""
+    written_repo = await _run_process_gitlab_project_capture_repo(
+        monkeypatch, gitlab_url="https://GitLab-A.example.com:443/api/v4/"
+    )
+    assert (
+        written_repo.settings["gitlab_instance_url"] == "https://gitlab-a.example.com"
+    )
+    # The project's own web_url stays untouched under its existing key.
+    assert written_repo.settings["url"] == "https://gitlab.com/group/test-project"
+    assert written_repo.settings["project_id"] == 123
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_gitlab_url",
+    [
+        "",
+        "   ",
+        "https://gitlab.example.com:notaport",
+    ],
+)
+async def test_process_gitlab_project_unknown_instance_url_omits_discriminator(
+    monkeypatch, bad_gitlab_url
+):
+    """[CHAOS-2801 codex MED, PR #1148 round-2] When the normalizer cannot
+    parse the connector URL (blank/malformed), the discriminator key must be
+    OMITTED -- never the raw value. Persisting the raw string would defeat
+    the documented "unknown" semantic AND retain path/query/userinfo from a
+    malformed URL at rest (the CHAOS-2766/2780 credential-retention leak
+    class). An absent key reads back as "unknown", identical to a
+    pre-CHAOS-2801 row."""
+    written_repo = await _run_process_gitlab_project_capture_repo(
+        monkeypatch, gitlab_url=bad_gitlab_url
+    )
+    assert "gitlab_instance_url" not in written_repo.settings
+    # The raw value must not appear under any other settings key either.
+    if bad_gitlab_url.strip():
+        assert bad_gitlab_url not in list(written_repo.settings.values())
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_project_userinfo_stripped_from_discriminator(monkeypatch):
+    """[CHAOS-2801 codex MED, PR #1148 round-2] A parseable URL carrying
+    userinfo persists the canonical host-only discriminator; the userinfo
+    component (credential-in-URL shape) never reaches the settings JSON at
+    rest."""
+    account_label = "svc-" + "sync-account"  # neutral, runtime-joined
+    written_repo = await _run_process_gitlab_project_capture_repo(
+        monkeypatch,
+        gitlab_url=f"https://{account_label}@GitLab-A.example.com/",
+    )
+    assert (
+        written_repo.settings["gitlab_instance_url"] == "https://gitlab-a.example.com"
+    )
+    assert account_label not in written_repo.settings["gitlab_instance_url"]
+
+
+def test_fetch_gitlab_pipelines_sync(monkeypatch):
+    pipeline = GitLabPipelineData(
+        pipeline_id="1",
+        status="success",
+        created_at=datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2023, 1, 1, 0, 5, 0, tzinfo=timezone.utc),
+    )
+    usage_sink: list[dict[str, str]] = []
+    fake_client = _FakeGitLabCodeClient(
+        pipelines=[pipeline], observations=[{"route_family": "pipelines"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
 
     pipelines = _fetch_gitlab_pipelines_sync(
-        mock_gl_project, repo_id=None, max_pipelines=10, since=None
+        Mock(),
+        project_id=1,
+        repo_id=None,
+        max_pipelines=10,
+        since=None,
+        usage_sink=usage_sink,
     )
 
     assert len(pipelines) == 1
@@ -194,35 +453,324 @@ def test_fetch_gitlab_pipelines_sync():
     assert pipelines[0].status == "success"
     assert pipelines[0].queued_at == datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     assert pipelines[0].started_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    assert usage_sink == [{"route_family": "pipelines"}]
 
 
-def test_fetch_gitlab_deployments_sync():
-    mock_connector = Mock()
-    mock_connector.rest_client.get_releases.return_value = [{"tag_name": "v1.2.3"}]
-    mock_connector.rest_client.get_deployments.return_value = [
-        {
-            "id": 101,
-            "iid": 12,
-            "status": "success",
-            "ref": "v1.2.3",
-            "environment": {"name": "production"},
-            "created_at": "2023-01-02T00:00:00Z",
-            "finished_at": "2023-01-02T00:10:00Z",
-        }
-    ]
+def test_fetch_gitlab_commits_sync(monkeypatch):
+    committed_at = datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    commit = GitLabCommitData(
+        commit_id="abc123",
+        message="ship it",
+        author_name="Ada",
+        authored_date=datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        committer_name="Grace",
+        committed_date=committed_at,
+        parent_ids=("parent",),
+    )
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commits=[commit], observations=[{"route_family": "project"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    commit_hashes, commit_objects = _fetch_gitlab_commits_sync(
+        Mock(), project_id=1, max_commits=10, repo_id=None, usage_sink=usage_sink
+    )
+
+    assert commit_hashes == ["abc123"]
+    assert len(commit_objects) == 1
+    assert commit_objects[0].hash == "abc123"
+    assert commit_objects[0].message == "ship it"
+    assert commit_objects[0].parents == 1
+    assert commit_objects[0].committer_when == committed_at
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_project_info_sync_uses_code_client(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    project = GitLabProjectData(
+        id=42,
+        name="proj",
+        path_with_namespace="group/proj",
+        web_url="https://gitlab.com/group/proj",
+        default_branch="main",
+    )
+    fake_client = _FakeGitLabCodeClient(
+        project=project, observations=[{"route_family": "project"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    result = _fetch_gitlab_project_info_sync(Mock(), 42, usage_sink=usage_sink)
+
+    assert result is project
+    assert result.name == "proj"
+    assert usage_sink == [{"route_family": "project"}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_gitlab_repository_tree_uses_code_client(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    tree_items = [{"type": "blob", "path": "src/a.py"}]
+    fake_client = _FakeGitLabCodeClient(
+        tree_items=tree_items, observations=[{"route_family": "project"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    items = await _fetch_gitlab_repository_tree(
+        Mock(), "group/proj", "main", usage_sink
+    )
+
+    assert items == tree_items
+    assert usage_sink == [{"route_family": "project"}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_gitlab_repository_tree_reraises_rate_limit(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+
+    class _RateLimitedClient(_FakeGitLabCodeClient):
+        async def list_repository_tree(
+            self, project_id, *, ref, per_page=100, max_items=1_000_000
+        ):
+            raise RateLimitException("limited")
+
+    fake_client = _RateLimitedClient(observations=[{"route_family": "project"}])
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    with pytest.raises(RateLimitException):
+        await _fetch_gitlab_repository_tree(Mock(), "group/proj", "main", usage_sink)
+
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_commit_stats_sync_drains_on_success(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commit_stats={"abc123": GitLabCommitStatsData("abc123", 12, 3)},
+        observations=[{"route_family": "project"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    stats = _fetch_gitlab_commit_stats_sync(
+        Mock(), 1, ["abc123"], None, 10, usage_sink=usage_sink
+    )
+
+    assert len(stats) == 1
+    assert stats[0].commit_hash == "abc123"
+    assert stats[0].additions == 12
+    assert stats[0].deletions == 3
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_commit_stats_sync_drains_on_failure(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commit_stats_errors={"abc123": RuntimeError("boom")},
+        observations=[{"route_family": "project"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    stats = _fetch_gitlab_commit_stats_sync(
+        Mock(), 1, ["abc123"], None, 10, usage_sink=usage_sink
+    )
+
+    assert stats == []
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_commit_stats_sync_reraises_rate_limit(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    fake_client = _FakeGitLabCodeClient(
+        commit_stats_errors={"abc123": RateLimitException("limited")},
+        observations=[{"route_family": "project"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    with pytest.raises(RateLimitException):
+        _fetch_gitlab_commit_stats_sync(
+            Mock(), 1, ["abc123"], None, 10, usage_sink=usage_sink
+        )
+
+    assert usage_sink == [{"route_family": "project"}]
+
+
+def test_fetch_gitlab_mrs_sync_uses_code_client(monkeypatch):
+    usage_sink: list[dict[str, Any]] = []
+    mr = {
+        "iid": "42",
+        "title": "Ship MR",
+        "description": "desc",
+        "state": "merged",
+        "author": {"username": "ada"},
+        "created_at": "2026-01-01T12:00:00Z",
+        "updated_at": "2026-01-02T12:00:00Z",
+        "merged_at": "2026-01-03T12:00:00Z",
+        "closed_at": None,
+        "source_branch": "feat",
+        "target_branch": "main",
+    }
+    fake_client = _FakeGitLabCodeClient(
+        merge_requests=[mr], observations=[{"route_family": "merge_requests"}]
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+    connector = Mock()
+    connector.per_page = 50
+    connector.get_merge_requests.side_effect = AssertionError(
+        "legacy connector.get_merge_requests must not be called"
+    )
+
+    prs = _fetch_gitlab_mrs_sync(
+        connector,
+        project_id=99,
+        repo_id=None,
+        max_mrs=10,
+        usage_sink=usage_sink,
+    )
+
+    assert fake_client.iter_merge_requests_calls == [(99, "all", 50, 10)]
+    connector.get_merge_requests.assert_not_called()
+    assert len(prs) == 1
+    assert prs[0].number == 42
+    assert prs[0].author_name == "ada"
+    assert prs[0].created_at == datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    assert prs[0].merged_at == datetime(2026, 1, 3, 12, tzinfo=timezone.utc)
+    assert usage_sink == [{"route_family": "merge_requests"}]
+
+
+def test_fetch_gitlab_deployments_sync(monkeypatch):
+    deployment = GitLabDeploymentData(
+        deployment_id="101",
+        deployment_iid=12,
+        status="success",
+        environment="production",
+        created_at=datetime(2023, 1, 2, 0, 0, 0, tzinfo=timezone.utc),
+        finished_at=datetime(2023, 1, 2, 0, 10, 0, tzinfo=timezone.utc),
+        sha="abc123",
+        raw_payload={"id": 101, "iid": 12, "ref": "v1.2.3"},
+    )
+    usage_sink: list[dict[str, str]] = []
+    fake_client = _FakeGitLabCodeClient(
+        deployments=[deployment],
+        releases=[{"tag_name": "v1.2.3"}],
+        merge_requests=[
+            {"iid": 44, "state": "merged", "merged_at": "2023-01-02T00:09:00Z"}
+        ],
+        observations=[{"route_family": "deployments"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
 
     deployments = _fetch_gitlab_deployments_sync(
-        mock_connector, project_id=1, repo_id=None, max_deployments=10, since=None
+        Mock(),
+        project_id=1,
+        repo_id=None,
+        max_deployments=10,
+        since=None,
+        usage_sink=usage_sink,
     )
 
     assert len(deployments) == 1
     assert deployments[0].deployment_id == "101"
     assert deployments[0].environment == "production"
+    assert deployments[0].pull_request_number == 44
     assert deployments[0].release_ref == "v1.2.3"
     assert deployments[0].release_ref_confidence == pytest.approx(1.0)
     assert deployments[0].deployed_at == datetime(
         2023, 1, 2, 0, 0, 0, tzinfo=timezone.utc
     )
+    assert usage_sink == [{"route_family": "deployments"}]
+
+
+def test_fetch_gitlab_test_reports_sync(monkeypatch):
+    pipeline_raw = {
+        "id": 1,
+        "ref": "main",
+        "created_at": "2023-01-01T00:00:00Z",
+        "started_at": "2023-01-01T00:01:00Z",
+        "finished_at": "2023-01-01T00:05:00Z",
+    }
+    usage_sink: list[dict[str, str]] = []
+    fake_client = _FakeGitLabCodeClient(
+        pipelines_raw=[pipeline_raw],
+        test_reports={1: {"test_suites": [{"name": "suite"}]}},
+        jobs={1: [{"id": 9, "artifacts_file": {"filename": "a.zip"}}]},
+        artifacts={9: b""},  # no artifact bytes -> no coverage members
+        observations=[{"route_family": "tests"}],
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    test_reports, coverage_members = _fetch_gitlab_test_reports_sync(
+        Mock(),
+        project_id=1,
+        since=None,
+        default_branch="main",
+        max_pipelines=10,
+        usage_sink=usage_sink,
+    )
+
+    assert len(test_reports) == 1
+    run_id, report, started_at, finished_at = test_reports[0]
+    assert run_id == "1"
+    assert report == {"test_suites": [{"name": "suite"}]}
+    assert started_at == datetime(2023, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    assert coverage_members == []
+    assert usage_sink == [{"route_family": "tests"}]
+
+
+def test_fetch_gitlab_test_reports_sync_skips_other_branch_pipelines(monkeypatch):
+    other_branch_pipeline = {
+        "id": 2,
+        "ref": "feature-x",
+        "created_at": "2023-01-01T00:00:00Z",
+    }
+    fake_client = _FakeGitLabCodeClient(
+        pipelines_raw=[other_branch_pipeline],
+        test_reports={2: {"test_suites": [{"name": "suite"}]}},
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        lambda connector: fake_client,
+    )
+
+    test_reports, coverage_members = _fetch_gitlab_test_reports_sync(
+        Mock(),
+        project_id=1,
+        since=None,
+        default_branch="main",
+        max_pipelines=10,
+    )
+
+    assert test_reports == []
+    assert coverage_members == []
 
 
 def test_fetch_gitlab_incidents_sync():

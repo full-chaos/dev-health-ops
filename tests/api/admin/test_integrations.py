@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +23,7 @@ from dev_health_ops.models.integrations import (
     IntegrationSource,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
 from dev_health_ops.models.settings import (
@@ -31,7 +33,7 @@ from dev_health_ops.models.settings import (
 )
 from dev_health_ops.models.users import Organization, User
 from dev_health_ops.sync.dispatch_outbox import (
-    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
 )
 from tests._helpers import tables_of
@@ -51,6 +53,7 @@ _TABLES = tables_of(
     IntegrationDataset,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
     SyncConfiguration,
     IntegrationCredential,
@@ -572,7 +575,7 @@ async def test_trigger_sync_returns_202_when_enqueue_fails(
     assert run.status == "planned"
     assert run.error is None
     assert run.completed_at is None
-    assert outbox.kind == OUTBOX_KIND_DISPATCH
+    assert outbox.kind == OUTBOX_KIND_DISCOVERY
     assert outbox.status == OUTBOX_STATUS_PENDING
 
 
@@ -674,7 +677,7 @@ async def test_trigger_backfill_returns_202_when_enqueue_fails(
     assert run.mode == "backfill"
     assert run.error is None
     assert run.completed_at is None
-    assert outbox.kind == OUTBOX_KIND_DISPATCH
+    assert outbox.kind == OUTBOX_KIND_DISCOVERY
     assert outbox.status == OUTBOX_STATUS_PENDING
 
 
@@ -733,6 +736,7 @@ async def test_get_sync_run_units_empty(client, session_maker, seeded_state):
     assert data["by_source"] == {}
     assert data["by_dataset"] == {}
     assert data["by_cost_class"] == {}
+    assert data["next_retry_at"] is None
 
 
 @pytest.mark.asyncio
@@ -772,6 +776,240 @@ async def test_get_sync_run_units_rollups(client, session_maker, seeded_state):
     assert data["by_status"]["failed"] == 1
     assert data["by_cost_class"]["standard"] == 2
     assert "git" in data["by_dataset"]
+    assert data["by_dataset"]["git"]["success"] == 1
+    assert data["by_dataset"]["git"]["failed"] == 1
+    assert data["by_source"][source_id]["success"] == 1
+    assert data["by_source"][source_id]["failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_exposes_source_names(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    async with session_maker() as session:
+        session.add(
+            SyncRunUnit(
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="git",
+                cost_class="standard",
+                mode="incremental",
+                status="success",
+                attempts=1,
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    unit = resp.json()["units"][0]
+    assert unit["source_name"] == "repo"
+    assert unit["source_full_name"] == "owner/repo"
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_retry_metadata_and_next_retry_at(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+    later_retry = datetime(2026, 6, 26, 12, 15, tzinfo=timezone.utc)
+    earliest_retry = later_retry - timedelta(minutes=10)
+    heartbeat = later_retry - timedelta(minutes=1)
+
+    async with session_maker() as session:
+        session.add_all(
+            [
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="git",
+                    cost_class="standard",
+                    mode="incremental",
+                    status="retrying",
+                    attempts=2,
+                    available_at=later_retry,
+                    rate_limit_deferrals=3,
+                    last_heartbeat_at=heartbeat,
+                ),
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="prs",
+                    cost_class="standard",
+                    mode="incremental",
+                    status="retrying",
+                    attempts=1,
+                    available_at=earliest_retry,
+                ),
+                SyncRunUnit(
+                    org_id=seeded_state["org_id"],
+                    sync_run_id=uuid.UUID(run_id),
+                    integration_id=uuid.UUID(integration_id),
+                    source_id=uuid.UUID(source_id),
+                    provider="github",
+                    dataset_key="issues",
+                    cost_class="standard",
+                    mode="incremental",
+                    status="success",
+                    attempts=1,
+                    available_at=earliest_retry - timedelta(minutes=5),
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert datetime.fromisoformat(data["next_retry_at"]) == earliest_retry.replace(
+        tzinfo=None
+    )
+    retry_unit = next(unit for unit in data["units"] if unit["dataset_key"] == "git")
+    assert datetime.fromisoformat(retry_unit["available_at"]) == later_retry.replace(
+        tzinfo=None
+    )
+    assert retry_unit["rate_limit_deferrals"] == 3
+    assert datetime.fromisoformat(retry_unit["last_heartbeat_at"]) == heartbeat.replace(
+        tzinfo=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_exposes_error_category(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    async with session_maker() as session:
+        session.add(
+            SyncRunUnit(
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="git",
+                cost_class="standard",
+                mode="incremental",
+                status="failed",
+                attempts=1,
+                result={"error_category": "rate_limit"},
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    unit = resp.json()["units"][0]
+    assert unit["error_category"] == "rate_limit"
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_non_dict_result_has_no_error_category(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    run_id = await _seed_sync_run(session_maker, seeded_state["org_id"], integration_id)
+
+    async with session_maker() as session:
+        session.add(
+            SyncRunUnit(
+                org_id=seeded_state["org_id"],
+                sync_run_id=uuid.UUID(run_id),
+                integration_id=uuid.UUID(integration_id),
+                source_id=uuid.UUID(source_id),
+                provider="github",
+                dataset_key="git",
+                cost_class="standard",
+                mode="incremental",
+                status="failed",
+                attempts=1,
+                result=["unexpected"],
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}/units")
+    assert resp.status_code == 200
+    unit = resp.json()["units"][0]
+    assert unit["error_category"] is None
+    assert unit["result"] == ["unexpected"]
+
+
+@pytest.mark.asyncio
+async def test_get_sync_run_units_foreign_org_run_returns_404(client, session_maker):
+    ac, _ = client
+    foreign_org_id = str(uuid.uuid4())
+    foreign_integration_id = uuid.uuid4()
+    foreign_run_id = uuid.uuid4()
+
+    async with session_maker() as session:
+        session.add(
+            Organization(
+                id=foreign_org_id, slug="other-org", name="Other Org", tier="pro"
+            )
+        )
+        session.add(
+            Integration(
+                id=foreign_integration_id,
+                org_id=foreign_org_id,
+                provider="github",
+                name="foreign-integration",
+                config={},
+                is_active=True,
+            )
+        )
+        session.add(
+            SyncRun(
+                id=foreign_run_id,
+                org_id=foreign_org_id,
+                integration_id=foreign_integration_id,
+                triggered_by="test",
+                mode="incremental",
+                status="planned",
+                total_units=0,
+                completed_units=0,
+                failed_units=0,
+            )
+        )
+        await session.commit()
+
+    resp = await ac.get(f"/api/v1/admin/sync-runs/{foreign_run_id}/units")
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

@@ -10,8 +10,14 @@ from typing import Any, cast
 from uuid import UUID
 
 from dev_health_ops.api.queries.investment import (
+    LATEST_WORK_UNIT_AUTHORS_CTE,
     LATEST_WORK_UNIT_INVESTMENTS_CTE,
+    LATEST_WORK_UNIT_REPO_EFFORT_CTE,
+    PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
     fetch_investment_quality_stats,
+)
+from dev_health_ops.api.queries.investment_membership_scope import (
+    record_stale_investment_membership_scope,
 )
 
 from ..authz import require_org_id
@@ -175,6 +181,12 @@ def _analytics_quality_window(batch: AnalyticsRequestInput) -> tuple[date, date]
 
 
 def _has_investment_author_filter(filters: FilterInput | None) -> bool:
+    """True when who.developers or scope.level=developer is active.
+
+    CHAOS-2492: used to decide whether the Sankey coverage query needs the
+    ``au`` join (LATEST_WORK_UNIT_AUTHORS_CTE) chained in -- coverage is no
+    longer forced to None for developer-filtered investment views.
+    """
     if filters is None:
         return False
     if (
@@ -342,6 +354,8 @@ async def _execute_timeseries_query(
 
     sql, params = compile_timeseries(request, org_id, timeout, filters=filters)
 
+    if use_investment:
+        await record_stale_investment_membership_scope(client, org_id=org_id)
     rows = await query_dicts(client, sql, params)
     grouped: dict[str, list[TimeseriesBucket]] = {}
 
@@ -438,6 +452,13 @@ async def _execute_breakdown_query(
 
     sql, params = compile_breakdown(request, org_id, timeout, filters=filters)
 
+    # CHAOS-2765: breakdown reads compile the CHAOS-2764 membership-scoped
+    # work-unit CTE just like timeseries/coverage/sankey, so the stale-scope
+    # counter must cover this surface too. Mirror _execute_timeseries_query:
+    # emit before execution when the investment (scoped) path is active. The
+    # recorder is internally fail-open, so it never blocks the read.
+    if use_investment:
+        await record_stale_investment_membership_scope(client, org_id=org_id)
     rows = await query_dicts(client, sql, params)
 
     # Resolve repo/team dimension keys to human display names server-side so the
@@ -660,7 +681,7 @@ async def resolve_analytics(
                         "work_unit_investments.from_ts < %(end_date)s "
                         "AND work_unit_investments.to_ts >= %(start_date)s"
                     )
-                    joins = """
+                    joins = f"""
                         LEFT JOIN (
                             SELECT
                                 work_unit_id,
@@ -677,44 +698,62 @@ async def resolve_analytics(
                                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                                     [work_unit_investments.work_unit_id]
                                 )) AS issue_id
-                                LEFT JOIN (
-                                    SELECT
-                                        work_item_id,
-                                        argMax(team_id, computed_at) AS team_id,
-                                        argMax(team_name, computed_at) AS team_name
-                                    FROM work_item_cycle_times
-                                    WHERE org_id = %(org_id)s
-                                    GROUP BY work_item_id
-                                ) AS t ON t.work_item_id = issue_id
+                                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                                 GROUP BY work_unit_id, team_id, team
                             )
                             GROUP BY work_unit_id
                         ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
-                        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
+                        LEFT JOIN latest_work_unit_repo_effort AS wure
+                            ON wure.org_id = work_unit_investments.org_id
+                            AND wure.work_unit_id = work_unit_investments.work_unit_id
+                        LEFT JOIN repos AS r ON toString(r.id) = toString(wure.repo_id)
                         """
 
                 assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
                 assigned_repo_expr = f"{repo_col} IS NOT NULL"
                 total_expr = "count()"
+                repo_total_expr = total_expr
                 assigned_team_count_expr = f"countIf({assigned_team_expr})"
                 assigned_repo_count_expr = f"countIf({assigned_repo_expr})"
                 if request.use_investment:
-                    assigned_repo_expr = f"lower({repo_col}) != 'unassigned'"
-                    total_expr = "uniqExact(work_unit_investments.work_unit_id)"
+                    # Effort-weighted, allocation-aware coverage so the numbers
+                    # match the effort-weighted Sankey flows (team coverage was
+                    # previously count-based and disagreed with the visual).
+                    # LEFT JOIN fallback: a work unit with no repo-effort
+                    # allocation row falls back to its scalar repo_id + full
+                    # effort, so it is never silently dropped.
+                    repo_effort_col = (
+                        "if(wure.work_unit_id != '', wure.repo_effort_value, "
+                        "work_unit_investments.effort_value)"
+                    )
+                    repo_assigned_col = (
+                        "if(wure.work_unit_id != '', wure.repo_id, "
+                        "work_unit_investments.repo_id)"
+                    )
+                    total_expr = f"sum({repo_effort_col})"
+                    repo_total_expr = total_expr
                     assigned_team_count_expr = (
-                        "uniqExactIf(work_unit_investments.work_unit_id, "
-                        f"{assigned_team_expr})"
+                        f"sumIf({repo_effort_col}, {assigned_team_expr})"
                     )
                     assigned_repo_count_expr = (
-                        "uniqExactIf(work_unit_investments.work_unit_id, "
-                        f"{assigned_repo_expr})"
+                        f"sumIf({repo_effort_col}, {repo_assigned_col} IS NOT NULL)"
                     )
 
+                has_author_filter = (
+                    request.use_investment
+                    and _has_investment_author_filter(resolved_filters)
+                )
                 with_clause = (
-                    f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}"
+                    (
+                        f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}, {LATEST_WORK_UNIT_AUTHORS_CTE}"
+                        if has_author_filter
+                        else f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}, {LATEST_WORK_UNIT_REPO_EFFORT_CTE}"
+                    )
                     if request.use_investment
                     else ""
                 )
+                if request.use_investment and has_author_filter:
+                    with_clause = f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}, {LATEST_WORK_UNIT_REPO_EFFORT_CTE}, {LATEST_WORK_UNIT_AUTHORS_CTE}"
                 source_alias = (
                     "work_unit_investments" if request.use_investment else table
                 )
@@ -727,65 +766,72 @@ async def resolve_analytics(
                     else "org_id = %(org_id)s"
                 )
 
-                if request.use_investment and _has_investment_author_filter(
-                    resolved_filters
-                ):
-                    logger.info(
-                        "Sankey coverage unavailable for investment author filters; "
-                        "work_unit_investments does not expose author_id"
-                    )
-                else:
-                    if request.use_investment and _has_work_category_filter(
-                        resolved_filters
-                    ):
-                        joins += """
-                        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-                        """
-
-                    coverage_filter_clause, coverage_filter_params = translate_filters(
-                        resolved_filters,
-                        use_investment=bool(request.use_investment),
-                        team_column=team_col,
-                        repo_column="work_unit_investments.repo_id"
-                        if request.use_investment
-                        else repo_col,
-                        author_column="author_id",
-                    )
-
-                    coverage_sql = f"""
-                        {with_clause}
-                        SELECT
-                            {total_expr} as total,
-                            {assigned_team_count_expr} as assigned_team,
-                            {assigned_repo_count_expr} as assigned_repo
-                        FROM {base_table}
-                        {joins}
-                        WHERE {date_filter}
-                          AND {org_filter}
-                          {coverage_filter_clause}
+                if has_author_filter:
+                    # CHAOS-2492: resolve developer identity via the au join so
+                    # who.developers / scope.level=developer coverage is honored
+                    # instead of being silently excluded (previously forced
+                    # coverage=None -- see CHAOS-2488).
+                    joins += """
+                    LEFT JOIN work_unit_authors AS au ON au.work_unit_id = work_unit_investments.work_unit_id
                     """
 
-                    cov_params = {
-                        "start_date": request.start_date,
-                        "end_date": request.end_date,
-                        "org_id": org_id,
-                    }
-                    cov_params.update(coverage_filter_params)
+                if request.use_investment and _has_work_category_filter(
+                    resolved_filters
+                ):
+                    joins += """
+                    ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+                    """
 
-                    try:
-                        c_rows = await query_dicts(client, coverage_sql, cov_params)
-                        if c_rows:
-                            total = float(c_rows[0].get("total", 0))
-                            assigned_team = float(c_rows[0].get("assigned_team", 0))
-                            assigned_repo = float(c_rows[0].get("assigned_repo", 0))
+                coverage_filter_clause, coverage_filter_params = translate_filters(
+                    resolved_filters,
+                    use_investment=bool(request.use_investment),
+                    team_column=team_col,
+                    repo_column="wure.repo_id" if request.use_investment else repo_col,
+                    author_column="author_email",
+                )
 
-                            coverage = SankeyCoverage(
-                                team_coverage=assigned_team / total if total > 0 else 0,
-                                repo_coverage=assigned_repo / total if total > 0 else 0,
-                            )
-                    except Exception as e:
-                        logger.error("Coverage query failed: %s", e)
-                        coverage = None
+                coverage_sql = f"""
+                    {with_clause}
+                    SELECT
+                        {total_expr} as total,
+                        {assigned_team_count_expr} as assigned_team,
+                        {repo_total_expr} as repo_total,
+                        {assigned_repo_count_expr} as assigned_repo
+                    FROM {base_table}
+                    {joins}
+                    WHERE {date_filter}
+                      AND {org_filter}
+                      {coverage_filter_clause}
+                """
+
+                cov_params = {
+                    "start_date": request.start_date,
+                    "end_date": request.end_date,
+                    "org_id": org_id,
+                }
+                cov_params.update(coverage_filter_params)
+
+                try:
+                    if request.use_investment:
+                        await record_stale_investment_membership_scope(
+                            client, org_id=org_id
+                        )
+                    c_rows = await query_dicts(client, coverage_sql, cov_params)
+                    if c_rows:
+                        total = float(c_rows[0].get("total", 0))
+                        assigned_team = float(c_rows[0].get("assigned_team", 0))
+                        repo_total = float(c_rows[0].get("repo_total", 0))
+                        assigned_repo = float(c_rows[0].get("assigned_repo", 0))
+
+                        coverage = SankeyCoverage(
+                            team_coverage=assigned_team / total if total > 0 else 0,
+                            repo_coverage=assigned_repo / repo_total
+                            if repo_total > 0
+                            else 0,
+                        )
+                except Exception as e:
+                    logger.error("Coverage query failed: %s", e)
+                    coverage = None
 
             sankey_result = SankeyResult(nodes=nodes, edges=edges, coverage=coverage)
 

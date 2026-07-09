@@ -69,6 +69,24 @@ class AIScopeInput:
     buckets: list[AIAttributionBucketInput] | None = None
 
 
+@strawberry.input
+class AIAttributionScopeInput:
+    """Scope filters for the dedicated ``aiAttributionOverview`` query.
+
+    Deliberately narrower than :class:`AIScopeInput`: ``ai_attribution_resolved``
+    carries no ``work_type`` column (unlike ``ai_impact_metrics_daily``, which
+    projects it from a ``work_items`` join), so exposing a ``work_type`` filter
+    here would silently no-op against the live page's active filters (CHAOS-2744).
+    ``buckets`` filters on the resolved view's own ``kind`` column instead.
+
+    All filters are AND-combined; ``None`` means "no filter at this level".
+    """
+
+    repo_id: str | None = None
+    team_id: str | None = None
+    buckets: list[AIAttributionBucketInput] | None = None
+
+
 # =============================================================================
 # Outputs
 # =============================================================================
@@ -504,5 +522,65 @@ class AiAttributedPrsResult:
     end_date: date
     rows: list[AiAttributedPr]
     total: int
+    has_more: bool
+    data_available: bool
+
+
+@strawberry.type
+class AIAttributionMixRow:
+    """Count of resolved AI attribution records for one kind in the window.
+
+    Sourced from a plain ``GROUP BY kind`` over ``ai_attribution_resolved``,
+    which already carries the winning (highest-precedence, non-superseded)
+    signal per subject, so counts never double a subject across sources.
+    This intentionally does NOT include a synthesized ``human`` bucket:
+    ``ai_attribution_resolved`` only ever contains subjects with a detected
+    signal, so a human count would require the full PR population (that
+    inference already lives in ``aiImpactSummary``).
+    """
+
+    kind: str
+    count: int
+    share: float
+
+
+@strawberry.type
+class AIAttributionEvidenceRow:
+    """A single resolved AI attribution record with full provenance.
+
+    Sourced directly from ``ai_attribution_resolved`` — one row per subject,
+    already resolved to the highest-precedence, non-superseded signal. No
+    aggregation, no fabrication: every row is a persisted signal.
+    """
+
+    subject_type: str
+    subject_id: str
+    repo_id: str | None
+    provider: str
+    kind: str
+    source: str
+    confidence: float
+    actor: str | None
+    evidence: str
+    observed_at: datetime
+    team_id: str | None = None
+
+
+@strawberry.type
+class AIAttributionOverviewResult:
+    """Attribution mix + provenance evidence for the requested window.
+
+    Backs the dedicated ``/ai/attribution`` page. ``mix`` answers "how does
+    detected AI involvement split by kind"; ``rows`` gives the underlying
+    evidence (source/confidence/evidence) so the UI never has to re-derive
+    or guess why a subject was attributed.
+    """
+
+    org_id: str
+    start_date: date
+    end_date: date
+    mix: list[AIAttributionMixRow]
+    total_attributed: int
+    rows: list[AIAttributionEvidenceRow]
     has_more: bool
     data_available: bool

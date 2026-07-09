@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +10,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -20,12 +21,14 @@ from dev_health_ops.models.integrations import (
     IntegrationSource,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
+    JobRunStatus,
     JobStatus,
     ScheduledJob,
     Setting,
@@ -53,6 +56,7 @@ _TABLES = tables_of(
     IntegrationDataset,
     SyncDispatchOutbox,
     SyncRun,
+    SyncRunReferenceDiscovery,
     SyncRunUnit,
     SyncWatermark,
 )
@@ -195,9 +199,17 @@ async def client(session_maker, seeded_state):
 
 
 async def _create_sync_config(ac, name: str = "my-sync", provider: str = "github"):
+    # github/gitlab plain creates are token-wide (all_repos); non-git providers
+    # ignore the flag and materialize a single source. Either way the config is
+    # integration-native and triggerable.
     return await ac.post(
         "/api/v1/admin/sync-configs",
-        json={"name": name, "provider": provider, "sync_targets": []},
+        json={
+            "name": name,
+            "provider": provider,
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
     )
 
 
@@ -211,10 +223,9 @@ async def _create_migrated_config(
 ) -> str:
     """Insert an integration-linked SyncConfiguration + Integration/source/dataset.
 
-    Post-CHAOS-2647 only configs linked to a migrated integration can be
-    triggered/backfilled; bare configs return HTTP 400. Seeding the integration,
-    one enabled source and one enabled dataset lets the trigger endpoint route
-    through the fan-out planner (plan_sync_run + dispatch_sync_run).
+    Seeds the integration, one enabled source and one enabled dataset so the
+    trigger endpoint routes through the fan-out planner (plan_sync_run +
+    dispatch_sync_run).
     """
     async with session_maker() as session:
         integration = Integration(
@@ -251,7 +262,7 @@ async def _create_migrated_config(
             sync_targets=["git"],
             sync_options={},
             is_active=is_active,
-            migrated_integration_id=integration.id,
+            integration_id=integration.id,
         )
         session.add_all([source, dataset, config])
         await session.flush()
@@ -385,6 +396,35 @@ async def test_create_sync_config_folds_top_level_schedule_fields(
     assert job.provider == "linear"
     assert job.timezone == "America/Los_Angeles"
     assert job.job_config == {"provider": "linear", "sync_config_id": str(config_id)}
+
+
+@pytest.mark.asyncio
+async def test_create_sync_config_rejects_invalid_timezone(client):
+    """Invalid selected timezone is rejected at write time (CHAOS-2689) instead
+    of silently falling back to UTC at dispatch time."""
+    ac, _ = client
+
+    with (
+        patch(
+            "dev_health_ops.licensing.gating._check_org_feature_async",
+            return_value=True,
+        ),
+        patch.object(sync_router_module, "Croniter", _CroniterStub),
+    ):
+        resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "bad-tz",
+                "provider": "linear",
+                "sync_targets": ["work-items"],
+                "sync_options": {"backfill_days": 1},
+                "schedule_cron": "30 2 * * *",
+                "timezone": "Not/AZone",
+            },
+        )
+
+    assert resp.status_code == 422, resp.text
+    assert "timezone" in resp.text.lower()
 
 
 @pytest.mark.asyncio
@@ -543,7 +583,7 @@ async def test_create_sync_config_acquires_repo_limit_lock_before_count(
             "name": "lock-before-count-single",
             "provider": "github",
             "sync_targets": ["git"],
-            "sync_options": {"owner": "full-chaos", "repo": "dev-health"},
+            "sync_options": {"owner": "full-chaos", "all_repos": True},
         },
     )
 
@@ -637,6 +677,244 @@ async def test_get_sync_config_nonexistent_returns_404(client):
     resp = await ac.get(f"/api/v1/admin/sync-configs/{uuid.uuid4()}")
 
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_sync_config_credential_id_reflects_linked_integration(
+    client, session_maker
+):
+    """CHAOS-2762 regression: ``SyncConfiguration`` stores no credential of
+    its own -- the API's ``credential_id`` is derived live from the linked
+    ``Integration`` (the single sanctioned surface), so it can never carry a
+    second, unfrozen copy that drifts from what auth resolution actually uses.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        cred_a = IntegrationCredential(
+            provider="github",
+            name="cred-a",
+            org_id=org_id,
+            credentials_encrypted="enc-a",
+            is_active=True,
+        )
+        cred_b = IntegrationCredential(
+            provider="github",
+            name="cred-b",
+            org_id=org_id,
+            credentials_encrypted="enc-b",
+            is_active=True,
+        )
+        session.add_all([cred_a, cred_b])
+        await session.commit()
+        cred_a_id, cred_b_id = str(cred_a.id), str(cred_b.id)
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "credential-mirror-test",
+            "provider": "github",
+            "credential_id": cred_a_id,
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    created = create_resp.json()
+    assert created["credential_id"] == cred_a_id
+    config_id = created["id"]
+
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        # The legacy column is gone: the model no longer even exposes it.
+        assert not hasattr(config, "credential_id")
+
+        integration = (
+            await session.execute(
+                select(Integration).where(Integration.id == config.integration_id)
+            )
+        ).scalar_one()
+        assert integration.credential_id == uuid.UUID(cred_a_id)
+
+        # Rotate the credential on the Integration directly -- the same
+        # surface an admin PATCH /integrations/{id} would touch.
+        integration.credential_id = uuid.UUID(cred_b_id)
+        await session.commit()
+
+    get_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+    assert get_resp.status_code == 200
+    # No stale mirror to go out of sync: the response tracks the rotation.
+    assert get_resp.json()["credential_id"] == cred_b_id
+
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    [listed] = [c for c in list_resp.json() if c["id"] == config_id]
+    assert listed["credential_id"] == cred_b_id
+
+
+@pytest.mark.asyncio
+async def test_sync_configs_sharing_integration_read_consistent_credential_id(
+    client, session_maker
+):
+    """CHAOS-2762 regression: configs sharing one ``integration_id`` (a
+    planner-managed parent plus a pre-planner legacy child, both still linked
+    to the same ``Integration`` per the ``0016``/``0023`` migration links)
+    must report the SAME ``credential_id`` -- and stay consistent after a
+    rotation -- because both now derive it from the one shared ``Integration``
+    row instead of each carrying its own, independently-writable copy.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        cred_a = IntegrationCredential(
+            provider="github",
+            name="cred-a",
+            org_id=org_id,
+            credentials_encrypted="enc-a",
+            is_active=True,
+        )
+        cred_b = IntegrationCredential(
+            provider="github",
+            name="cred-b",
+            org_id=org_id,
+            credentials_encrypted="enc-b",
+            is_active=True,
+        )
+        session.add_all([cred_a, cred_b])
+        await session.commit()
+        cred_a_id, cred_b_id = str(cred_a.id), str(cred_b.id)
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "shared-integration-parent",
+            "provider": "github",
+            "credential_id": cred_a_id,
+            "sync_targets": [],
+            "sync_options": {"all_repos": True},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    parent_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        parent = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(parent_id)
+                )
+            )
+        ).scalar_one()
+        integration_id = parent.integration_id
+
+        # A pre-planner legacy child sharing the parent's Integration (see
+        # migrations 0016/0023): its OWN row never carried credential_id
+        # independently even before this change -- children were created
+        # without one -- so this pins that both rows read the parent
+        # Integration's credential consistently, not just the parent alone.
+        child = SyncConfiguration(
+            org_id=org_id,
+            name="shared-integration-child",
+            provider="github",
+            sync_targets=["git"],
+            sync_options={},
+            parent_id=parent.id,
+            integration_id=integration_id,
+        )
+        session.add(child)
+        await session.commit()
+        child_id = str(child.id)
+
+    for config_id in (parent_id, child_id):
+        resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+        assert resp.status_code == 200
+        assert resp.json()["credential_id"] == cred_a_id
+
+    async with session_maker() as session:
+        integration = await session.get(Integration, integration_id)
+        integration.credential_id = uuid.UUID(cred_b_id)
+        await session.commit()
+
+    for config_id in (parent_id, child_id):
+        resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+        assert resp.status_code == 200
+        assert resp.json()["credential_id"] == cred_b_id, (
+            f"config {config_id} did not observe the rotated credential"
+        )
+
+
+@pytest.mark.asyncio
+async def test_sync_config_credential_id_is_null_for_out_of_org_integration_link(
+    client, session_maker
+):
+    """CHAOS-2762 regression (codex finding #3): a ``SyncConfiguration`` whose
+    ``integration_id`` points at an ``Integration`` belonging to a DIFFERENT
+    org (corrupt data / manual tampering -- there is no org constraint on
+    that FK) must never leak that other org's ``credential_id`` into this
+    org's API response. The read-through helpers are org-scoped, so an
+    out-of-org link resolves to null exactly like "no linked integration"
+    rather than exposing another tenant's credential UUID.
+    """
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+    other_org_id = str(uuid.uuid4())
+
+    async with session_maker() as session:
+        other_org_credential = IntegrationCredential(
+            provider="github",
+            name="other-org-cred",
+            org_id=other_org_id,
+            credentials_encrypted="enc-other-org",
+            is_active=True,
+        )
+        session.add(other_org_credential)
+        await session.flush()
+
+        other_org_integration = Integration(
+            org_id=other_org_id,
+            provider="github",
+            name="other-org-integration",
+            config={},
+            is_active=True,
+        )
+        other_org_integration.credential_id = other_org_credential.id
+        session.add(other_org_integration)
+        await session.flush()
+
+        # Corrupt/tampered link: a config that belongs to THIS org but whose
+        # integration_id points at ANOTHER org's Integration.
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="cross-org-link",
+            provider="github",
+            sync_targets=["git"],
+            sync_options={},
+            integration_id=other_org_integration.id,
+        )
+        session.add(config)
+        await session.commit()
+        config_id = str(config.id)
+
+    get_resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["credential_id"] is None, (
+        "an out-of-org integration_id must never leak another org's credential_id"
+    )
+
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    [listed] = [c for c in list_resp.json() if c["id"] == config_id]
+    assert listed["credential_id"] is None, (
+        "the list endpoint's batched read-through must be org-scoped too"
+    )
 
 
 @pytest.mark.asyncio
@@ -946,25 +1224,168 @@ async def test_delete_nonexistent_sync_config_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_unmigrated_config_returns_400(client):
-    """CHAOS-2647: a bare config not linked to a migrated integration cannot be
-    triggered. Planner-only routing returns HTTP 400 instead of enqueuing a
-    legacy worker task."""
+@pytest.mark.parametrize(
+    "provider, sync_targets, sync_options",
+    [
+        ("jira", ["work-items"], {"project_key": "ENG"}),
+        ("linear", ["work-items"], {"team_id": "team-uuid"}),
+        ("launchdarkly", ["feature-flags"], {"project_key": "default"}),
+    ],
+)
+async def test_create_non_git_sync_config_is_integration_native_and_triggerable(
+    client, session_maker, provider, sync_targets, sync_options
+):
+    """Provider matrix (non-git): POST /sync-configs materializes an
+    integration-linked, planner-managed config with exactly one planner-tagged
+    source for jira/linear/launchdarkly, so they trigger real units instead of
+    the old "no linked integration" 400. These providers have no repo list and
+    previously fell through to a bare, unroutable config.
+    """
     ac, _ = client
 
-    create_resp = await _create_sync_config(ac, name="trigger-unmigrated")
-    assert create_resp.status_code == 201
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": f"{provider}-matrix",
+            "provider": provider,
+            "sync_targets": sync_targets,
+            "sync_options": sync_options,
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
     config_id = create_resp.json()["id"]
 
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None
+        assert config.integration_id is not None
+        assert config.planner_managed is True
+        integration = await session.get(Integration, config.integration_id)
+        assert integration is not None and integration.provider == provider
+        enabled_sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(enabled_sources) == 1
+        assert (enabled_sources[0].metadata_ or {}).get(
+            "planner_managed_sync_config_id"
+        ) == config_id
+
     mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
     with patch(
         "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
     ):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
-    assert resp.status_code == 400
-    assert "not linked to a migrated integration" in resp.json()["detail"]
-    mock_dispatch.apply_async.assert_not_called()
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["total_units"] >= 1
+    mock_dispatch.apply_async.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider, repo", [("github", "acme/repo"), ("gitlab", "123")])
+async def test_batch_create_git_sync_config_is_triggerable_with_units(
+    client, session_maker, provider, repo
+):
+    """Provider matrix (git): POST /sync-configs/batch with a concrete repo
+    materializes one planner source and plans a non-empty run, so a single-repo
+    git create is triggerable with units (not a silent zero-unit 202)."""
+    ac, _ = client
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": f"{provider}-batch",
+            "provider": provider,
+            "sync_targets": ["git"],
+            "repos": [repo],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["parent"]["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None and config.integration_id is not None
+        assert config.planner_managed is True
+        enabled_sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(enabled_sources) == 1
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="fake-task-id")
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["total_units"] >= 1
+    mock_dispatch.apply_async.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+async def test_create_git_sync_config_without_all_repos_is_rejected(client, provider):
+    """git providers must select repos via /batch or set all_repos; a plain create
+    with neither would be a zero-source, zero-unit no-op, so it is rejected with
+    400 instead of silently acknowledging triggers."""
+    ac, _ = client
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": f"{provider}-bare",
+            "provider": provider,
+            "sync_targets": ["git"],
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    assert "all_repos" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+async def test_create_git_all_repos_sync_config_is_integration_native(
+    client, session_maker, provider
+):
+    """git all_repos plain create is integration-native and planner-managed;
+    sources are populated separately via POST /integrations/{id}/discover."""
+    ac, _ = client
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": f"{provider}-allrepos",
+            "provider": provider,
+            "sync_targets": ["git"],
+            "sync_options": {"all_repos": True},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None
+        assert config.integration_id is not None
+        assert config.planner_managed is True
 
 
 @pytest.mark.asyncio
@@ -1041,6 +1462,248 @@ async def test_list_sync_config_jobs_empty(client):
 
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_list_sync_config_jobs_enriches_planner_run_and_paginates(
+    client, session_maker
+):
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="jobs-enriched")
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        source = IntegrationSource(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            provider="github",
+            source_type="repository",
+            external_id="acme/repo",
+            name="repo",
+            full_name="acme/repo",
+            metadata_={"planner_managed_sync_config_id": str(config.id)},
+            is_enabled=True,
+        )
+        session.add(source)
+        await session.flush()
+        sync_run = SyncRun(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            triggered_by="manual",
+            mode="incremental",
+            status="success",
+            total_units=1,
+            completed_units=1,
+            failed_units=0,
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        session.add(sync_run)
+        await session.flush()
+        session.add(
+            SyncRunUnit(
+                org_id=config.org_id,
+                sync_run_id=sync_run.id,
+                integration_id=config.integration_id,
+                source_id=source.id,
+                provider="github",
+                dataset_key="commits",
+                cost_class="standard",
+                mode="incremental",
+                since_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                before_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                status="success",
+                attempts=1,
+            )
+        )
+        legacy_run = JobRun(
+            job.id, triggered_by="scheduler", status=JobRunStatus.PENDING.value
+        )
+        legacy_run.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        enriched_run = JobRun(
+            job.id, triggered_by="manual", status=JobRunStatus.RUNNING.value
+        )
+        enriched_run.created_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        enriched_run.result = {"sync_run_id": str(sync_run.id)}
+        session.add_all([legacy_run, enriched_run])
+        await session.commit()
+
+    first_page = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs?limit=1")
+    second_page = await ac.get(
+        f"/api/v1/admin/sync-configs/{config_id}/jobs?limit=1&offset=1"
+    )
+
+    assert first_page.status_code == 200, first_page.text
+    first = first_page.json()
+    assert isinstance(first, list)
+    assert len(first) == 1
+    assert first[0]["sync_run"] == {
+        "mode": "incremental",
+        "triggered_by": "manual",
+        "requested_range": {
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
+            "source_ids": [str(source.id)],
+            "run_ids": [str(sync_run.id)],
+        },
+        "covered_range": {
+            "since": "2026-01-01T00:00:00Z",
+            "before": "2026-01-02T00:00:00Z",
+            "source_ids": [str(source.id)],
+            "run_ids": [str(sync_run.id)],
+        },
+        "total_units": 1,
+        "completed_units": 1,
+        "failed_units": 0,
+        "sync_run_id": str(sync_run.id),
+    }
+    assert second_page.status_code == 200, second_page.text
+    second = second_page.json()
+    assert len(second) == 1
+    assert second[0]["sync_run"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_sync_config_jobs_uses_rollups_without_loading_unit_rows(
+    client, session_maker
+):
+    ac, _ = client
+    create_resp = await _create_sync_config(ac, name="jobs-large-rollup")
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+    unit_count = 201
+
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+        source = IntegrationSource(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            provider="github",
+            source_type="repository",
+            external_id="acme/large-repo",
+            name="large-repo",
+            full_name="acme/large-repo",
+            metadata_={"planner_managed_sync_config_id": str(config.id)},
+            is_enabled=True,
+        )
+        session.add(source)
+        await session.flush()
+        sync_run = SyncRun(
+            org_id=config.org_id,
+            integration_id=config.integration_id,
+            triggered_by="manual",
+            mode="incremental",
+            status="success",
+            total_units=unit_count,
+            completed_units=unit_count,
+            failed_units=0,
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        session.add(sync_run)
+        await session.flush()
+        session.add_all(
+            SyncRunUnit(
+                org_id=config.org_id,
+                sync_run_id=sync_run.id,
+                integration_id=config.integration_id,
+                source_id=source.id,
+                provider="github",
+                dataset_key="commits",
+                cost_class="standard",
+                mode="incremental",
+                since_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                before_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                status="success",
+                attempts=1,
+            )
+            for _ in range(unit_count)
+        )
+        enriched_run = JobRun(
+            job.id, triggered_by="manual", status=JobRunStatus.RUNNING.value
+        )
+        enriched_run.created_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        enriched_run.result = {"sync_run_id": str(sync_run.id)}
+        session.add(enriched_run)
+        await session.commit()
+
+    loaded_unit_rows = 0
+
+    def count_loaded_unit_row(_target, _context) -> None:
+        nonlocal loaded_unit_rows
+        loaded_unit_rows += 1
+
+    event.listen(SyncRunUnit, "load", count_loaded_unit_row)
+    try:
+        resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs?limit=1")
+    finally:
+        event.remove(SyncRunUnit, "load", count_loaded_unit_row)
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data[0]["sync_run"]["total_units"] == unit_count
+    assert data[0]["sync_run"]["completed_units"] == unit_count
+    assert data[0]["sync_run"]["failed_units"] == 0
+    assert data[0]["sync_run"]["requested_range"] == {
+        "since": "2026-01-01T00:00:00Z",
+        "before": "2026-01-02T00:00:00Z",
+        "source_ids": [str(source.id)],
+        "run_ids": [str(sync_run.id)],
+    }
+    assert loaded_unit_rows == 0
+
+
+def test_sync_run_unit_range_normalizes_naive_datetimes_to_utc():
+    source_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    unit = SyncRunUnit(
+        org_id="org-1",
+        sync_run_id=run_id,
+        integration_id=uuid.uuid4(),
+        source_id=source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="standard",
+        mode="incremental",
+        since_at=datetime(2026, 1, 1),
+        before_at=datetime(2026, 1, 2),
+        status="success",
+        attempts=1,
+    )
+
+    coverage_range = sync_router_module._sync_run_unit_range([unit])
+
+    assert coverage_range is not None
+    assert coverage_range.since == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert coverage_range.before == datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -1234,7 +1897,7 @@ async def test_trigger_marks_pending_job_run_failed_when_enqueue_fails(
     run = runs[0]
     assert run.status == JobRunStatus.FAILED.value
     assert run.completed_at is not None
-    assert run.error == "dispatch enqueue failed: broker down"
+    assert run.error == "RuntimeError: broker down"
 
 
 @pytest.mark.asyncio
@@ -1302,6 +1965,23 @@ def _gitlab_project(project_id: int, name: str, full_name: str):
         full_name=full_name,
         default_branch="main",
     )
+
+
+class _FakeGitLabCodeClient:
+    """Async context manager stub for GitLabCodeClient (CHAOS-2817/CS15b).
+
+    Batch-create name resolution now discovers group projects through the
+    canonical httpx code client instead of ``GitLabConnector.list_repositories``.
+    """
+
+    def __init__(self, projects):
+        self.list_projects = AsyncMock(return_value=projects)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return None
 
 
 @pytest.mark.asyncio
@@ -1473,7 +2153,7 @@ async def test_sync_config_repositories_ignore_untagged_sources(client, session_
         session.add(
             IntegrationSource(
                 org_id=config.org_id,
-                integration_id=config.migrated_integration_id,
+                integration_id=config.integration_id,
                 provider="github",
                 source_type="repository",
                 external_id="acme/discovered",
@@ -1518,12 +2198,13 @@ async def test_batch_create_gitlab_children_get_project_id_and_group(
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-        _gitlab_project(202, "beta", "acme-group/sub/beta"),
-    ]
-    mock_connector_cls = MagicMock(return_value=mock_connector)
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+            _gitlab_project(202, "beta", "acme-group/sub/beta"),
+        ]
+    )
+    mock_client_cls = MagicMock(return_value=fake_client)
 
     with (
         patch.object(
@@ -1532,8 +2213,8 @@ async def test_batch_create_gitlab_children_get_project_id_and_group(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            mock_connector_cls,
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            mock_client_cls,
         ),
     ):
         resp = await ac.post(
@@ -1557,10 +2238,10 @@ async def test_batch_create_gitlab_children_get_project_id_and_group(
     assert data["total_created"] == 0
     assert data["children"] == []
 
-    mock_connector_cls.assert_called_once_with(
-        url="https://gitlab.example.com", private_token="glpat-test"
+    mock_client_cls.assert_called_once_with(
+        private_token="glpat-test", base_url="https://gitlab.example.com"
     )
-    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+    fake_client.list_projects.assert_called_once_with(group_name="acme-group")
 
     async with session_maker() as session:
         sources = (await session.execute(select(IntegrationSource))).scalars().all()
@@ -1601,10 +2282,11 @@ async def test_batch_create_gitlab_unknown_project_name_returns_400(client):
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
 
     with (
         patch.object(
@@ -1613,8 +2295,8 @@ async def test_batch_create_gitlab_unknown_project_name_returns_400(client):
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            MagicMock(return_value=mock_connector),
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            MagicMock(return_value=fake_client),
         ),
     ):
         resp = await ac.post(
@@ -1672,11 +2354,12 @@ async def test_batch_create_gitlab_credential_url_persisted_into_children(
             MagicMock(config={}),
         )
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
-    mock_connector_cls = MagicMock(return_value=mock_connector)
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
+    mock_client_cls = MagicMock(return_value=fake_client)
 
     with (
         patch.object(
@@ -1685,8 +2368,8 @@ async def test_batch_create_gitlab_credential_url_persisted_into_children(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            mock_connector_cls,
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            mock_client_cls,
         ),
     ):
         resp = await ac.post(
@@ -1705,8 +2388,8 @@ async def test_batch_create_gitlab_credential_url_persisted_into_children(
     data = resp.json()
 
     # Resolution used the credential's self-hosted URL...
-    mock_connector_cls.assert_called_once_with(
-        url="https://gitlab.internal.example.com", private_token="glpat-test"
+    mock_client_cls.assert_called_once_with(
+        private_token="glpat-test", base_url="https://gitlab.internal.example.com"
     )
     # ...and that URL is persisted into both parent and child options.
     assert (
@@ -1732,11 +2415,12 @@ async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(7007, "007", "acme-group/007"),
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(7007, "007", "acme-group/007"),
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
 
     with (
         patch.object(
@@ -1745,8 +2429,8 @@ async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            MagicMock(return_value=mock_connector),
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            MagicMock(return_value=fake_client),
         ),
     ):
         resp = await ac.post(
@@ -1763,7 +2447,7 @@ async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
 
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+    fake_client.list_projects.assert_called_once_with(group_name="acme-group")
 
     assert data["children"] == []
     async with session_maker() as session:
@@ -1784,10 +2468,11 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
     mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
         return_value=({"token": "glpat-test"}, MagicMock(config={}))
     )
-    mock_connector = MagicMock()
-    mock_connector.list_repositories.return_value = [
-        _gitlab_project(101, "alpha", "acme-group/alpha"),
-    ]
+    fake_client = _FakeGitLabCodeClient(
+        [
+            _gitlab_project(101, "alpha", "acme-group/alpha"),
+        ]
+    )
 
     with (
         patch.object(
@@ -1796,8 +2481,8 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
             return_value=mock_creds_svc,
         ),
         patch(
-            "dev_health_ops.connectors.gitlab.GitLabConnector",
-            MagicMock(return_value=mock_connector),
+            "dev_health_ops.providers.gitlab.code_client.GitLabCodeClient",
+            MagicMock(return_value=fake_client),
         ),
     ):
         resp = await ac.post(
@@ -1815,10 +2500,97 @@ async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(
     assert resp.status_code == 201, resp.text
     data = resp.json()
     # The listing WAS consulted (credential + group present)...
-    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+    fake_client.list_projects.assert_called_once_with(group_name="acme-group")
 
     assert data["children"] == []
     async with session_maker() as session:
         source = (await session.execute(select(IntegrationSource))).scalar_one()
     assert source.external_id == "12345"
     assert source.full_name == "acme-group/12345"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2681: connecting an integration must NOT silently create+start a broad
+# sync. The connect step alone yields no sync config (no enabled, no running);
+# a sync only starts after explicit repository selection (/sync-configs/batch)
+# followed by an explicit start (/sync-configs/{id}/trigger).
+# ---------------------------------------------------------------------------
+
+
+async def _simulate_connect(session_maker, org_id: str) -> None:
+    """Mimic the GitHub App connect step: a credential, nothing else."""
+    async with session_maker() as session:
+        session.add(
+            IntegrationCredential(
+                provider="github",
+                name="github-app",
+                org_id=org_id,
+                credentials_encrypted="enc",
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_connect_only_creates_no_enabled_or_running_sync(client, session_maker):
+    ac, seeded_state = client
+    await _simulate_connect(session_maker, seeded_state["org_id"])
+
+    # The connect step alone must not materialize any sync config or job run.
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    assert list_resp.json() == []
+
+    async with session_maker() as session:
+        configs = (await session.execute(select(SyncConfiguration))).scalars().all()
+        jobs = (await session.execute(select(ScheduledJob))).scalars().all()
+        runs = (await session.execute(select(JobRun))).scalars().all()
+
+    assert configs == []
+    assert jobs == []
+    assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_sync_starts_only_after_explicit_select_and_start(client, session_maker):
+    ac, seeded_state = client
+    await _simulate_connect(session_maker, seeded_state["org_id"])
+
+    # Step 1 (explicit select): batch-create with concrete repos. This enables a
+    # planner config but must NOT dispatch a run on its own.
+    select_resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "explicit-select",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["web"],
+        },
+    )
+    assert select_resp.status_code == 201, select_resp.text
+    config_id = select_resp.json()["parent"]["id"]
+
+    async with session_maker() as session:
+        runs_after_select = (await session.execute(select(JobRun))).scalars().all()
+    # Selecting repositories enables the config but starts no sync run.
+    assert runs_after_select == []
+
+    # Step 2 (explicit start): trigger dispatches a run and persists a PENDING
+    # JobRun. dispatch is mocked so no Celery broker is needed.
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async.return_value = MagicMock(id="task-id")
+    with patch(
+        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+    ):
+        trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert trigger_resp.status_code == 202, trigger_resp.text
+    assert trigger_resp.json()["status"] == "triggered"
+    mock_dispatch.apply_async.assert_called_once()
+
+    async with session_maker() as session:
+        runs_after_start = (await session.execute(select(JobRun))).scalars().all()
+    assert len(runs_after_start) == 1
+    assert runs_after_start[0].status == JobRunStatus.PENDING.value

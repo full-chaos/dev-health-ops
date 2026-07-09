@@ -16,7 +16,11 @@ from dev_health_ops.api.graphql.models.outputs import (
     WorkGraphNodeType,
     WorkGraphProvenance,
 )
-from dev_health_ops.api.graphql.resolvers.work_graph import resolve_work_graph_edges
+from dev_health_ops.api.graphql.resolvers.work_graph import (
+    resolve_work_graph_artifacts,
+    resolve_work_graph_edges,
+    resolve_work_graph_flow,
+)
 
 
 class MockClient:
@@ -121,21 +125,65 @@ class TestResolveWorkGraphEdges:
 
     @pytest.mark.asyncio
     async def test_applies_repo_ids_filter(self, mock_context):
-        with patch(
-            "dev_health_ops.api.queries.client.query_dicts",
-            new_callable=AsyncMock,
-        ) as mock_query:
+        # The web global filter bar sends repo *slugs* ("org/repo"), not UUIDs.
+        # The resolver MUST resolve them to catalog UUIDs (via resolve_repo_ids)
+        # BEFORE they reach SQL: a raw slug against the UUID repo_id column
+        # throws CANNOT_PARSE_UUID and empties the graph. After resolution the
+        # SQL filters the UUID column directly.
+        resolved_uuid = "920f9442-07df-4217-4dc4-c5833c0b8268"
+        with (
+            patch(
+                "dev_health_ops.api.graphql.resolvers.work_graph.resolve_repo_ids",
+                new_callable=AsyncMock,
+                return_value=[resolved_uuid],
+            ) as mock_resolve,
+            patch(
+                "dev_health_ops.api.queries.client.query_dicts",
+                new_callable=AsyncMock,
+            ) as mock_query,
+        ):
             mock_query.return_value = []
 
-            filters = WorkGraphEdgeFilterInput(repo_ids=["repo-1", "repo-2"])
+            filters = WorkGraphEdgeFilterInput(repo_ids=["full-chaos/dev-health-ops"])
             await resolve_work_graph_edges(mock_context, filters)
+
+            # Resolution happened, org-scoped, on the raw slug ref.
+            mock_resolve.assert_awaited_once()
+            assert mock_resolve.await_args is not None
+            assert mock_resolve.await_args.args[1] == ["full-chaos/dev-health-ops"]
+            assert mock_resolve.await_args.kwargs.get("org_id") == "test-org"
 
             call_args = mock_query.call_args
             sql = call_args[0][1]
             params = call_args[0][2]
 
+            # Raw UUID-column filter (inputs are already resolved UUIDs).
             assert "repo_id IN %(repo_ids)s" in sql
-            assert params["repo_ids"] == ["repo-1", "repo-2"]
+            # The RESOLVED UUID reaches SQL, never the slug.
+            assert params["repo_ids"] == [resolved_uuid]
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_repo_ids_returns_empty(self, mock_context):
+        # A repo filter whose refs resolve to NO known repo must yield an empty
+        # result, NOT fall through to an unscoped whole-org query.
+        with (
+            patch(
+                "dev_health_ops.api.graphql.resolvers.work_graph.resolve_repo_ids",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "dev_health_ops.api.queries.client.query_dicts",
+                new_callable=AsyncMock,
+            ) as mock_query,
+        ):
+            filters = WorkGraphEdgeFilterInput(repo_ids=["nonexistent/repo"])
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+            assert result.total_count == 0
+            assert result.edges == []
+            # Short-circuited before any edge query touched SQL.
+            mock_query.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_applies_source_type_filter(self, mock_context):
@@ -736,3 +784,45 @@ class TestWorkGraphEdgeLookupResolution:
         pr_lookup_params = mock_query.call_args_list[1][0][2]
         assert "pr_numbers" in pr_lookup_params
         assert 42 in pr_lookup_params["pr_numbers"]
+
+
+class TestRepoScopeResolutionContract:
+    """Guardrail: EVERY work-graph resolver must route repo refs through the
+    shared ``resolve_repo_ids`` choke point (slug/UUID -> org-scoped catalog
+    UUID) BEFORE they reach SQL. A resolver that filters ``repo_id`` on a raw
+    slug reintroduces the CANNOT_PARSE_UUID / empty-graph regression. This test
+    fails if any resolver stops calling the shared resolver or drops org_id."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "resolver",
+        [
+            resolve_work_graph_edges,
+            resolve_work_graph_flow,
+            resolve_work_graph_artifacts,
+        ],
+    )
+    async def test_resolver_routes_repo_refs_through_shared_resolver(
+        self, resolver, mock_context
+    ):
+        with (
+            patch(
+                "dev_health_ops.api.graphql.resolvers.work_graph.resolve_repo_ids",
+                new_callable=AsyncMock,
+                return_value=["920f9442-07df-4217-4dc4-c5833c0b8268"],
+            ) as mock_resolve,
+            patch(
+                "dev_health_ops.api.queries.client.query_dicts",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            filters = WorkGraphEdgeFilterInput(repo_ids=["full-chaos/dev-health-ops"])
+            await resolver(mock_context, filters)
+
+            # The shared choke point was invoked exactly once, org-scoped, on the
+            # raw ref (NOT a bespoke inline SQL subquery, NOT a raw slug in SQL).
+            mock_resolve.assert_awaited_once()
+            assert mock_resolve.await_args is not None
+            assert mock_resolve.await_args.args[1] == ["full-chaos/dev-health-ops"]
+            assert mock_resolve.await_args.kwargs.get("org_id") == "test-org"

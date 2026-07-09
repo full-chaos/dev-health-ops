@@ -10,6 +10,7 @@ import logging
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -19,6 +20,8 @@ from dev_health_ops.connectors.exceptions import (
     RateLimitException,
 )
 from dev_health_ops.connectors.utils.retry import retry_with_backoff
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +30,11 @@ logger = logging.getLogger(__name__)
 # token. Logged verbatim so an operator can attribute a failure to a permission,
 # SSO, or rate-limit cause.
 _DIAGNOSTIC_HEADERS = (
+    "x-ratelimit-limit",
     "x-ratelimit-remaining",
     "x-ratelimit-reset",
+    "x-ratelimit-resource",
+    "x-ratelimit-used",
     "retry-after",
     "x-github-request-id",
     "x-accepted-github-permissions",
@@ -88,6 +94,9 @@ class GitHubGraphQLClient:
         self.token = token
         self.timeout = timeout
         self.token_provider = token_provider
+        self.last_response_headers: dict[str, str] = {}
+        self.last_response_status: int | None = None
+        self.last_rate_limit_data: dict[str, Any] | None = None
         self.headers = {
             "Content-Type": "application/json",
         }
@@ -124,6 +133,10 @@ class GitHubGraphQLClient:
         if variables:
             payload["variables"] = variables
 
+        self.last_response_headers = {}
+        self.last_response_status = None
+        self.last_rate_limit_data = None
+
         try:
             response = requests.post(
                 self.GRAPHQL_ENDPOINT,
@@ -131,6 +144,8 @@ class GitHubGraphQLClient:
                 headers=self._headers(),
                 timeout=self.timeout,
             )
+            self.last_response_status = response.status_code
+            self.last_response_headers = safe_github_headers(response)
 
             # Check for HTTP errors
             if response.status_code == 401:
@@ -146,10 +161,22 @@ class GitHubGraphQLClient:
                 # (a) primary rate limit: remaining quota exhausted -> retry
                 # after the reset window.
                 if diag.get("x-ratelimit-remaining") == "0":
+                    reset_delay = _github_reset_delay_seconds(response)
                     raise RateLimitException(
                         f"GitHub API rate limit exceeded on POST "
                         f"{self.GRAPHQL_ENDPOINT} (headers={diag})",
-                        retry_after_seconds=_github_reset_delay_seconds(response),
+                        retry_after_seconds=reset_delay,
+                        signal=RateLimitSignal(
+                            provider="github",
+                            host=urlparse(self.GRAPHQL_ENDPOINT).netloc or None,
+                            dimension=BudgetDimension.GRAPHQL_COST,
+                            retry_after_seconds=reset_delay,
+                            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                                diag.get("x-ratelimit-reset")
+                            ),
+                            reason="primary",
+                            request_id=diag.get("x-github-request-id"),
+                        ),
                     )
                 # (b) secondary/abuse limit: Retry-After present, OR the body
                 # carries GitHub's documented secondary/abuse wording even with
@@ -176,6 +203,17 @@ class GitHubGraphQLClient:
                         f"GitHub secondary/abuse rate limit on POST "
                         f"{self.GRAPHQL_ENDPOINT} (headers={diag})",
                         retry_after_seconds=retry_after_seconds,
+                        signal=RateLimitSignal(
+                            provider="github",
+                            host=urlparse(self.GRAPHQL_ENDPOINT).netloc or None,
+                            dimension=BudgetDimension.SECONDARY_ABUSE_RISK,
+                            retry_after_seconds=retry_after_seconds,
+                            reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                                diag.get("x-ratelimit-reset")
+                            ),
+                            reason="secondary",
+                            request_id=diag.get("x-github-request-id"),
+                        ),
                     )
                 # (c) permission/SSO/other 403: NOT a transient condition.
                 # Raise a non-retryable AuthenticationException so the retry
@@ -193,6 +231,12 @@ class GitHubGraphQLClient:
                 )
 
             data = response.json()
+            response_data = data.get("data") if isinstance(data, dict) else None
+            if isinstance(response_data, dict):
+                rate_limit_data = response_data.get("rateLimit")
+                self.last_rate_limit_data = (
+                    dict(rate_limit_data) if isinstance(rate_limit_data, dict) else None
+                )
 
             # Check for GraphQL errors
             if "errors" in data:

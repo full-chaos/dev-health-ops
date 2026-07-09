@@ -283,6 +283,35 @@ class TestThemeFilterServerSide:
         )
 
     @pytest.mark.asyncio
+    async def test_scoped_partial_degraded_probe_uses_scoped_marker(self, mock_context):
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [
+                [],
+                [{"complete_run_markers": 1, "investment_rows": 50}],
+            ]
+            filters = WorkGraphEdgeFilterInput(
+                repo_ids=["repo-z"],
+                theme="risk",
+                allow_scoped_partial=True,
+            )
+            result = await resolve_work_graph_edges(mock_context, filters)
+
+        probe_sql = mock_query.call_args_list[1][0][1]
+        probe_params = mock_query.call_args_list[1][0][2]
+
+        assert result.degraded_reason is None
+        assert result.is_partial is True
+        assert result.partial_scope == "repo"
+        assert result.partial_repo_ids == ["repo-z"]
+        assert "work_unit_membership_scoped_runs" in probe_sql
+        assert "work_unit_membership_runs" not in probe_sql
+        assert probe_params["scoped_repo_ids"] == ["repo-z"]
+        assert probe_params["scoped_repo_count"] == 1
+
+    @pytest.mark.asyncio
     async def test_genuine_empty_is_not_degraded(self, mock_context):
         """Empty filter result but a complete marker EXISTS (no match) → not a
         degraded state: degraded_reason is None."""

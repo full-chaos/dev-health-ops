@@ -54,6 +54,7 @@ Note: Jira Ops/Service Desk incidents are planned once project-to-repo or deploy
 ### Work Tracking
 
 - `work_item_metrics_daily` (daily aggregates, by provider/team/repo)
+- `estimate_coverage_metrics_daily` (daily backlog estimate coverage, by provider/team/scope)
 - `work_item_user_metrics_daily` (daily aggregates, by provider/user/team)
 - `work_item_cycle_times` (per-work-item fact rows for completed items)
 
@@ -159,6 +160,26 @@ Keyed by `(day, provider, team_id, work_scope_id)`.
 - `bug_completed_ratio`: completed bugs / total completed
 - `story_points_completed`: sum of story points completed (Jira only, when configured)
 - `predictability_score`: Completion Rate = `items_completed / (items_completed + wip_count_end_of_day)`
+
+### Estimate coverage (`estimate_coverage_metrics_daily`)
+
+Estimate coverage is the Backlog Risk metric for how much open backlog has an explicit story-point/estimate value.
+
+- Grain: one row per `(day, provider, work_scope_id, team_id)`.
+- Denominator `backlog_size`: work items created before the end of `day` and not completed/canceled before the end of `day`.
+- Numerator `estimated_count`: denominator items where normalized `WorkItem.story_points IS NOT NULL`.
+- `unestimated_count`: `backlog_size - estimated_count`.
+- `ratio`: `estimated_count / backlog_size` when `backlog_size > 0`; otherwise `NULL`. If a previously known grain has no open backlog at the end of the day, persist `backlog_size = 0`, `estimated_count = 0`, `unestimated_count = 0`, and `ratio = NULL` rather than surfacing older coverage.
+- Null-vs-zero semantics: `story_points = NULL` means unestimated. `story_points = 0` is still an explicit estimate and counts in `estimated_count`.
+
+Provider normalization maps native fields into `WorkItem.story_points` before this metric is computed:
+
+- Jira: configured story-points custom field.
+- GitLab: issue or merge-request `weight`.
+- GitHub: Projects v2 numeric fields named `estimate`, `points`, `story points`, or `size`.
+- Linear: issue `estimate`, including `0` as an explicit estimate.
+
+GraphQL exposes the latest persisted estimate coverage on `ThroughputForecast.estimateCoverage` using the frozen `ThroughputEstimateCoverage` type: `ratio`, `estimatedCount`, `unestimatedCount`, and `backlogSize`. Forecasts with `backlogSize = 0` return no `estimateCoverage` object because the coverage ratio is undefined for an empty backlog.
 
 ### Work item facts (`work_item_cycle_times`)
 

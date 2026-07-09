@@ -2,7 +2,7 @@
 
 Asserts that manual "Sync now", scheduler, and backfill ALL route through
 plan_sync_run + dispatch_sync_run, and that an unmigrated config (no
-migrated_integration_id) causes:
+integration_id) causes:
   - manual trigger  → planner_request_for_config_if_routed returns None
                        (the HTTP layer converts this to HTTP 400)
   - scheduler       → _maybe_dispatch_config returns False (skip)
@@ -28,6 +28,7 @@ from dev_health_ops.models import (
     IntegrationDataset,
     IntegrationSource,
     SyncRunMode,
+    SyncRunUnit,
 )
 from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.models.users import Organization
@@ -134,7 +135,7 @@ def _seed_config(
         sync_targets=["git"],
         sync_options={"schedule_cron": schedule_cron} if schedule_cron else {},
         is_active=is_active,
-        migrated_integration_id=integration.id if migrated else None,
+        integration_id=integration.id if migrated else None,
     )
     session.add(config)
     session.flush()
@@ -147,7 +148,7 @@ def _seed_config(
 
 
 def test_unmigrated_config_returns_none_from_planner_request(db_session):
-    """An unmigrated config (no migrated_integration_id) must return None.
+    """An unmigrated config (no integration_id) must return None.
 
     The HTTP layer converts None → HTTP 400.  This test exercises the real
     routing helper without going through the HTTP stack.
@@ -164,7 +165,7 @@ def test_unmigrated_config_returns_none_from_planner_request(db_session):
 
     assert result is None, (
         "planner_request_for_config_if_routed must return None for an unmigrated "
-        "config (no migrated_integration_id) — the HTTP layer maps this to HTTP 400"
+        "config (no integration_id) — the HTTP layer maps this to HTTP 400"
     )
 
 
@@ -263,16 +264,16 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     plan_calls: list[object] = []
     dispatch_calls: list[object] = []
 
-    from dev_health_ops.sync import planner as planner_mod
+    from dev_health_ops.sync import execution_trigger as execution_trigger_mod
     from dev_health_ops.workers import sync_units as sync_units_mod
 
-    original_plan = planner_mod.plan_sync_run
+    original_plan = execution_trigger_mod.plan_sync_run
 
     def fake_plan(session, request):
         plan_calls.append(request)
         return original_plan(session, request)
 
-    monkeypatch.setattr(planner_mod, "plan_sync_run", fake_plan)
+    monkeypatch.setattr(execution_trigger_mod, "plan_sync_run", fake_plan)
     monkeypatch.setattr(
         sync_units_mod.dispatch_sync_run,
         "apply_async",
@@ -284,8 +285,9 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     )
     _patch_db_session(monkeypatch, db_session)
 
-    # Pass a naive now to match croniter's naive output.
-    now = datetime.utcnow()
+    # Production passes an aware UTC now (dispatch_scheduled_syncs uses
+    # datetime.now(timezone.utc)); the scheduler now compares against aware UTC.
+    now = datetime.now(timezone.utc)
     result = _maybe_dispatch_config(db_session, config, now)
 
     assert result is True, (
@@ -293,6 +295,11 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     )
     assert len(plan_calls) == 1, "plan_sync_run must be called exactly once"
     assert len(dispatch_calls) == 1, "dispatch_sync_run.apply_async must be called once"
+    dataset_keys = {
+        unit.dataset_key
+        for unit in db_session.query(SyncRunUnit).order_by(SyncRunUnit.dataset_key)
+    }
+    assert dataset_keys == {"commits", "security"}
 
 
 # ---------------------------------------------------------------------------

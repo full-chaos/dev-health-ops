@@ -40,6 +40,18 @@ class IngestionSink:
     async def insert_git_file_data(self, files: list[GitFile]) -> None:
         await self._store.insert_git_file_data(files)
 
+    async def get_git_file_contents_by_path(self, repo_id: Any) -> dict[str, str]:
+        """Latest non-empty ``git_files.contents`` per path for a repo.
+
+        Used by ``backfill_file_records`` to keep previously-fetched contents
+        alive across paths-only rewrites (CHAOS-2857). Stores that do not
+        implement the read return an empty mapping."""
+        getter = getattr(self._store, "get_git_file_contents_by_path", None)
+        if getter is None:
+            return {}
+        result = await getter(repo_id)
+        return dict(result or {})
+
     async def insert_blame_data(self, blame_data: list[GitBlame]) -> None:
         await self._store.insert_blame_data(blame_data)
 

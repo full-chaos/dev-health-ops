@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from _sql_explain_helpers import CapturingSink, FakeGraphQLContext
 
@@ -57,7 +57,12 @@ async def _fixture_compounding_risk(sink: CapturingSink) -> None:
         _load_team_assignments,
     )
 
-    await _latest_day_for_org(sink, SAMPLE_ORG_ID)
+    await _latest_day_for_org(
+        sink, SAMPLE_ORG_ID, scope="repo", scope_ids=[SAMPLE_REPO_ID]
+    )
+    await _latest_day_for_org(
+        sink, SAMPLE_ORG_ID, scope="team", scope_ids=[SAMPLE_TEAM_ID]
+    )
 
     # Both scope=repo and scope=team paths plus with/without scope_ids filter
     # — bug #2 (max(computed_at) AS computed_at) lives in this query.
@@ -98,6 +103,31 @@ async def _fixture_compounding_risk(sink: CapturingSink) -> None:
     # `repo`) lives here.
     await _load_repo_labels(sink, SAMPLE_ORG_ID, [SAMPLE_REPO_ID])
     await _load_team_assignments(sink, SAMPLE_ORG_ID)
+
+
+async def _fixture_testops_risk(sink: CapturingSink) -> None:
+    from dev_health_ops.api.graphql.resolvers.testops_risk import (
+        _fetch_daily_rows,
+        _fetch_quadrant_rows,
+    )
+    from dev_health_ops.api.graphql.types.testops_risk import TestOpsRiskInput
+
+    await _fetch_daily_rows(
+        sink,
+        SAMPLE_ORG_ID,
+        TestOpsRiskInput(
+            start_date=SAMPLE_DAY - timedelta(days=14),
+            end_date=SAMPLE_DAY,
+        ),
+    )
+    await _fetch_quadrant_rows(
+        sink,
+        SAMPLE_ORG_ID,
+        TestOpsRiskInput(
+            start_date=SAMPLE_DAY - timedelta(days=14),
+            end_date=SAMPLE_DAY,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +361,45 @@ async def _fixture_bus_factor(sink: CapturingSink) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ai_attribution (aiAttributionOverview via AIAttributionClickHouseLoader,
+# CHAOS-2744 -- also regression-guards the scope.buckets kind filter)
+# ---------------------------------------------------------------------------
+
+
+async def _fixture_ai_attribution(sink: CapturingSink) -> None:
+    from dev_health_ops.metrics.loaders.ai_attribution import (
+        AIAttributionClickHouseLoader,
+    )
+
+    loader = AIAttributionClickHouseLoader(sink, org_id=SAMPLE_ORG_ID)
+    start = datetime.combine(SAMPLE_DAY, time.min)
+    end = datetime.combine(SAMPLE_DAY + timedelta(days=7), time.min)
+
+    # Unscoped mix + evidence.
+    await loader.load_mix(start=start, end=end)
+    await loader.load_evidence(start=start, end=end, limit=50, offset=0)
+    # scope.buckets -> kind filter (CHAOS-2744 Oracle NO-GO regression: this
+    # must parse and bind against the real ai_attribution_resolved.kind column).
+    await loader.load_mix(start=start, end=end, kinds=["ai_assisted", "agent_created"])
+    await loader.load_evidence(
+        start=start,
+        end=end,
+        kinds=["ai_assisted", "agent_created"],
+        limit=50,
+        offset=0,
+    )
+    # repo_id / repo_ids (team-resolved) scopes.
+    await loader.load_mix(start=start, end=end, repo_id=uuid.UUID(SAMPLE_REPO_ID))
+    await loader.load_evidence(
+        start=start,
+        end=end,
+        repo_ids=[uuid.UUID(SAMPLE_REPO_ID)],
+        limit=50,
+        offset=0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # data_health
 # ---------------------------------------------------------------------------
 
@@ -353,6 +422,19 @@ async def _fixture_data_health(sink: CapturingSink) -> None:
 
 
 async def _fixture_analytics(sink: CapturingSink) -> None:
+    from dev_health_ops.api.graphql.context import GraphQLContext
+    from dev_health_ops.api.graphql.models.inputs import (
+        AnalyticsRequestInput,
+        DateRangeInput,
+        DimensionInput,
+        FilterInput,
+        MeasureInput,
+        SankeyRequestInput,
+        ScopeFilterInput,
+        ScopeLevelInput,
+        WhoFilterInput,
+    )
+    from dev_health_ops.api.graphql.resolvers.analytics import resolve_analytics
     from dev_health_ops.api.graphql.sql.compiler import (
         BreakdownRequest,
         CatalogValuesRequest,
@@ -421,6 +503,61 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
     sink.calls.extend(nodes_qs)
     sink.calls.extend(edges_qs)
 
+    # CHAOS-2492: developer-filtered investment Sankey -- must chain
+    # LATEST_WORK_UNIT_AUTHORS_CTE + the `au` join and resolve
+    # hasAny(au.author_emails, ...) against the REAL git_commits /
+    # git_pull_requests schema (not just string-matched in unit tests).
+    dev_sankey_req = SankeyRequest(
+        path=["theme", "repo"],
+        measure="count",
+        start_date=start,
+        end_date=end,
+        use_investment=True,
+    )
+    who_filters = FilterInput(who=WhoFilterInput(developers=["alice@example.com"]))
+    nodes_qs, edges_qs = compile_sankey(
+        dev_sankey_req, SAMPLE_ORG_ID, filters=who_filters
+    )
+    sink.calls.extend(nodes_qs)
+    sink.calls.extend(edges_qs)
+
+    scope_filters = FilterInput(
+        scope=ScopeFilterInput(level=ScopeLevelInput.DEVELOPER, ids=["bob@example.com"])
+    )
+    dev_breakdown_req = BreakdownRequest(
+        dimension="theme",
+        measure="count",
+        start_date=start,
+        end_date=end,
+        use_investment=True,
+    )
+    sql, params = compile_breakdown(
+        dev_breakdown_req, SAMPLE_ORG_ID, filters=scope_filters
+    )
+    sink.calls.append((sql, params))
+
+    # CHAOS-2492: the RESOLVER-level Sankey coverage query is built inline
+    # in resolve_analytics() and is NOT exercised by the compile_sankey()
+    # calls above -- coverage used to be forced to None for developer
+    # filters (CHAOS-2488) and now chains the same au join / hasAny()
+    # predicate. Drive it through the real resolver (not just the compiler)
+    # so EXPLAIN validates the exact SQL the resolver emits, including the
+    # `total`/`assigned_team`/`assigned_repo` coverage aggregates.
+    dev_batch = AnalyticsRequestInput(
+        sankey=SankeyRequestInput(
+            path=[DimensionInput.THEME, DimensionInput.REPO],
+            measure=MeasureInput.COUNT,
+            date_range=DateRangeInput(start_date=start, end_date=end),
+            use_investment=True,
+        ),
+        use_investment=True,
+        filters=who_filters,
+    )
+    await resolve_analytics(
+        GraphQLContext(org_id=SAMPLE_ORG_ID, db_url="clickhouse://test", client=sink),
+        dev_batch,
+    )
+
     for fm_dim in ("team", "repo", "work_type"):
         fm_req = FlowMatrixRequest(
             dimension=fm_dim,
@@ -445,6 +582,7 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 
 ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("compounding_risk", _fixture_compounding_risk),
+    ("testops_risk", _fixture_testops_risk),
     ("forecast", _fixture_forecast),
     ("home", _fixture_home),
     ("capacity", _fixture_capacity),
@@ -455,6 +593,7 @@ ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("bus_factor", _fixture_bus_factor),
     ("data_health", _fixture_data_health),
     ("analytics", _fixture_analytics),
+    ("ai_attribution", _fixture_ai_attribution),
 ]
 """Registry of ``(resolver_name, fixture)`` pairs.
 

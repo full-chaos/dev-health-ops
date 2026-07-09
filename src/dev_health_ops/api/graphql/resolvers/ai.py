@@ -23,12 +23,15 @@ from typing import Any
 
 import strawberry
 
+from dev_health_ops.api.queries.client import query_dicts
+from dev_health_ops.api.utils.numeric import safe_optional_float
 from dev_health_ops.metrics.ai_impact import (
     AI_BUCKETS as AI_ATTRIBUTION_BUCKETS,
 )
 from dev_health_ops.metrics.ai_impact import (
     AttributionBucket,
 )
+from dev_health_ops.metrics.loaders.ai_attribution import AIAttributionClickHouseLoader
 from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
 from dev_health_ops.metrics.opportunities.ai_detector import AIOpportunityDetector
 
@@ -37,6 +40,10 @@ from ..context import GraphQLContext
 from ..models.ai import (
     AiAttributedPr,
     AiAttributedPrsResult,
+    AIAttributionEvidenceRow,
+    AIAttributionMixRow,
+    AIAttributionOverviewResult,
+    AIAttributionScopeInput,
     AIComparison,
     AIComparisonDelta,
     AIComparisonSide,
@@ -86,15 +93,95 @@ def _parse_uuid(value: str | None) -> uuid.UUID | None:
         return None
 
 
-def _normalize_scope(
+async def _resolve_repo_ref(
+    client: Any, org_id: str, raw_repo_id: str | None
+) -> uuid.UUID | None:
+    if not raw_repo_id:
+        return None
+    try:
+        return uuid.UUID(raw_repo_id)
+    except (TypeError, ValueError):
+        pass
+    rows = await query_dicts(
+        client,
+        """
+        SELECT id
+        FROM repos
+        WHERE org_id = {org_id:String}
+          AND repo = {slug:String}
+        ORDER BY toString(id)
+        """,
+        {"org_id": org_id, "slug": raw_repo_id},
+    )
+    if not rows:
+        return None
+    value = rows[0].get("id")
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _normalize_scope(
+    context: GraphQLContext,
+    org_id: str,
     scope: AIScopeInput | None,
-) -> tuple[uuid.UUID | None, str | None, str | None]:
+) -> tuple[uuid.UUID | None, str | None, str | None, bool]:
     if scope is None:
-        return None, None, None
+        return None, None, None, False
+    repo_id = await _resolve_repo_ref(_require_client(context), org_id, scope.repo_id)
     return (
-        _parse_uuid(scope.repo_id),
+        repo_id,
         scope.team_id or None,
         scope.work_type or None,
+        bool(scope.repo_id) and repo_id is None,
+    )
+
+
+async def _normalize_attribution_scope(
+    context: GraphQLContext,
+    org_id: str,
+    scope: AIAttributionScopeInput | None,
+) -> tuple[uuid.UUID | None, str | None, list[str] | None, bool]:
+    """Normalize the narrower attribution-overview scope (no ``work_type``).
+
+    ``ai_attribution_resolved`` has no ``work_type`` column, so that
+    dimension is not exposed on :class:`AIAttributionScopeInput` at all
+    (CHAOS-2744) -- there is nothing to silently drop here. ``buckets``
+    maps 1:1 onto the resolved view's own ``kind`` column.
+    """
+    if scope is None:
+        return None, None, None, False
+    kinds = [bucket.value for bucket in scope.buckets] if scope.buckets else None
+    repo_id = await _resolve_repo_ref(_require_client(context), org_id, scope.repo_id)
+    return (
+        repo_id,
+        scope.team_id or None,
+        kinds,
+        bool(scope.repo_id) and repo_id is None,
+    )
+
+
+async def _normalize_opportunity_scope(
+    context: GraphQLContext, org_id: str, scope: AIScopeInput | None
+) -> tuple[AIScopeInput | None, bool]:
+    if scope is None or not scope.repo_id:
+        return scope, False
+    repo_id = await _resolve_repo_ref(_require_client(context), org_id, scope.repo_id)
+    if repo_id is None:
+        return None, True
+    if scope.repo_id == str(repo_id):
+        return scope, False
+    return (
+        AIScopeInput(
+            repo_id=str(repo_id),
+            team_id=scope.team_id,
+            work_type=scope.work_type,
+            buckets=scope.buckets,
+        ),
+        False,
     )
 
 
@@ -116,7 +203,11 @@ async def _load_daily_records(
     """Load daily AI impact records honoring the scope filter."""
 
     _validate_date_range(date_range)
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return []
     loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
     return await loader.load_ai_impact_metrics(
         start_day=date_range.start_date,
@@ -526,7 +617,13 @@ async def _load_reviewer_concentration(
     date_range: AIDateRangeInput,
     scope: AIScopeInput | None,
 ) -> AIReviewerConcentrationSummary:
-    repo_id, team_id, _work_type = _normalize_scope(scope)
+    repo_id, team_id, _work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIReviewerConcentrationSummary(
+            data_available=False, reviewer_count=0, reviewer_gini=None
+        )
     loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
     reviewer_gini, reviewer_count = await loader.load_reviewer_concentration(
         start_day=date_range.start_date,
@@ -584,7 +681,11 @@ async def _load_engagement_slices(
     unavailable rather than silently mis-scoped. Team scopes are translated
     to repo ids first; an unresolvable team also yields unavailable.
     """
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return {}, {}
     if work_type:
         return {}, {}
 
@@ -835,7 +936,11 @@ async def _load_overlap_rows(
     A ``work_type`` scope cannot be applied to the raw-PR join, so overlap
     is reported unavailable for work-type-scoped requests.
     """
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return [], []
     if work_type:
         return [], []
 
@@ -876,9 +981,7 @@ async def _load_overlap_rows(
                 prs_total=prs_total,
                 prs_touching_hotspots=touching,
                 hotspot_overlap_rate=_ratio(touching, prs_total),
-                avg_hotspot_risk_score=(
-                    float(avg_risk) if avg_risk is not None else None
-                ),
+                avg_hotspot_risk_score=safe_optional_float(avg_risk),
             )
         )
     hotspot_rows.sort(key=lambda r: r.bucket)
@@ -933,8 +1036,17 @@ async def resolve_ai_opportunities(
 
     org_id = require_org_id(context)
     client = _require_client(context)
+    resolved_scope, repo_unresolved = await _normalize_opportunity_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIOpportunitiesResult(
+            org_id=org_id, recommendations=[], detector_ready=True
+        )
     detector = AIOpportunityDetector(client)
-    recommendations = await detector.detect(org_id=org_id, scope=scope, limit=limit)
+    recommendations = await detector.detect(
+        org_id=org_id, scope=resolved_scope, limit=limit
+    )
     # detector_ready signals that the detector is wired and ran successfully,
     # NOT that it found candidates.  An empty result is valid (no opportunities
     # right now); False would mislead the frontend into showing "not connected".
@@ -960,7 +1072,18 @@ async def resolve_ai_governance_summary(
 
     org_id = require_org_id(context)
     _validate_date_range(date_range)
-    repo_id, team_id, _work_type = _normalize_scope(scope)
+    repo_id, team_id, _work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIGovernanceSummary(
+            org_id=org_id,
+            start_date=date_range.start_date,
+            end_date=date_range.end_date,
+            coverage=[],
+            recent_violations=[],
+            data_available=False,
+        )
     client = _require_client(context)
 
     loader = AIGovernanceLoader(client)
@@ -1226,7 +1349,19 @@ async def resolve_ai_attributed_prs(
 
     org_id = require_org_id(context)
     _validate_date_range(date_range)
-    repo_id, team_id, work_type = _normalize_scope(scope)
+    repo_id, team_id, work_type, repo_unresolved = await _normalize_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AiAttributedPrsResult(
+            org_id=org_id,
+            start_date=date_range.start_date,
+            end_date=date_range.end_date,
+            rows=[],
+            total=0,
+            has_more=False,
+            data_available=False,
+        )
 
     page_size = max(1, min(int(limit), _MAX_AI_ATTRIBUTED_PRS_PAGE))
     page_offset = max(0, int(offset))
@@ -1317,4 +1452,154 @@ async def resolve_ai_attributed_prs(
         total=len(rows),
         has_more=has_more,
         data_available=bool(rows),
+    )
+
+
+# =============================================================================
+# resolve_ai_attribution_overview
+# =============================================================================
+
+_MAX_AI_ATTRIBUTION_EVIDENCE_PAGE = 200
+
+
+async def resolve_ai_attribution_overview(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIAttributionScopeInput | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> AIAttributionOverviewResult:
+    """Attribution mix + provenance evidence for the dedicated AI Attribution page.
+
+    Reads ``ai_attribution_resolved`` only — the highest-precedence,
+    non-superseded signal per subject. Every returned row corresponds to a
+    persisted signal; source/confidence/evidence are never fabricated or
+    recomputed at request time.
+    """
+
+    org_id = require_org_id(context)
+    _validate_date_range(date_range)
+    repo_id, team_id, kinds, repo_unresolved = await _normalize_attribution_scope(
+        context, org_id, scope
+    )
+    if repo_unresolved:
+        return AIAttributionOverviewResult(
+            org_id=org_id,
+            start_date=date_range.start_date,
+            end_date=date_range.end_date,
+            mix=[],
+            total_attributed=0,
+            rows=[],
+            has_more=False,
+            data_available=False,
+        )
+
+    page_size = max(1, min(int(limit), _MAX_AI_ATTRIBUTION_EVIDENCE_PAGE))
+    page_offset = max(0, int(offset))
+
+    start_dt = datetime.combine(date_range.start_date, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(date_range.end_date, time.max, tzinfo=timezone.utc)
+
+    # Resolve the team scope to repo UUIDs BEFORE the SQL LIMIT, mirroring
+    # resolve_ai_attributed_prs (CHAOS-2180 Wave 2), so team-scoped pages
+    # stay dense. ``None`` means the catalogs could not be loaded; callers
+    # then fall back to in-memory filtering below.
+    team_repo_ids: list[uuid.UUID] | None = None
+    if team_id:
+        team_repo_ids = await _resolve_team_repo_ids(
+            _require_client(context), org_id=org_id, team_id=team_id
+        )
+        if team_repo_ids is not None and not team_repo_ids:
+            # The team resolves to no repos: honestly empty, not an error.
+            return AIAttributionOverviewResult(
+                org_id=org_id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+                mix=[],
+                total_attributed=0,
+                rows=[],
+                has_more=False,
+                data_available=False,
+            )
+
+    loader = AIAttributionClickHouseLoader(_require_client(context), org_id=org_id)
+
+    mix_raw = await loader.load_mix(
+        start=start_dt,
+        end=end_dt,
+        repo_id=repo_id,
+        repo_ids=team_repo_ids,
+        kinds=kinds,
+    )
+    total_mix = sum(int(row.get("count") or 0) for row in mix_raw)
+    mix = [
+        AIAttributionMixRow(
+            kind=str(row.get("kind") or "unknown"),
+            count=int(row.get("count") or 0),
+            share=(int(row.get("count") or 0) / total_mix) if total_mix else 0.0,
+        )
+        for row in mix_raw
+    ]
+
+    # Fetch one extra row so we can report has_more without a COUNT(*) round-trip.
+    raw_rows = await loader.load_evidence(
+        start=start_dt,
+        end=end_dt,
+        repo_id=repo_id,
+        repo_ids=team_repo_ids,
+        kinds=kinds,
+        limit=page_size + 1,
+        offset=page_offset,
+    )
+    has_more = len(raw_rows) > page_size
+    page_rows = raw_rows[:page_size]
+
+    # Resolve team IDs via RepoPatternTeamResolver before filtering, mirroring
+    # resolve_ai_attributed_prs: teams.repo_patterns holds fnmatch glob
+    # patterns over repo full-names, not repo UUIDs, so a SQL JOIN never
+    # matches — team membership is resolved in app code.
+    if org_id:
+        distinct_repo_ids = list(
+            {str(row["repo_id"]) for row in page_rows if row.get("repo_id") is not None}
+        )
+        team_map = await _resolve_repo_team_map(
+            _require_client(context), org_id=org_id, repo_ids=distinct_repo_ids
+        )
+        if team_map:
+            for row in page_rows:
+                repo_id_val = row.get("repo_id")
+                row["team_id"] = (
+                    team_map.get(str(repo_id_val)) if repo_id_val is not None else None
+                )
+
+    if team_id:
+        page_rows = [row for row in page_rows if (row.get("team_id") or "") == team_id]
+
+    rows: list[AIAttributionEvidenceRow] = []
+    for row in page_rows:
+        rows.append(
+            AIAttributionEvidenceRow(
+                subject_type=str(row.get("subject_type") or ""),
+                subject_id=str(row.get("subject_id") or ""),
+                repo_id=str(row["repo_id"]) if row.get("repo_id") is not None else None,
+                provider=str(row.get("provider") or ""),
+                kind=str(row.get("kind") or "unknown"),
+                source=str(row.get("source") or ""),
+                confidence=float(row.get("confidence") or 0.0),
+                actor=row.get("actor"),
+                evidence=str(row.get("evidence") or "{}"),
+                observed_at=_to_aware(row["observed_at"]),
+                team_id=row.get("team_id") or None,
+            )
+        )
+
+    return AIAttributionOverviewResult(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        mix=mix,
+        total_attributed=total_mix,
+        rows=rows,
+        has_more=has_more,
+        data_available=bool(mix or rows),
     )

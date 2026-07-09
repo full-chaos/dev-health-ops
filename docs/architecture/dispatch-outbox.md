@@ -4,13 +4,13 @@ The durable dispatch outbox guarantees that committed sync runs do not get stran
 
 ## Architectural Overview
 
-The outbox pattern separates database transactions from message broker publishing. Producers write outbox entries within the same database transaction that updates the sync run state. A periodic reconciler relay then polls, claims, and publishes these entries to the Celery broker.
+The outbox pattern separates database transactions from message broker publishing. Producers write outbox entries within the same database transaction that updates the sync run state. A periodic reconciler relay then polls, claims, and publishes these entries to the Celery broker. Sync-config entrypoints first create the admin-visible `JobRun` activity row, then plan the execution-truth `SyncRun`, and link the two through `JobRun.result.sync_run_id`.
 
 ```mermaid
 graph TD
     subgraph Producers [Producers (In-Transaction Write)]
         P1[Planner / plan_sync_run]
-        P2[Trigger Sites (4 sites)]
+        P2[Sync Execution Triggers<br/>manual / scheduled / backfill]
         P3[run_sync_unit]
         P4[finalize_sync_run]
     end
@@ -54,6 +54,10 @@ graph TD
 ```
 
 At-most-once provider execution is not enforced by the outbox. It is guaranteed by the separate unit claim and lease-token CAS guards. The atomic `DISPATCHING` to `RUNNING` claim and the lease checks prevent duplicate execution of provider units even if a task is published multiple times.
+
+`JobRun` is not an execution lock. It is the activity/index row used by admin history surfaces. `SyncRun` and `SyncRunUnit` remain the execution source of truth, and the outbox remains the durable dispatch mechanism.
+
+For how each `SyncRunUnit` is decomposed (`source × dataset × window`) and the reference-tier vs work-item-tier distinction, see [Sync Unit Model](sync-unit-model.md).
 
 ---
 
@@ -102,6 +106,16 @@ sequenceDiagram
     Relay->>DB: Mark outbox row dispatched (BEFORE publishing)
     Note over Relay: If publish fails here, task is lost (At-Most-Once)
     Relay->>Broker: Publish post_sync fanout tasks
+
+    Note over DB, Worker: Case 5: Eligible Linear backfill expired lease (Retry, not Fail) [CHAOS-2710]
+    Worker->>DB: run_sync_unit holds lease; worker dies mid-chunk, lease expires
+    Relay->>DB: Expired-lease loop finds RUNNING unit with dead lease
+    Note over Relay: Eligible? provider=linear AND mode=backfill AND work-item family AND retry-SAFE surfaces AND count < max
+    Relay->>DB: CAS RUNNING -> RETRYING, clear lease, expired_lease_retry_count++, available_at = now + backoff
+    Note over DB: When available_at is reached, the existing dispatch path re-drives the unit
+    Relay->>Broker: Publish dispatch_sync_run (redispatch the retrying unit)
+    Broker->>Worker: Execute dispatch_sync_run -> run_sync_unit (fresh lease)
+    Note over Relay: If count == max instead: unit -> FAILED (error_category=worker_lost_retry_exhausted)
 ```
 
 ---
@@ -163,7 +177,7 @@ Durable exactly-once delivery for `post_sync` is deferred. It will be implemente
 
 The periodic `reconcile_sync_dispatch` task runs every 60 seconds. It performs the following operations:
 
-1. **Lease Expiry**: Finds running units with expired leases and marks them failed.
+1. **Lease Expiry**: Finds running units with expired leases. Most are marked terminal `FAILED` (`error_category = worker_lost`). **Exception (CHAOS-2710):** an eligible Linear backfill unit — `provider == linear`, `mode == backfill`, a work-item-family dataset, parent run non-terminal, all touched ClickHouse surfaces in the proven retry-SAFE set, and `expired_lease_retry_count < SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES` — is instead flipped `RUNNING -> RETRYING` (atomic CAS) with a cleared lease and an `available_at = now + SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS` backoff, so it is redispatched rather than failed. Exhausting the retry budget falls back to terminal `FAILED` (`error_category = worker_lost_retry_exhausted`). This is the **only** deviation from terminal-fail recovery; the dispatch, finalize, and post_sync semantics below are unchanged — a retried unit re-enters through the existing at-least-once `dispatch_sync_run` outbox path with no new outbox kind.
 2. **Materialization**: Scans for runs that need dispatching, finalization, or post-sync processing, then creates outbox rows for them.
 3. **Relay**: Claims pending outbox rows using a unique claim token and lease. It publishes the tasks to Celery and marks the rows as dispatched.
 

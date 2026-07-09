@@ -61,20 +61,23 @@ class TeamLoader(CachedDataLoader[str, TeamData | None]):
             List of TeamData objects (or None for missing teams).
         """
         from dev_health_ops.api.queries.client import query_dicts
+        from dev_health_ops.api.queries.investment import (
+            PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+        )
 
         if not keys or self._client is None:
             return [None] * len(keys)
 
-        # Query all teams in a single batch
-        sql = """
-            SELECT DISTINCT
-                team_id,
-                team_name,
-                org_id,
-                count() OVER (PARTITION BY team_id) as member_count
-            FROM work_item_cycle_times
+        sql = f"""
+            SELECT
+                toString(team_id) AS team_id,
+                ifNull(nullIf(any(team_name), ''), toString(team_id)) AS team_name,
+                count() AS member_count
+            FROM {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE}
             WHERE team_id IN %(team_ids)s
-              AND org_id = %(org_id)s
+              AND team_id IS NOT NULL
+              AND team_id != ''
+            GROUP BY team_id
             ORDER BY team_id
         """
         params = {"team_ids": list(keys), "org_id": self._org_id}
@@ -90,7 +93,7 @@ class TeamLoader(CachedDataLoader[str, TeamData | None]):
                     team_map[team_id] = TeamData(
                         team_id=team_id,
                         team_name=str(row.get("team_name", team_id)),
-                        org_id=str(row.get("org_id", self._org_id)),
+                        org_id=self._org_id,
                         member_count=int(row.get("member_count", 0)),
                     )
 
@@ -142,19 +145,30 @@ class TeamByNameLoader(CachedDataLoader[str, TeamData | None]):
             List of TeamData objects (or None for missing teams).
         """
         from dev_health_ops.api.queries.client import query_dicts
+        from dev_health_ops.api.queries.investment import (
+            PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+        )
 
         if not keys or self._client is None:
             return [None] * len(keys)
 
-        sql = """
-            SELECT DISTINCT
-                team_id,
-                team_name,
-                org_id,
-                count() OVER (PARTITION BY team_id) as member_count
-            FROM work_item_cycle_times
-            WHERE lower(team_name) IN %(team_names)s
-              AND org_id = %(org_id)s
+        sql = f"""
+            SELECT
+                toString(team_id) AS team_id,
+                ifNull(nullIf(any(raw_team_name), ''), toString(team_id)) AS team_name,
+                count() AS member_count
+            FROM (
+                SELECT
+                    work_item_id,
+                    team_id,
+                    team_name AS raw_team_name
+                FROM {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE}
+            ) AS t
+            WHERE lower(raw_team_name) IN %(team_names)s
+              AND team_id IS NOT NULL
+              AND team_id != ''
+              AND raw_team_name IS NOT NULL
+            GROUP BY team_id
             ORDER BY team_name
         """
         params = {"team_names": [k.lower() for k in keys], "org_id": self._org_id}
@@ -170,7 +184,7 @@ class TeamByNameLoader(CachedDataLoader[str, TeamData | None]):
                     team_map[team_name.lower()] = TeamData(
                         team_id=str(row.get("team_id", "")),
                         team_name=team_name,
-                        org_id=str(row.get("org_id", self._org_id)),
+                        org_id=self._org_id,
                         member_count=int(row.get("member_count", 0)),
                     )
 

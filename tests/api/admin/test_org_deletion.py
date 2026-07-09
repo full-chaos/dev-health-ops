@@ -3,13 +3,14 @@ from __future__ import annotations
 import importlib
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -22,9 +23,22 @@ from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.billing import BillingPlan, BillingPrice
 from dev_health_ops.models.billing_audit import BillingAuditLog
-from dev_health_ops.models.checkpoints import MetricCheckpoint
+from dev_health_ops.models.checkpoints import MetricCheckpoint, SyncComputeCheckpoint
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.impersonation import ImpersonationSession
+from dev_health_ops.models.integrations import (
+    Integration,
+    IntegrationDataset,
+    IntegrationSource,
+    SyncDispatchOutbox,
+    SyncRun,
+    SyncRunMode,
+    SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
+    SyncRunStatus,
+    SyncRunUnit,
+    SyncRunUnitStatus,
+)
 from dev_health_ops.models.invoices import Invoice, InvoiceLineItem
 from dev_health_ops.models.ip_allowlist import OrgIPAllowlist
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
@@ -34,6 +48,7 @@ from dev_health_ops.models.refunds import Refund
 from dev_health_ops.models.reports import ReportRun, SavedReport
 from dev_health_ops.models.retention import OrgRetentionPolicy
 from dev_health_ops.models.settings import (
+    GithubAppInstallation,
     IntegrationCredential,
     JobRun,
     ScheduledJob,
@@ -58,6 +73,7 @@ _TABLES = tables_of(
     Membership,
     Setting,
     IntegrationCredential,
+    GithubAppInstallation,
     SyncConfiguration,
     ScheduledJob,
     JobRun,
@@ -69,6 +85,15 @@ _TABLES = tables_of(
     BackfillJob,
     RefreshToken,
     MetricCheckpoint,
+    SyncComputeCheckpoint,
+    Integration,
+    IntegrationSource,
+    IntegrationDataset,
+    SyncRun,
+    SyncRunUnit,
+    SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
+    SyncDispatchOutbox,
     ImpersonationSession,
     Subscription,
     SubscriptionEvent,
@@ -81,6 +106,19 @@ _TABLES = tables_of(
     OrgIPAllowlist,
     OrgFeatureOverride,
     OrgLicense,
+)
+
+_INTEGRATION_ORG_MODELS: tuple[Any, ...] = (
+    Integration,
+    IntegrationSource,
+    IntegrationDataset,
+    SyncRun,
+    SyncRunUnit,
+    SyncComputeCheckpoint,
+    SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
+    SyncDispatchOutbox,
+    GithubAppInstallation,
 )
 
 
@@ -113,6 +151,13 @@ class _FakeClickHouseClient:
 async def session_maker(tmp_path):
     db_path = tmp_path / "org-deletion.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     async with engine.begin() as conn:
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES)
@@ -129,6 +174,112 @@ async def _row_count(session: AsyncSession, model, predicate) -> int:
         select(func.count()).select_from(model).where(predicate)
     )
     return int(count or 0)
+
+
+async def _assert_integration_graph_count(
+    session: AsyncSession, org_id: str, expected: int
+) -> None:
+    for model in _INTEGRATION_ORG_MODELS:
+        assert await _row_count(session, model, model.org_id == org_id) == expected
+
+
+async def _seed_integration_graph(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    credential_id: uuid.UUID,
+    suffix: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    integration = Integration(
+        org_id=org_id,
+        provider="github",
+        credential_id=credential_id,
+        name=f"{suffix}-integration",
+        config={},
+    )
+    session.add(integration)
+    await session.flush()
+
+    source = IntegrationSource(
+        org_id=org_id,
+        integration_id=integration.id,
+        provider="github",
+        source_type="repository",
+        external_id=f"{suffix}/repo",
+        name="repo",
+        full_name=f"{suffix}/repo",
+        metadata_={},
+    )
+    dataset = IntegrationDataset(
+        org_id=org_id,
+        integration_id=integration.id,
+        dataset_key="pull_requests",
+        options={},
+    )
+    sync_run = SyncRun(
+        org_id=org_id,
+        integration_id=integration.id,
+        triggered_by="test",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunStatus.SUCCESS.value,
+    )
+    session.add_all([source, dataset, sync_run])
+    await session.flush()
+
+    run_unit = SyncRunUnit(
+        org_id=org_id,
+        sync_run_id=sync_run.id,
+        integration_id=integration.id,
+        source_id=source.id,
+        provider="github",
+        dataset_key="pull_requests",
+        cost_class="default",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.SUCCESS.value,
+    )
+    session.add(run_unit)
+    await session.flush()
+
+    session.add_all(
+        [
+            SyncComputeCheckpoint(
+                org_id=org_id,
+                sync_run_id=sync_run.id,
+                sync_run_unit_id=run_unit.id,
+                source_id=source.id,
+                provider="github",
+                dataset_key="pull_requests",
+                compute_type="work_graph",
+                status="ready",
+            ),
+            SyncRunPostDispatch(
+                org_id=org_id,
+                sync_run_id=sync_run.id,
+                kind="team_autoimport",
+                dispatched_at=now,
+            ),
+            SyncRunReferenceDiscovery(
+                org_id=org_id,
+                sync_run_id=sync_run.id,
+                status="completed",
+                available_at=now,
+            ),
+            SyncDispatchOutbox(
+                org_id=org_id,
+                sync_run_id=sync_run.id,
+                kind="reference_discovery",
+                status="pending",
+                available_at=now,
+            ),
+            GithubAppInstallation(
+                installation_id=10_001 if suffix == "org-one" else 10_002,
+                account_login=suffix,
+                account_type="Organization",
+                org_id=org_id,
+            ),
+        ]
+    )
 
 
 async def _seed_org_pair(session: AsyncSession) -> tuple[str, str]:
@@ -149,6 +300,15 @@ async def _seed_org_pair(session: AsyncSession) -> tuple[str, str]:
         job_type="report",
         schedule_cron="0 0 * * *",
     )
+    credential1 = IntegrationCredential(
+        org_id=str(org1_id),
+        provider="github",
+        name="prod",
+        credentials_encrypted="encrypted-token-body",
+    )
+    credential2 = IntegrationCredential(
+        org_id=str(org2_id), provider="github", name="prod"
+    )
 
     session.add_all(
         [
@@ -165,13 +325,8 @@ async def _seed_org_pair(session: AsyncSession) -> tuple[str, str]:
                 is_encrypted=True,
             ),
             Setting(org_id=str(org2_id), category="github", key="region", value="us"),
-            IntegrationCredential(
-                org_id=str(org1_id),
-                provider="github",
-                name="prod",
-                credentials_encrypted="encrypted-token-body",
-            ),
-            IntegrationCredential(org_id=str(org2_id), provider="github", name="prod"),
+            credential1,
+            credential2,
             SyncConfiguration(
                 org_id=str(org1_id), name="org-one-config", provider="github"
             ),
@@ -205,6 +360,13 @@ async def _seed_org_pair(session: AsyncSession) -> tuple[str, str]:
             JobRun(job_id=job1.id),
             JobRun(job_id=job2.id),
         ]
+    )
+    await session.flush()
+    await _seed_integration_graph(
+        session, org_id=str(org1_id), credential_id=credential1.id, suffix="org-one"
+    )
+    await _seed_integration_graph(
+        session, org_id=str(org2_id), credential_id=credential2.id, suffix="org-two"
     )
     await session.flush()
     return str(org1_id), str(org2_id)
@@ -265,6 +427,12 @@ async def test_org_deletion_dry_run_returns_contract_without_deleting(session_ma
         assert payload["postgres"]["tables"]["organizations"] == 1
         assert payload["postgres"]["tables"]["settings"] == 1
         assert payload["postgres"]["tables"]["scheduled_jobs"] == 2
+        assert payload["postgres"]["tables"]["integrations"] == 1
+        assert payload["postgres"]["tables"]["integration_sources"] == 1
+        assert payload["postgres"]["tables"]["sync_runs"] == 1
+        assert payload["postgres"]["tables"]["sync_run_units"] == 1
+        assert payload["postgres"]["tables"]["sync_compute_checkpoints"] == 1
+        assert payload["postgres"]["tables"]["github_app_installations"] == 1
         assert payload["clickhouse"]["total"] == 0
         assert all(count == 0 for count in payload["clickhouse"]["tables"].values())
         assert payload["disabled_jobs"] == 2
@@ -272,6 +440,7 @@ async def test_org_deletion_dry_run_returns_contract_without_deleting(session_ma
         # Warnings depend on whether ClickHouse is reachable in the environment
         # (unconfigured locally vs. configured-but-unmigrated in CI); assert shape.
         assert isinstance(payload["warnings"], list)
+        await _assert_integration_graph_count(session, org1_id, 1)
 
         assert (
             await _row_count(
@@ -304,6 +473,16 @@ async def test_org_deletion_deletes_only_target_org_and_sanitizes_logs(
         assert result.dry_run is False
         assert result.postgres.tables["organizations"] == 1
         assert result.postgres.tables["integration_credentials"] == 1
+        assert result.postgres.tables["integrations"] == 1
+        assert result.postgres.tables["integration_sources"] == 1
+        assert result.postgres.tables["integration_datasets"] == 1
+        assert result.postgres.tables["sync_runs"] == 1
+        assert result.postgres.tables["sync_run_units"] == 1
+        assert result.postgres.tables["sync_run_post_dispatches"] == 1
+        assert result.postgres.tables["sync_run_reference_discoveries"] == 1
+        assert result.postgres.tables["sync_dispatch_outbox"] == 1
+        assert result.postgres.tables["sync_compute_checkpoints"] == 1
+        assert result.postgres.tables["github_app_installations"] == 1
         assert result.postgres.tables["scheduled_jobs"] == 2
         assert result.disabled_jobs == 2
         assert result.credentials_deleted == 3
@@ -324,6 +503,7 @@ async def test_org_deletion_deletes_only_target_org_and_sanitizes_logs(
         assert (
             await _row_count(session, ScheduledJob, ScheduledJob.org_id == org1_id) == 0
         )
+        await _assert_integration_graph_count(session, org1_id, 0)
 
         assert (
             await _row_count(
@@ -341,6 +521,7 @@ async def test_org_deletion_deletes_only_target_org_and_sanitizes_logs(
         assert (
             await _row_count(session, ScheduledJob, ScheduledJob.org_id == org2_id) == 2
         )
+        await _assert_integration_graph_count(session, org2_id, 1)
 
     log_output = caplog.text
     assert org1_id in log_output

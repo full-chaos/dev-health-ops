@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
+    BackfillJob,
     Base,
     Integration,
     IntegrationSource,
@@ -16,11 +17,13 @@ from dev_health_ops.models import (
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
@@ -58,11 +61,22 @@ def _patch_db_session(monkeypatch, session):
     )
 
 
-def _seed_run(session, *, planned_units=0):
+def _seed_run(
+    session,
+    *,
+    planned_units=0,
+    provider="github",
+    mode=SyncRunMode.INCREMENTAL.value,
+    dataset_key="commits",
+    source_type="repo",
+    external_id="full-chaos/dev-health",
+    name="dev-health",
+    full_name="full-chaos/dev-health",
+):
     org_id = str(uuid.uuid4())
     integration = Integration(
         org_id=org_id,
-        provider="github",
+        provider=provider,
         name="demo",
         config={},
         is_active=True,
@@ -72,11 +86,11 @@ def _seed_run(session, *, planned_units=0):
     source = IntegrationSource(
         org_id=org_id,
         integration_id=integration.id,
-        provider="github",
-        source_type="repo",
-        external_id="full-chaos/dev-health",
-        name="dev-health",
-        full_name="full-chaos/dev-health",
+        provider=provider,
+        source_type=source_type,
+        external_id=external_id,
+        name=name,
+        full_name=full_name,
         metadata_={},
         is_enabled=True,
     )
@@ -84,7 +98,7 @@ def _seed_run(session, *, planned_units=0):
         org_id=org_id,
         integration_id=integration.id,
         triggered_by="manual",
-        mode=SyncRunMode.INCREMENTAL.value,
+        mode=mode,
         status=SyncRunStatus.DISPATCHING.value,
         total_units=planned_units + 1,
         completed_units=0,
@@ -92,16 +106,27 @@ def _seed_run(session, *, planned_units=0):
     )
     session.add_all([source, run])
     session.flush()
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
+    session.flush()
     now = datetime.now(timezone.utc)
     running = SyncRunUnit(
         org_id=org_id,
         sync_run_id=run.id,
         integration_id=integration.id,
         source_id=source.id,
-        provider="github",
-        dataset_key="commits",
+        provider=provider,
+        dataset_key=dataset_key,
         cost_class="medium",
-        mode=SyncRunMode.INCREMENTAL.value,
+        mode=mode,
         status=SyncRunUnitStatus.RUNNING.value,
         attempts=1,
         lease_owner="worker-dead",
@@ -116,10 +141,10 @@ def _seed_run(session, *, planned_units=0):
             sync_run_id=run.id,
             integration_id=integration.id,
             source_id=source.id,
-            provider="github",
+            provider=provider,
             dataset_key=f"prs-{index}",
             cost_class="medium",
-            mode=SyncRunMode.INCREMENTAL.value,
+            mode=mode,
             status=SyncRunUnitStatus.PLANNED.value,
             attempts=0,
         )
@@ -281,6 +306,181 @@ def test_reconciler_does_not_expire_live_lease(db_session, monkeypatch):
     assert finalizers == []
 
 
+def test_reconciler_retries_eligible_expired_linear_backfill_work_item_unit_once(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(
+        db_session,
+        provider="linear",
+        mode=SyncRunMode.BACKFILL.value,
+        dataset_key="work-items",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS", "60")
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "2")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES,
+    )
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    first = sync_reconciler.reconcile_sync_dispatch(limit=10)
+    second = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(running)
+    dispatch_row = _outbox_row(db_session, run, OUTBOX_KIND_DISPATCH)
+    assert first["expired_units"] == 1
+    assert first["expired_retry_units"] == 1
+    assert first["expired_retry_exhausted_units"] == 0
+    assert first["relayed_dispatch"] == 0
+    assert second["expired_units"] == 0
+    assert running.status == SyncRunUnitStatus.RETRYING.value
+    assert running.expired_lease_retry_count == 1
+    assert running.last_retry_reason == "expired_lease"
+    assert running.result is not None
+    assert running.result["error_category"] == "worker_lost"
+    assert running.result["retry_count"] == 1
+    assert running.result["retry_reason"] == "expired_lease"
+    assert running.result["retry_exhausted"] is False
+    assert running.result["last_lease_expired_at"] is not None
+    assert running.result["next_retry_at"] is not None
+    assert running.lease_owner is None
+    assert running.lease_expires_at is None
+    assert dispatches == []
+    assert finalizers == []
+    assert dispatch_row.status == OUTBOX_STATUS_PENDING
+    assert _aware(dispatch_row.available_at) > datetime.now(timezone.utc)
+
+
+def test_reconciler_does_not_retry_linear_backfill_when_surface_is_unproven(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(
+        db_session,
+        provider="linear",
+        mode=SyncRunMode.BACKFILL.value,
+        dataset_key="work-items",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+    )
+    proven_safe = set(sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES)
+    proven_safe.remove("investment_classifications_daily")
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "2")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        frozenset(proven_safe),
+    )
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(running)
+    assert result["expired_units"] == 1
+    assert result["expired_retry_units"] == 0
+    assert result["expired_retry_exhausted_units"] == 0
+    assert running.status == SyncRunUnitStatus.FAILED.value
+    assert running.expired_lease_retry_count == 0
+    assert running.retry_exhausted_at is None
+    assert running.result is not None
+    assert running.result["error_category"] == "worker_lost"
+    assert running.result["retry_exhausted"] is False
+    assert "investment_classifications_daily" in running.result["retry_surfaces"]
+    assert dispatches == []
+    assert finalizers == [((str(run.id),), "sync")]
+
+
+def test_reconciler_exhausted_linear_backfill_retry_fails_worker_lost_exhausted(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(
+        db_session,
+        provider="linear",
+        mode=SyncRunMode.BACKFILL.value,
+        dataset_key="work-items",
+        source_type="team",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+    )
+    running.expired_lease_retry_count = 1
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", "1")
+    monkeypatch.setattr(
+        sync_units,
+        "_CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES",
+        sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES,
+    )
+    dispatches = []
+    finalizers = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: finalizers.append((args, queue)),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(running)
+    finalize_row = _outbox_row(db_session, run, OUTBOX_KIND_FINALIZE)
+    assert result["expired_units"] == 1
+    assert result["expired_retry_units"] == 0
+    assert result["expired_retry_exhausted_units"] == 1
+    assert result["relayed_finalize"] == 1
+    assert running.status == SyncRunUnitStatus.FAILED.value
+    assert running.expired_lease_retry_count == 1
+    assert running.retry_exhausted_at is not None
+    assert running.result is not None
+    assert running.result["error_category"] == "worker_lost_retry_exhausted"
+    assert running.result["retry_count"] == 1
+    assert running.result["retry_exhausted"] is True
+    assert dispatches == []
+    assert finalizers == [((str(run.id),), "sync")]
+    assert finalize_row.status == OUTBOX_STATUS_DISPATCHED
+
+
 def test_reconciler_rearms_dispatch_outbox_after_publish_failure(
     db_session, monkeypatch
 ):
@@ -320,7 +520,7 @@ def test_reconciler_rearms_dispatch_outbox_after_publish_failure(
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
     assert dispatch_row.claim_token is None
     assert dispatch_row.attempts == 1
-    assert dispatch_row.last_error == "broker down"
+    assert dispatch_row.last_error == "RuntimeError: broker down"
     assert _aware(dispatch_row.available_at) > before
 
 
@@ -361,7 +561,7 @@ def test_reconciler_rearms_finalizer_outbox_after_publish_failure(
     assert finalize_row.status == OUTBOX_STATUS_PENDING
     assert finalize_row.claim_token is None
     assert finalize_row.attempts == 1
-    assert finalize_row.last_error == "broker down"
+    assert finalize_row.last_error == "RuntimeError: broker down"
     assert _aware(finalize_row.available_at) > before
 
 
@@ -444,6 +644,96 @@ def test_reconciler_materializes_and_relays_committed_planned_run(
     assert finalizers == []
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
     assert dispatch_row.attempts == 1
+
+
+def test_reconciler_rearms_expired_reference_discovery_lease(db_session, monkeypatch):
+    from dev_health_ops.workers import reference_discovery, sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    db_session.delete(running)
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    ledger.status = "running"
+    ledger.lease_owner = "dead-discovery-worker"
+    ledger.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    ledger.available_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    discovery_dispatches = []
+    monkeypatch.setattr(
+        reference_discovery.run_sync_reference_discovery,
+        "apply_async",
+        lambda args=None, queue=None: discovery_dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    discovery_row = _outbox_row(db_session, run, OUTBOX_KIND_DISCOVERY)
+    assert result["materialized_discovery"] == 1
+    assert discovery_dispatches == [((str(run.id),), "sync")]
+    assert discovery_row.status == OUTBOX_STATUS_DISPATCHED
+
+
+def test_reconciler_rearms_discovery_when_dispatch_blocked_on_ledger(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import reference_discovery, sync_reconciler, sync_units
+
+    run, running, planned = _seed_run(db_session, planned_units=1)
+    db_session.delete(running)
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    ledger.status = "planned"
+    ledger.completed_at = None
+    ledger.available_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    upsert_outbox_wakeup(
+        db_session,
+        sync_run_id=run.id,
+        kind=OUTBOX_KIND_DISPATCH,
+        available_at=datetime.now(timezone.utc),
+    )
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    discovery_dispatches = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        reference_discovery.run_sync_reference_discovery,
+        "apply_async",
+        lambda args=None, queue=None: discovery_dispatches.append((args, queue)),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=1)
+
+    dispatch_row = _outbox_row(db_session, run, OUTBOX_KIND_DISPATCH)
+    discovery_row = _outbox_row(db_session, run, OUTBOX_KIND_DISCOVERY)
+    assert result["relayed_dispatch"] == 0
+    assert dispatches == []
+    assert discovery_dispatches == []
+    assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
+    assert discovery_row.status == OUTBOX_STATUS_PENDING
+    assert planned[0].status == SyncRunUnitStatus.PLANNED.value
 
 
 def test_reconciler_zero_unit_run_relays_finalize_and_terminalizes(
@@ -851,3 +1141,333 @@ def test_reconciler_two_passes_do_not_double_publish_post_sync(db_session, monke
     assert second["relayed_post_sync"] == 0
     assert len(post_sync_dispatches) == 1
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
+
+
+def _seed_orphan_backfill_job(
+    session,
+    *,
+    org_id=None,
+    celery_task_id=None,
+    status="pending",
+    created_at=None,
+):
+    job = BackfillJob(
+        org_id=org_id or str(uuid.uuid4()),
+        sync_config_id=uuid.uuid4(),
+        celery_task_id=celery_task_id,
+        status=status,
+        since_date=date(2026, 1, 1),
+        before_date=date(2026, 1, 8),
+        total_chunks=1,
+    )
+    if created_at is not None:
+        job.created_at = created_at
+    session.add(job)
+    session.flush()
+    return job
+
+
+def test_reconciler_terminalizes_orphaned_backfill_job_without_marker_past_ttl(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["orphaned_backfill_jobs"] == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"
+    assert job.completed_at is not None
+
+
+def test_reconciler_terminalizes_orphaned_backfill_job_with_marker_to_deleted_run(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    deleted_run_id = uuid.uuid4()
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=f"worker|sync_run:{deleted_run_id}",
+        status="running",
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["orphaned_backfill_jobs"] == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"
+    assert job.completed_at is not None
+
+
+def test_reconciler_does_not_terminalize_young_orphaned_backfill_job(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["orphaned_backfill_jobs"] == 0
+    assert job.status == "pending"
+    assert job.error_message is None
+    assert job.completed_at is None
+
+
+def test_reconciler_does_not_terminalize_backfill_job_with_live_nonterminal_run(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    running.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    db_session.flush()
+    job = _seed_orphan_backfill_job(
+        db_session,
+        org_id=run.org_id,
+        celery_task_id=f"sync_run:{run.id}",
+        status="pending",
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(run)
+    db_session.refresh(job)
+    assert run.status == SyncRunStatus.DISPATCHING.value
+    assert result["orphaned_backfill_jobs"] == 0
+    assert job.status == "pending"
+    assert job.error_message is None
+    assert job.completed_at is None
+
+
+def test_reconciler_still_repairs_pending_backfill_job_with_terminal_run_via_observer(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    running.lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    run.status = SyncRunStatus.FAILED.value
+    run.completed_at = None
+    run.error = "provider auth failed"
+    run.failed_units = 1
+    job = _seed_orphan_backfill_job(
+        db_session,
+        org_id=run.org_id,
+        celery_task_id=f"sync_run:{run.id}",
+        status="pending",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+    monkeypatch.setattr(
+        sync_units.finalize_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: None,
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(job)
+    assert result["observer_repairs"] == 1
+    assert result["orphaned_backfill_jobs"] == 0
+    assert job.status == "failed"
+    assert job.error_message == "provider auth failed"
+    assert job.completed_at is not None
+
+
+def test_backfill_job_marker_sync_run_id_parses_and_rejects_marker_variants():
+    from dev_health_ops.workers import sync_reconciler
+
+    resolvable = BackfillJob(celery_task_id=f"worker|sync_run:{uuid.uuid4()}")
+    missing_marker = BackfillJob(celery_task_id="worker-task-id")
+    no_task_id = BackfillJob(celery_task_id=None)
+    unparseable = BackfillJob(celery_task_id="worker|sync_run:not-a-uuid")
+
+    assert sync_reconciler._backfill_job_marker_sync_run_id(resolvable) is not None
+    assert sync_reconciler._backfill_job_marker_sync_run_id(missing_marker) is None
+    assert sync_reconciler._backfill_job_marker_sync_run_id(no_task_id) is None
+    assert sync_reconciler._backfill_job_marker_sync_run_id(unparseable) is None
+
+
+def test_backfill_job_is_orphaned_predicate_against_existing_run_id_set():
+    from dev_health_ops.workers import sync_reconciler
+
+    live_id = uuid.uuid4()
+    existing_run_ids = {live_id}
+    missing_id = uuid.uuid4()
+
+    assert sync_reconciler._backfill_job_is_orphaned(None, existing_run_ids) is True
+    assert (
+        sync_reconciler._backfill_job_is_orphaned(missing_id, existing_run_ids) is True
+    )
+    assert sync_reconciler._backfill_job_is_orphaned(live_id, existing_run_ids) is False
+
+
+def test_terminalize_orphaned_backfill_jobs_boundary_created_at_equals_cutoff(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    cutoff = fixed_now - timedelta(seconds=3600)
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=cutoff,
+    )
+
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=10
+    )
+    db_session.flush()
+
+    db_session.refresh(job)
+    assert terminalized == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"
+
+
+def test_terminalize_orphaned_backfill_jobs_just_inside_ttl_is_untouched(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    cutoff = fixed_now - timedelta(seconds=3600)
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=cutoff + timedelta(seconds=1),
+    )
+
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=10
+    )
+    db_session.flush()
+
+    db_session.refresh(job)
+    assert terminalized == 0
+    assert job.status == "pending"
+    assert job.error_message is None
+
+
+def test_terminalize_orphaned_backfill_jobs_unparseable_marker_is_orphaned(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    job = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id="worker|sync_run:not-a-uuid",
+        status="running",
+        created_at=fixed_now - timedelta(hours=2),
+    )
+
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=10
+    )
+    db_session.flush()
+
+    db_session.refresh(job)
+    assert terminalized == 1
+    assert job.status == "failed"
+    assert job.error_message == "backfill job orphaned: no linked sync run"
+
+
+def test_terminalize_orphaned_backfill_jobs_does_not_starve_orphan_behind_old_scan_window(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    monkeypatch.setenv("SYNC_BACKFILL_JOB_ORPHAN_TTL_SECONDS", "3600")
+    fixed_now = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    running.lease_expires_at = fixed_now + timedelta(minutes=5)
+    db_session.flush()
+
+    repair_limit = 1
+    old_scan_window = (
+        repair_limit * sync_reconciler._BACKFILL_JOB_ORPHAN_SCAN_LIMIT_MULTIPLIER
+    )
+    head_non_orphans = [
+        _seed_orphan_backfill_job(
+            db_session,
+            org_id=run.org_id,
+            celery_task_id=f"sync_run:{run.id}",
+            status="pending",
+            created_at=fixed_now - timedelta(hours=3) + timedelta(seconds=index),
+        )
+        for index in range(old_scan_window + 1)
+    ]
+
+    orphan = _seed_orphan_backfill_job(
+        db_session,
+        celery_task_id=None,
+        status="pending",
+        created_at=fixed_now
+        - timedelta(hours=3)
+        + timedelta(seconds=old_scan_window + 1),
+    )
+
+    terminalized = sync_reconciler._terminalize_orphaned_backfill_jobs(
+        db_session, fixed_now, limit=repair_limit
+    )
+    db_session.flush()
+
+    for non_orphan in head_non_orphans:
+        db_session.refresh(non_orphan)
+    db_session.refresh(orphan)
+    assert terminalized == 1
+    assert len(head_non_orphans) > old_scan_window
+    assert all(non_orphan.status == "pending" for non_orphan in head_non_orphans)
+    assert all(non_orphan.error_message is None for non_orphan in head_non_orphans)
+    assert orphan.status == "failed"
+    assert orphan.error_message == "backfill job orphaned: no linked sync run"

@@ -6,11 +6,15 @@ from uuid import UUID
 
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 from dev_health_ops.providers._base import BasePipelineAdapter, PipelineSyncBatch
+from dev_health_ops.providers._http import GITHUB_DIAGNOSTIC_HEADER_NAMES
+from dev_health_ops.providers.github.budget import GITHUB_USAGE_RESOLVER
 
 
 class GitHubActionsAdapter(BasePipelineAdapter):
     provider = "github_actions"
     token_env_var = "GITHUB_TOKEN"
+    usage_resolver = GITHUB_USAGE_RESOLVER
+    diagnostic_header_names = GITHUB_DIAGNOSTIC_HEADER_NAMES
 
     @property
     def default_headers(self) -> dict[str, str]:
@@ -76,6 +80,7 @@ class GitHubActionsAdapter(BasePipelineAdapter):
             f"/repos/{owner}/{repo}/actions/runs",
             params=params,
             data_key="workflow_runs",
+            operation=f"tests:GET /repos/{owner}/{repo}/actions/runs",
         )
 
         pipeline_rows: list[PipelineRunExtendedRow] = []
@@ -135,6 +140,7 @@ class GitHubActionsAdapter(BasePipelineAdapter):
             jobs = await self._paginate(
                 f"/repos/{owner}/{repo}/actions/runs/{workflow_run.get('id')}/jobs",
                 data_key="jobs",
+                operation=f"tests:GET /repos/{owner}/{repo}/actions/runs/{{id}}/jobs",
             )
             for job in jobs:
                 job_started_at = self.parse_datetime(job.get("started_at"))

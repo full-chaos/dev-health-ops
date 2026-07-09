@@ -12,10 +12,39 @@ Key semantics:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
+
+from ..errors import ValidationError
 
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
+
+# CHAOS-2385/CHAOS-2492: author_email is the only identity column any
+# developer/author predicate can ever match (git_commits, git_pull_requests,
+# user_metrics_daily, commit_metrics; /api/v1/filters/options populates the
+# quick-filter picker with exactly this column). GraphQL input, URL-decoded
+# REST query params, and the advanced WhoSection UI (web repo) can all pass
+# arbitrary free-form strings (e.g. a raw "alice, bob" string instead of a
+# properly split array) -- silently building a predicate against a
+# non-email value would just match nothing and look like an unrelated bug
+# rather than a bad-input error. Validate format before ANY of who.developers
+# / scope.level=developer becomes a predicate (or a rejection).
+_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _validate_developer_emails(values: list[str], field: str) -> None:
+    """Raise ValidationError if any developer filter value isn't an email."""
+    invalid = [v for v in values if not _EMAIL_PATTERN.match(v)]
+    if invalid:
+        raise ValidationError(
+            f"{field}.developers must be email addresses (author_email is "
+            "the shared identity column across git_commits/"
+            "git_pull_requests/user_metrics_daily/commit_metrics); got "
+            f"non-email value(s): {invalid!r}",
+            field=field,
+            value=invalid,
+        )
 
 
 def translate_scope_filter(
@@ -23,7 +52,7 @@ def translate_scope_filter(
     ids: list[str],
     team_column: str = "team_id",
     repo_column: str = "repo_id",
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate scope filter to SQL predicate.
 
@@ -32,7 +61,7 @@ def translate_scope_filter(
         ids: List of IDs to filter by. Empty means "All" - no filtering.
         team_column: Column name for team filtering
         repo_column: Column name for repo filtering
-        author_column: Column name for developer/author filtering
+        author_column: Column name for developer/author filtering (default: real ClickHouse column `author_email`, e.g. git_commits/user_metrics_daily; CHAOS-2385 -- `author_id` does not exist in any ClickHouse table)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -109,13 +138,13 @@ def translate_repo_filter(
 
 def translate_developer_filter(
     developers: list[str],
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate developer filter to SQL predicate.
 
     Args:
         developers: List of developer IDs to filter by. Empty means "All".
-        author_column: Column name for author/developer filtering
+        author_column: Column name for author/developer filtering (default: real ClickHouse column `author_email`; CHAOS-2385)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -131,7 +160,7 @@ def translate_filters(
     use_investment: bool = False,
     team_column: str = "team_id",
     repo_column: str = "repo_id",
-    author_column: str = "author_id",
+    author_column: str = "author_email",
 ) -> tuple[str, dict[str, Any]]:
     """Translate a complete FilterInput to SQL predicates.
 
@@ -143,7 +172,7 @@ def translate_filters(
         use_investment: Whether using investment tables
         team_column: Column name for team filtering
         repo_column: Column name for repo filtering
-        author_column: Column name for author/developer filtering
+        author_column: Column name for author/developer filtering (default: real ClickHouse column `author_email`; CHAOS-2385 -- `author_id` does not exist in any ClickHouse table)
 
     Returns:
         Tuple of (SQL clause string, params dict)
@@ -171,6 +200,38 @@ def translate_filters(
                 " AND (ut.team_label IN %(scope_ids)s OR ut.team_id IN %(scope_ids)s)"
             )
             params["scope_ids"] = filters.scope.ids
+        elif (
+            use_investment
+            and filters.scope.level.value == "developer"
+            and filters.scope.ids
+        ):
+            # CHAOS-2492: work_unit_investments carries no author column; the
+            # `au` join (LATEST_WORK_UNIT_AUTHORS_CTE, see compiler.py) resolves
+            # an ARRAY of contributor author_emails per work unit rather than a
+            # scalar column, so membership uses hasAny() instead of a flat IN.
+            # W2: validate email format BEFORE building the predicate -- same
+            # gap as who.developers below; without this, an invalid scope.ids
+            # value silently produces an empty/no-op filter instead of a
+            # rejection.
+            _validate_developer_emails(filters.scope.ids, field="scope")
+            clauses.append(" AND hasAny(au.author_emails, %(scope_ids)s)")
+            params["scope_ids"] = filters.scope.ids
+        elif filters.scope.level.value == "developer" and filters.scope.ids:
+            _validate_developer_emails(filters.scope.ids, field="scope")
+            # CHAOS-2492: developer scope is only supported on the
+            # investment path (via the au join above); investment_metrics_daily
+            # and the testops rollups carry no per-developer breakdown at
+            # all. Reject explicitly rather than emit author_email against a
+            # table that doesn't have it (mirrors the honest-rejection
+            # precedent in compiler.py's
+            # _reject_filtered_same_dimension_flow_matrix, CHAOS-2487).
+            raise ValidationError(
+                "scope.level=developer filtering requires an investment "
+                "query; pass useInvestment=true or remove the developer "
+                "scope.",
+                field="scope",
+                value="developer",
+            )
         else:
             clause, scope_params = translate_scope_filter(
                 level=filters.scope.level.value,
@@ -185,13 +246,21 @@ def translate_filters(
 
     # Who filter - developers
     if filters.who is not None and filters.who.developers:
-        clause, dev_params = translate_developer_filter(
-            developers=filters.who.developers,
-            author_column=author_column,
-        )
-        if clause:
-            clauses.append(clause)
-            params.update(dev_params)
+        _validate_developer_emails(filters.who.developers, field="who")
+        if use_investment:
+            # CHAOS-2492: same hasAny() array-membership predicate as above.
+            clauses.append(" AND hasAny(au.author_emails, %(developer_ids)s)")
+            params["developer_ids"] = filters.who.developers
+        else:
+            # CHAOS-2492: same table-awareness gap as scope.level=developer
+            # above -- reject rather than emit a predicate against a column
+            # that doesn't exist on the non-investment source table.
+            raise ValidationError(
+                "who.developers filtering requires an investment query; "
+                "pass useInvestment=true or remove the developer filter.",
+                field="who",
+                value="developers",
+            )
 
     # What filter - repos
     if filters.what is not None and filters.what.repos:

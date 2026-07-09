@@ -69,6 +69,14 @@ def _setup_client(client: Any, responses: list[Any]) -> None:
     client.query.side_effect = responses
 
 
+def _assert_repo_ids_slug_or_uuid_predicate(query: str) -> None:
+    assert "repo_id IN (" in query
+    assert "SELECT id FROM repos" in query
+    assert "org_id = {org_id:String}" in query
+    assert "repo IN {repo_ids:Array(String)}" in query
+    assert "toString(id) IN {repo_ids:Array(String)}" in query
+
+
 def _timeseries_input(
     *,
     scope: ComplexityScope = ComplexityScope.REPO,
@@ -490,6 +498,56 @@ async def test_timeseries_limit_selects_scopes_not_earliest_rows() -> None:
     assert "latest_complexity" in first_call_query
     assert "ORDER BY day, repo_id\nLIMIT" not in first_call_query
     assert first_call_params["limit"] == 10
+
+
+@pytest.mark.asyncio
+async def test_repo_ids_filter_resolves_slugs_or_uuids_at_all_user_filter_sites() -> (
+    None
+):
+    ctx = _ctx()
+
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], []), _qresult([], [])])
+
+    await resolve_complexity_timeseries(
+        ctx,
+        _timeseries_input(repo_ids=["3fa85f64-5717-4562-b3fc-2c963f66afa6"]),
+    )
+    await resolve_complexity_timeseries(
+        ctx,
+        _timeseries_input(
+            scope=ComplexityScope.FILE,
+            repo_ids=["3fa85f64-5717-4562-b3fc-2c963f66afa6"],
+        ),
+    )
+    await resolve_hotspots(
+        ctx, _hotspots_input(repo_ids=["3fa85f64-5717-4562-b3fc-2c963f66afa6"])
+    )
+
+    repo_query: str = ctx.client.query.call_args_list[0].args[0]
+    file_query: str = ctx.client.query.call_args_list[1].args[0]
+    hotspots_query: str = ctx.client.query.call_args_list[2].args[0]
+    _assert_repo_ids_slug_or_uuid_predicate(repo_query)
+    _assert_repo_ids_slug_or_uuid_predicate(file_query)
+    _assert_repo_ids_slug_or_uuid_predicate(hotspots_query)
+
+
+@pytest.mark.asyncio
+async def test_repo_ids_filter_accepts_slug_from_filter_options() -> None:
+    ctx = _ctx()
+    slug = "full-chaos/dev-health-ops"
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], []), _qresult([], [])])
+
+    await resolve_complexity_timeseries(ctx, _timeseries_input(repo_ids=[slug]))
+    await resolve_complexity_timeseries(
+        ctx, _timeseries_input(scope=ComplexityScope.FILE, repo_ids=[slug])
+    )
+    await resolve_hotspots(ctx, _hotspots_input(repo_ids=[slug]))
+
+    for call in ctx.client.query.call_args_list:
+        query: str = call.args[0]
+        params: dict[str, Any] = call.kwargs["parameters"]
+        _assert_repo_ids_slug_or_uuid_predicate(query)
+        assert params["repo_ids"] == [slug]
 
 
 # ---------------------------------------------------------------------------

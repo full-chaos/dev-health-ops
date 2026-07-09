@@ -1,13 +1,19 @@
 import asyncio
 import logging
 import zipfile
-from collections.abc import Iterable
 from datetime import datetime, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
     ComplexityScanner,
+)
+from dev_health_ops.connectors.models import (
+    Author,
+    Repository,
+    RepoStats,
+    SecurityAlertData,
 )
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
@@ -27,13 +33,14 @@ from dev_health_ops.processors.base_git import (
     backfill_file_records,
     blame_backfill_needed,
     build_ci_pipeline_run,
-    build_connector_pull_request,
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
+    historical_backfill_day,
     resolve_commit_stats_limit,
     resolve_incident_labels,
     select_unblamed_paths,
+    write_historical_complexity,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -47,6 +54,7 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.processors.testops_tests import process_gitlab_test_report
+from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
@@ -77,165 +85,207 @@ else:
     RateLimitGate = None
 
 
+def _is_rate_limit_exception(exc: Exception) -> bool:
+    from dev_health_ops.exceptions import RateLimitException
+
+    return isinstance(exc, RateLimitException)
+
+
 # --- GitLab Sync Helpers ---
 
 
-def _fetch_gitlab_project_info_sync(connector, project_id):
+def _fetch_gitlab_project_info_sync(
+    connector, project_id, usage_sink: list[dict[str, Any]] | None = None
+):
     """Sync helper to fetch GitLab project info."""
-    gl_project = connector.gitlab.projects.get(project_id)
-    # Access properties to force load if lazy
-    _ = gl_project.name
-    return gl_project
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_project(project_id)
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        return asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_project_info_sync", drained_observations, usage_sink
+        )
 
 
 def _fetch_gitlab_commits_sync(
-    gl_project,
+    connector,
+    project_id,
     max_commits: int | None,
     repo_id,
     since: datetime | None = None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ):
-    """Sync helper to fetch GitLab commits."""
-    list_params: dict[str, object] = {"per_page": 100, "get_all": False}
-    if since is not None:
-        since_iso = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-        list_params["since"] = since_iso
-    if until is not None:
-        until_iso = until.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-        list_params["until"] = until_iso
+    """Sync helper to fetch GitLab commits via the canonical code client."""
+    drained_observations: list[dict[str, Any]] = []
 
-    commit_objects = []
-    count = 0
-    commit_hashes = []
-    page = 1
-    per_page = min(max_commits, 100) if max_commits else 100
-    stop_due_to_since = False
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_commits(
+                    project_id,
+                    max_commits=max_commits,
+                    since=since,
+                    until=until,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
 
-    while True:
-        if max_commits is not None and count >= max_commits:
-            break
-
-        page_params = dict(list_params)
-        page_params["page"] = page
-        page_params["per_page"] = per_page
-        commits_page = gl_project.commits.list(**page_params)
-        if not commits_page:
-            break
-        logging.debug(
-            "GitLab commits page %d returned %d items",
-            page,
-            len(commits_page),
+    try:
+        raw_commits = asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_commits_sync", drained_observations, usage_sink
         )
 
-        for commit in commits_page:
-            if max_commits is not None and count >= max_commits:
+    commit_objects = []
+    commit_hashes = []
+    for commit in raw_commits:
+        committed_when = commit.committed_date
+        if until is not None and isinstance(committed_when, datetime):
+            if committed_when.astimezone(timezone.utc) > until:
+                continue
+        if since is not None and isinstance(committed_when, datetime):
+            if committed_when.astimezone(timezone.utc) < since:
                 break
 
-            committed_when = None
-            if hasattr(commit, "committed_date") and commit.committed_date:
-                try:
-                    committed_when = safe_parse_datetime(commit.committed_date)
-                except Exception:
-                    committed_when = None
-
-            if until is not None and isinstance(committed_when, datetime):
-                if committed_when.astimezone(timezone.utc) > until:
-                    continue
-
-            if since is not None and isinstance(committed_when, datetime):
-                if committed_when.astimezone(timezone.utc) < since:
-                    stop_due_to_since = True
-                    break
-
-            git_commit = GitCommit(
+        commit_objects.append(
+            GitCommit(
                 repo_id=repo_id,
-                hash=commit.id,
+                hash=commit.commit_id,
                 message=commit.message,
-                author_name=(
-                    commit.author_name if hasattr(commit, "author_name") else "Unknown"
-                ),
+                author_name=commit.author_name or "Unknown",
                 author_email=None,
-                author_when=(
-                    safe_parse_datetime(commit.authored_date)
-                    if hasattr(commit, "authored_date")
-                    else datetime.now(timezone.utc)
-                ),
-                committer_name=(
-                    commit.committer_name
-                    if hasattr(commit, "committer_name")
-                    else "Unknown"
-                ),
+                author_when=commit.authored_date or datetime.now(timezone.utc),
+                committer_name=commit.committer_name or "Unknown",
                 committer_email=None,
-                committer_when=(
-                    safe_parse_datetime(commit.committed_date)
-                    if hasattr(commit, "committed_date")
-                    else datetime.now(timezone.utc)
-                ),
-                parents=len(commit.parent_ids) if hasattr(commit, "parent_ids") else 0,
+                committer_when=commit.committed_date or datetime.now(timezone.utc),
+                parents=len(commit.parent_ids),
             )
-            commit_objects.append(git_commit)
-            commit_hashes.append(commit.id)
-            count += 1
-
-        if stop_due_to_since or len(commits_page) < per_page:
-            break
-        page += 1
+        )
+        commit_hashes.append(commit.commit_id)
 
     return commit_hashes, commit_objects
 
 
 def _fetch_gitlab_commit_stats_sync(
-    gl_project, commit_hashes, repo_id, max_stats, gate=None
+    connector,
+    project_id,
+    commit_hashes,
+    repo_id,
+    max_stats,
+    gate=None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ):
-    """Sync helper to fetch detailed commit stats from GitLab.
-
-    Each commit detail is one REST call, so each iteration waits on the
-    rate-limit gate.
-    """
+    """Sync helper to fetch detailed commit stats from GitLab."""
     gate = BaseGitProcessor.ensure_gate(gate)
-    stats_objects = []
+    drained_observations: list[dict[str, Any]] = []
 
-    for commit_hash in commit_hashes[:max_stats]:
-        try:
-            if gate is not None:
-                gate.wait_sync()
-            detailed_commit = gl_project.commits.get(commit_hash)
-            if hasattr(detailed_commit, "stats"):
-                stat = GitCommitStat(
-                    repo_id=repo_id,
-                    commit_hash=commit_hash,
-                    file_path=AGGREGATE_STATS_MARKER,
-                    additions=detailed_commit.stats.get("additions", 0),
-                    deletions=detailed_commit.stats.get("deletions", 0),
-                    old_file_mode="unknown",
-                    new_file_mode="unknown",
-                )
-                stats_objects.append(stat)
-        except Exception as e:
-            logging.warning(
-                "Failed to get stats for commit %s: %s",
-                commit_hash,
-                e,
-            )
-    return stats_objects
+    async def _run():
+        stats_objects = []
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                for commit_hash in commit_hashes[:max_stats]:
+                    try:
+                        if gate is not None:
+                            gate.wait_sync()
+                        detailed_stats = await client.get_commit_stats(
+                            project_id, commit_hash
+                        )
+                        stats_objects.append(
+                            GitCommitStat(
+                                repo_id=repo_id,
+                                commit_hash=commit_hash,
+                                file_path=AGGREGATE_STATS_MARKER,
+                                additions=detailed_stats.additions,
+                                deletions=detailed_stats.deletions,
+                                old_file_mode="unknown",
+                                new_file_mode="unknown",
+                            )
+                        )
+                    except Exception as e:
+                        if _is_rate_limit_exception(e):
+                            raise
+                        logging.warning(
+                            "Failed to get stats for commit %s: %s",
+                            commit_hash,
+                            e,
+                        )
+                return stats_objects
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        return asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_commit_stats_sync", drained_observations, usage_sink
+        )
 
 
-def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
+def _fetch_gitlab_mrs_sync(
+    connector,
+    project_id,
+    repo_id,
+    max_mrs,
+    usage_sink: list[dict[str, Any]] | None = None,
+):
     """Sync helper to fetch GitLab Merge Requests."""
     logging.info(
         "Fetching merge requests for project %d...",
         project_id,
     )
-    mrs = connector.get_merge_requests(
-        project_id=project_id, state="all", max_mrs=max_mrs
-    )
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.iter_merge_requests(
+                    project_id,
+                    state="all",
+                    per_page=int(getattr(connector, "per_page", 100) or 100),
+                    max_items=max_mrs,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        mrs = asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_mrs_sync", drained_observations, usage_sink
+        )
+
     pr_objects = []
     for mr in mrs:
-        git_pr = build_connector_pull_request(
-            mr,
+        merged_at = safe_parse_datetime(mr.get("merged_at"))
+        closed_at = safe_parse_datetime(mr.get("closed_at"))
+        author_data = mr.get("author")
+        git_pr = build_git_pull_request(
             repo_id=repo_id,
-            state=normalize_pr_state(mr.state, mr.merged_at),
+            number=int(mr.get("iid") or 0),
+            title=mr.get("title") or None,
+            body=mr.get("description"),
+            state=normalize_pr_state(mr.get("state"), merged_at),
+            author_name=(
+                author_data.get("username")
+                if isinstance(author_data, dict) and author_data.get("username")
+                else "Unknown"
+            ),
             author_email=None,
+            created_at=safe_parse_datetime(mr.get("created_at")),
+            merged_at=merged_at,
+            closed_at=closed_at,
+            head_branch=mr.get("source_branch"),
+            base_branch=mr.get("target_branch"),
         )
         pr_objects.append(git_pr)
     logging.info(
@@ -474,11 +524,22 @@ class _MrReviewFetch(NamedTuple):
     known: bool
 
 
+async def _fetch_all_mr_notes_async(
+    client: Any,
+    project_id: int,
+    iid: int,
+    *,
+    per_page: int,
+) -> list[dict[str, Any]]:
+    return await client.iter_mr_notes(project_id, iid, per_page=per_page)
+
+
 def _fetch_all_mr_notes(
     connector,
     project_id: int,
     iid: int,
     gate: Any = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch *every* page of an MR's notes, not just the first.
 
@@ -493,49 +554,38 @@ def _fetch_all_mr_notes(
     failed first page — both must avoid clobbering correct metrics).
     """
     per_page = int(getattr(connector, "per_page", 100) or 100)
-    all_notes: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        if gate is not None:
-            gate.wait_sync()
-        try:
-            page_notes = connector.rest_client.get_merge_request_notes(
-                project_id,
-                iid,
-                page=page,
-                per_page=per_page,
-            )
-            if gate is not None:
-                gate.reset()
-        except Exception as exc:
-            retry_after = getattr(exc, "retry_after_seconds", None)
-            if retry_after is not None and gate is not None:
-                applied = gate.penalize(retry_after)
-                logging.info(
-                    "GitLab rate limited fetching notes for MR !%d; backoff %.1fs (%s)",
-                    iid,
-                    applied,
-                    exc,
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> list[dict[str, Any]]:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await _fetch_all_mr_notes_async(
+                    client, project_id, iid, per_page=per_page
                 )
-                continue
-            raise
-        if not page_notes:
-            break
-        all_notes.extend(page_notes)
-        # Final page when the server returns fewer than a full page.
-        if len(page_notes) < per_page:
-            break
-        page += 1
-    return all_notes
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    if gate is not None:
+        gate.wait_sync()
+    try:
+        notes = asyncio.run(_run())
+        if gate is not None:
+            gate.reset()
+        return notes
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_all_mr_notes", drained_observations, usage_sink
+        )
 
 
-def _fetch_gitlab_mr_reviews(
-    connector,
+async def _fetch_gitlab_mr_reviews_async(
+    client: Any,
     project_id: int,
     mr: dict[str, Any],
     repo_id: Any,
     created_at: datetime | None,
-    gate: Any = None,
+    *,
+    per_page: int,
 ) -> _MrReviewFetch:
     """Best-effort fetch + map of one MR's reviews (approvals + notes).
 
@@ -557,15 +607,21 @@ def _fetch_gitlab_mr_reviews(
 
     approvals: dict[str, Any] | None = None
     try:
-        approvals = connector.rest_client.get_merge_request_approvals(project_id, iid)
+        approvals = await client.get_mr_approvals(project_id, iid)
     except Exception as exc:  # noqa: BLE001 - best-effort, some tiers lack approvals
+        if _is_rate_limit_exception(exc):
+            raise
         logging.debug("Failed to fetch approvals for MR !%d: %s", iid, exc)
 
     notes: list[dict[str, Any]] = []
     notes_known = True
     try:
-        notes = _fetch_all_mr_notes(connector, project_id, iid, gate=gate)
+        notes = await _fetch_all_mr_notes_async(
+            client, project_id, iid, per_page=per_page
+        )
     except Exception as exc:  # noqa: BLE001 - best-effort
+        if _is_rate_limit_exception(exc):
+            raise
         notes_known = False
         logging.warning(
             "Could not fetch notes for MR !%d (project %s); preserving existing "
@@ -597,6 +653,48 @@ def _fetch_gitlab_mr_reviews(
     return _MrReviewFetch(reviews, first_review_at, changes_requested_count, known=True)
 
 
+def _fetch_gitlab_mr_reviews(
+    connector,
+    project_id: int,
+    mr: dict[str, Any],
+    repo_id: Any,
+    created_at: datetime | None,
+    gate: Any = None,
+    usage_sink: list[dict[str, Any]] | None = None,
+) -> _MrReviewFetch:
+    iid = int(mr.get("iid") or 0)
+    if iid <= 0:
+        return _MrReviewFetch([], None, 0, known=True)
+
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> _MrReviewFetch:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await _fetch_gitlab_mr_reviews_async(
+                    client,
+                    project_id,
+                    mr,
+                    repo_id,
+                    created_at,
+                    per_page=int(getattr(connector, "per_page", 100) or 100),
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    if gate is not None:
+        gate.wait_sync()
+    try:
+        fetched = asyncio.run(_run())
+        if gate is not None:
+            gate.reset()
+        return fetched
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_mr_reviews", drained_observations, usage_sink
+        )
+
+
 def _sync_gitlab_mrs_to_store(
     connector,
     project_id: int,
@@ -608,6 +706,7 @@ def _sync_gitlab_mrs_to_store(
     gate: Any = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     """Fetch all MRs for a project and insert them in batches.
 
@@ -629,6 +728,16 @@ def _sync_gitlab_mrs_to_store(
 
     gate = BaseGitProcessor.ensure_gate(gate)
     assert gate is not None
+    per_page = int(getattr(connector, "per_page", 100) or 100)
+    drained_observations: list[dict[str, Any]] = []
+
+    def _flush_prs() -> None:
+        if batch:
+            BaseGitProcessor.persist_batch_threadsafe(
+                ingestion_sink.insert_git_pull_requests(list(batch)),
+                loop,
+            )
+            batch.clear()
 
     def _flush_reviews() -> None:
         if review_batch:
@@ -638,152 +747,160 @@ def _sync_gitlab_mrs_to_store(
             )
             review_batch.clear()
 
-    while True:
-        try:
-            gate.wait_sync()
-            logging.debug(
-                "GitLab MRs page %d (per_page=%d) for project %d",
-                page,
-                connector.per_page,
+    def _append_fetched_mr(mr: dict[str, Any], fetched: _MrReviewFetch) -> None:
+        nonlocal total
+
+        author_name = "Unknown"
+        author_email = None
+        author_data = mr.get("author")
+        if author_data:
+            author_name = author_data.get("username") or author_name
+
+        merged_at = safe_parse_datetime(mr.get("merged_at"))
+        closed_at = safe_parse_datetime(mr.get("closed_at"))
+        created_at = safe_parse_datetime(mr.get("created_at"))
+
+        comments_count = int(mr.get("user_notes_count") or 0)
+
+        if not fetched.known:
+            # Authoritative review source (MR notes) was unavailable for
+            # this MR. The PR row is ReplacingMergeTree-replaced on write,
+            # so persisting it now with zeroed review metrics would clobber
+            # previously-correct first_review_at / reviews_count /
+            # changes_requested_count. Skip this MR's row this cycle so the
+            # prior values are preserved, and record the iid so the run
+            # fails loud (no watermark advancement) and is retried — a
+            # silent skip would let the watermark move past this MR and
+            # strand it until a full resync (CHAOS-2378).
+            skipped_iid = int(mr.get("iid") or 0)
+            skipped_iids.append(skipped_iid)
+            logging.warning(
+                "Skipping PR row for MR !%d (project %d): review fetch "
+                "degraded; run will not advance watermark and will retry",
+                skipped_iid,
                 project_id,
             )
-            mrs = connector.rest_client.get_merge_requests(
-                project_id=project_id,
-                state=state,
-                page=page,
-                per_page=connector.per_page,
-                order_by="updated_at",
-                sort="desc",
-            )
-            gate.reset()
-        except Exception as e:
-            retry_after = getattr(e, "retry_after_seconds", None)
-            if retry_after is None:
-                raise
-            applied = gate.penalize(retry_after)
-            logging.info(
-                "GitLab rate limited while fetching MRs; backoff %.1fs (%s)",
-                applied,
-                e,
-            )
-            continue
-        if not mrs:
-            break
-        logging.debug(
-            "GitLab MRs page %d returned %d items (total: %d)",
-            page,
-            len(mrs),
-            total,
-        )
+            return
 
-        for mr in mrs:
-            author_name = "Unknown"
-            author_email = None
-            author_data = mr.get("author")
-            if author_data:
-                author_name = author_data.get("username") or author_name
+        review_batch.extend(fetched.reviews)
 
-            merged_at = safe_parse_datetime(mr.get("merged_at"))
-            closed_at = safe_parse_datetime(mr.get("closed_at"))
-            updated_at = safe_parse_datetime(mr.get("updated_at"))
-            created_at = safe_parse_datetime(mr.get("created_at"))
-
-            comments_count = int(mr.get("user_notes_count") or 0)
-
-            if (
-                until is not None
-                and isinstance(updated_at, datetime)
-                and updated_at.astimezone(timezone.utc) > until
-            ):
-                continue
-
-            if (
-                since is not None
-                and isinstance(updated_at, datetime)
-                and updated_at.astimezone(timezone.utc) < since
-            ):
-                mrs = []
-                break
-
-            # Reconstruct reviews (approvals + notes) so GitLab orgs populate
-            # git_pull_request_reviews like GitHub does (CHAOS-2378).
-            fetched = _fetch_gitlab_mr_reviews(
-                connector=connector,
-                project_id=project_id,
-                mr=mr,
+        batch.append(
+            build_git_pull_request(
                 repo_id=repo_id,
+                number=int(mr.get("iid") or 0),
+                title=mr.get("title") or None,
+                body=mr.get("description"),
+                state=normalize_pr_state(mr.get("state"), merged_at),
+                author_name=author_name,
+                author_email=author_email,
                 created_at=created_at,
-                gate=gate,
+                merged_at=merged_at,
+                closed_at=closed_at,
+                head_branch=mr.get("source_branch"),
+                base_branch=mr.get("target_branch"),
+                first_review_at=fetched.first_review_at,
+                changes_requested_count=fetched.changes_requested_count,
+                reviews_count=len(fetched.reviews),
+                comments_count=comments_count,
             )
-
-            if not fetched.known:
-                # Authoritative review source (MR notes) was unavailable for
-                # this MR. The PR row is ReplacingMergeTree-replaced on write,
-                # so persisting it now with zeroed review metrics would clobber
-                # previously-correct first_review_at / reviews_count /
-                # changes_requested_count. Skip this MR's row this cycle so the
-                # prior values are preserved, and record the iid so the run
-                # fails loud (no watermark advancement) and is retried — a
-                # silent skip would let the watermark move past this MR and
-                # strand it until a full resync (CHAOS-2378).
-                skipped_iid = int(mr.get("iid") or 0)
-                skipped_iids.append(skipped_iid)
-                logging.warning(
-                    "Skipping PR row for MR !%d (project %d): review fetch "
-                    "degraded; run will not advance watermark and will retry",
-                    skipped_iid,
-                    project_id,
-                )
-                continue
-
-            review_batch.extend(fetched.reviews)
-
-            batch.append(
-                build_git_pull_request(
-                    repo_id=repo_id,
-                    number=int(mr.get("iid") or 0),
-                    title=mr.get("title") or None,
-                    body=mr.get("description"),
-                    state=normalize_pr_state(mr.get("state"), merged_at),
-                    author_name=author_name,
-                    author_email=author_email,
-                    created_at=created_at,
-                    merged_at=merged_at,
-                    closed_at=closed_at,
-                    head_branch=mr.get("source_branch"),
-                    base_branch=mr.get("target_branch"),
-                    first_review_at=fetched.first_review_at,
-                    changes_requested_count=fetched.changes_requested_count,
-                    reviews_count=len(fetched.reviews),
-                    comments_count=comments_count,
-                )
-            )
-            total += 1
-
-            if len(batch) >= batch_size:
-                BaseGitProcessor.persist_batch_threadsafe(
-                    ingestion_sink.insert_git_pull_requests(batch),
-                    loop,
-                )
-                logging.debug(
-                    "Stored batch of %d MRs for project %d (total: %d)",
-                    len(batch),
-                    project_id,
-                    total,
-                )
-                batch.clear()
-                _flush_reviews()
-
-        page += 1
-        if not mrs:
-            break
-
-    if batch:
-        BaseGitProcessor.persist_batch_threadsafe(
-            ingestion_sink.insert_git_pull_requests(batch),
-            loop,
         )
-    _flush_reviews()
+        total += 1
+
+        if len(batch) >= batch_size:
+            _flush_prs()
+            logging.debug(
+                "Stored batch of %d MRs for project %d (total: %d)",
+                batch_size,
+                project_id,
+                total,
+            )
+            _flush_reviews()
+
+    async def _sync_pages() -> None:
+        nonlocal page
+
+        async def _fetch_page_with_retry(
+            client, current_page: int
+        ) -> list[dict[str, Any]]:
+            while True:
+                try:
+                    gate.wait_sync()
+                    page_items = await client.get_merge_requests_page(
+                        project_id=project_id,
+                        page=current_page,
+                        state=state,
+                        per_page=per_page,
+                    )
+                    gate.reset()
+                    return page_items
+                except Exception as exc:  # noqa: BLE001 - legacy retry-after seam
+                    if _is_rate_limit_exception(exc):
+                        raise
+                    retry_after = getattr(exc, "retry_after_seconds", None)
+                    if retry_after is None:
+                        raise
+                    applied = gate.penalize(retry_after)
+                    logging.info(
+                        "GitLab rate limited while fetching MRs; backoff %.1fs (%s)",
+                        applied,
+                        exc,
+                    )
+
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                while True:
+                    mrs = await _fetch_page_with_retry(client, page)
+                    logging.debug(
+                        "GitLab MRs page %d returned %d items for project %d (total: %d)",
+                        page,
+                        len(mrs),
+                        project_id,
+                        total,
+                    )
+                    if not mrs:
+                        return
+
+                    stop_pagination = False
+                    for mr in mrs:
+                        updated_at = safe_parse_datetime(mr.get("updated_at"))
+                        if (
+                            until is not None
+                            and isinstance(updated_at, datetime)
+                            and updated_at.astimezone(timezone.utc) > until
+                        ):
+                            continue
+                        if (
+                            since is not None
+                            and isinstance(updated_at, datetime)
+                            and updated_at.astimezone(timezone.utc) < since
+                        ):
+                            stop_pagination = True
+                            break
+                        created_at = safe_parse_datetime(mr.get("created_at"))
+                        fetched = await _fetch_gitlab_mr_reviews_async(
+                            client,
+                            project_id,
+                            mr,
+                            repo_id,
+                            created_at,
+                            per_page=per_page,
+                        )
+                        _append_fetched_mr(mr, fetched)
+
+                    if stop_pagination:
+                        return
+                    page += 1
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
+    try:
+        asyncio.run(_sync_pages())
+    finally:
+        _flush_prs()
+        _flush_reviews()
+        _drain_gitlab_code_usage(
+            "_sync_gitlab_mrs_to_store", drained_observations, usage_sink
+        )
 
     logging.info(
         "Fetched %d merge requests for project %d",
@@ -801,26 +918,50 @@ def _sync_gitlab_mrs_to_store(
     return total
 
 
-def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
+def _drain_gitlab_code_usage(
+    helper_name: str,
+    drained_observations: list[dict[str, Any]],
+    usage_sink: list[dict[str, Any]] | None,
+) -> None:
+    if usage_sink is not None:
+        usage_sink.extend(drained_observations)
+    elif drained_observations:
+        logging.debug(
+            "%s: drained %d GitLab code usage observation(s) with no "
+            "adapter-owned sink (legacy entry point) -- logging only, not persisted",
+            helper_name,
+            len(drained_observations),
+        )
+
+
+def _fetch_gitlab_pipelines_sync(
+    connector, project_id, repo_id, max_pipelines, since, usage_sink=None
+):
     """Sync helper to fetch GitLab CI/CD pipelines."""
     pipelines: list[CiPipelineRun] = []
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_pipelines(
+                    project_id, max_pipelines=max_pipelines
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
 
     try:
-        list_params = {"per_page": 100, "order_by": "updated_at", "sort": "desc"}
-        if max_pipelines > 100:
-            raw_pipelines = gl_project.pipelines.list(**list_params, as_list=False)
-        else:
-            raw_pipelines = gl_project.pipelines.list(**list_params, get_all=False)
+        raw_pipelines = asyncio.run(_run())
     except Exception as exc:
         logging.debug("Failed to fetch pipelines: %s", exc)
-        return pipelines
+        raw_pipelines = []
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_pipelines_sync", drained_observations, usage_sink
+        )
 
-    count = 0
     for pipeline in raw_pipelines:
-        if count >= max_pipelines:
-            break
-
-        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
+        created_at = pipeline.created_at
 
         if created_at is None:
             continue
@@ -828,48 +969,32 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
         if since is not None and created_at.astimezone(timezone.utc) < since:
             break
 
-        started_at = (
-            safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
-        )
-
-        finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
-
-        # GitLab pipelines expose no clean automatic-retry counter, so default
-        # to 0. (A new pipeline is created per retry rather than a run_attempt
-        # being incremented, unlike GitHub Actions.)
         pipelines.append(
             build_ci_pipeline_run(
                 repo_id=repo_id,
-                run_id=str(getattr(pipeline, "id", "")),
-                status=getattr(pipeline, "status", None),
+                run_id=pipeline.pipeline_id,
+                status=pipeline.status,
                 queued_at=created_at,
-                started_at=started_at,
-                finished_at=finished_at,
+                started_at=pipeline.started_at or created_at,
+                finished_at=pipeline.finished_at,
                 retry_count=0,
             )
         )
-        count += 1
 
     return pipelines
 
 
-def _resolve_gitlab_deployment_mr(connector, project_id, sha):
+def _resolve_gitlab_deployment_mr_from_items(mrs):
     """Resolve the merged MR for a deployed commit via the commits API.
 
     Failure-soft: any lookup error leaves the deployment without MR
     attribution rather than failing the sync.
     """
-    if not sha:
-        return None, None
     try:
-        mrs = connector.rest_client.get_list(
-            f"projects/{project_id}/repository/commits/{sha}/merge_requests"
-        )
-    except Exception as exc:
-        logging.debug("Failed MR lookup for deployed commit %s: %s", sha, exc)
+        merged = [mr for mr in mrs or [] if mr.get("state") == "merged"]
+        chosen = merged[0] if merged else (mrs[0] if mrs else None)
+    except Exception:
         return None, None
-    merged = [mr for mr in mrs or [] if mr.get("state") == "merged"]
-    chosen = merged[0] if merged else (mrs[0] if mrs else None)
     if not chosen:
         return None, None
     merged_at = safe_parse_datetime(chosen.get("merged_at") or "")
@@ -881,71 +1006,91 @@ def _resolve_gitlab_deployment_mr(connector, project_id, sha):
 
 
 def _fetch_gitlab_deployments_sync(
-    connector, project_id, repo_id, max_deployments, since
+    connector, project_id, repo_id, max_deployments, since, usage_sink=None
 ):
     """Sync helper to fetch GitLab deployments."""
     deployments: list[Deployment] = []
-    release_objects = []
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run():
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                try:
+                    release_objects = await client.get_deployment_releases(
+                        project_id, per_page=min(max_deployments, 100)
+                    )
+                except Exception as exc:
+                    logging.debug(
+                        "Failed to fetch GitLab releases for release_ref: %s", exc
+                    )
+                    release_objects = []
+                raw_deployments = await client.get_deployments(
+                    project_id,
+                    max_deployments=max_deployments,
+                    per_page=min(max_deployments, 100),
+                )
+                merge_requests_by_deployment_id: dict[str, list[dict[str, Any]]] = {}
+                for dep in raw_deployments:
+                    if not dep.sha:
+                        continue
+                    try:
+                        merge_requests_by_deployment_id[
+                            dep.deployment_id
+                        ] = await client.get_deployment_merge_requests(
+                            project_id, dep.sha
+                        )
+                    except Exception as exc:
+                        logging.debug(
+                            "Failed MR lookup for deployed commit %s: %s", dep.sha, exc
+                        )
+                return release_objects, raw_deployments, merge_requests_by_deployment_id
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
     try:
-        release_objects = connector.rest_client.get_releases(
-            project_id=project_id,
-            per_page=min(max_deployments, 100),
-        )
-    except Exception as exc:
-        logging.debug("Failed to fetch GitLab releases for release_ref: %s", exc)
-    try:
-        # Use REST API to fetch deployments
-        raw_deployments = connector.rest_client.get_deployments(
-            project_id=project_id,
-            per_page=min(max_deployments, 100),
-            order_by="created_at",
-            sort="desc",
+        release_objects, raw_deployments, merge_requests_by_deployment_id = asyncio.run(
+            _run()
         )
     except Exception as exc:
         logging.debug("Failed to fetch deployments: %s", exc)
-        return deployments
+        raw_deployments = []
+        release_objects = []
+        merge_requests_by_deployment_id = {}
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_deployments_sync", drained_observations, usage_sink
+        )
 
     for dep in raw_deployments[:max_deployments]:
-        created_at_str = dep.get("created_at")
-        if not created_at_str:
-            continue
-
-        created_at = safe_parse_datetime(created_at_str)
+        created_at = dep.created_at
         if created_at is None:
             continue
 
         if since is not None and created_at.astimezone(timezone.utc) < since:
             break
 
-        # Parse other timestamps if available
-        finished_at = None
-        finished_at_str = dep.get("finished_at")
-        if finished_at_str:
-            finished_at = safe_parse_datetime(finished_at_str)
-
+        deployment_payload = {
+            **dep.raw_payload,
+            "deployment_id": dep.deployment_id,
+            "deployment_iid": dep.deployment_iid,
+        }
         enrichment = get_release_ref_enrichment(
-            {
-                **dep,
-                "deployment_id": str(dep.get("id", "")),
-                "deployment_iid": dep.get("iid"),
-            },
+            deployment_payload,
             "gitlab",
             releases=release_objects,
         )
 
-        mr_number, mr_merged_at = _resolve_gitlab_deployment_mr(
-            connector, project_id, dep.get("sha")
+        mr_number, mr_merged_at = _resolve_gitlab_deployment_mr_from_items(
+            merge_requests_by_deployment_id.get(dep.deployment_id, [])
         )
         deployments.append(
             build_deployment(
                 repo_id=repo_id,
-                deployment_id=str(dep.get("id", "")),
-                status=dep.get("status", None),
-                environment=dep.get("environment", {}).get("name")
-                if isinstance(dep.get("environment"), dict)
-                else None,
+                deployment_id=dep.deployment_id,
+                status=dep.status,
+                environment=dep.environment,
                 started_at=created_at,
-                finished_at=finished_at,
+                finished_at=dep.finished_at,
                 deployed_at=created_at,
                 merged_at=mr_merged_at,
                 pull_request_number=mr_number,
@@ -1018,16 +1163,85 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
     return incidents
 
 
+def _gitlab_code_client_from_connector(connector):
+    """Build an instrumented ``GitLabCodeClient`` from a legacy connector's
+    resolved credentials (CHAOS-2773 CS10). Mirrors
+    ``processors/github.py::_github_code_client_from_connector`` so both
+    provider pathfinders expose the same factory seam -- also the monkeypatch
+    point for the security-family unit tests."""
+    from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
+
+    return GitLabCodeClient(
+        private_token=str(connector.private_token or ""),
+        base_url=connector.url,
+    )
+
+
+def _gitlab_effective_group(group_name: str | None, pattern: str | None) -> str | None:
+    if group_name or not pattern or "/" not in pattern:
+        return group_name
+    prefix = pattern.split("/", 1)[0]
+    if prefix and "*" not in prefix and "?" not in prefix:
+        logging.info("Extracted group '%s' from pattern '%s'", prefix, pattern)
+        return prefix
+    return None
+
+
+def _repo_stats_from_gitlab_commits(commits: list[Any], stats: list[Any]) -> RepoStats:
+    authors: dict[str, Author] = {}
+    for commit in commits:
+        author_name = str(getattr(commit, "author_name", None) or "Unknown")
+        if author_name not in authors:
+            authors[author_name] = Author(id=0, username=author_name, name=author_name)
+    return RepoStats(
+        total_commits=len(commits),
+        additions=sum(int(getattr(item, "additions", 0)) for item in stats),
+        deletions=sum(int(getattr(item, "deletions", 0)) for item in stats),
+        commits_per_week=0.0,
+        authors=list(authors.values()),
+    )
+
+
 def _fetch_gitlab_security_alerts_sync(
-    connector, project_id, repo_id, max_alerts, since
+    connector, project_id, repo_id, max_alerts, since, usage_sink=None
 ):
-    """Sync helper to fetch GitLab security alerts (vulnerability findings, dependency scanning)."""
+    """Sync helper to fetch GitLab security alerts (vulnerability findings, dependency scanning).
+
+    CHAOS-2773 CS10: fetches via the canonical, instrumented
+    ``providers.gitlab.code_client.GitLabCodeClient`` (built on the shared
+    ``InstrumentedRESTCore``) instead of the frozen
+    ``GitLabConnector.get_security_alerts`` (python-gitlab + the
+    un-instrumented ``connectors/utils/rest.py``). Both callers dispatch this
+    helper via ``loop.run_in_executor`` (a plain worker thread with no
+    running event loop), so bridging to the async client with
+    ``asyncio.run()`` here is safe.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, receives the client's
+    drained per-request usage observations in a ``finally:`` on BOTH the
+    success and failure path, mirroring
+    ``processors/github.py::_enrich_prs_with_reviews_batch``. Any fetch
+    failure is still swallowed here (pre-existing behavior: security alerts
+    are best-effort optional enrichment that must never fail the whole
+    project sync), so there is never an in-flight exception to attach
+    partial observations to -- the unconditional drain below already covers
+    both the success AND failure path.
+    """
+
     security_alert_cls = getattr(git_models, "SecurityAlert")
     alerts = []
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> list[SecurityAlertData]:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_security_alerts(
+                    project_id, max_alerts=max_alerts
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
     try:
-        raw_alerts = connector.get_security_alerts(
-            project_id=project_id, max_alerts=max_alerts
-        )
+        raw_alerts = asyncio.run(_run())
         for item in raw_alerts:
             created_at = item.created_at
             if not created_at:
@@ -1053,124 +1267,108 @@ def _fetch_gitlab_security_alerts_sync(
             )
     except Exception as exc:
         logging.debug("Failed to fetch GitLab security alerts: %s", exc)
+    finally:
+        if usage_sink is not None:
+            usage_sink.extend(drained_observations)
+        elif drained_observations:
+            logging.debug(
+                "_fetch_gitlab_security_alerts_sync: drained %d security usage "
+                "observation(s) with no adapter-owned sink (legacy entry "
+                "point) -- logging only, not persisted",
+                len(drained_observations),
+            )
     return alerts
 
 
-def _iter_gitlab_repo_tree(
-    gl_project,
-    *,
-    ref: str,
-    per_page: int = 100,
-    limit: int | None = None,
-) -> Iterable[Any]:
-    page = 1
-    seen = 0
-    # Defensive page cap. GitLab paginates until it returns an empty page, but a
-    # transport/API glitch — or a test double whose ``repository_tree()`` is a
-    # truthy Mock that never yields a falsy page — would otherwise spin forever
-    # (an unbounded REST crawl that hangs the sync; this hung the unit suite to
-    # the CI job timeout). 10k pages at per_page=100 covers ~1M tree entries,
-    # far beyond any real repository.
-    max_pages = 10_000
+def _fetch_gitlab_blame_sync(
+    connector,
+    project_full_name: str,
+    default_branch: str,
+    repo_id,
+    limit: int = 50,
+    usage_sink: list[dict[str, Any]] | None = None,
+):
+    """Sync helper to fetch GitLab blame data via the canonical code client.
 
-    while page <= max_pages:
-        try:
-            page_items = gl_project.repository_tree(
-                ref=ref,
-                recursive=True,
-                per_page=per_page,
-                page=page,
-                get_all=False,
-            )
-        except TypeError:
-            page_items = gl_project.repository_tree(
-                ref=ref,
-                recursive=True,
-                per_page=per_page,
-                page=page,
-                all=False,
-            )
-        # An empty page marks the end. Check the length explicitly: a real
-        # GitLab response is a list (``[]`` is falsy), but a truthy-but-empty
-        # container — e.g. a test Mock with no configured return — is not caught
-        # by ``not page_items`` alone and would loop until ``max_pages``.
-        try:
-            page_len = len(page_items)
-        except TypeError:
-            page_len = 0
-        if not page_items or page_len == 0:
-            break
-        seen += page_len
-        logging.debug(
-            "GitLab repo tree page %d returned %d items (total: %d)",
-            page,
-            page_len,
-            seen,
-        )
-        yield from page_items
-        if limit is not None and seen >= limit:
-            return
-        page += 1
+    CHAOS-2817/CS15b: ``process_gitlab_project``'s optional ``fetch_blame``
+    step used to receive the python-gitlab project object and call its
+    ``.repository_tree()`` / the frozen ``connector.get_file_blame()``. Once
+    ``_fetch_gitlab_project_info_sync`` started returning the plain
+    ``GitLabProjectData`` dataclass (no ``.repository_tree()``), that shape
+    stopped matching -- rewired onto ``GitLabCodeClient.list_repository_tree``
+    / ``get_file_blame`` (project full name + default branch, not a
+    python-gitlab project object).
+    """
+    drained_observations: list[dict[str, Any]] = []
 
-
-def _fetch_gitlab_blame_sync(gl_project, connector, project_id, repo_id, limit=50):
-    """Sync helper to fetch GitLab blame data."""
-    blame_batch = []
-    try:
-        # Get files from repository tree (paged to avoid huge responses)
-        files_to_process = []
-        for item in _iter_gitlab_repo_tree(
-            gl_project,
-            ref=gl_project.default_branch,
-            per_page=100,
-            limit=None,
-        ):
-            if item["type"] == "blob" and not is_skippable(item["path"]):
-                files_to_process.append(item["path"])
-                if len(files_to_process) >= limit:
-                    break
-
-        # Limit files
-        files_to_process = files_to_process[:limit]
-        logging.debug(
-            "GitLab blame: processing %d files (limit %d)",
-            len(files_to_process),
-            limit,
-        )
-
-        for idx, file_path in enumerate(files_to_process, start=1):
+    async def _run() -> list[Any]:
+        async with _gitlab_code_client_from_connector(connector) as client:
             try:
+                try:
+                    tree_items = await client.list_repository_tree(
+                        project_full_name, ref=default_branch
+                    )
+                except Exception as e:
+                    if _is_rate_limit_exception(e):
+                        raise
+                    logging.error("Error fetching files for blame: %s", e)
+                    return []
+
+                files_to_process: list[str] = []
+                for item in tree_items:
+                    if item.get("type") == "blob" and not is_skippable(
+                        item.get("path", "")
+                    ):
+                        files_to_process.append(item["path"])
+                        if len(files_to_process) >= limit:
+                            break
+                files_to_process = files_to_process[:limit]
                 logging.debug(
-                    "GitLab blame fetch %d/%d: %s",
-                    idx,
+                    "GitLab blame: processing %d files (limit %d)",
                     len(files_to_process),
-                    file_path,
+                    limit,
                 )
-                blame = connector.get_file_blame(
-                    project_id=project_id,
-                    file_path=file_path,
-                    ref=gl_project.default_branch,
-                )
-                if blame and blame.ranges:
-                    for r in blame.ranges:
-                        blame_obj = GitBlame(
-                            repo_id=repo_id,
-                            path=file_path,
-                            line_no=r.starting_line,
-                            author_name=r.author,
-                            author_email=r.author_email,
-                            commit_hash=r.commit_sha,
-                            line="<remote>",
-                            author_when=datetime.now(timezone.utc),
+
+                blame_batch: list[Any] = []
+                for idx, file_path in enumerate(files_to_process, start=1):
+                    try:
+                        logging.debug(
+                            "GitLab blame fetch %d/%d: %s",
+                            idx,
+                            len(files_to_process),
+                            file_path,
                         )
-                        blame_batch.append(blame_obj)
-            except Exception as e:
-                logging.warning(f"Failed to get blame for {file_path}: {e}")
+                        blame = await client.get_file_blame(
+                            project_full_name, file_path, ref=default_branch
+                        )
+                        if blame and blame.ranges:
+                            for r in blame.ranges:
+                                blame_batch.append(
+                                    GitBlame(
+                                        repo_id=repo_id,
+                                        path=file_path,
+                                        line_no=r.starting_line,
+                                        author_name=r.author,
+                                        author_email=r.author_email,
+                                        commit_hash=r.commit_sha,
+                                        line="<remote>",
+                                        author_when=datetime.now(timezone.utc),
+                                    )
+                                )
+                    except Exception as e:
+                        if _is_rate_limit_exception(e):
+                            raise
+                        logging.warning("Failed to get blame for %s: %s", file_path, e)
+                return blame_batch
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
 
-    except Exception as e:
-        logging.error(f"Error fetching files for blame: {e}")
-
-    return blame_batch
+    try:
+        return asyncio.run(_run())
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_blame_sync", drained_observations, usage_sink
+        )
 
 
 # Bounds for API-based file-content backfill (parity with the GitHub
@@ -1186,6 +1384,7 @@ CONTENT_FETCH_MAX_FILES = 2_000
 # bounded one-time cost on first onboarding; full coverage remains available
 # via the dedicated blame sync target (CHAOS-2376).
 BLAME_BACKFILL_MAX_FILES = 500
+GITLAB_BLAME_FETCH_FAILURE_WARNING_LIMIT = 5
 
 
 async def _fetch_scannable_contents(
@@ -1193,13 +1392,24 @@ async def _fetch_scannable_contents(
     project_full_name: str,
     ref: str,
     file_paths: list[str],
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     """Fetch text for scanner-eligible files via batched GraphQL blob queries.
 
-    Only paths matching the complexity scanner's include/exclude globs are
-    fetched, keeping API volume proportional to what the metrics jobs can
-    actually use. Errors degrade to a paths-only backfill (contents stay
-    NULL) rather than failing the sync.
+    CHAOS-2815/CS14: fetches via the canonical, instrumented
+    ``providers.gitlab.code_client.GitLabCodeClient`` (built on the shared
+    ``InstrumentedRESTCore``) instead of the frozen
+    ``GitLabConnector.get_file_contents`` (``connectors/gitlab.py``, riding
+    un-instrumented ``requests`` GraphQL calls). Only paths matching the
+    complexity scanner's include/exclude globs are fetched, keeping API
+    volume proportional to what the metrics jobs can actually use.
+
+    ``usage_sink`` (CHAOS-2803/CS2) receives the client's drained
+    per-request usage observations in a ``finally:`` on both the success and
+    failure path, mirroring every other GitLabCodeClient helper in this
+    file. A ``RateLimitException`` propagates (an exhausted rate limit must
+    fail the sync, not silently truncate file coverage); any other fetch
+    failure degrades to a paths-only backfill (contents stay NULL).
     """
     scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
     scannable: list[str] = []
@@ -1218,22 +1428,80 @@ async def _fetch_scannable_contents(
     if not scannable:
         return {}
 
-    loop = asyncio.get_running_loop()
+    drained_observations: list[dict[str, Any]] = []
     try:
-        return await loop.run_in_executor(
-            None,
-            lambda: connector.get_file_contents(
-                project_full_name,
-                scannable,
-                ref=ref,
-                max_bytes=CONTENT_FETCH_MAX_BYTES,
-            ),
-        )
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_file_contents(
+                    project_full_name,
+                    scannable,
+                    ref=ref,
+                    max_bytes=CONTENT_FETCH_MAX_BYTES,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
     except Exception as e:
+        if _is_rate_limit_exception(e):
+            raise
         logging.warning(
             "Failed to fetch file contents for %s: %s", project_full_name, e
         )
         return {}
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_scannable_contents", drained_observations, usage_sink
+        )
+
+
+async def _fetch_gitlab_repository_tree(
+    connector: Any,
+    project_full_name: str,
+    ref: str,
+    usage_sink: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    drained_observations: list[dict[str, Any]] = []
+    try:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.list_repository_tree(project_full_name, ref=ref)
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+    except Exception as e:
+        if _is_rate_limit_exception(e):
+            raise
+        logging.warning("Failed to list GitLab files for %s: %s", project_full_name, e)
+        return []
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_repository_tree", drained_observations, usage_sink
+        )
+
+
+async def _resolve_gitlab_backfill_ref(
+    connector: Any,
+    project_full_name: str,
+    default_branch: str,
+    until: datetime | None,
+    usage_sink: list[dict[str, Any]] | None,
+) -> str | None:
+    if until is None:
+        return default_branch
+
+    drained_observations: list[dict[str, Any]] = []
+    try:
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                return await client.get_latest_commit_sha(
+                    project_full_name,
+                    ref=default_branch,
+                    until=until,
+                )
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+    finally:
+        _drain_gitlab_code_usage(
+            "_resolve_gitlab_backfill_ref", drained_observations, usage_sink
+        )
 
 
 async def _backfill_gitlab_missing_data(
@@ -1248,6 +1516,10 @@ async def _backfill_gitlab_missing_data(
     include_files: bool = True,
     include_blame: bool = True,
     include_commit_stats: bool = True,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
+    metrics_sink: Any | None = None,
 ) -> None:
     # check_backfill_needs's blame_only flag doubles as "skip commit stats".
     needs = await check_backfill_needs(
@@ -1258,7 +1530,11 @@ async def _backfill_gitlab_missing_data(
     # (contents NULL), which has_any_git_files treats as "done". Upgrade
     # them by re-running the files backfill when no contents exist yet;
     # ReplacingMergeTree(last_synced) supersedes the stale rows.
-    needs_files = needs.files if include_files else False
+    historical_day = historical_backfill_day(until)
+    needs_historical_complexity = include_files and historical_day is not None
+    needs_files = (
+        needs.files if include_files else False
+    ) or needs_historical_complexity
     if (
         include_files
         and not needs_files
@@ -1281,25 +1557,27 @@ async def _backfill_gitlab_missing_data(
     if not (needs_files or needs_blame or needs_commit_stats):
         return
 
-    try:
-        project = connector.gitlab.projects.get(project_full_name)
-    except Exception as e:
-        logging.warning(f"Failed to load GitLab project {project_full_name}: {e}")
-        return
-
     file_paths: list[str] = []
     blame_paths: list[str] = []
+    backfill_ref = default_branch
     if needs_files or needs_blame:
-        try:
-            items = _iter_gitlab_repo_tree(
-                project,
-                ref=default_branch,
-                per_page=100,
-                limit=None,
+        resolved_ref = await _resolve_gitlab_backfill_ref(
+            connector, project_full_name, default_branch, until, usage_sink
+        )
+        if resolved_ref is None:
+            logging.warning(
+                "No GitLab commit found for %s at or before %s; skipping file backfill",
+                project_full_name,
+                until.isoformat() if until is not None else "unknown",
             )
-        except Exception as e:
-            logging.warning(f"Failed to list GitLab files for {project_full_name}: {e}")
+            needs_files = False
+            needs_blame = False
             items = []
+        else:
+            backfill_ref = resolved_ref
+            items = await _fetch_gitlab_repository_tree(
+                connector, project_full_name, backfill_ref, usage_sink
+            )
 
         for item in items or []:
             if item.get("type") != "blob":
@@ -1313,59 +1591,63 @@ async def _backfill_gitlab_missing_data(
             contents_by_path = await _fetch_scannable_contents(
                 connector,
                 project_full_name,
-                default_branch,
+                backfill_ref,
                 file_paths,
+                usage_sink=usage_sink,
             )
-            await backfill_file_records(
-                ingestion_sink,
-                db_repo.id,
-                file_paths,
-                project_full_name,
+            if historical_day is None:
+                await backfill_file_records(
+                    ingestion_sink,
+                    db_repo.id,
+                    file_paths,
+                    project_full_name,
+                    contents_by_path=contents_by_path,
+                )
+            write_historical_complexity(
+                store=store,
+                metrics_sink=metrics_sink,
+                repo_id=db_repo.id,
+                day=historical_day,
+                ref_value=backfill_ref,
                 contents_by_path=contents_by_path,
             )
 
     if needs_commit_stats:
-        try:
-            commits = project.commits.list(
-                ref_name=default_branch, per_page=100, get_all=True
-            )
-        except TypeError:
-            commits = project.commits.list(
-                ref_name=default_branch, per_page=100, all=True
-            )
-
-        async with AsyncBatchCollector(
-            ingestion_sink.insert_git_commit_stats
-        ) as stats_collector:
-            commit_count = 0
-            for commit in commits or []:
-                if max_commits and commit_count >= max_commits:
-                    break
-                commit_count += 1
-                sha = getattr(commit, "id", None) or getattr(commit, "sha", None)
-                if not sha:
-                    continue
-                try:
-                    stats = connector.get_commit_stats_by_project(
-                        sha=sha,
-                        project_name=project_full_name,
-                    )
-                    stats_collector.add(
-                        GitCommitStat(
-                            repo_id=db_repo.id,
-                            commit_hash=sha,
-                            file_path=AGGREGATE_STATS_MARKER,
-                            additions=getattr(stats, "additions", 0),
-                            deletions=getattr(stats, "deletions", 0),
-                            old_file_mode="unknown",
-                            new_file_mode="unknown",
-                        )
-                    )
-                    await stats_collector.maybe_flush()
-                except Exception as e:
-                    logging.debug(
-                        f"Failed commit stat fetch for {project_full_name}@{sha}: {e}"
-                    )
+        # CHAOS-2814/CS13: fetch commits + detailed stats via the canonical,
+        # instrumented GitLabCodeClient helpers (``_fetch_gitlab_commits_sync``
+        # / ``_fetch_gitlab_commit_stats_sync``) instead of the frozen
+        # python-gitlab ``project.commits.list()`` + the un-instrumented
+        # ``connector.get_commit_stats_by_project()``. Dispatched via
+        # ``loop.run_in_executor`` (mirrors every other GitLab sync helper,
+        # e.g. ``_sync_gitlab_commit_stats``) since the sync helpers bridge
+        # to the async client with their own ``asyncio.run()`` and cannot be
+        # awaited directly from this already-running event loop.
+        loop = asyncio.get_running_loop()
+        commit_hashes, _ = await loop.run_in_executor(
+            None,
+            _fetch_gitlab_commits_sync,
+            connector,
+            project_full_name,
+            max_commits,
+            db_repo.id,
+            since,
+            until,
+            usage_sink,
+        )
+        stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, since)
+        stats_objects = await loop.run_in_executor(
+            None,
+            _fetch_gitlab_commit_stats_sync,
+            connector,
+            project_full_name,
+            commit_hashes,
+            db_repo.id,
+            stats_limit,
+            None,
+            usage_sink,
+        )
+        if stats_objects:
+            await ingestion_sink.insert_git_commit_stats(stats_objects)
 
     if needs_blame and file_paths:
         # Bound the blame crawl: one REST call per file, so cap the number of
@@ -1389,53 +1671,92 @@ async def _backfill_gitlab_missing_data(
             project_full_name,
             BLAME_BACKFILL_MAX_FILES,
         )
-        async with AsyncBatchCollector(
-            ingestion_sink.insert_blame_data
-        ) as blame_collector:
-            for path in blame_paths:
+        # CHAOS-2815/CS14: fetch blame via the canonical, instrumented
+        # GitLabCodeClient (built on the shared InstrumentedRESTCore) instead
+        # of the frozen ``connector.rest_client.get_file_blame`` (un-
+        # instrumented ``connectors/utils/rest.py``). One client is built for
+        # the whole capped crawl and drained once, mirroring
+        # ``_fetch_gitlab_commit_stats_sync``'s per-commit-loop shape. A
+        # ``RateLimitException`` on any file propagates -- an exhausted rate
+        # limit must fail the sync, not silently strand the remaining files
+        # in this batch as per-file warnings -- while any other per-file
+        # failure is logged and the crawl continues (bounded, best-effort).
+        drained_observations: list[dict[str, Any]] = []
+        try:
+            async with _gitlab_code_client_from_connector(connector) as client:
                 try:
-                    blame_items = connector.rest_client.get_file_blame(
-                        project.id,
-                        path,
-                        default_branch,
-                    )
-                except Exception as e:
-                    logging.debug(
-                        f"Failed blame fetch for {project_full_name}:{path}: {e}"
-                    )
-                    continue
+                    blame_fetch_failure_count = 0
+                    async with AsyncBatchCollector(
+                        ingestion_sink.insert_blame_data
+                    ) as blame_collector:
+                        for path in blame_paths:
+                            try:
+                                blame_items = await client.get_file_blame(
+                                    project_full_name, path, ref=backfill_ref
+                                )
+                            except Exception as e:
+                                if _is_rate_limit_exception(e):
+                                    raise
+                                blame_fetch_failure_count += 1
+                                if (
+                                    blame_fetch_failure_count
+                                    <= GITLAB_BLAME_FETCH_FAILURE_WARNING_LIMIT
+                                ):
+                                    logging.warning(
+                                        "Failed GitLab blame fetch for %s:%s: %s",
+                                        project_full_name,
+                                        path,
+                                        e,
+                                    )
+                                continue
 
-                line_no = 1
-                for item in blame_items or []:
-                    commit = item.get("commit", {})
-                    for line in item.get("lines", []) or []:
-                        blame_collector.add(
-                            GitBlame(
-                                repo_id=db_repo.id,
-                                path=path,
-                                line_no=line_no,
-                                author_email=commit.get("author_email"),
-                                author_name=commit.get("author_name"),
-                                author_when=None,
-                                commit_hash=commit.get("id"),
-                                line=line.rstrip("\n")
-                                if isinstance(line, str)
-                                else None,
-                            )
+                            for rng in blame_items.ranges:
+                                for line_no, line in enumerate(
+                                    rng.lines,
+                                    start=rng.starting_line,
+                                ):
+                                    blame_collector.add(
+                                        GitBlame(
+                                            repo_id=db_repo.id,
+                                            path=path,
+                                            line_no=line_no,
+                                            author_email=rng.author_email,
+                                            author_name=rng.author,
+                                            author_when=None,
+                                            commit_hash=rng.commit_sha,
+                                            line=line,
+                                        )
+                                    )
+                                    await blame_collector.maybe_flush()
+                    if blame_fetch_failure_count:
+                        logging.warning(
+                            "Skipped GitLab blame for %d file(s) in %s; logged first %d failures",
+                            blame_fetch_failure_count,
+                            project_full_name,
+                            min(
+                                blame_fetch_failure_count,
+                                GITLAB_BLAME_FETCH_FAILURE_WARNING_LIMIT,
+                            ),
                         )
-                        line_no += 1
-                        await blame_collector.maybe_flush()
+                finally:
+                    drained_observations.extend(client.drain_usage_observations())
+        finally:
+            _drain_gitlab_code_usage(
+                "_backfill_gitlab_missing_data blame", drained_observations, usage_sink
+            )
 
 
 async def _sync_gitlab_commits(
     *,
-    gl_project: Any,
+    connector: Any,
+    project_id: int,
     db_repo: Repo,
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     max_commits: int | None,
     since: datetime | None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], int]:
     if max_commits is None:
         logging.info("Fetching all commits from GitLab...")
@@ -1444,11 +1765,13 @@ async def _sync_gitlab_commits(
     commit_hashes, commit_objects = await loop.run_in_executor(
         None,
         _fetch_gitlab_commits_sync,
-        gl_project,
+        connector,
+        project_id,
         max_commits,
         db_repo.id,
         since,
         until,
+        usage_sink,
     )
     if commit_objects:
         await ingestion_sink.insert_git_commit_data(commit_objects)
@@ -1458,7 +1781,8 @@ async def _sync_gitlab_commits(
 
 async def _sync_gitlab_commit_stats(
     *,
-    gl_project: Any,
+    connector: Any,
+    project_id: int,
     db_repo: Repo,
     ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
@@ -1466,26 +1790,32 @@ async def _sync_gitlab_commit_stats(
     since: datetime | None,
     until: datetime | None = None,
     commit_hashes: list[str] | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     if commit_hashes is None:
         commit_hashes, _ = await loop.run_in_executor(
             None,
             _fetch_gitlab_commits_sync,
-            gl_project,
+            connector,
+            project_id,
             max_commits,
             db_repo.id,
             since,
             until,
+            usage_sink,
         )
     logging.info("Fetching commit stats from GitLab...")
     stats_limit = resolve_commit_stats_limit(len(commit_hashes), max_commits, since)
     stats_objects = await loop.run_in_executor(
         None,
         _fetch_gitlab_commit_stats_sync,
-        gl_project,
+        connector,
+        project_id,
         commit_hashes,
         db_repo.id,
         stats_limit,
+        None,
+        usage_sink,
     )
     if stats_objects:
         await ingestion_sink.insert_git_commit_stats(stats_objects)
@@ -1501,12 +1831,12 @@ def _is_report_name(name: str) -> bool:
 
 def _fetch_gitlab_test_reports_sync(
     connector: Any,
-    gl_project: Any,
     project_id: int,
     since: datetime | None,
     default_branch: str | None,
     max_pipelines: int,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> tuple[
     list[tuple[str, dict[str, Any], datetime | None, datetime | None]],
     list[tuple[str, list[tuple[str, bytes]]]],
@@ -1517,108 +1847,163 @@ def _fetch_gitlab_test_reports_sync(
     ``[(run_id, test_report_json, started_at, finished_at), ...]`` (GitLab's
     parsed JUnit JSON + the pipeline timestamps used to date the suites) and
     ``coverage_members`` is ``[(run_id, [(filename, bytes), ...]), ...]`` from
-    job artifact ZIPs. ``run_id`` is ``str(pipeline.id)`` so rows join to the
-    pipeline. Bounded to the default branch and ``max_pipelines`` pipelines.
+    job artifact ZIPs. ``run_id`` is ``str(pipeline["id"])`` so rows join to
+    the pipeline. Bounded to the default branch and ``max_pipelines``
+    pipelines.
+
+    CHAOS-2773 CS12: fetches via the canonical, instrumented
+    ``providers.gitlab.code_client.GitLabCodeClient`` (built on the shared
+    ``InstrumentedRESTCore``) instead of the frozen python-gitlab
+    ``gl_project.pipelines.list()`` + the un-instrumented
+    ``connectors/utils/rest.py`` (``get_pipeline_test_report`` / ``get_list``
+    / ``download_job_artifacts``). Dispatched via ``loop.run_in_executor``
+    (a plain worker thread with no running event loop), so bridging to the
+    async client with ``asyncio.run()`` here is safe -- mirrors
+    ``_fetch_gitlab_pipelines_sync`` / ``_fetch_gitlab_deployments_sync`` /
+    ``_fetch_gitlab_security_alerts_sync``. ONE client instance covers the
+    whole project scan (pipeline listing + every pipeline's test_report +
+    jobs + artifact downloads), matching the CS2 "one client per unit"
+    drain contract.
+
+    ``usage_sink`` (CHAOS-2803/CS2), when given, receives the client's
+    drained per-request usage observations in a ``finally:`` on BOTH the
+    success and failure path.
     """
     from dev_health_ops.connectors.utils.safe_archive import iter_zip_members
 
-    test_reports: list[
-        tuple[str, dict[str, Any], datetime | None, datetime | None]
-    ] = []
-    coverage_members: list[tuple[str, list[tuple[str, bytes]]]] = []
     since_aware = since
     if since_aware is not None and since_aware.tzinfo is None:
         since_aware = since_aware.replace(tzinfo=timezone.utc)
 
-    # Filter by update time SERVER-SIDE. We must NOT early-`break` on created_at:
-    # the list is ordered by updated_at, and a recently-updated pipeline can be
-    # old by created_at, so breaking would silently skip valid in-window
-    # pipelines (Codex review). The max_pipelines cap bounds the scan instead.
-    list_params: dict[str, Any] = {
-        "per_page": 100,
-        "order_by": "updated_at",
-        "sort": "desc",
-    }
-    if since_aware is not None:
-        list_params["updated_after"] = since_aware.isoformat()
+    drained_observations: list[dict[str, Any]] = []
+
+    async def _run() -> tuple[
+        list[tuple[str, dict[str, Any], datetime | None, datetime | None]],
+        list[tuple[str, list[tuple[str, bytes]]]],
+    ]:
+        test_reports: list[
+            tuple[str, dict[str, Any], datetime | None, datetime | None]
+        ] = []
+        coverage_members: list[tuple[str, list[tuple[str, bytes]]]] = []
+
+        async with _gitlab_code_client_from_connector(connector) as client:
+            try:
+                # Filter by update time SERVER-SIDE. We must NOT early-`break`
+                # on created_at: the list is ordered by updated_at, and a
+                # recently-updated pipeline can be old by created_at, so
+                # breaking would silently skip valid in-window pipelines
+                # (Codex review). The max_pipelines cap (applied below, AFTER
+                # the default-branch filter) bounds the scan instead.
+                try:
+                    raw_pipelines = await client.iter_pipelines_since(
+                        project_id, since=since_aware, per_page=100
+                    )
+                except Exception as exc:
+                    logging.warning(
+                        "Could not list pipelines for GitLab project %s: %s",
+                        project_id,
+                        exc,
+                    )
+                    return test_reports, coverage_members
+
+                count = 0
+                for pipeline in raw_pipelines:
+                    if count >= max_pipelines:
+                        break
+                    ref = pipeline.get("ref")
+                    if default_branch and ref and ref != default_branch:
+                        continue
+                    pipeline_id = pipeline.get("id")
+                    if pipeline_id is None:
+                        continue
+                    count += 1
+                    run_id = str(pipeline_id)
+                    created_at = safe_parse_datetime(pipeline.get("created_at"))
+                    started_at = (
+                        safe_parse_datetime(pipeline.get("started_at")) or created_at
+                    )
+                    finished_at = safe_parse_datetime(pipeline.get("finished_at"))
+
+                    if (
+                        until is not None
+                        and isinstance(started_at, datetime)
+                        and started_at.astimezone(timezone.utc) > until
+                    ):
+                        continue
+
+                    # Native parsed test report (pass/fail/duration) — preferred over XML.
+                    try:
+                        report = await client.get_pipeline_test_report(
+                            project_id, pipeline_id
+                        )
+                        if report and report.get("test_suites"):
+                            test_reports.append(
+                                (run_id, report, started_at, finished_at)
+                            )
+                    except Exception as exc:
+                        logging.debug(
+                            "test_report failed for pipeline %s: %s",
+                            pipeline_id,
+                            exc,
+                        )
+
+                    # Coverage from job artifacts (best-effort, bounded).
+                    try:
+                        jobs = await client.iter_pipeline_jobs(
+                            project_id, pipeline_id, per_page=100
+                        )
+                    except Exception:
+                        jobs = []
+                    members: list[tuple[str, bytes]] = []
+                    artifact_jobs = 0
+                    for job in jobs:
+                        if artifact_jobs >= MAX_ARTIFACTS_PER_RUN:
+                            break
+                        if not (job.get("artifacts_file") or job.get("artifacts")):
+                            continue
+                        job_id = job.get("id")
+                        if job_id is None:
+                            continue
+                        artifact_jobs += 1
+                        try:
+                            data = await client.download_job_artifact(
+                                project_id, job_id
+                            )
+                        except Exception as exc:
+                            logging.debug(
+                                "artifact download failed for job %s: %s",
+                                job_id,
+                                exc,
+                            )
+                            continue
+                        if not data:
+                            continue
+                        try:
+                            members.extend(
+                                iter_zip_members(data, name_filter=_is_report_name)
+                            )
+                        except zipfile.BadZipFile:
+                            continue
+                    if members:
+                        coverage_members.append((run_id, members))
+
+                return test_reports, coverage_members
+            finally:
+                drained_observations.extend(client.drain_usage_observations())
+
     try:
-        if max_pipelines > 100:
-            raw_pipelines = gl_project.pipelines.list(**list_params, as_list=False)
-        else:
-            raw_pipelines = gl_project.pipelines.list(**list_params, get_all=False)
+        test_reports, coverage_members = asyncio.run(_run())
     except Exception as exc:
         logging.warning(
-            "Could not list pipelines for GitLab project %s: %s", project_id, exc
+            "Failed to fetch GitLab test reports for project %s: %s",
+            project_id,
+            exc,
         )
-        return test_reports, coverage_members
-
-    count = 0
-    for pipeline in raw_pipelines:
-        if count >= max_pipelines:
-            break
-        ref = getattr(pipeline, "ref", None)
-        if default_branch and ref and ref != default_branch:
-            continue
-        pipeline_id = getattr(pipeline, "id", None)
-        if pipeline_id is None:
-            continue
-        count += 1
-        run_id = str(pipeline_id)
-        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
-        started_at = (
-            safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
+        test_reports, coverage_members = [], []
+    finally:
+        _drain_gitlab_code_usage(
+            "_fetch_gitlab_test_reports_sync", drained_observations, usage_sink
         )
-        finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
-
-        if (
-            until is not None
-            and isinstance(started_at, datetime)
-            and started_at.astimezone(timezone.utc) > until
-        ):
-            continue
-
-        # Native parsed test report (pass/fail/duration) — preferred over XML.
-        try:
-            report = connector.rest_client.get_pipeline_test_report(
-                project_id, pipeline_id
-            )
-            if report and report.get("test_suites"):
-                test_reports.append((run_id, report, started_at, finished_at))
-        except Exception as exc:
-            logging.debug("test_report failed for pipeline %s: %s", pipeline_id, exc)
-
-        # Coverage from job artifacts (best-effort, bounded).
-        try:
-            jobs = connector.rest_client.get_list(
-                f"projects/{project_id}/pipelines/{pipeline_id}/jobs",
-                params={"per_page": 100},
-            )
-        except Exception:
-            jobs = []
-        members: list[tuple[str, bytes]] = []
-        artifact_jobs = 0
-        for job in jobs:
-            if artifact_jobs >= MAX_ARTIFACTS_PER_RUN:
-                break
-            if not (job.get("artifacts_file") or job.get("artifacts")):
-                continue
-            job_id = job.get("id")
-            if job_id is None:
-                continue
-            artifact_jobs += 1
-            try:
-                data = connector.rest_client.download_job_artifacts(project_id, job_id)
-            except Exception as exc:
-                logging.debug("artifact download failed for job %s: %s", job_id, exc)
-                continue
-            if not data:
-                continue
-            try:
-                members.extend(iter_zip_members(data, name_filter=_is_report_name))
-            except zipfile.BadZipFile:
-                continue
-        if members:
-            coverage_members.append((run_id, members))
 
     return test_reports, coverage_members
 
@@ -1635,6 +2020,7 @@ async def _sync_gitlab_test_reports(
     loop: asyncio.AbstractEventLoop,
     since: datetime | None,
     until: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """Ingest TestOps data for one GitLab project (CHAOS-2370).
 
@@ -1648,6 +2034,13 @@ async def _sync_gitlab_test_reports(
     from dev_health_ops.providers.gitlab.testops_pipeline import GitLabCIAdapter
 
     # (1) Extended pipelines + jobs. Explicit token (Codex review item G).
+    # ``adapter`` (CHAOS-2773 CS12) now opts into instrumentation via
+    # ``BasePipelineAdapter``'s ``usage_resolver``/``diagnostic_header_names``
+    # class attributes (shared foundation with CHAOS-2806/CS5's
+    # GitHubActionsAdapter) -- drained unconditionally in the ``finally:``
+    # below on BOTH the success and failure path, mirroring the code-client
+    # helpers above.
+    adapter: GitLabCIAdapter | None = None
     try:
         adapter = GitLabCIAdapter(base_url=connector.rest_client.base_url, token=token)
         processor = TestOpsPipelineProcessor(ingestion_sink)
@@ -1672,18 +2065,25 @@ async def _sync_gitlab_test_reports(
             project_id,
             exc,
         )
+    finally:
+        if adapter is not None:
+            _drain_gitlab_code_usage(
+                "_sync_gitlab_test_reports[adapter]",
+                adapter.drain_usage_observations(),
+                usage_sink,
+            )
 
     default_branch = getattr(gl_project, "default_branch", None)
     test_reports, coverage_members = await loop.run_in_executor(
         None,
         _fetch_gitlab_test_reports_sync,
         connector,
-        gl_project,
         project_id,
         since,
         default_branch,
         MAX_RUNS_PER_SYNC,
         until,
+        usage_sink,
     )
 
     suite_rows: list[Any] = []
@@ -1777,9 +2177,15 @@ async def process_gitlab_project(
     sync_commit_stats: bool | None = None,
     sync_files: bool | None = None,
     sync_blame: bool | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process a GitLab project using the GitLab connector.
+
+    ``usage_sink`` (CHAOS-2803/CS2) mirrors ``process_github_repo``'s
+    adapter-owned drain sink for symmetry with ``dataset_adapters.py``. GitLab
+    code-client helpers drain their per-request observations into this sink on
+    both success and failure; legacy connector-only paths leave it untouched.
     """
     if not CONNECTORS_AVAILABLE:
         raise RuntimeError(
@@ -1800,7 +2206,7 @@ async def process_gitlab_project(
         # 1. Fetch Project Info
         logging.info("Fetching project information...")
         gl_project = await loop.run_in_executor(
-            None, _fetch_gitlab_project_info_sync, connector, project_id
+            None, _fetch_gitlab_project_info_sync, connector, project_id, usage_sink
         )
 
         logging.info(f"Found project: {gl_project.name}")
@@ -1812,20 +2218,41 @@ async def process_gitlab_project(
             else gl_project.name
         )
 
+        repo_settings: dict[str, Any] = {
+            "source": "gitlab",
+            "project_id": gl_project.id,
+            "url": gl_project.web_url if hasattr(gl_project, "web_url") else None,
+            "default_branch": (
+                gl_project.default_branch
+                if hasattr(gl_project, "default_branch")
+                else "main"
+            ),
+        }
+        # CHAOS-2801: the *instance* this project id was resolved against —
+        # the connector's configured base URL, not the project's own
+        # (optional) web_url above. Numeric ``project_id`` values are only
+        # unique within one GitLab instance, so a work-item unit scoping by
+        # id (job_work_items.py) uses this to reject a same-id row from a
+        # DIFFERENT instance. Persisted through the SAME shared normalizer
+        # the comparison site uses (single function, no second copy) so
+        # equivalent URL spellings — case, trailing slash, /api/v4 suffix,
+        # explicit default :443/:80, userinfo — can never false-mismatch.
+        # The normalizer result is persisted DIRECTLY: when it is None
+        # (blank/malformed input) the key is OMITTED — never the raw URL,
+        # which could retain path/query/userinfo from a malformed value
+        # (credential-in-URL retention, the CHAOS-2766/2780 leak class) and
+        # would violate the documented "unknown" semantic the scoping site
+        # relies on. An absent key reads as "unknown", exactly like rows
+        # written before this field existed.
+        gitlab_instance_url = normalize_gitlab_instance(gitlab_url)
+        if gitlab_instance_url is not None:
+            repo_settings["gitlab_instance_url"] = gitlab_instance_url
+
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=full_name,
             provider="gitlab",
-            settings={
-                "source": "gitlab",
-                "project_id": gl_project.id,
-                "url": gl_project.web_url if hasattr(gl_project, "web_url") else None,
-                "default_branch": (
-                    gl_project.default_branch
-                    if hasattr(gl_project, "default_branch")
-                    else "main"
-                ),
-            },
+            settings=repo_settings,
             tags=["gitlab"],
         )
 
@@ -1842,6 +2269,9 @@ async def process_gitlab_project(
                 default_branch=db_repo.settings.get("default_branch", "main"),
                 max_commits=max_commits,
                 blame_only=True,
+                since=since,
+                until=until,
+                usage_sink=usage_sink,
             )
             logging.info("Completed blame-only sync for GitLab project: %s", project_id)
             return
@@ -1849,18 +2279,21 @@ async def process_gitlab_project(
         commit_hashes: list[str] | None = None
         if run_commits:
             commit_hashes, _ = await _sync_gitlab_commits(
-                gl_project=gl_project,
+                connector=connector,
+                project_id=project_id,
                 db_repo=db_repo,
                 ingestion_sink=ingestion_sink,
                 loop=loop,
                 max_commits=max_commits,
                 since=since,
                 until=until,
+                usage_sink=usage_sink,
             )
 
         if run_commit_stats:
             await _sync_gitlab_commit_stats(
-                gl_project=gl_project,
+                connector=connector,
+                project_id=project_id,
                 db_repo=db_repo,
                 ingestion_sink=ingestion_sink,
                 loop=loop,
@@ -1868,6 +2301,7 @@ async def process_gitlab_project(
                 since=since,
                 until=until,
                 commit_hashes=commit_hashes,
+                usage_sink=usage_sink,
             )
 
         if sync_prs:
@@ -1886,6 +2320,7 @@ async def process_gitlab_project(
                 None,
                 since,
                 until,
+                usage_sink,
             )
             logging.info(f"Stored {mr_total} merge requests from GitLab")
 
@@ -1894,10 +2329,12 @@ async def process_gitlab_project(
             pipeline_runs = await loop.run_in_executor(
                 None,
                 _fetch_gitlab_pipelines_sync,
-                gl_project,
+                connector,
+                project_id,
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                usage_sink,
             )
             pipeline_runs = _filter_after(pipeline_runs, until, "started_at")
             if pipeline_runs:
@@ -1916,6 +2353,7 @@ async def process_gitlab_project(
                 loop=loop,
                 since=since,
                 until=until,
+                usage_sink=usage_sink,
             )
 
         if sync_deployments:
@@ -1928,6 +2366,7 @@ async def process_gitlab_project(
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                usage_sink,
             )
             deployments = _filter_after(deployments, until, "deployed_at", "started_at")
             if deployments:
@@ -1960,6 +2399,7 @@ async def process_gitlab_project(
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                usage_sink,
             )
             security_alerts = _filter_after(security_alerts, until, "created_at")
             if security_alerts:
@@ -1976,12 +2416,15 @@ async def process_gitlab_project(
             logging.info("Fetching blame data from GitLab (this may take a while)...")
             blame_batch = await loop.run_in_executor(
                 None,
-                _fetch_gitlab_blame_sync,
-                gl_project,
-                connector,
-                project_id,
-                db_repo.id,
-                50,
+                partial(
+                    _fetch_gitlab_blame_sync,
+                    connector,
+                    gl_project.path_with_namespace,
+                    gl_project.default_branch,
+                    db_repo.id,
+                    50,
+                    usage_sink,
+                ),
             )
 
             if blame_batch:
@@ -2010,8 +2453,17 @@ async def process_gitlab_project(
                     include_files=run_files,
                     include_blame=run_blame,
                     include_commit_stats=False,
+                    since=since,
+                    until=until,
+                    usage_sink=usage_sink,
                 )
             except Exception as e:
+                if _is_rate_limit_exception(e):
+                    # CHAOS-2815/CS14: an exhausted rate limit must propagate
+                    # so the batch/job is marked failed and retried, not
+                    # swallowed as a per-project warning (mirrors CS13's
+                    # commit-stats precedent).
+                    raise
                 logging.warning(
                     "Backfill failed for GitLab project %s: %s", full_name, e
                 )
@@ -2050,6 +2502,7 @@ async def process_gitlab_projects_batch(
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
+    usage_sink: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Process multiple GitLab projects using batch processing with pattern matching.
@@ -2093,17 +2546,28 @@ async def process_gitlab_projects_batch(
             return
 
         project_info = result.repository
+        batch_repo_settings: dict[str, Any] = {
+            "source": "gitlab",
+            "project_id": project_info.id,
+            "url": project_info.url,
+            "default_branch": project_info.default_branch,
+            "batch_processed": True,
+        }
+        # CHAOS-2801: instance discriminator — see the twin write site's
+        # comment in process_gitlab_project above (same shared normalizer,
+        # same normalized-or-omitted rule: never persist the raw URL when
+        # the normalizer returns None). ``gitlab_url`` here is the
+        # connector's configured base URL for the whole batch (this
+        # function's own parameter), not per-project.
+        batch_instance_url = normalize_gitlab_instance(gitlab_url)
+        if batch_instance_url is not None:
+            batch_repo_settings["gitlab_instance_url"] = batch_instance_url
+
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=project_info.full_name,
             provider="gitlab",
-            settings={
-                "source": "gitlab",
-                "project_id": project_info.id,
-                "url": project_info.url,
-                "default_branch": project_info.default_branch,
-                "batch_processed": True,
-            },
+            settings=batch_repo_settings,
             tags=["gitlab"],
         )
 
@@ -2132,6 +2596,7 @@ async def process_gitlab_projects_batch(
             return
 
         gl_project = None
+        project_usage_sink = usage_sink if usage_sink is not None else []
         if sync_git:
             # Fetch commits and stats to populate git_commits/git_commit_stats.
             if max_commits_per_project is None and since is None:
@@ -2139,17 +2604,16 @@ async def process_gitlab_projects_batch(
             else:
                 commit_limit = max_commits_per_project or 100
             try:
-                if gl_project is None:
-                    gl_project = await loop.run_in_executor(
-                        None, connector.gitlab.projects.get, project_info.id
-                    )
                 commit_hashes, commit_objects = await loop.run_in_executor(
                     None,
                     _fetch_gitlab_commits_sync,
-                    gl_project,
+                    connector,
+                    project_info.id,
                     commit_limit,
                     db_repo.id,
                     since,
+                    None,
+                    project_usage_sink,
                 )
                 if commit_objects:
                     await ingestion_sink.insert_git_commit_data(commit_objects)
@@ -2157,14 +2621,22 @@ async def process_gitlab_projects_batch(
                 stats_objects = await loop.run_in_executor(
                     None,
                     _fetch_gitlab_commit_stats_sync,
-                    gl_project,
+                    connector,
+                    project_info.id,
                     commit_hashes,
                     db_repo.id,
                     50 if commit_limit is None else min(commit_limit, 50),
+                    None,
+                    project_usage_sink,
                 )
                 if stats_objects:
                     await ingestion_sink.insert_git_commit_stats(stats_objects)
             except Exception as e:
+                if _is_rate_limit_exception(e):
+                    # CHAOS-2814/CS13: an exhausted rate limit must propagate so
+                    # the batch/job is marked failed and retried, not swallowed
+                    # as a per-project warning.
+                    raise
                 logging.warning(
                     "Failed to fetch commits for GitLab project %s: %s",
                     project_info.full_name,
@@ -2188,6 +2660,8 @@ async def process_gitlab_projects_batch(
                         "all",
                         mr_gate,
                         since,
+                        None,
+                        project_usage_sink,
                     )
             except PartialGitLabMrSyncError as e:
                 # Degraded review fetch skipped MR rows for this project. Keep
@@ -2207,6 +2681,8 @@ async def process_gitlab_projects_batch(
                 )
                 degraded_mr_errors.append(e)
             except Exception as e:
+                if _is_rate_limit_exception(e):
+                    raise
                 logging.warning(
                     "Failed to fetch/store MRs for GitLab project %s: %s",
                     project_info.full_name,
@@ -2215,17 +2691,15 @@ async def process_gitlab_projects_batch(
 
         if sync_cicd:
             try:
-                if gl_project is None:
-                    gl_project = await loop.run_in_executor(
-                        None, connector.gitlab.projects.get, project_info.id
-                    )
                 pipeline_runs = await loop.run_in_executor(
                     None,
                     _fetch_gitlab_pipelines_sync,
-                    gl_project,
+                    connector,
+                    project_info.id,
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    project_usage_sink,
                 )
                 if pipeline_runs:
                     await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
@@ -2239,9 +2713,7 @@ async def process_gitlab_projects_batch(
         if sync_tests:
             try:
                 if gl_project is None:
-                    gl_project = await loop.run_in_executor(
-                        None, connector.gitlab.projects.get, project_info.id
-                    )
+                    gl_project = project_info
                 await _sync_gitlab_test_reports(
                     connector=connector,
                     gl_project=gl_project,
@@ -2252,6 +2724,7 @@ async def process_gitlab_projects_batch(
                     ingestion_sink=ingestion_sink,
                     loop=loop,
                     since=since,
+                    usage_sink=project_usage_sink,
                 )
             except Exception as e:
                 logging.warning(
@@ -2270,6 +2743,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    project_usage_sink,
                 )
                 if deployments:
                     await ingestion_sink.insert_deployments(deployments)
@@ -2310,6 +2784,7 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    project_usage_sink,
                 )
                 if security_alerts:
                     insert_security_alerts = getattr(
@@ -2352,6 +2827,7 @@ async def process_gitlab_projects_batch(
                     max_commits=max_commits_per_project,
                     include_blame=True,
                     include_commit_stats=False,
+                    usage_sink=project_usage_sink,
                 )
             except Exception as e:
                 logging.debug(
@@ -2392,7 +2868,79 @@ async def process_gitlab_projects_batch(
             else:
                 loop.call_soon_threadsafe(_enqueue)
 
+    async def _discover_projects() -> list[Repository]:
+        effective_group = _gitlab_effective_group(group_name, pattern)
+        drained_observations: list[dict[str, Any]] = []
+        try:
+            async with _gitlab_code_client_from_connector(connector) as client:
+                try:
+                    return await client.list_projects(
+                        group_name=effective_group,
+                        pattern=pattern,
+                        max_projects=max_projects,
+                    )
+                finally:
+                    drained_observations.extend(client.drain_usage_observations())
+        finally:
+            _drain_gitlab_code_usage(
+                "process_gitlab_projects_batch[discover]",
+                drained_observations,
+                usage_sink,
+            )
+
+    async def _process_project_stats(project: Repository) -> None:
+        semaphore = project_stats_semaphore
+        async with semaphore:
+            batch_result_cls = cast(Any, BatchResult)
+            try:
+                # Cap the stats-only commit fetch the same way the historical
+                # get_repo_stats_by_project page fetch was implicitly bounded
+                # (~100, GitLab's default page size): an unset
+                # max_commits_per_project must NOT fall through to
+                # GitLabCodeClient.get_commits(max_commits=None), which
+                # paginates up to 10k pages of full project history.
+                commit_limit = max_commits_per_project or 100
+                commits, _commit_objects = await loop.run_in_executor(
+                    None,
+                    _fetch_gitlab_commits_sync,
+                    connector,
+                    project.id,
+                    commit_limit,
+                    None,
+                    since,
+                    None,
+                    usage_sink,
+                )
+                stats_limit = resolve_commit_stats_limit(
+                    len(commits), max_commits_per_project, since
+                )
+                stat_objects = await loop.run_in_executor(
+                    None,
+                    _fetch_gitlab_commit_stats_sync,
+                    connector,
+                    project.id,
+                    commits,
+                    None,
+                    stats_limit,
+                    None,
+                    usage_sink,
+                )
+                result = batch_result_cls(
+                    repository=project,
+                    stats=_repo_stats_from_gitlab_commits(commits, stat_objects),
+                    success=True,
+                )
+            except Exception as e:
+                if _is_rate_limit_exception(e):
+                    raise
+                logging.warning("Failed to get stats for %s: %s", project.full_name, e)
+                result = batch_result_cls(
+                    repository=project, error=str(e), success=False
+                )
+            on_project_complete(result)
+
     try:
+        projects = await _discover_projects()
         if sync_git:
             results_queue = asyncio.Queue(maxsize=max(1, max_concurrent * 2))
 
@@ -2409,33 +2957,30 @@ async def process_gitlab_projects_batch(
 
             consumer_task = asyncio.create_task(_consume_results())
 
-            if use_async:
-                await connector.get_projects_with_stats_async(
-                    group_name=group_name,
-                    pattern=pattern,
-                    batch_size=batch_size,
-                    max_concurrent=max_concurrent,
-                    rate_limit_delay=rate_limit_delay,
-                    max_commits_per_repo=max_commits_per_project,
-                    max_repos=max_projects,
-                    on_project_complete=on_project_complete,
-                )
-            else:
-                await loop.run_in_executor(
-                    None,
-                    lambda: connector.get_projects_with_stats(
-                        group_name=group_name,
-                        pattern=pattern,
-                        batch_size=batch_size,
-                        max_concurrent=max_concurrent,
-                        rate_limit_delay=rate_limit_delay,
-                        max_commits_per_repo=max_commits_per_project,
-                        max_repos=max_projects,
-                        on_project_complete=on_project_complete,
-                    ),
+            project_stats_semaphore = asyncio.Semaphore(max(1, max_concurrent))
+            for batch_start in range(0, len(projects), max(1, batch_size)):
+                batch = projects[batch_start : batch_start + max(1, batch_size)]
+                await asyncio.gather(
+                    *(_process_project_stats(project) for project in batch)
                 )
 
-            await results_queue.join()
+            # Wait for the queue to drain, but bail out if the consumer dies
+            # first: store_result may propagate a RateLimitException (CHAOS-2814/
+            # CS13), leaving un-task_done()'d items so results_queue.join()
+            # would hang forever. FIRST_COMPLETED lets us detect that and
+            # re-raise instead -- mirrors process_github_repos_batch.
+            join_task = asyncio.create_task(results_queue.join())
+            done, _pending = await asyncio.wait(
+                {join_task, consumer_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if consumer_task in done:
+                join_task.cancel()
+                try:
+                    await join_task
+                except asyncio.CancelledError:
+                    # Expected: join_task was cancelled after consumer_task ended first.
+                    pass
+                await consumer_task  # re-raises the consumer's exception
             await results_queue.put(_queue_sentinel)
             await consumer_task
         else:
@@ -2444,14 +2989,6 @@ async def process_gitlab_projects_batch(
                 group_name,
                 pattern,
                 max_projects,
-            )
-            projects = await loop.run_in_executor(
-                None,
-                lambda: connector._get_projects_for_processing(
-                    group_name=group_name,
-                    pattern=pattern,
-                    max_repos=max_projects,
-                ),
             )
             logging.info("Discovered %d GitLab projects for PR sync", len(projects))
             semaphore = asyncio.Semaphore(max(1, max_concurrent))
@@ -2467,6 +3004,8 @@ async def process_gitlab_projects_batch(
                     try:
                         await store_result(result)
                     except Exception as e:
+                        if _is_rate_limit_exception(e):
+                            raise
                         result = batch_result_cls(
                             repository=project_info,
                             stats=None,

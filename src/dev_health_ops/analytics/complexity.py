@@ -1,9 +1,12 @@
 import fnmatch
+import functools
 import importlib
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 from radon.complexity import cc_visit
 
@@ -13,6 +16,61 @@ yaml = importlib.import_module("yaml")
 DEFAULT_COMPLEXITY_CONFIG_PATH = (
     Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
 )
+
+
+@functools.cache
+def _import_lizard() -> ModuleType:
+    """Import lizard without letting it poison ``sys.path`` (CHAOS-2863).
+
+    lizard's module body runs a script-mode convenience on import: it inserts
+    ``dirname(abspath(sys.argv[0]))`` at ``sys.path[0]``. Under ``python -m
+    dev_health_ops.cli ...`` that directory is the installed package itself,
+    so ``dev_health_ops.alembic`` shadows the real ``alembic`` for every
+    later import and ``dev-hops migrate`` crashes. Import lazily and restore
+    ``sys.path`` exactly as it was.
+    """
+    path_before = list(sys.path)
+    try:
+        return importlib.import_module("lizard")
+    finally:
+        sys.path[:] = path_before
+
+
+#: Extensions the scanner can analyze, mapped to the persisted ``language``
+#: value. Python goes through radon (kept for trend continuity with existing
+#: ``repo_complexity_daily`` rows, CHAOS-2850); everything else goes through
+#: lizard. Keep this map aligned with ``config/complexity.yaml`` include_globs:
+#: the same globs also gate provider file-content ingestion
+#: (``_fetch_scannable_contents``), so an extension missing there can never
+#: produce complexity data.
+LANGUAGE_BY_EXTENSION: dict[str, str] = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".rb": "ruby",
+    ".php": "php",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".swift": "swift",
+    ".scala": "scala",
+    ".m": "objective-c",
+    ".mm": "objective-c",
+    ".lua": "lua",
+    ".vue": "vue",
+}
 
 
 @dataclass
@@ -133,8 +191,7 @@ class ComplexityScanner:
         return results
 
     def _analyze_file(self, file_path: Path) -> FileComplexity | None:
-        # Currently only Python is supported via radon
-        if not file_path.suffix == ".py":
+        if file_path.suffix.lower() not in LANGUAGE_BY_EXTENSION:
             return None
 
         try:
@@ -142,40 +199,62 @@ class ComplexityScanner:
                 code = f.read()
             return self._analyze_content(code, str(file_path))
         except Exception:
-            # Syntax errors or other issues
+            # Unreadable files (permissions, encoding, ...)
             return None
 
     def _analyze_content(self, code: str, file_path: str) -> FileComplexity | None:
-        if not file_path.endswith(".py"):
+        ext = os.path.splitext(file_path)[1].lower()
+        language = LANGUAGE_BY_EXTENSION.get(ext)
+        if language is None:
             return None
 
+        if ext == ".py":
+            return self._analyze_python(code, file_path)
+        return self._analyze_with_lizard(code, file_path, language)
+
+    def _analyze_python(self, code: str, file_path: str) -> FileComplexity | None:
+        """Python via radon -- kept separate from lizard so historical
+        ``repo_complexity_daily`` trends stay comparable (CHAOS-2850)."""
         try:
-            # Radon analysis
             blocks = cc_visit(code)
-
-            functions_count = len(blocks)
-            cyclomatic_total = sum(b.complexity for b in blocks)
-            cyclomatic_avg = (
-                cyclomatic_total / functions_count if functions_count > 0 else 0.0
-            )
-
-            high_count = sum(1 for b in blocks if b.complexity > self.high_threshold)
-            very_high_count = sum(
-                1 for b in blocks if b.complexity > self.very_high_threshold
-            )
-
-            # Count LOC
-            loc = len(code.splitlines())
-
-            return FileComplexity(
-                file_path=str(file_path),
-                language="python",
-                loc=loc,
-                functions_count=functions_count,
-                cyclomatic_total=cyclomatic_total,
-                cyclomatic_avg=cyclomatic_avg,
-                high_complexity_functions=high_count,
-                very_high_complexity_functions=very_high_count,
-            )
         except Exception:
+            # Syntax errors or other parse issues
             return None
+
+        complexities = [b.complexity for b in blocks]
+        return self._build_result(code, file_path, "python", complexities)
+
+    def _analyze_with_lizard(
+        self, code: str, file_path: str, language: str
+    ) -> FileComplexity | None:
+        lizard = _import_lizard()
+        try:
+            analysis = lizard.analyze_file.analyze_source_code(file_path, code)
+        except Exception:
+            # Malformed source the tokenizer cannot handle
+            return None
+
+        complexities = [f.cyclomatic_complexity for f in analysis.function_list]
+        return self._build_result(code, file_path, language, complexities)
+
+    def _build_result(
+        self, code: str, file_path: str, language: str, complexities: list[int]
+    ) -> FileComplexity:
+        functions_count = len(complexities)
+        cyclomatic_total = sum(complexities)
+        cyclomatic_avg = (
+            cyclomatic_total / functions_count if functions_count > 0 else 0.0
+        )
+        high_count = sum(1 for c in complexities if c > self.high_threshold)
+        very_high_count = sum(1 for c in complexities if c > self.very_high_threshold)
+
+        return FileComplexity(
+            file_path=str(file_path),
+            language=language,
+            loc=len(code.splitlines()),
+            functions_count=functions_count,
+            cyclomatic_total=cyclomatic_total,
+            cyclomatic_avg=cyclomatic_avg,
+            high_complexity_functions=high_count,
+            very_high_complexity_functions=very_high_count,
+        )

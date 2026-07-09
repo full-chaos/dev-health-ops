@@ -13,16 +13,43 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     create_rate_limit_gate,
 )
 from dev_health_ops.exceptions import RateLimitException
-from dev_health_ops.providers._ratelimit import gate_call, parse_retry_after_header
+from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.gitlab.ratelimit import maybe_raise_gitlab_rate_limit
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
+
+_DIAGNOSTIC_HEADER_NAMES = (
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+    "retry-after",
+    "x-request-id",
+    "x-runtime",
+)
+
+
+def _diagnostic_headers(headers: object) -> dict[str, str]:
+    get_items = getattr(headers, "items", None)
+    if get_items is None:
+        return {}
+    lowered = {str(k).lower(): str(v) for k, v in get_items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
 
 
 def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
     """Raise RateLimitException if exc is a GitLab rate-limit error (HTTP 429,
     or 403 carrying rate-limit headers); otherwise return None so callers
-    continue their existing handling."""
+    continue their existing handling.
+
+    Delegates the actual 429/header-qualified-403 predicate + delay
+    computation to ``providers/gitlab/ratelimit.py`` (CHAOS-2773 CS1), itself
+    built on the shared ``providers/_ratelimit.py`` helpers
+    (``gitlab_403_is_rate_limited`` / ``gitlab_resolve_retry_after_seconds``,
+    #1142) -- so exactly one predicate/delay implementation exists for
+    GitLab, not a second copy inline here.
+    """
     import gitlab  # python-gitlab; keep lazy to match existing import semantics
 
     if isinstance(exc, RateLimitException):
@@ -31,7 +58,6 @@ def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
         return None
     status = getattr(exc, "response_code", None)
     headers = getattr(exc, "response_headers", None) or {}
-    retry_after = parse_retry_after_header(headers)
 
     def _hdr(name: str) -> str | None:
         try:
@@ -39,29 +65,13 @@ def _maybe_raise_gitlab_rate_limit(exc: BaseException) -> None:
         except AttributeError:
             return None
 
-    is_rate_limited = status == 429 or (
-        status == 403
-        and (
-            retry_after is not None
-            or str(_hdr("RateLimit-Remaining")) == "0"
-            or _hdr("Retry-After") is not None
+    try:
+        maybe_raise_gitlab_rate_limit(
+            status=status, headers=headers, request_id=_hdr("X-Request-Id")
         )
-    )
-    if not is_rate_limited:
-        return None
-    # Prefer Retry-After; else derive from RateLimit-Reset (epoch seconds) if present.
-    if retry_after is None:
-        reset_raw = _hdr("RateLimit-Reset")
-        if reset_raw is not None:
-            try:
-                import time as _t
-
-                retry_after = max(0.0, float(reset_raw) - _t.time())
-            except (TypeError, ValueError):
-                retry_after = None
-    raise RateLimitException(
-        f"GitLab rate limited (HTTP {status})", retry_after_seconds=retry_after
-    ) from exc
+    except RateLimitException as rate_limit_exc:
+        raise rate_limit_exc from exc
+    return None
 
 
 class _ListManager(Protocol):
@@ -116,6 +126,9 @@ class GitLabWorkClient:
             host=host,
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
+        from dev_health_ops.providers.gitlab.budget import GITLAB_USAGE_RESOLVER
+
+        self._usage = UsageRecorder(resolver=GITLAB_USAGE_RESOLVER)
 
         self.gl = gitlab.Gitlab(
             auth.base_url,
@@ -143,10 +156,78 @@ class GitLabWorkClient:
     def get_project(self, project_id_or_path: str) -> Any:
         try:
             with gate_call(self.gate):
-                return self.gl.projects.get(project_id_or_path)
+                project = self.gl.projects.get(project_id_or_path)
+            self._record_last_response_usage("GET /projects/:id")
+            return project
         except Exception as exc:
+            self._record_exception_usage("GET /projects/:id", exc)
             _maybe_raise_gitlab_rate_limit(exc)
             raise
+
+    def _record_usage_observation(
+        self,
+        *,
+        transport: str,
+        operation: str,
+        headers: dict[str, str],
+        rate_limit: dict[str, Any],
+        status: int | None = None,
+    ) -> None:
+        # Aggregation/keying by route_family lives in the shared recorder
+        # (CHAOS-2754); this client only owns the header extraction below.
+        self._usage.record(
+            transport=transport,
+            operation=operation,
+            headers=headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def _record_rest_usage(
+        self,
+        operation: str,
+        *,
+        headers: object | None = None,
+        status: int | None = None,
+    ) -> None:
+        safe_headers = _diagnostic_headers(headers or {})
+        rate_limit: dict[str, Any] = {}
+        for source, target in {
+            "ratelimit-remaining": "remaining",
+            "ratelimit-reset": "reset",
+            "ratelimit-limit": "limit",
+            "retry-after": "retry_after",
+        }.items():
+            value = safe_headers.get(source)
+            if value is not None:
+                rate_limit[target] = value
+        self._record_usage_observation(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def _record_last_response_usage(self, operation: str) -> None:
+        headers = getattr(self.gl, "last_response_headers", None)
+        status = getattr(self.gl, "last_response_code", None)
+        self._record_rest_usage(
+            operation,
+            headers=headers,
+            status=status if isinstance(status, int) else None,
+        )
+
+    def _record_exception_usage(self, operation: str, exc: BaseException) -> None:
+        status = getattr(exc, "response_code", None)
+        self._record_rest_usage(
+            operation,
+            headers=getattr(exc, "response_headers", None),
+            status=status if isinstance(status, int) else None,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        return self._usage.drain()
 
     def _gated_iter(self, iterable: Any) -> Iterator[Any]:
         """Consume a python-gitlab lazy iterator with each page fetch routed
@@ -163,9 +244,11 @@ class GitLabWorkClient:
                         item = next(iterator)
                     except StopIteration:
                         return
+                self._record_last_response_usage("GET iterator page")
             except StopIteration:
                 return
             except Exception as exc:
+                self._record_exception_usage("GET iterator page", exc)
                 _maybe_raise_gitlab_rate_limit(exc)
                 raise
             yield item

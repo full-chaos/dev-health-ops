@@ -325,7 +325,7 @@ def linear_issue_to_work_item(
         closed_at=closed_at,
         due_at=due_date,
         labels=labels,
-        story_points=float(estimate) if estimate else None,
+        story_points=float(estimate) if estimate is not None else None,
         sprint_id=sprint_id,
         sprint_name=sprint_name,
         parent_id=parent_id,

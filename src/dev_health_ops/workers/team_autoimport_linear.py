@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Coroutine, Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from threading import Thread
 from typing import Any, Protocol, TypeVar, cast
@@ -31,6 +32,10 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.models.work_items import Sprint
+from dev_health_ops.providers.identity import load_identity_resolver
+from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+from dev_health_ops.providers.linear.normalize import linear_cycle_to_sprint
 
 _T = TypeVar("_T")
 _REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
@@ -43,6 +48,7 @@ class _DimensionSink(Protocol):
     def write_team_project_ownership(
         self, rows: Sequence[TeamProjectOwnershipRecord]
     ) -> None: ...
+    def write_sprints(self, rows: Sequence[Sprint]) -> None: ...
     async def insert_teams(self, teams: list[dict[str, Any]]) -> None: ...
     def close(self) -> None: ...
 
@@ -146,8 +152,13 @@ def populate(
     scope: dict[str, Any],
     **kwargs: Any,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     linear_credentials = linear_credentials_from_mapping(credentials)
     if linear_credentials is None:
+        if strict:
+            raise ValueError(
+                "missing Linear credentials for strict reference discovery"
+            )
         return {
             "status": "skipped",
             "reason": "missing_linear_credentials",
@@ -158,6 +169,7 @@ def populate(
         }
 
     now = datetime.now(timezone.utc)
+    resolver = load_identity_resolver()
     discovery = TeamDiscoveryService(None, org_id)
     membership = TeamMembershipService(cast(AsyncSession, None), org_id)
     teams = _run(discovery.discover_linear(api_key=linear_credentials.api_key))
@@ -167,6 +179,7 @@ def populate(
     member_rows: list[MemberRecord] = []
     membership_rows: list[TeamMembershipRecord] = []
     ownership_rows: list[TeamProjectOwnershipRecord] = []
+    sprint_rows: list[Sprint] = []
 
     for team in teams:
         team_id = _team_id(team)
@@ -227,8 +240,17 @@ def populate(
                 team_key=team_id,
             )
         )
+        roster_facets: list[str] = []
         for member in discovered_members:
             member_id = _member_id("linear", member.provider_identity)
+            facets = resolver.membership_facets(
+                provider="linear",
+                username=member.provider_identity,
+                email=member.email,
+            ) or [member.provider_identity]
+            for facet in facets:
+                if facet not in roster_facets:
+                    roster_facets.append(facet)
             member_rows.append(
                 MemberRecord(
                     org_id=org_id,
@@ -248,8 +270,9 @@ def populate(
                     provider="linear",
                     team_id=team_id,
                     member_id=member_id,
-                    raw_provider_user_id=member.provider_identity,
+                    raw_provider_user_id=facets[0],
                     raw_email=member.email,
+                    identity_facets=facets,
                     source="native",
                     is_primary=1,
                     specificity=100,
@@ -258,6 +281,28 @@ def populate(
                     updated_at=now,
                 )
             )
+        team_rows[-1]["members"] = roster_facets
+
+    try:
+        with LinearClient(
+            auth=LinearAuth(api_key=linear_credentials.api_key), org_id=org_id
+        ) as client:
+            for team in teams:
+                api_team = client.get_team_by_key(_team_id(team))
+                if not api_team or not api_team.get("id"):
+                    continue
+                for cycle in client.iter_cycles(team_id=str(api_team["id"])):
+                    sprint_rows.append(
+                        replace(
+                            linear_cycle_to_sprint(cycle),
+                            native_team_key=_team_id(team),
+                            org_id=org_id,
+                        )
+                    )
+    except Exception:
+        if strict:
+            raise
+        sprint_rows = []
 
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
@@ -321,6 +366,8 @@ def populate(
         sink.write_members(members)
         sink.write_team_memberships(memberships)
         sink.write_team_project_ownership(ownership)
+        if hasattr(sink, "write_sprints"):
+            sink.write_sprints(sprint_rows)
     finally:
         if should_close:
             sink.close()
@@ -328,10 +375,13 @@ def populate(
     return {
         "mode": scope.get("mode"),
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects),
         "members_imported": len(members),
         "team_memberships_imported": len(memberships),
         "team_project_ownership_imported": len(ownership),
+        "sprints_imported": len(sprint_rows),
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }
@@ -343,7 +393,10 @@ def _apply_roster(
     roster: dict[str, list[str]] = {}
     for row in rows:
         roster_for_team = roster.setdefault(str(row.team_id), [])
-        for value in (row.raw_provider_user_id, row.raw_email):
+        values = tuple(row.identity_facets) or tuple(
+            value for value in (row.raw_provider_user_id, row.raw_email) if value
+        )
+        for value in values:
             if value and value not in roster_for_team:
                 roster_for_team.append(str(value))
     for team_row in team_rows:

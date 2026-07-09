@@ -11,6 +11,8 @@ from .context import GraphQLContext
 from .extensions import ConfiguredValidationRules, OrgIdAuthExtension
 from .models.ai import (
     AiAttributedPrsResult,
+    AIAttributionOverviewResult,
+    AIAttributionScopeInput,
     AIComparison,
     AIDateRangeInput,
     AIGovernanceSummary,
@@ -57,12 +59,14 @@ from .models.outputs import (
     WorkItemTeamAttribution,
     WorkUnitTeamAttribution,
 )
+from .models.pr import PullRequestDetail
 from .models.recommendations import (
     Recommendation,
     WindowInput,
 )
 from .resolvers.ai import (
     resolve_ai_attributed_prs,
+    resolve_ai_attribution_overview,
     resolve_ai_comparison,
     resolve_ai_governance_summary,
     resolve_ai_impact_summary,
@@ -79,6 +83,7 @@ from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspot
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.improve import resolve_improve_opportunities
+from .resolvers.pr import resolve_pr
 from .resolvers.product_telemetry import (
     resolve_product_telemetry_dashboard,
     resolve_product_telemetry_platform_dashboard,
@@ -121,6 +126,7 @@ from .types.review_edges import (
     ReviewEdgesInput,
     ReviewEdgesResult,
 )
+from .types.testops_risk import TestOpsRiskInput, TestOpsRiskResult
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +275,21 @@ class Query:
 
         context = get_context(info)
         return await resolve_work_graph_edges(context, filters)
+
+    @strawberry.field(
+        description=(
+            "Pull request detail by stable id ({repo_id}#pr{number}) from "
+            "persisted ClickHouse PR, review, commit, and Work Graph tables."
+        )
+    )
+    async def pr(
+        self,
+        info: Info,
+        org_id: str,
+        id: strawberry.ID,
+    ) -> PullRequestDetail | None:
+        context = get_context(info)
+        return await resolve_pr(context, str(id))
 
     @strawberry.field(
         description="Per-node-type inflow/outflow over the full work graph"
@@ -523,6 +544,23 @@ class Query:
 
     @strawberry.field(
         description=(
+            "Persisted TestOps Delivery Risk metrics from release confidence, "
+            "quality drag, and pipeline stability tables."
+        )
+    )
+    async def testops_risk(
+        self,
+        info: Info,
+        org_id: str,
+        input: TestOpsRiskInput,
+    ) -> TestOpsRiskResult:
+        from .resolvers.testops_risk import resolve_testops_risk
+
+        context = get_context(info)
+        return await resolve_testops_risk(context, org_id, input)
+
+    @strawberry.field(
+        description=(
             "Cyclomatic complexity trend by repo or file. Reads from "
             "append-only ``repo_complexity_daily`` / ``file_complexity_snapshots`` "
             "tables — no recomputation, pure surface of persisted data."
@@ -762,6 +800,30 @@ class Query:
     ) -> AiAttributedPrsResult:
         context = get_context(info)
         return await resolve_ai_attributed_prs(
+            context, date_range, scope, limit, offset
+        )
+
+    @strawberry.field(
+        description=(
+            "AI attribution mix and provenance evidence for the requested "
+            "window. Reads ai_attribution_resolved only - the highest-"
+            "precedence, non-superseded signal per subject - so every row "
+            "carries source, confidence, and evidence. Does not include a "
+            "synthesized human bucket; use aiImpactSummary for the full "
+            "AI-vs-human PR split."
+        )
+    )
+    async def ai_attribution_overview(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIAttributionScopeInput | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> AIAttributionOverviewResult:
+        context = get_context(info)
+        return await resolve_ai_attribution_overview(
             context, date_range, scope, limit, offset
         )
 

@@ -17,6 +17,28 @@ from dev_health_ops.api.queries import flame
 
 
 @pytest.mark.asyncio
+async def test_fetch_issue_reads_team_identity_from_wita(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_query_dicts(client, query, params):
+        captured["query"] = query
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(flame, "query_dicts", _fake_query_dicts)
+
+    await flame.fetch_issue(object(), work_item_id="issue-1", org_id="org-A")
+
+    query = str(captured["query"])
+    assert "FROM work_item_cycle_times AS wct FINAL" in query
+    assert "FROM work_item_team_attributions FINAL" in query
+    assert "LEFT JOIN" in query
+    assert "nullIf(t.team_id, '') AS team_id" in query
+    assert "wct.team_id" not in query
+    assert captured["params"] == {"work_item_id": "issue-1", "org_id": "org-A"}
+
+
+@pytest.mark.asyncio
 async def test_fetch_deployment_scopes_on_deployments_org_id(monkeypatch):
     captured: dict[str, object] = {}
 

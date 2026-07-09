@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
 from dev_health_ops.models.settings import IntegrationCredential
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 from ._helpers import _normalize_credential_keys
 
@@ -217,7 +218,12 @@ class IntegrationCredentialsService:
         if cred:
             cred.last_test_at = datetime.now(timezone.utc)
             cred.last_test_success = success
-            cred.last_test_error = error
+            # CHAOS-2780: this stores errors from testing the credential
+            # itself -- the most likely text to embed the secret -- and is
+            # republished verbatim via admin API responses and sync-preflight
+            # HTTP details, so it must go through the same redaction as the
+            # sync-run error columns (CHAOS-2766).
+            cred.last_test_error = sanitize_error_text(error)
             await self.session.flush()
 
     async def list_by_provider(self, provider: str) -> list[IntegrationCredential]:

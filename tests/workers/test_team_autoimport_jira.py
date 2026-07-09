@@ -13,6 +13,7 @@ from dev_health_ops.metrics.schemas import (
     TeamMembershipRecord,
     TeamProjectOwnershipRecord,
 )
+from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.workers import team_autoimport, team_autoimport_jira
 
 
@@ -97,6 +98,13 @@ class CapturingClickHouseSink(FakeDimensionSink):
 def test_jira_populate_writes_native_and_jira_legacy_ownership_without_touching_links(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    resolver = IdentityResolver(
+        alias_to_canonical={
+            "jira:accountid:account-1": "canonical-jira-id@example.com",
+            "ops@example.com": "canonical-jira-email@example.com",
+        }
+    )
+
     async def discover_jira(
         self: object, email: str, api_token: str, url: str
     ) -> list[DiscoveredTeam]:
@@ -136,6 +144,9 @@ def test_jira_populate_writes_native_and_jira_legacy_ownership_without_touching_
         team_autoimport_jira.TeamMembershipService,
         "discover_members_jira_bulk",
         discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira, "load_identity_resolver", lambda: resolver
     )
     legacy_links = [
         {
@@ -177,6 +188,21 @@ def test_jira_populate_writes_native_and_jira_legacy_ownership_without_touching_
         "jira_legacy",
     ) in sink.ownership
     assert ("org-1", "jira:account-1") in sink.members
+    membership = sink.memberships[("org-1", "jira", "OPS", "jira:account-1", "native")]
+    assert membership.raw_provider_user_id == "canonical-jira-id@example.com"
+    assert membership.raw_email == "ops@example.com"
+    assert membership.identity_facets == [
+        "canonical-jira-id@example.com",
+        "jira:accountid:account-1",
+        "canonical-jira-email@example.com",
+        "ops@example.com",
+    ]
+    assert sink.teams[("org-1", "OPS")]["members"] == [
+        "canonical-jira-id@example.com",
+        "jira:accountid:account-1",
+        "canonical-jira-email@example.com",
+        "ops@example.com",
+    ]
     # CHAOS-2609 (CS-COV) item 6: assert the emitted native ProjectRecord fields.
     project = sink.projects[("org-1", "jira", "org-1:jira:OPS")]
     assert project.project_key == "OPS"

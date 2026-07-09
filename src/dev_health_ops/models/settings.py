@@ -247,7 +247,14 @@ class SyncConfiguration(Base):
     """Configuration for data sync jobs.
 
     Defines what to sync (repos, projects, teams) and how (filters, options).
-    Links to IntegrationCredential for authentication.
+
+    Authentication is NOT configured here. ``credential_id`` was removed
+    (CHAOS-2762): it was a second, unfrozen mirror of ``Integration
+    .credential_id`` that the auth-resolution path (``sync/planner.py``,
+    ``workers/sync_bootstrap.py``) never read. The sanctioned surface is
+    ``Integration.credential_id``, reached via this config's
+    ``integration_id`` FK and frozen onto ``sync_runs`` at plan time
+    (CHAOS-2755's ``resolve_run_auth``).
     """
 
     __tablename__ = "sync_configurations"
@@ -260,15 +267,6 @@ class SyncConfiguration(Base):
         Text, nullable=False, comment="Display name for this sync config"
     )
     provider: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-
-    credential_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID,
-        ForeignKey("integration_credentials.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    credential: Mapped[IntegrationCredential | None] = relationship(
-        "IntegrationCredential"
-    )
 
     sync_targets: Mapped[list[str]] = mapped_column(
         JSON,
@@ -331,13 +329,13 @@ class SyncConfiguration(Base):
         foreign_keys="SyncConfiguration.parent_id",
         lazy="raise",
     )
-    migrated_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+    integration_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID,
         ForeignKey("integrations.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    migrated_source_id: Mapped[uuid.UUID | None] = mapped_column(
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID,
         ForeignKey("integration_sources.id", ondelete="SET NULL"),
         nullable=True,
@@ -356,26 +354,24 @@ class SyncConfiguration(Base):
         name: str,
         provider: str,
         org_id: str | None = None,
-        credential_id: uuid.UUID | None = None,
         sync_targets: list[str] | None = None,
         sync_options: dict[str, Any] | None = None,
         is_active: bool = True,
         parent_id: uuid.UUID | None = None,
-        migrated_integration_id: uuid.UUID | None = None,
-        migrated_source_id: uuid.UUID | None = None,
+        integration_id: uuid.UUID | None = None,
+        source_id: uuid.UUID | None = None,
         planner_managed: bool = False,
     ) -> None:
         self.id = uuid.uuid4()
         self.org_id = org_id or ""
         self.name = name
         self.provider = provider
-        self.credential_id = credential_id
         self.sync_targets = sync_targets or []
         self.sync_options = sync_options or {}
         self.is_active = is_active
         self.parent_id = parent_id
-        self.migrated_integration_id = migrated_integration_id
-        self.migrated_source_id = migrated_source_id
+        self.integration_id = integration_id
+        self.source_id = source_id
         self.planner_managed = planner_managed
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)

@@ -196,7 +196,7 @@ async def _observed_identities(
             UNION ALL
             SELECT provider, arrayJoin(assignees) AS identity,
                    identity AS display_name, count() AS observed_count
-            FROM work_items
+            FROM work_items FINAL
             WHERE org_id = %(org_id)s AND has(assignees, '') = 0
             GROUP BY provider, identity
         )
@@ -333,7 +333,7 @@ async def _coverage_rows(
         SELECT coalesce(nullIf(r.repo, ''), toString(w.repo_id)) AS repo_name,
                count() AS total,
                countIf(w.provider != '' AND w.project_key != '') AS covered
-        FROM work_items w
+        FROM work_items AS w FINAL
         LEFT JOIN repos r ON r.id = w.repo_id
         WHERE w.org_id = %(org_id)s
         GROUP BY repo_name

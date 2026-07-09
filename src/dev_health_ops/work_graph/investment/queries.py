@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import WORK_ITEMS_DEDUPED
 
 
 def query_dicts(
@@ -19,34 +20,74 @@ def fetch_work_graph_edges(
     *,
     repo_ids: list[str] | None = None,
     org_id: str = "",
+    exclude_heuristic: bool = True,
 ) -> list[dict[str, Any]]:
+    """Fetch work-graph edges for investment work-unit component building.
+
+    ``exclude_heuristic`` (default ON, CHAOS-2775) drops ``provenance='heuristic'``
+    edges — low-confidence, rule-inferred links (e.g. same repo + time window)
+    that percolate thousands of unrelated issues/PRs/commits into a single giant
+    "work unit". Heuristic edges remain in ``work_graph_edges`` for display and
+    other consumers; only work-unit grouping excludes them. This is the single
+    choke point shared by the materializer, the dispatch enumerator, and the
+    membership backfill, so the default-on filter keeps all three consistent
+    without any call-site changes.
+
+    Two invariants both the heuristic filter and partitioned dispatch rely on:
+
+    - DEDUP BEFORE FILTER: ``work_graph_edges`` is a ReplacingMergeTree keyed by
+      (org_id, source_type, source_id, edge_type, target_type, target_id) and a
+      raw read can return stale pre-merge versions of an edge. Provenance is NOT
+      part of that identity (a heuristic link can later be re-emitted as
+      native), so rows are argMax-collapsed by ``last_synced`` per identity and
+      the heuristic filter applies to the LATEST provenance via HAVING —
+      otherwise a stale row could resurrect an excluded edge (or keep an edge
+      excluded that is now native) depending on merge timing.
+    - DETERMINISTIC ORDER: partitioned materialization dispatches numeric
+      ``component_indexes`` and each chunk worker re-fetches and rebuilds the
+      component list. Component discovery order follows edge row order, so this
+      query ORDERs BY the full identity key — without it, ClickHouse physical
+      row order could differ between dispatcher and chunk workers and index N
+      would name a different component (skipped / double-categorized units).
+    """
+    conditions: list[str] = []
     params: dict[str, Any] = {}
-    where_sql = ""
     if repo_ids:
         params["repo_ids"] = repo_ids
-        where_sql = "WHERE repo_id IN %(repo_ids)s"
+        conditions.append("repo_id IN %(repo_ids)s")
     # Optional org_id filtering
     if org_id:
         params["org_id"] = org_id
-        if where_sql:
-            where_sql += " AND org_id = %(org_id)s"
-        else:
-            where_sql = "WHERE org_id = %(org_id)s"
+        conditions.append("org_id = %(org_id)s")
+    where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    having_sql = ""
+    if exclude_heuristic:
+        # Parameterized (no value interpolation): exclude rule-inferred edges,
+        # judged on the deduplicated (latest) provenance. HAVING must reference
+        # the SELECT alias, NOT repeat argMax(provenance, ...): the alias
+        # shadows the raw column and re-aggregating it raises
+        # ILLEGAL_AGGREGATION (184) — same ClickHouse trap documented on
+        # LATEST_WORK_UNIT_INVESTMENTS_CTE (api/queries/investment.py).
+        params["heuristic_provenance"] = "heuristic"
+        having_sql = "HAVING provenance != %(heuristic_provenance)s"
     query = f"""
         SELECT
-            edge_id,
+            any(edge_id) AS edge_id,
             source_type,
             source_id,
             target_type,
             target_id,
             edge_type,
-            toString(repo_id) AS repo_id,
-            provider,
-            provenance,
-            confidence,
-            evidence
+            toString(argMax(repo_id, last_synced)) AS repo_id,
+            argMax(provider, last_synced) AS provider,
+            argMax(provenance, last_synced) AS provenance,
+            argMax(confidence, last_synced) AS confidence,
+            argMax(evidence, last_synced) AS evidence
         FROM work_graph_edges
         {where_sql}
+        GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
+        {having_sql}
+        ORDER BY org_id, source_type, source_id, edge_type, target_type, target_id
     """
     return query_dicts(sink, query, params)
 
@@ -81,7 +122,7 @@ def fetch_work_items(
         created_at,
         updated_at,
         completed_at
-        FROM work_items
+        FROM {WORK_ITEMS_DEDUPED}
         {where_sql}
     """
     return query_dicts(sink, query, params)
@@ -106,7 +147,7 @@ def fetch_parent_titles(
         SELECT
         work_item_id,
         title
-        FROM work_items
+        FROM {WORK_ITEMS_DEDUPED}
         {where_sql}
     """
     rows = query_dicts(sink, query, params)

@@ -81,7 +81,7 @@ async def resolve_capacity_forecast(
     )
     from dev_health_ops.metrics.sinks.factory import create_sink
 
-    require_org_id(context)
+    org_id = require_org_id(context)
 
     if context.client is None:
         raise RuntimeError("Database client not available")
@@ -95,6 +95,7 @@ async def resolve_capacity_forecast(
 
     sink = create_sink(context.db_url)
     try:
+        setattr(sink, "org_id", org_id)
         history = await load_throughput_from_sink(
             sink,
             team_id=team_id,
@@ -148,15 +149,15 @@ async def resolve_capacity_forecasts(
 ) -> CapacityForecastConnection:
     from dev_health_ops.api.queries.client import query_dicts
 
-    require_org_id(context)
+    org_id = require_org_id(context)
     client = context.client
 
     if client is None:
         raise RuntimeError("Database client not available")
 
     limit = filters.limit if filters else 10
-    params: dict[str, Any] = {"limit": int(limit)}
-    where_clauses: list[str] = []
+    params: dict[str, Any] = {"limit": int(limit), "org_id": org_id}
+    where_clauses: list[str] = ["org_id = %(org_id)s"]
 
     if filters:
         if filters.team_id:

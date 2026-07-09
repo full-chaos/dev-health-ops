@@ -20,6 +20,7 @@ def write_llm_token_usage(
     provider: str,
     model: str | None,
     source: str,
+    run_id: str = "",
     input_tokens: int | None,
     output_tokens: int | None,
     calls: int = 1,
@@ -35,6 +36,7 @@ def write_llm_token_usage(
             [
                 LLMTokenUsageRecord(
                     org_id=org_id or "",
+                    run_id=run_id or "",
                     provider=provider or "unknown",
                     model=model or "unknown",
                     source=source,

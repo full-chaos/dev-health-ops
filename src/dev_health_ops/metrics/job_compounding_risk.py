@@ -6,7 +6,7 @@ already-persisted ``repo_metrics_daily`` + ``repo_complexity_daily`` rows
 and emits one row per repo (and per team) per day.
 
 Usage:
-    dev-hops metrics compounding-risk --org ORG [--day YYYY-MM-DD] [--backfill N]
+    dev-hops metrics compounding-risk --org ORG [--since YYYY-MM-DD] [--before YYYY-MM-DD] [--backfill N]
 """
 
 from __future__ import annotations
@@ -19,19 +19,28 @@ from typing import Any
 
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compounding_risk import (
+    MISSING_INPUT_REASONS,
     build_compounding_risk_rows_for_day,
+    summarize_compounding_risk_diagnostics,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.teams import build_repo_pattern_resolver
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.utils.cli import (
+    add_date_range_args,
+    add_sink_arg,
+    resolve_date_range,
+    validate_sink,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _date_range(end_day: date, backfill_days: int) -> list[date]:
-    if backfill_days <= 0:
+    if backfill_days <= 1:
         return [end_day]
-    return [end_day - timedelta(days=i) for i in range(backfill_days, -1, -1)]
+    start_day = end_day - timedelta(days=backfill_days - 1)
+    return [start_day + timedelta(days=i) for i in range(backfill_days)]
 
 
 def _fetch_repo_metrics_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
@@ -87,9 +96,10 @@ async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
 
     repos = sink.query_dicts(
         """
-        SELECT toString(repo_id) AS repo_id, full_name
+        SELECT toString(id) AS repo_id, argMax(repo, last_synced) AS full_name
         FROM repos
         WHERE org_id = {org_id:String}
+        GROUP BY org_id, id
         """,
         {"org_id": org_id},
     )
@@ -128,9 +138,16 @@ async def run_compounding_risk_job(
     computed_at = datetime.now(timezone.utc)
 
     total_rows = 0
+    aggregate_non_null = 0
+    aggregate_unknown = 0
+    # Seed every fixed reason key at 0 so the aggregate has a stable shape
+    # and key order regardless of which reasons actually occur (CHAOS-2888).
+    aggregate_reason_counts: dict[str, int] = dict.fromkeys(MISSING_INPUT_REASONS, 0)
+    days_with_no_repo_rows: list[str] = []
     for d in _date_range(day, backfill_days):
         repo_rows = _fetch_repo_metrics_for_day(sink, org_id, d)
         if not repo_rows:
+            days_with_no_repo_rows.append(d.isoformat())
             logger.info(
                 "compounding-risk: no repo_metrics_daily rows for day=%s org_id=%s",
                 d.isoformat(),
@@ -148,18 +165,34 @@ async def run_compounding_risk_job(
         if rows:
             sink.write_compounding_risk_daily(rows)
             total_rows += len(rows)
+            diagnostics = summarize_compounding_risk_diagnostics(rows)
+            aggregate_non_null += diagnostics.non_null_rows
+            aggregate_unknown += diagnostics.unknown_rows
+            for reason, count in diagnostics.reason_counts.items():
+                aggregate_reason_counts[reason] = (
+                    aggregate_reason_counts.get(reason, 0) + count
+                )
             logger.info(
-                "compounding-risk: wrote %d rows for day=%s (repos=%d, teams=%d)",
+                "compounding-risk: wrote %d rows for day=%s (repos=%d, teams=%d, "
+                "non_null=%d, unknown=%d, reasons=%s)",
                 len(rows),
                 d.isoformat(),
                 sum(1 for r in rows if r.scope == "repo"),
                 sum(1 for r in rows if r.scope == "team"),
+                diagnostics.non_null_rows,
+                diagnostics.unknown_rows,
+                diagnostics.reason_counts,
             )
 
     logger.info(
-        "compounding-risk: done, %d rows written across %d day(s)",
+        "compounding-risk: done, %d rows written across %d day(s) "
+        "(non_null=%d, unknown=%d, reasons=%s, days_with_no_repo_rows=%s)",
         total_rows,
-        backfill_days + 1,
+        max(1, backfill_days),
+        aggregate_non_null,
+        aggregate_unknown,
+        aggregate_reason_counts,
+        days_with_no_repo_rows,
     )
     return 0
 
@@ -173,31 +206,21 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
             "given day range and writes compounding_risk_daily."
         ),
     )
-    p.add_argument(
-        "--day",
-        type=lambda s: date.fromisoformat(s),
-        default=None,
-        help="Target day (UTC). Defaults to today.",
-    )
-    p.add_argument(
-        "--backfill",
-        type=int,
-        default=0,
-        dest="backfill_days",
-        help="Additional days to backfill (inclusive). Default 0.",
-    )
+    add_date_range_args(p, include_deprecated_aliases=False)
+    add_sink_arg(p)
     p.set_defaults(func=_cmd_compounding_risk)
 
 
 async def _cmd_compounding_risk(ns: argparse.Namespace) -> int:
     try:
+        validate_sink(ns)
         db_url = resolve_sink_uri(ns)
-        day = ns.day or datetime.now(timezone.utc).date()
+        day, backfill_days = resolve_date_range(ns)
         org_id = getattr(ns, "org", None) or os.getenv("ORG_ID") or ""
         return await run_compounding_risk_job(
             db_url=db_url,
             day=day,
-            backfill_days=int(ns.backfill_days or 0),
+            backfill_days=backfill_days,
             org_id=org_id,
         )
     except Exception as exc:

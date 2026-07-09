@@ -268,7 +268,7 @@ async def _issue_membership_tokens(
     refresh_payload = auth_service.validate_token(
         token_pair.refresh_token, token_type="refresh"
     )
-    if membership is not None and refresh_payload and refresh_payload.get("jti"):
+    if refresh_payload and refresh_payload.get("jti"):
         expires_at = _expiry_to_utc(refresh_payload.get("exp"))
         if expires_at is not None:
             await create_refresh_token_record(

@@ -16,6 +16,7 @@ from dev_health_ops.models.audit import (
     AuditLog,
     AuditResourceType,
 )
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,11 @@ class AuditService:
             changes=changes,
             request_metadata=req_metadata if req_metadata else None,
             status=status,
-            error_message=error_message,
+            # CHAOS-2784: audit_logs.error_message is a free-form Text
+            # column; callers (e.g. SSO SAML/OIDC processing failures) pass
+            # str(exc) straight through, so redact credential-shaped
+            # substrings before persisting (CHAOS-2766).
+            error_message=sanitize_error_text(error_message),
         )
 
         self.session.add(audit_log)

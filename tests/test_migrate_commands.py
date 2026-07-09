@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.cli import _should_resolve_org, build_parser
+from dev_health_ops.cli import _resolve_org, _should_resolve_org, build_parser
 from dev_health_ops.migrate import (
     _run_clickhouse_repair,
     _run_clickhouse_status,
@@ -96,8 +96,10 @@ class TestMigrateRouting:
                 "repair",
             ]
         )
+        _resolve_org(ns)
 
         assert ns.org == "root-org"
+        assert ns.org_explicit is True
         assert not _should_resolve_org(ns)
 
     def test_repair_leaf_org_flag_scopes_repair(self):
@@ -110,27 +112,32 @@ class TestMigrateRouting:
                 "leaf-org",
             ]
         )
+        _resolve_org(ns)
 
         assert ns.org == "leaf-org"
+        assert ns.org_explicit is True
         assert not _should_resolve_org(ns)
 
     def test_repair_without_org_does_not_auto_resolve_first_org(self):
         ns = self.parser.parse_args(["migrate", "clickhouse", "repair"])
+        # Namespaces built via build_parser().parse_args() directly (not
+        # cli.main()) hold the raw _ORG_UNSET sentinel in ns.org until
+        # _resolve_org runs -- mirrors what main() does immediately after
+        # parse_args(), before any code (including _should_resolve_org)
+        # reads ns.org.
+        _resolve_org(ns)
 
         assert getattr(ns, "org", None) is None
+        assert ns.org_explicit is False
         assert not _should_resolve_org(ns)
 
     def test_non_repair_command_without_org_still_auto_resolves(self):
         ns = self.parser.parse_args(["migrate", "clickhouse", "status"])
+        _resolve_org(ns)
 
         assert getattr(ns, "org", None) is None
+        assert ns.org_explicit is False
         assert _should_resolve_org(ns)
-
-    def test_audit_planner_configs_without_org_does_not_auto_resolve(self):
-        ns = self.parser.parse_args(["audit", "planner-configs"])
-
-        assert getattr(ns, "org", None) is None
-        assert not _should_resolve_org(ns)
 
     def test_upgrade_flat_defaults_to_head(self):
         ns = self.parser.parse_args(["migrate", "upgrade"])

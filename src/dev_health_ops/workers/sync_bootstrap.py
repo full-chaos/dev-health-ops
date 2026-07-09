@@ -22,6 +22,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import threading
 import uuid
 from collections import OrderedDict
@@ -29,11 +30,168 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from dev_health_ops.credentials.fingerprint import credential_fingerprint
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
 logger = logging.getLogger(__name__)
+
+
+class RunAuthFingerprintMismatchError(ValueError):
+    """A run's stamped credential fingerprint no longer matches the credential
+    resolved at execution time (an in-place secret edit mid-run, CHAOS-2755).
+
+    Raised only under ``SYNC_RUN_AUTH_STRICT``; the default is warn-and-continue.
+    Subclasses :class:`ValueError` so it is treated as a non-retryable failure by
+    the unit/discovery error handlers (rotation is a legitimate mid-run edit, so
+    retrying the old stamp would be wrong).
+    """
+
+
+def _sync_run_auth_strict() -> bool:
+    """Hard-fail on a mid-run credential-content change when truthy.
+
+    Default (warn-and-continue) tolerates rotation-to-fix-a-bad-token, the
+    common legitimate in-place edit; operators flip this on for a strict rollout.
+    """
+    return os.getenv("SYNC_RUN_AUTH_STRICT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _load_credential(session: Session, credential_id: Any, org_id: str) -> Any:
+    """Load an ``IntegrationCredential`` by id within an org.
+
+    Deliberately does NOT filter on ``is_active``: ``is_active`` is enforced only
+    at plan-time stamping (``sync/planner.py``); a stamped run tolerates its
+    credential being deactivated mid-run — that asymmetry is what "freezing" a
+    run's auth means.
+    """
+    from dev_health_ops.models import IntegrationCredential
+
+    return (
+        session.query(IntegrationCredential)
+        .filter(
+            IntegrationCredential.id == credential_id,
+            IntegrationCredential.org_id == org_id,
+        )
+        .one_or_none()
+    )
+
+
+def _resolve_integration_auth(
+    session: Session, integration: Any, provider: str, error_label: str
+) -> tuple[Any, Any]:
+    """Today's mutable-resolution path: read auth from ``Integration.credential_id``.
+
+    Used for NULL-stamped runs (legacy / pre-migration / in-flight at deploy).
+    """
+    from dev_health_ops.workers.task_utils import (
+        _credential_mapping,
+        _resolve_env_credentials,
+    )
+
+    credential_id = integration.credential_id
+    if credential_id is None:
+        return None, _resolve_env_credentials(provider)
+    credential = _load_credential(session, credential_id, integration.org_id)
+    if credential is None:
+        raise ValueError(f"Credential not found for {error_label}")
+    return credential_id, _credential_mapping(credential)
+
+
+def _verify_stamped_fingerprint(
+    run: Any,
+    *,
+    decrypted_credentials: Any,
+    credential_id: Any,
+    integration: Any,
+    error_label: str,
+) -> None:
+    """Detect an in-place secret edit against the run's stamped fingerprint.
+
+    No-op when the run carries no stamped fingerprint. On mismatch: hard-fail
+    under ``SYNC_RUN_AUTH_STRICT``, otherwise warn and continue with the newly
+    resolved secret. Logs carry no secret material.
+    """
+    stamped_fingerprint = getattr(run, "credential_fingerprint", None)
+    if not stamped_fingerprint:
+        return
+    current_fingerprint = credential_fingerprint(
+        decrypted_credentials,
+        credential_id=str(credential_id) if credential_id is not None else None,
+        integration_id=str(integration.id),
+    )
+    if current_fingerprint == stamped_fingerprint:
+        return
+    if _sync_run_auth_strict():
+        raise RunAuthFingerprintMismatchError(
+            f"Sync run auth fingerprint mismatch for {error_label}: "
+            "stamped credential content changed mid-run"
+        )
+    logger.warning(
+        "sync_run_auth.fingerprint_mismatch",
+        extra={
+            "error_label": error_label,
+            "integration_id": str(integration.id),
+            "auth_source": getattr(run, "auth_source", None),
+            "strict": False,
+        },
+    )
+
+
+def resolve_run_auth(
+    session: Session,
+    *,
+    run: Any,
+    integration: Any,
+    provider: str,
+    error_label: str,
+) -> tuple[Any, Any]:
+    """Resolve ``(credential_id, decrypted_credentials)`` for a unit/discovery.
+
+    When the run was stamped at plan time (``auth_source`` non-NULL, CHAOS-2755),
+    the run-frozen credential is used, so a mid-run edit to
+    ``Integration.credential_id`` cannot change this run's auth. NULL-stamped
+    runs fall back to the mutable ``Integration.credential_id`` path so runs that
+    were already in flight when this change deployed keep working.
+    """
+    from dev_health_ops.workers.task_utils import (
+        _credential_mapping,
+        _resolve_env_credentials,
+    )
+
+    auth_source = getattr(run, "auth_source", None) if run is not None else None
+    if auth_source is None:
+        return _resolve_integration_auth(session, integration, provider, error_label)
+
+    stamped_credential_id = getattr(run, "credential_id", None)
+    if stamped_credential_id is None:
+        decrypted_credentials: Any = dict(_resolve_env_credentials(provider))
+        credential_id: Any = None
+    else:
+        credential = _load_credential(
+            session, stamped_credential_id, integration.org_id
+        )
+        if credential is None:
+            # Stamped credential deleted mid-run: the intended, honest failure
+            # surface (the run was frozen against a now-absent credential).
+            raise ValueError(f"Credential not found for {error_label}")
+        decrypted_credentials = _credential_mapping(credential)
+        credential_id = stamped_credential_id
+    _verify_stamped_fingerprint(
+        run,
+        decrypted_credentials=decrypted_credentials,
+        credential_id=credential_id,
+        integration=integration,
+        error_label=error_label,
+    )
+    return credential_id, decrypted_credentials
 
 
 @dataclass(frozen=True)
@@ -60,6 +218,32 @@ class SyncTaskContext:
     credential_id: str | None
     decrypted_credentials: Any
     db_url: str
+    source_is_org_wide_placeholder: bool = False
+
+
+_NON_GIT_SOURCE_SCOPE_KEYS = ("project_id", "project_key", "team_id", "repo")
+
+
+def _linear_org_wide_placeholder_source(source: Any, integration: Any) -> bool:
+    provider = str(getattr(source, "provider", "") or integration.provider).lower()
+    if provider != "linear":
+        return False
+
+    metadata = dict(getattr(source, "metadata_", None) or {})
+    if metadata.get("org_wide_placeholder") is True:
+        return True
+
+    external_id = str(getattr(source, "external_id", "") or "").strip().lower()
+    if external_id != provider:
+        return False
+
+    if not metadata.get("planner_managed_sync_config_id"):
+        return False
+
+    config = dict(getattr(integration, "config", None) or {})
+    return not any(
+        str(config.get(key) or "").strip() for key in _NON_GIT_SOURCE_SCOPE_KEYS
+    )
 
 
 @dataclass(frozen=True)
@@ -116,15 +300,11 @@ class SyncTaskBootstrap:
 
         from dev_health_ops.models import (
             Integration,
-            IntegrationCredential,
             IntegrationSource,
+            SyncRun,
             SyncRunUnit,
         )
-        from dev_health_ops.workers.task_utils import (
-            _credential_mapping,
-            _get_db_url,
-            _resolve_env_credentials,
-        )
+        from dev_health_ops.workers.task_utils import _get_db_url
 
         unit_uuid = uuid.UUID(str(unit_id))
         unit = (
@@ -156,21 +336,21 @@ class SyncTaskBootstrap:
         if source is None:
             raise ValueError(f"Integration source not found for unit: {unit_id}")
 
-        credential_id = integration.credential_id
-        if credential_id is None:
-            decrypted_credentials = _resolve_env_credentials(str(unit.provider))
-        else:
-            credential = (
-                session.query(IntegrationCredential)
-                .filter(
-                    IntegrationCredential.id == credential_id,
-                    IntegrationCredential.org_id == unit.org_id,
-                )
-                .one_or_none()
-            )
-            if credential is None:
-                raise ValueError(f"Credential not found for unit: {unit_id}")
-            decrypted_credentials = _credential_mapping(credential)
+        # Prefer the run-stamped credential frozen at plan time (CHAOS-2755). A
+        # NULL-stamped (legacy/in-flight) run falls back to the mutable
+        # integration.credential_id path inside resolve_run_auth.
+        run = (
+            session.query(SyncRun)
+            .filter(SyncRun.id == unit.sync_run_id, SyncRun.org_id == unit.org_id)
+            .one_or_none()
+        )
+        credential_id, decrypted_credentials = resolve_run_auth(
+            session,
+            run=run,
+            integration=integration,
+            provider=str(unit.provider),
+            error_label=f"unit: {unit_id}",
+        )
 
         processor_flags = {
             str(key): bool(value)
@@ -193,6 +373,9 @@ class SyncTaskBootstrap:
             credential_id=str(credential_id) if credential_id is not None else None,
             decrypted_credentials=decrypted_credentials,
             db_url=_get_db_url(),
+            source_is_org_wide_placeholder=_linear_org_wide_placeholder_source(
+                source, integration
+            ),
         )
 
 

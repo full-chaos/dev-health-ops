@@ -68,14 +68,15 @@ class RepoLoader(CachedDataLoader[str, RepoData | None]):
 
         sql = """
             SELECT
-                id as repo_id,
-                name as repo_name,
+                toString(id) as repo_id,
+                argMax(repo, last_synced) as repo_name,
                 org_id,
-                default_branch,
-                language
+                NULL AS default_branch,
+                NULL AS language
             FROM repos
-            WHERE id IN %(repo_ids)s
+            WHERE toString(id) IN %(repo_ids)s
               AND org_id = %(org_id)s
+            GROUP BY org_id, id
         """
         params = {"repo_ids": list(keys), "org_id": self._org_id}
 
@@ -148,14 +149,15 @@ class RepoByNameLoader(CachedDataLoader[str, RepoData | None]):
 
         sql = """
             SELECT
-                id as repo_id,
-                name as repo_name,
+                toString(id) as repo_id,
+                argMax(repo, last_synced) as repo_name,
                 org_id,
-                default_branch,
-                language
+                NULL AS default_branch,
+                NULL AS language
             FROM repos
-            WHERE lower(name) IN %(repo_names)s
-              AND org_id = %(org_id)s
+            WHERE org_id = %(org_id)s
+            GROUP BY org_id, id
+            HAVING lower(repo_name) IN %(repo_names)s
         """
         params = {"repo_names": [k.lower() for k in keys], "org_id": self._org_id}
 

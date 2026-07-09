@@ -128,6 +128,16 @@ def _sync_run_to_response(run: object) -> SyncRunResponse:
 
 
 def _unit_to_response(unit: object) -> SyncRunUnitResponse:
+    source = getattr(unit, "source", None)
+    result = getattr(unit, "result", None)
+    result_dict = result if isinstance(result, dict) else {}
+    error_category = result_dict.get("error_category")
+    unit_status = str(getattr(unit, "status"))
+    # next_retry_at: the worker-emitted result value is authoritative when present;
+    # otherwise derive it from available_at for a unit awaiting retry (CHAOS-2710).
+    next_retry_at = result_dict.get("next_retry_at")
+    if next_retry_at is None and unit_status == "retrying":
+        next_retry_at = getattr(unit, "available_at")
     return SyncRunUnitResponse.model_validate(
         {
             "id": str(getattr(unit, "id")),
@@ -135,6 +145,8 @@ def _unit_to_response(unit: object) -> SyncRunUnitResponse:
             "sync_run_id": str(getattr(unit, "sync_run_id")),
             "integration_id": str(getattr(unit, "integration_id")),
             "source_id": str(getattr(unit, "source_id")),
+            "source_name": source.name if source else None,
+            "source_full_name": source.full_name if source else None,
             "provider": str(getattr(unit, "provider")),
             "dataset_key": str(getattr(unit, "dataset_key")),
             "cost_class": str(getattr(unit, "cost_class")),
@@ -143,9 +155,21 @@ def _unit_to_response(unit: object) -> SyncRunUnitResponse:
             "before_at": getattr(unit, "before_at"),
             "status": str(getattr(unit, "status")),
             "attempts": int(getattr(unit, "attempts")),
+            "available_at": getattr(unit, "available_at"),
+            "rate_limit_deferrals": int(getattr(unit, "rate_limit_deferrals")),
             "duration_seconds": getattr(unit, "duration_seconds"),
             "error": getattr(unit, "error"),
-            "result": getattr(unit, "result"),
+            "error_category": error_category,
+            "last_heartbeat_at": getattr(unit, "last_heartbeat_at"),
+            "result": result,
+            "retry_count": result_dict.get("retry_count"),
+            "retry_reason": result_dict.get("retry_reason"),
+            "last_lease_expired_at": result_dict.get("last_lease_expired_at"),
+            "next_retry_at": next_retry_at,
+            "retry_exhausted": result_dict.get("retry_exhausted"),
+            "retry_surfaces": result_dict.get("retry_surfaces"),
+            "linear_page_count": result_dict.get("linear_page_count"),
+            "linear_batch_count": result_dict.get("linear_batch_count"),
             "created_at": getattr(unit, "created_at"),
             "updated_at": getattr(unit, "updated_at"),
         }
@@ -525,7 +549,7 @@ async def get_sync_run_units(
     run_id: str,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    limit: int = 200,
+    limit: int | None = None,
 ) -> SyncRunUnitSummary:
     svc = SyncRunService(session, org_id)
     run = await svc.get_run(run_id)
@@ -535,6 +559,20 @@ async def get_sync_run_units(
     units = await svc.list_units(run_id)
     rollups = SyncRunService.build_unit_rollups(units)
     total_units = len(units)
+    retry_times = [
+        unit.available_at
+        for unit in units
+        if unit.status == "retrying" and unit.available_at is not None
+    ]
+    retry_exhausted_unit_count = sum(
+        1
+        for unit in units
+        if isinstance(unit.result, dict)
+        and (
+            unit.result.get("retry_exhausted") is True
+            or unit.result.get("error_category") == "worker_lost_retry_exhausted"
+        )
+    )
 
     return SyncRunUnitSummary(
         by_status=rollups["by_status"],
@@ -546,5 +584,9 @@ async def get_sync_run_units(
         partial_failure_summary=rollups["partial_failure_summary"],
         failed_unit_count=rollups["failed_unit_count"],
         unit_count=total_units,
-        units=[_unit_to_response(u) for u in units[:limit]],
+        next_retry_at=min(retry_times) if retry_times else None,
+        retry_exhausted_unit_count=retry_exhausted_unit_count,
+        units=[
+            _unit_to_response(u) for u in (units if limit is None else units[:limit])
+        ],
     )

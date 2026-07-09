@@ -5,6 +5,14 @@ from typing import Any
 
 from celery.schedules import crontab
 
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 # Broker and backend (Valkey, using redis:// wire protocol)
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
@@ -29,6 +37,9 @@ late_ack_excluded_tasks = (
     "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
     "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
     "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
+    "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
+    "dev_health_ops.workers.tasks.dispatch_capacity_forecast",
+    "dev_health_ops.workers.tasks.dispatch_complexity_job",
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
     "dev_health_ops.workers.tasks.dispatch_release_impact",
     "dev_health_ops.workers.tasks.dispatch_membership_backfill",
@@ -61,6 +72,14 @@ stream_consumer_expires_seconds = 30
 # Retry settings
 task_default_retry_delay = 60  # 1 minute between retries
 task_max_retries = 3
+sync_unit_expired_lease_max_retries = max(
+    0,
+    _int_env("SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES", 1),
+)
+sync_unit_expired_lease_retry_backoff_seconds = max(
+    0,
+    _int_env("SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS", 60),
+)
 
 # Queue settings
 task_default_queue = "default"
@@ -93,6 +112,7 @@ task_queues: dict[str, dict[str, Any]] = {
     "webhooks": {},
     "ingest": {},
     "reports": {},
+    "scheduler": {},
     # Dedicated telemetry queue: monitor_queue_depths must not share a queue
     # with floodable work — if `default` backs up, queue-depth telemetry would
     # die exactly when it is needed. Consumed by BOTH `worker` and
@@ -105,16 +125,33 @@ beat_schedule = {
     "dispatch-scheduled-syncs": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
         "schedule": 300.0,
-        "options": {"queue": "default"},
+        "options": {"queue": "scheduler"},
     },
     "dispatch-scheduled-metrics": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
         "schedule": 300.0,
         "options": {"queue": "default"},
     },
+    # Fans out per active organization (CHAOS-2849): discover_repos (job_daily.py)
+    # scopes the repos query by org_id, so a single blank-org run would never
+    # match a real (UUID-scoped) tenant's rows and repo_metrics_daily would never
+    # be populated. dispatch_daily_metrics_for_all_orgs enumerates active orgs and
+    # enqueues one dispatch_daily_metrics_partitioned per org_id.
     "run-daily-metrics": {
-        "task": "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
+        "task": "dev_health_ops.workers.tasks.dispatch_daily_metrics_for_all_orgs",
         "schedule": crontab(hour=1, minute=0),
+        "options": {"queue": "default"},
+    },
+    # Complexity daily floor cadence (CHAOS-2850): run_complexity_job previously
+    # only ran chained after a git sync, so an org with infrequent syncs left
+    # repo_complexity_daily stale, and complexity_delta's trailing 30-day window
+    # (compounding_risk.py) read a flat trend. This dispatcher fans out one
+    # run_complexity_job per active org daily, independent of sync activity.
+    # Scheduled before run-daily-metrics (01:00) so the daily hotspot/risk compute
+    # reads a freshly-refreshed complexity snapshot for the day.
+    "run-complexity-daily": {
+        "task": "dev_health_ops.workers.tasks.dispatch_complexity_job",
+        "schedule": crontab(hour=0, minute=45),
         "options": {"queue": "default"},
     },
     # Daily safety net for recommendations_daily (CHAOS-2373). The primary
@@ -150,10 +187,9 @@ beat_schedule = {
         "options": {"queue": "sync"},
     },
     "run-capacity-forecast": {
-        "task": "dev_health_ops.workers.tasks.run_capacity_forecast_job",
+        "task": "dev_health_ops.workers.tasks.dispatch_capacity_forecast",
         "schedule": crontab(hour=4, minute=0, day_of_week="monday"),
-        "kwargs": {"all_teams": True},
-        "options": {"queue": "metrics"},
+        "options": {"queue": "default"},
     },
     "process-ingest-streams": {
         "task": "dev_health_ops.workers.tasks.run_ingest_consumer",
@@ -196,6 +232,16 @@ beat_schedule = {
         "task": "dev_health_ops.workers.tasks.dispatch_membership_backfill",
         "schedule": crontab(hour=3, minute=30),
         "options": {"queue": "default"},
+    },
+    # Retention for the durable rate-limit observation store (CHAOS-2758).
+    # Env-tunable via SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS (default 14,
+    # see workers/sync_reconciler.py). Scheduled off-peak, clear of the other
+    # nightly jobs (1:00 metrics, 1:30 release-impact, 2:00 recommendations,
+    # 3:30 membership backfill).
+    "prune-rate-limit-observations": {
+        "task": "dev_health_ops.workers.tasks.prune_rate_limit_observations",
+        "schedule": crontab(hour=5, minute=0),
+        "options": {"queue": "sync"},
     },
 }
 

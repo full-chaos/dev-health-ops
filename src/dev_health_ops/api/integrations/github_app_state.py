@@ -27,9 +27,10 @@ class GitHubAppStateError(ValueError):
 class GitHubAppInstallState:
     org_id: str
     jti: str
+    return_to: str | None = None
 
 
-def mint_github_app_install_state(org_id: str) -> str:
+def mint_github_app_install_state(org_id: str, return_to: str | None = None) -> str:
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "org_id": org_id,
@@ -40,6 +41,8 @@ def mint_github_app_install_state(org_id: str) -> str:
         "iat": now,
         "exp": now + timedelta(minutes=GITHUB_APP_STATE_TTL_MINUTES),
     }
+    if return_to is not None:
+        payload["return_to"] = return_to
     return jwt.encode(payload, _get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
@@ -63,4 +66,6 @@ def verify_github_app_install_state(state: str) -> GitHubAppInstallState:
     jti = payload.get("jti")
     if not isinstance(jti, str) or not jti:
         raise GitHubAppStateError("Invalid GitHub App installation state identifier")
-    return GitHubAppInstallState(org_id=org_id, jti=jti)
+    raw_return_to = payload.get("return_to")
+    return_to = raw_return_to if isinstance(raw_return_to, str) else None
+    return GitHubAppInstallState(org_id=org_id, jti=jti, return_to=return_to)

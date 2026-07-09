@@ -189,6 +189,17 @@ class SyncRun(Base):
     )
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Run-auth freeze (CHAOS-2755): the credential resolved once at plan time and
+    # frozen for the whole run. ``credential_id`` is a PLAIN UUID with NO foreign
+    # key — a stamped credential deleted mid-run must not be blocked by an FK and
+    # instead surfaces as the existing "Credential not found" unit failure.
+    # ``credential_fingerprint`` is a safe-scope content witness (no raw secret).
+    # ``auth_source`` is 'integration_credential' | 'environment'; NULL marks a
+    # legacy/pre-migration or in-flight-at-deploy run that falls back to the
+    # mutable ``Integration.credential_id`` resolution path.
+    credential_id: Mapped[uuid.UUID | None] = mapped_column(GUID, nullable=True)
+    credential_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_source: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -204,6 +215,9 @@ class SyncRun(Base):
     )
     dispatch_outbox: Mapped[list[SyncDispatchOutbox]] = relationship(
         back_populates="sync_run", cascade="all, delete-orphan"
+    )
+    reference_discovery: Mapped[SyncRunReferenceDiscovery | None] = relationship(
+        back_populates="sync_run", cascade="all, delete-orphan", uselist=False
     )
 
     __table_args__ = (
@@ -244,6 +258,13 @@ class SyncRunUnit(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     rate_limit_first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expired_lease_retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_retry_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_exhausted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -312,6 +333,55 @@ class SyncRunPostDispatch(Base):
         UniqueConstraint(
             "sync_run_id", "kind", name="uq_sync_run_post_dispatches_run_kind"
         ),
+    )
+
+
+class SyncRunReferenceDiscovery(Base):
+    __tablename__ = "sync_run_reference_discoveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    sync_run_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("sync_runs.id"), nullable=False, unique=True
+    )
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    lease_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    sync_run: Mapped[SyncRun] = relationship(back_populates="reference_discovery")
+
+    __table_args__ = (
+        Index(
+            "ix_sync_run_reference_discoveries_status_available",
+            "status",
+            "available_at",
+        ),
+        Index("ix_sync_run_reference_discoveries_org", "org_id"),
     )
 
 

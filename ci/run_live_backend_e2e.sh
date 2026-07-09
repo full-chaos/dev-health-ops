@@ -7,6 +7,9 @@ EXIT_FAILURE=10
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}" || exit "${EXIT_FAILURE}"
 
+PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH
+
 require_cmd() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -58,6 +61,8 @@ POSTGRES_URI_DEFAULT="postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/test
 CLICKHOUSE_URI="${CLICKHOUSE_URI:-${CLICKHOUSE_URI_DEFAULT}}"
 POSTGRES_URI="${POSTGRES_URI:-${POSTGRES_URI_DEFAULT}}"
 DATABASE_URI="${POSTGRES_URI}"
+export CLICKHOUSE_URI POSTGRES_URI DATABASE_URI
+export DISABLE_DOTENV=1
 
 API_HOST="${LIVE_E2E_API_HOST:-127.0.0.1}"
 API_PORT="${LIVE_E2E_API_PORT:-18080}"
@@ -66,8 +71,10 @@ BASE_URL="http://${API_HOST}:${API_PORT}"
 FIXTURE_SEED="${LIVE_E2E_FIXTURE_SEED:-20260219}"
 FIXTURE_DAYS="${LIVE_E2E_FIXTURE_DAYS:-14}"
 FIXTURE_REPO_NAME="${LIVE_E2E_FIXTURE_REPO_NAME:-acme/live-e2e}"
+FIXTURE_PROVIDER="${LIVE_E2E_FIXTURE_PROVIDER:-github}"
 FIXTURE_COMMITS_PER_DAY="${LIVE_E2E_COMMITS_PER_DAY:-6}"
 FIXTURE_PR_COUNT="${LIVE_E2E_PR_COUNT:-24}"
+export FIXTURE_PROVIDER
 
 
 # Must match the org_id used in generate_auth_token() below.
@@ -219,7 +226,6 @@ PY
 
 echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
 (
-  export DISABLE_DOTENV=1
   export ORG_ID="${E2E_ORG_ID}"
   unset POSTGRES_URI
   unset DATABASE_URI
@@ -228,6 +234,7 @@ echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
     --sink "${CLICKHOUSE_URI}" \
     --db-type clickhouse \
     --repo-name "${FIXTURE_REPO_NAME}" \
+    --provider "${FIXTURE_PROVIDER}" \
     --days "${FIXTURE_DAYS}" \
     --commits-per-day "${FIXTURE_COMMITS_PER_DAY}" \
     --pr-count "${FIXTURE_PR_COUNT}" \
@@ -251,7 +258,6 @@ fi
 
 echo "==> starting API at ${BASE_URL}"
 (
-  export DISABLE_DOTENV=1
   export DATABASE_URI="${DATABASE_URI}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
   export POSTGRES_URI="${POSTGRES_URI}"
@@ -305,6 +311,7 @@ HOME_FILE="${TMP_DIR}/home.json"
 fetch_json "/api/v1/home" "${HOME_FILE}" "200"
 run_python - "${HOME_FILE}" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
@@ -312,8 +319,13 @@ payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
 freshness = payload.get("freshness", {})
 assert "last_ingested_at" in freshness, freshness
 sources = freshness.get("sources", {})
-allowed_states = {"ok", "down", "stale", "unknown", "not_configured", "error"}
-for key in ("github", "gitlab", "jira", "ci"):
+allowed_states = {"ok", "degraded", "down", "stale", "unknown", "not_configured", "error"}
+fixture_provider = os.environ.get("FIXTURE_PROVIDER", "github")
+expected_sources = {"ci"}
+if fixture_provider != "synthetic":
+    expected_sources.add(fixture_provider)
+assert set(sources) == expected_sources, sources
+for key in expected_sources:
     assert key in sources, sources
     assert str(sources.get(key, "")).lower() in allowed_states, sources
 coverage = freshness.get("coverage", {})

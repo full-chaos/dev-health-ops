@@ -444,7 +444,7 @@ def test_mark_outbox_publish_failed_rearms_with_backoff_and_error(db_session):
     assert row.claim_token is None
     assert row.claim_expires_at is None
     assert _aware(row.available_at) == now + timedelta(seconds=65)
-    assert row.last_error == "broker down"
+    assert row.last_error == "RuntimeError: broker down"
 
 
 def test_mark_outbox_publish_failed_rejects_expired_lease(db_session):

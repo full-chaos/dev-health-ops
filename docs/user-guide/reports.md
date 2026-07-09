@@ -45,12 +45,12 @@ When a report is created without an explicit `ReportPlan`, the system generates 
 Clicking **Run Now** on the report detail page triggers the `triggerReport` mutation. This creates a `ReportRun` (with `triggered_by="api"` and status `PENDING`) and dispatches the `execute_saved_report` Celery task to the `reports` queue. The mutation serves as an example of the preferred Celery-job trigger pattern (CHAOS-2475, CHAOS-2482) to avoid running resource-intensive or credential-heavy operations inline. Using this pattern ensures credentials aren't exposed or bypassed. See [workers.md](../ops/workers.md) for details on Celery worker configuration.
 ### Scheduled Execution
 
-Reports with a schedule (Weekly or Monthly) are triggered automatically by the `dispatch_scheduled_reports` beat task, which runs every 5 minutes and checks for due reports based on their cron expression.
+Reports with a schedule (Weekly or Monthly) are triggered automatically by the `dispatch_scheduled_reports` beat task, which runs every 5 minutes and checks for due reports based on their cron expression. The cron is evaluated in the schedule's selected **timezone** (`ScheduledJob.timezone`, defaulting to UTC), so the times below are wall-clock times in that zone — a report scheduled in `America/Los_Angeles` fires at 09:00 Pacific, not 09:00 UTC (CHAOS-2689).
 
 | Schedule | Cron Expression |
 |----------|----------------|
-| Weekly | `0 9 * * 1` (Mondays at 09:00 UTC) |
-| Monthly | `0 9 1 * *` (1st of month at 09:00 UTC) |
+| Weekly | `0 9 * * 1` (Mondays at 09:00 in the report's timezone) |
+| Monthly | `0 9 1 * *` (1st of month at 09:00 in the report's timezone) |
 
 ---
 

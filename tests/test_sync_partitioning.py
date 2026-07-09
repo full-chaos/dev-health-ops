@@ -64,15 +64,13 @@ class TestDiscoverReposForConfig:
         mock_gh.assert_called_once()
 
     @patch("requests.get")
-    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    @patch("dev_health_ops.providers.github.app_auth.mint_installation_token")
     def test_github_app_all_repos_lists_installation_repositories(
-        self, mock_token_provider_cls, mock_get
+        self, mock_mint_token, mock_get
     ):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
-        mock_token_provider_cls.return_value.get_token.return_value = (
-            "installation-token"
-        )
+        mock_mint_token.return_value = "installation-token"
         mock_response = MagicMock(status_code=200)
         mock_response.json.return_value = {
             "repositories": [
@@ -99,11 +97,13 @@ class TestDiscoverReposForConfig:
         )
 
         assert result == [("orgA", "api"), ("orgA", "api-worker")]
-        mock_token_provider_cls.assert_called_once_with(
+        # Installation token is minted via the standalone providers.github
+        # utility (CHAOS-2786), not the connectors-side GitHubAppTokenProvider.
+        mock_mint_token.assert_called_once_with(
             app_id="123",
             private_key="private-key",
             installation_id="456",
-            api_base_url="https://api.github.test",
+            base_url="https://api.github.test",
         )
         mock_get.assert_called_once()
         assert mock_get.call_args.args[0] == (
@@ -114,15 +114,13 @@ class TestDiscoverReposForConfig:
         )
 
     @patch("requests.get")
-    @patch("dev_health_ops.connectors.utils.github_app.GitHubAppTokenProvider")
+    @patch("dev_health_ops.providers.github.app_auth.mint_installation_token")
     def test_github_app_all_repos_installation_api_failure_raises(
-        self, mock_token_provider_cls, mock_get
+        self, mock_mint_token, mock_get
     ):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
-        mock_token_provider_cls.return_value.get_token.return_value = (
-            "installation-token"
-        )
+        mock_mint_token.return_value = "installation-token"
         mock_get.return_value = MagicMock(status_code=401, text="bad credentials")
         config = _make_config(
             provider="github",
@@ -138,6 +136,46 @@ class TestDiscoverReposForConfig:
                     "installation_id": "456",
                 },
             )
+
+    @patch("requests.get")
+    @patch("dev_health_ops.providers.github.app_auth.mint_installation_token")
+    def test_github_app_all_repos_defaults_base_url_and_propagates_mint_error(
+        self, mock_mint_token, mock_get
+    ):
+        """The ``all_repos`` App-auth path (Codex-flagged CHAOS-2786 gap) --
+
+        (a) defaults ``base_url`` to ``api.github.com`` through the new
+        minter exactly like the non-``all_repos`` path, and (b) propagates
+        whatever the minter raises (``providers.github.app_auth`` errors,
+        not a connectors-side exception type) without ever calling the
+        installation-listing endpoint.
+        """
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+        from dev_health_ops.providers.github.app_auth import GitHubAppAuthError
+
+        mock_mint_token.side_effect = GitHubAppAuthError("boom")
+        config = _make_config(
+            provider="github",
+            sync_options={"all_repos": True, "search": "orgA/*"},
+        )
+
+        with pytest.raises(GitHubAppAuthError, match="boom"):
+            discover_repos_for_config(
+                config,
+                {
+                    "app_id": "123",
+                    "private_key": "private-key",
+                    "installation_id": "456",
+                },
+            )
+
+        mock_mint_token.assert_called_once_with(
+            app_id="123",
+            private_key="private-key",
+            installation_id="456",
+            base_url="https://api.github.com",
+        )
+        mock_get.assert_not_called()
 
     @patch("dev_health_ops.discovery.repos.discover_gitlab_repos")
     def test_gitlab_delegates_to_gitlab_discovery(self, mock_gl):
@@ -849,6 +887,54 @@ class TestCredentialMapping:
 
 
 class TestWorkItemsProviderCredentialIsolation:
+    @pytest.mark.parametrize(
+        ("provider", "source_kwargs", "message_fragment"),
+        [
+            ("github", {"repo_name": None}, "github work-item unit had no source"),
+            ("linear", {"repo_name": "   "}, "linear work-item unit had no source"),
+            ("gitlab", {"repo_name": ""}, "gitlab work-item unit had no source"),
+            (
+                "jira",
+                {"jira_project_keys": ["   "]},
+                "jira work-item unit had no source",
+            ),
+        ],
+    )
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    def test_require_source_missing_source_fails_before_org_wide_discovery(
+        self,
+        mock_sink_class,
+        provider,
+        source_kwargs,
+        message_fragment,
+        caplog,
+    ):
+        from dev_health_ops.metrics.job_work_items import (
+            WorkItemUnitMissingSource,
+            run_work_items_sync_job,
+        )
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+        caplog.set_level("ERROR", logger="dev_health_ops.metrics.job_work_items")
+
+        with patch("dev_health_ops.metrics.job_work_items._discover_repos") as discover:
+            with pytest.raises(WorkItemUnitMissingSource, match=message_fragment):
+                run_work_items_sync_job(
+                    db_url="clickhouse://localhost/dev",
+                    day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                    backfill_days=1,
+                    provider=provider,
+                    org_id="00000000-0000-0000-0000-000000000001",
+                    require_source=True,
+                    **source_kwargs,
+                )
+
+        discover.assert_not_called()
+        assert message_fragment in caplog.text
+        assert "refusing org-wide fan-out" in caplog.text
+
     @patch.dict(os.environ, {}, clear=True)
     @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
@@ -886,6 +972,170 @@ class TestWorkItemsProviderCredentialIsolation:
         assert captured_clients
         assert isinstance(captured_clients[0], LinearClient)
         assert captured_clients[0].auth.api_key == "lin_explicit"
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_empty_source_raises(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        with pytest.raises(ValueError, match="non-empty source team key"):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+                repo_name="   ",
+            )
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    def test_linear_work_items_without_required_source_keeps_org_wide_path(
+        self, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+        from dev_health_ops.providers.linear.client import LinearClient
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        sink.client.query.return_value = SimpleNamespace(result_rows=[])
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            client = self._make_client()
+            assert isinstance(client, LinearClient)
+            captured_repos.append(ctx.repo)
+            return iter(())
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+            )
+
+        assert captured_repos == [None]
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_threads_source_into_ingestion_repo(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            captured_repos.append(ctx.repo)
+            return iter(())
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+                repo_name="ENG",
+            )
+
+        assert captured_repos == ["ENG"]
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_org_wide_placeholder_reaches_unscoped_ingest(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            captured_repos.append(ctx.repo)
+            return iter(())
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            run_work_items_sync_job(
+                db_url="clickhouse://localhost/dev",
+                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                backfill_days=1,
+                provider="linear",
+                org_id="00000000-0000-0000-0000-000000000001",
+                credentials={"api_key": "lin_explicit"},
+                repo_name=None,
+                require_source=False,
+            )
+
+        assert captured_repos == [None]
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_linear_work_items_scoped_provider_name_still_fails_visibly(
+        self, mock_from_env, mock_sink_class
+    ):
+        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+
+        sink = MagicMock()
+        sink.query_dicts.return_value = []
+        mock_sink_class.return_value = sink
+
+        captured_repos: list[object] = []
+
+        def _fake_iter_ingest(self, ctx):
+            captured_repos.append(ctx.repo)
+            raise ValueError("Linear team 'linear' not found")
+
+        with patch(
+            "dev_health_ops.providers.linear.provider.LinearProvider.iter_ingest",
+            new=_fake_iter_ingest,
+        ):
+            with pytest.raises(ValueError, match="Linear team 'linear' not found"):
+                run_work_items_sync_job(
+                    db_url="clickhouse://localhost/dev",
+                    day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+                    backfill_days=1,
+                    provider="linear",
+                    org_id="00000000-0000-0000-0000-000000000001",
+                    credentials={"api_key": "lin_explicit"},
+                    repo_name="linear",
+                    require_source=True,
+                )
+
+        assert captured_repos == ["linear"]
 
     @patch.dict(
         os.environ,

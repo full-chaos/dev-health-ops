@@ -18,6 +18,7 @@ from .routers import (
     invites_router,
     login_router,
     oauth_router,
+    onboarding_router,
     password_reset_router,
     refresh_router,
     register_router,
@@ -34,6 +35,7 @@ router.include_router(verify_router)
 router.include_router(password_reset_router)
 router.include_router(login_router)
 router.include_router(invites_router)
+router.include_router(onboarding_router)
 router.include_router(session_router)
 router.include_router(refresh_router)
 router.include_router(oauth_router)

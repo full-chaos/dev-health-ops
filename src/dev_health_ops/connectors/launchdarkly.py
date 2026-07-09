@@ -17,8 +17,17 @@ from dev_health_ops.connectors.exceptions import (
     AuthenticationException,
     RateLimitException,
 )
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
+
+
+def _response_host(response: httpx.Response) -> str | None:
+    """Best-effort host for the responding LaunchDarkly instance."""
+    host = getattr(getattr(response, "url", None), "host", None)
+    return host if isinstance(host, str) and host else None
+
 
 _BASE_URL = "https://app.launchdarkly.com/api/v2"
 
@@ -56,11 +65,26 @@ def _raise_for_status(response: httpx.Response) -> None:
     if status == 401:
         raise AuthenticationException("LaunchDarkly authentication failed")
     if status == 403:
-        raise APIException(f"LaunchDarkly forbidden: {response.text}")
+        # Permission/feature-disabled: non-retryable, matching the
+        # GitHub/GitLab convention where a permission 403 is an auth error
+        # rather than a retryable APIException.
+        raise AuthenticationException(f"LaunchDarkly forbidden: {response.text}")
     if status == 429:
+        retry_after = _parse_retry_after(response)
         raise RateLimitException(
             "LaunchDarkly rate limit exceeded",
-            retry_after_seconds=_parse_retry_after(response),
+            retry_after_seconds=retry_after,
+            signal=RateLimitSignal(
+                provider="launchdarkly",
+                host=_response_host(response),
+                dimension=BudgetDimension.REST_CORE,
+                retry_after_seconds=retry_after,
+                # LaunchDarkly reports its reset window as epoch MILLISECONDS.
+                reset_at=RateLimitSignal.reset_at_from_epoch_millis(
+                    response.headers.get("X-RateLimit-Reset")
+                ),
+                reason="primary",
+            ),
         )
     if status == 404:
         raise APIException(f"LaunchDarkly resource not found: {response.url}")

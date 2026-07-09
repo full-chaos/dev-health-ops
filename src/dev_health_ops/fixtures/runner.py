@@ -22,13 +22,85 @@ from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
 from dev_health_ops.models.teams import Team
 from dev_health_ops.providers.teams import load_team_resolver
-from dev_health_ops.storage import SQLAlchemyStore, resolve_db_type, run_with_store
+from dev_health_ops.storage import (
+    ClickHouseStore,
+    SQLAlchemyStore,
+    resolve_db_type,
+    run_with_store,
+)
 from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS
 from dev_health_ops.work_graph.runner import materialize_fixture_investments
 
 MIN_WORK_UNIT_INVESTMENT_RECORDS = 5
 MIN_WORK_UNIT_REPO_COVERAGE = 0.9
 MIN_WORK_UNIT_TEAM_COVERAGE = 0.8
+
+# Providers that only ever appear via a real connector sync. Fixture runs may
+# label rows "github" etc. via --provider, so the guard keys on whether any of
+# these are ALREADY present for the org, not on the label being generated.
+LIVE_PROVIDERS: tuple[str, ...] = ("github", "gitlab", "jira", "linear", "bitbucket")
+
+
+class MixedOrgError(RuntimeError):
+    """Refusal to write synthetic fixtures into an org holding synced data."""
+
+
+# Server messages that mean the scanned table simply is not there yet (fresh
+# database, migrations not run). ONLY these disarm the scan for that table —
+# any other failure (connectivity, auth, syntax) must fail CLOSED, or a
+# transient outage would silently let fixtures pollute a live org.
+_MISSING_TABLE_MARKERS = ("UNKNOWN_TABLE", "does not exist", "doesn't exist")
+
+
+async def _detect_live_providers(store: Any, org_id: str) -> set[str]:
+    """Best-effort scan for live (connector-synced) providers in ``org_id``.
+
+    Synthetic fixtures silently mixed into a synced org pollute Investment
+    allocation and every team/repo rollup with repos and teams that do not
+    exist for that tenant (CHAOS-2778). Only the ClickHouse analytics store is
+    scanned — that is where fixture work items/repos land; other store types
+    return an empty set and skip the guard.
+    """
+    client = getattr(store, "client", None)
+    if not isinstance(store, ClickHouseStore) or client is None:
+        return set()
+    found: set[str] = set()
+    for table in ("work_items", "repos"):
+        query = (
+            f"SELECT DISTINCT provider FROM {table} "
+            "WHERE org_id = {org_id:String} AND provider IN {live:Array(String)}"
+        )
+        try:
+            result = await asyncio.to_thread(
+                client.query,
+                query,
+                parameters={"org_id": org_id, "live": list(LIVE_PROVIDERS)},
+            )
+        except Exception as exc:
+            if any(marker in str(exc) for marker in _MISSING_TABLE_MARKERS):
+                # Fresh DB / missing table: nothing synced yet.
+                logging.debug("mixed-org guard skipped table %s: %s", table, exc)
+                continue
+            raise
+        found.update(str(row[0]) for row in getattr(result, "result_rows", []) or [])
+    return found
+
+
+async def _ensure_org_unpolluted(
+    store: Any, org_id: str, *, allow_mixed_org: bool
+) -> None:
+    """Refuse fixture generation into an org that already holds synced data."""
+    if allow_mixed_org:
+        return
+    live_providers = await _detect_live_providers(store, org_id)
+    if live_providers:
+        raise MixedOrgError(
+            f"Org {org_id} already holds synced data from "
+            f"{sorted(live_providers)}. Generating synthetic fixtures into it "
+            "would pollute Investment/team/repo rollups with demo repos and "
+            "teams (CHAOS-2778). Use a dedicated demo org, or pass "
+            "--allow-mixed-org to override."
+        )
 
 
 async def _insert_batches(
@@ -462,12 +534,14 @@ async def _seed_auth_data(
             safe_org_ids.add(org.id)
     await session.commit()
 
-    # Gate fixture-user insertion on safe-org insertion (CHAOS-2458): on the
-    # default path, never introduce a fixture account (e.g. the known-password
-    # admin@devhealth.example superuser) for a tenant that already exists. A
-    # fixture user is eligible only if it belongs to at least one org that was
-    # freshly inserted this run; users tied only to pre-existing (skipped) orgs
-    # are left out entirely. overwrite_real_users=True keeps the full pass.
+    # Gate fixture-user insertion on safe-org insertion (CHAOS-2458) while
+    # preserving the CHAOS-2670 first-run fixture contract: the seed contains
+    # one verified orgless identity for workspace-onboarding tests and one
+    # onboarded admin identity for admin/integration tests. On the default path,
+    # the empty-graph guard above means orgless fixture users can only be added
+    # into an empty auth DB; users tied to orgs are eligible only when at least
+    # one of their orgs was freshly inserted this run. overwrite_real_users=True
+    # keeps the full pass for isolated demo/CI refreshes.
     all_memberships = user_data.get("memberships") or []
     user_org_map: dict[Any, set[Any]] = {}
     for membership in all_memberships:
@@ -475,8 +549,10 @@ async def _seed_auth_data(
 
     safe_user_ids: set[Any] = set()
     for user in user_data["users"]:
+        user_org_ids = user_org_map.get(user.id, set())
+        is_orgless_fixture_user = not user_org_ids
         if not overwrite_real_users and not (
-            user_org_map.get(user.id, set()) & safe_org_ids
+            is_orgless_fixture_user or (user_org_ids & safe_org_ids)
         ):
             logging.warning(
                 "FIXTURES-GUARD: skipping fixture user %s (%s) because it is not "
@@ -572,6 +648,10 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     async def _handler(store):
         if isinstance(store, SQLAlchemyStore):
             await store.ensure_tables()
+
+        await _ensure_org_unpolluted(
+            store, org_id, allow_mixed_org=getattr(ns, "allow_mixed_org", False)
+        )
 
         repo_count = max(1, ns.repo_count)
         base_name = ns.repo_name
@@ -1060,7 +1140,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     if comp_data["dailies"]:
                         sink.write_repo_complexity_daily(comp_data["dailies"])
 
-    await run_with_store(ns.sink, db_type, _handler, org_id=org_id)
+    try:
+        await run_with_store(ns.sink, db_type, _handler, org_id=org_id)
+    except MixedOrgError as exc:
+        logging.error("%s", exc)
+        return 1
 
     all_ff_flags: list = []
     feature_flag_graph_contexts: list[dict[str, Any]] = []
@@ -1583,6 +1667,77 @@ AI_FIXTURE_TABLES: tuple[str, ...] = (
     "ai_policy_events",
 )
 
+COCKPIT_LIVE_DATA_TABLES: tuple[str, ...] = (
+    "repo_complexity_daily",
+    "repo_metrics_daily",
+    "compounding_risk_daily",
+    "testops_pipeline_metrics_daily",
+    "testops_test_metrics_daily",
+    "testops_coverage_metrics_daily",
+)
+
+
+def _validate_cockpit_live_data_fixture_tables(client: Any, table_exists) -> bool:
+    counts: dict[str, int] = {}
+    for table in COCKPIT_LIVE_DATA_TABLES:
+        if not table_exists(table):
+            logging.error(
+                "FAIL: Cockpit live-data table %s missing (run fixtures with --with-metrics).",
+                table,
+            )
+            return False
+        try:
+            counts[table] = _query_int(client, f"SELECT count() FROM {table}")
+        except Exception as exc:
+            logging.error("FAIL: Could not count %s rows: %s", table, exc)
+            return False
+        if counts[table] == 0:
+            logging.error(
+                "FAIL: Cockpit live-data table %s is empty (regression in --with-metrics).",
+                table,
+            )
+            return False
+
+    try:
+        review_latency_rows = _query_int(
+            client,
+            """
+            SELECT count()
+            FROM repo_metrics_daily
+            WHERE pr_first_review_p90_hours IS NOT NULL
+            """,
+        )
+        complexity_rows = _query_int(
+            client,
+            """
+            SELECT count()
+            FROM repo_complexity_daily
+            WHERE cyclomatic_per_kloc IS NOT NULL
+            """,
+        )
+    except Exception as exc:
+        logging.error("FAIL: Could not validate Compounding Risk inputs: %s", exc)
+        return False
+
+    if review_latency_rows == 0:
+        logging.error(
+            "FAIL: repo_metrics_daily has no pr_first_review_p90_hours rows; "
+            "Compounding Risk review-latency input is absent."
+        )
+        return False
+    if complexity_rows == 0:
+        logging.error(
+            "FAIL: repo_complexity_daily has no cyclomatic_per_kloc rows; "
+            "Compounding Risk complexity input is absent."
+        )
+        return False
+
+    logging.info(
+        "Cockpit live-data fixture tables: "
+        + ", ".join(f"{name}={counts[name]}" for name in COCKPIT_LIVE_DATA_TABLES)
+    )
+    return True
+
 
 def _validate_ai_fixture_tables(client: Any, table_exists) -> bool:
     """Verify every AI fixture/rollup table is present and non-empty."""
@@ -1894,6 +2049,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             )
     except Exception as e:
         logging.error(f"FAIL: Could not validate Phase 2 metrics: {e}")
+        return 1
+
+    if not _validate_cockpit_live_data_fixture_tables(client, _table_exists):
         return 1
 
     # 2. Check prerequisites
@@ -2255,6 +2413,17 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Bypass metric-coherence validation after generation. "
             "Off by default; use only when generation performance is the bottleneck."
+        ),
+    )
+    fix_gen.add_argument(
+        "--allow-mixed-org",
+        action="store_true",
+        dest="allow_mixed_org",
+        default=False,
+        help=(
+            "Write fixtures even if the target org already holds live "
+            "connector-synced data. Off by default: mixing synthetic repos/teams "
+            "into a synced org pollutes Investment and rollup charts (CHAOS-2778)."
         ),
     )
     fix_gen.set_defaults(func=run_fixtures_generation)

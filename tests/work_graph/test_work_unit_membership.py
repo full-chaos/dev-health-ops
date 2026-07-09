@@ -24,6 +24,7 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
     WorkUnitMembershipRunRecord,
+    WorkUnitRepoEffortRecord,
 )
 from dev_health_ops.work_graph.investment.categorize import CategorizationOutcome
 from dev_health_ops.work_graph.investment.constants import (
@@ -147,6 +148,7 @@ class FakeSink:
     def __init__(self) -> None:
         self.client = object()
         self.investment_rows: list[WorkUnitInvestmentRecord] = []
+        self.repo_effort_rows: list[WorkUnitRepoEffortRecord] = []
         self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
         self.membership_rows: list[WorkUnitMembershipRecord] = []
         self.membership_run_records: list[WorkUnitMembershipRunRecord] = []
@@ -158,6 +160,9 @@ class FakeSink:
 
     def write_work_unit_investments(self, rows) -> None:
         self.investment_rows.extend(rows)
+
+    def write_work_unit_repo_effort(self, rows) -> None:
+        self.repo_effort_rows.extend(rows)
 
     def write_work_unit_investment_quotes(self, rows) -> None:
         self.quote_rows.extend(rows)

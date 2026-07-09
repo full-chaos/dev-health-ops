@@ -22,6 +22,14 @@ from __future__ import annotations
 # the human-readable name is sourced here.
 DEMO_ORG_NAME = "Meridian"
 
+ONBOARDING_ORGLESS_USER_EMAIL = "onboarding@devhealth.example"
+ONBOARDING_ORGLESS_USER_USERNAME = "onboarding"
+ONBOARDING_ORGLESS_USER_FULL_NAME = "Onboarding Fixture User"
+
+ONBOARDED_ADMIN_USER_EMAIL = "admin@devhealth.example"
+ONBOARDED_ADMIN_USER_USERNAME = "admin"
+ONBOARDED_ADMIN_USER_FULL_NAME = "Onboarded Admin Fixture User"
+
 # Curated, realistic repository names. The fixture runner assigns these to the
 # generated repos in order; only when the requested repo count exceeds this list
 # does it fall back to the legacy numeric-suffix scheme.

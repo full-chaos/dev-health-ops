@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import uuid
@@ -42,6 +43,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 )
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
+    compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
     compute_work_item_team_attributions,
 )
@@ -115,26 +117,92 @@ def discover_repos(
             )
         ]
 
-    # Query repos from ClickHouse, scoped by org_id
+    # Query repos from ClickHouse, scoped by org_id.
+    #
+    # ``repos`` is a ReplacingMergeTree(last_synced) ordered by (org_id, id)
+    # (migration 027). ``insert_repo`` always writes a fresh row per sync
+    # rather than short-circuiting on an existing row (CHAOS-1775), so
+    # multiple logical versions of the same (org_id, id) routinely coexist
+    # until a background merge collapses them -- a plain ``SELECT *`` here
+    # returns those pre-merge duplicates as separate DiscoveredRepo entries,
+    # causing duplicate per-project fetches downstream (CHAOS-2787). Dedup
+    # server-side to the latest row per (org_id, id) via argMax(*, last_synced)
+    # rather than relying on background merges or FINAL.
+    #
+    # All three projected columns (repo, settings, provider) MUST come from
+    # the SAME winning physical row. Three independent
+    # argMax(col, last_synced) aggregates each pick a tied-row winner
+    # *independently* when two versions share the exact same last_synced --
+    # realistic here, since ``last_synced`` is only DateTime64(3) and
+    # ``insert_repo`` stamps it from ``datetime.now()``, so rapid re-syncs of
+    # the same (org_id, id) can land in the same millisecond. That would let
+    # discover_repos synthesize a Frankenstein row (e.g. a new repo name with
+    # a stale provider). Instead, collapse to a SINGLE
+    # ``argMax(tuple(repo, settings, provider), last_synced)`` -- exactly one
+    # row is chosen as "latest", and the three values are unwrapped from that
+    # one row via ``tupleElement``, guaranteeing internal consistency. Ties
+    # resolve to an arbitrary but internally-consistent version (matching
+    # ReplacingMergeTree's own tie semantics); a deterministic tie-breaker
+    # beyond that is not required here.
+    #
+    # ``settings`` is Nullable(String): a bare argMax(settings, last_synced)
+    # SKIPS NULL values entirely, so an older *non-NULL* settings value would
+    # incorrectly mask a genuinely NULL settings value on the latest row.
+    # Wrapping the whole projection in tuple(...) sidesteps this too -- the
+    # outer tuple is never NULL itself even when its ``settings`` element is,
+    # so argMax compares/carries it correctly, and tupleElement(...) then
+    # unwraps each value, NULL and all.
     try:
-        query = "SELECT id, repo, settings, provider FROM repos"
+        query = (
+            "SELECT id, "
+            "tupleElement(latest, 1) AS repo, "
+            "tupleElement(latest, 2) AS settings, "
+            "tupleElement(latest, 3) AS provider "
+            "FROM ("
+            "SELECT id, "
+            "argMax(tuple(repo, settings, provider), last_synced) AS latest "
+            "FROM repos"
+        )
         params: dict[str, str] = {}
         if org_id:
             query += " WHERE org_id = {org_id:String}"
             params["org_id"] = org_id
+        query += " GROUP BY org_id, id)"
         rows = primary_sink.client.query(query, parameters=params).result_rows
         return [
             DiscoveredRepo(
                 repo_id=uuid.UUID(str(r[0])),
                 full_name=r[1],
                 source=r[3] if len(r) > 3 and r[3] != "unknown" else provider,
-                settings=r[2] or {},
+                settings=_parse_repo_settings(r[2]),
             )
             for r in rows
         ]
     except Exception as exc:
         logger.warning("Repo discovery failed: %s", exc)
         return []
+
+
+def _parse_repo_settings(raw: object) -> dict[str, Any]:
+    """Parse the ClickHouse ``repos.settings`` column into a dict.
+
+    ``settings`` is stored as a JSON string (Nullable(String)); the
+    ``DiscoveredRepo.settings: dict[str, object]`` annotation was previously
+    lying — this returned the raw string unparsed, so any per-provider match
+    on a settings key (e.g. CHAOS-2763's gitlab ``project_id`` scoping) would
+    always miss on production data. ``None``/malformed JSON/a non-dict JSON
+    value all yield ``{}`` so downstream numeric-id matching fails closed
+    instead of raising.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 # Backward-compat alias used by job_dora and job_work_items
@@ -990,6 +1058,7 @@ async def run_daily_metrics_job(
         wi_metrics: list[Any] = []
         wi_user_metrics: list[Any] = []
         wi_cycle_times: list[Any] = []
+        estimate_coverage_metrics: list[Any] = []
         wi_team_attributions: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
@@ -1006,6 +1075,15 @@ async def run_daily_metrics_job(
                 )
             )
             wi_team_attributions = compute_work_item_team_attributions(
+                work_items=work_items,
+                computed_at=computed_at,
+                team_resolver=team_resolver,
+                project_key_resolver=project_key_resolver,
+                linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
+            )
+            estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
+                day=d,
                 work_items=work_items,
                 computed_at=computed_at,
                 team_resolver=team_resolver,
@@ -1231,6 +1309,8 @@ async def run_daily_metrics_job(
             s.write_team_metrics(team_metrics)
             if wi_metrics:
                 s.write_work_item_metrics(wi_metrics)
+            if estimate_coverage_metrics:
+                s.write_estimate_coverage_metrics(estimate_coverage_metrics)
             if wi_user_metrics:
                 s.write_work_item_user_metrics(wi_user_metrics)
             if wi_cycle_times:

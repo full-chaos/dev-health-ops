@@ -63,7 +63,12 @@ async def _populate_async(
     scope: dict[str, Any],
     team_store: Any | None = None,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     if not _provider_capable():
+        if strict:
+            raise ValueError(
+                "GitLab is not import-capable for strict reference discovery"
+            )
         return _zero_summary(org_id=org_id, reason="provider_not_import_capable")
 
     token = _first_string(credentials, "token", "access_token", "private_token")
@@ -73,6 +78,10 @@ async def _populate_async(
         or DEFAULT_GITLAB_URL
     )
     if not token or not group_path:
+        if strict:
+            raise ValueError(
+                "missing GitLab credentials or group for strict reference discovery"
+            )
         return _zero_summary(
             org_id=org_id, reason="missing_gitlab_credentials_or_group"
         )
@@ -85,6 +94,8 @@ async def _populate_async(
             url=url,
         )
     except Exception as exc:
+        if strict:
+            raise
         logger.info(
             "Skipping GitLab team auto-import for org_id=%s group=%s: discovery failed: %s",
             org_id,
@@ -111,6 +122,7 @@ async def _populate_async(
         teams=teams,
         now=now,
         resolver=resolver,
+        strict=strict,
     )
     sink = _sink(scope)
     membership_rows = await _split_memberships_for_review(
@@ -137,6 +149,8 @@ async def _populate_async(
 
     summary: dict[str, Any] = {
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [],
         "projects_imported": len({row.project_id for row in project_rows}),
         "members_imported": len({row.member_id for row in membership_rows}),
         "team_memberships_imported": len(membership_rows),
@@ -255,6 +269,7 @@ async def _membership_rows(
     teams: Iterable[Any],
     now: datetime,
     resolver: IdentityResolver,
+    strict: bool,
 ) -> tuple[list[TeamMembershipRecord], dict[str, list[str]], set[tuple[str, str]]]:
     service = TeamMembershipService(session=cast(Any, None), org_id=org_id)
     rows: list[TeamMembershipRecord] = []
@@ -271,6 +286,8 @@ async def _membership_rows(
                 url=url,
             )
         except Exception as exc:
+            if strict:
+                raise
             logger.info(
                 "Skipping GitLab membership import for org_id=%s group=%s: %s",
                 org_id,
@@ -292,10 +309,9 @@ async def _membership_rows(
             # facets[0] is the alias-resolved identity (canonical email when the
             # gitlab:<username> is aliased, else gitlab:<username>) — the facet a
             # no-email assignee resolves to. It goes into raw_provider_user_id
-            # (the only member_by_identity slot free; member_id is the PK and
-            # keeps the bare username) AND, with the provider-qualified id, into
-            # the teams.members roster so BOTH attribution paths match aliased and
-            # non-aliased members (CHAOS-2609).
+            # (member_id is the PK and keeps the bare username), identity_facets,
+            # AND the teams.members roster so BOTH attribution paths match
+            # aliased and non-aliased members (CHAOS-2609, CHAOS-2625).
             facets = resolver.membership_facets(
                 provider=PROVIDER,
                 username=raw_identity,
@@ -313,6 +329,7 @@ async def _membership_rows(
                     member_id=member_id,
                     raw_provider_user_id=facets[0],
                     raw_email=getattr(member, "email", None),
+                    identity_facets=facets,
                     source="provider_access",
                     is_primary=0,
                     specificity=BASE_SPECIFICITY,
@@ -337,7 +354,10 @@ def _roster_from_memberships(
     roster: dict[str, list[str]] = {}
     for row in rows:
         roster_for_team = roster.setdefault(str(row.team_id), [])
-        for value in (row.raw_provider_user_id, row.raw_email):
+        values = tuple(row.identity_facets) or tuple(
+            value for value in (row.raw_provider_user_id, row.raw_email) if value
+        )
+        for value in values:
             if value and value not in roster_for_team:
                 roster_for_team.append(str(value))
     return roster

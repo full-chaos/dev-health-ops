@@ -17,6 +17,35 @@ def _counting(counter: dict[str, Any], key: str, value: Any):
     return _inner
 
 
+def _async_counting(counter: dict[str, Any], key: str, value: Any):
+    async def _inner(*args: Any, **kwargs: Any) -> Any:
+        counter[key] = counter.get(key, 0) + 1
+        return value
+
+    return _inner
+
+
+async def _fake_fetch_github_repo_info(connector, owner, repo_name, usage_sink=None):
+    """Mirror ``_fetch_github_repo_info_async``'s field mapping so tests keep
+    exercising ``_FakeGitHubConnector.github.get_repo`` without a real
+    ``GitHubCodeClient`` (these fixtures pin PyGithub-shaped attribute names).
+    """
+    gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
+    return github.Repository(
+        id=gh_repo.id,
+        name=gh_repo.name,
+        full_name=gh_repo.full_name,
+        default_branch=gh_repo.default_branch,
+        description=gh_repo.description,
+        url=gh_repo.html_url,
+        created_at=gh_repo.created_at,
+        updated_at=gh_repo.updated_at,
+        language=gh_repo.language,
+        stars=gh_repo.stargazers_count,
+        forks=gh_repo.forks_count,
+    )
+
+
 class _SimpleRepository:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -68,6 +97,20 @@ class _FakeGitLabConnector:
         return None
 
 
+class _FakeGitLabProjectInfoClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get_project(self, project_id):
+        return _fake_gitlab_project()
+
+    def drain_usage_observations(self):
+        return []
+
+
 def _fake_github_repo():
     return SimpleNamespace(
         id=1,
@@ -105,6 +148,14 @@ def _disable_non_git_flags() -> dict[str, Any]:
     )
 
 
+def _patch_gitlab_project_info(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gitlab,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: _FakeGitLabProjectInfoClient(),
+    )
+
+
 def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
     calls: dict[str, Any] = {"commits": 0, "stats": 0, "backfill": []}
 
@@ -113,14 +164,17 @@ def test_github_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
     monkeypatch.setattr(github, "Repository", _SimpleRepository)
     monkeypatch.setattr(github, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
-        github,
-        "_fetch_github_commits_sync",
-        _counting(calls, "commits", (["raw-sha"], ["commit-row"])),
+        github, "_fetch_github_repo_info_async", _fake_fetch_github_repo_info
     )
     monkeypatch.setattr(
         github,
-        "_fetch_github_commit_stats_sync",
-        _counting(calls, "stats", ["stat-row"]),
+        "_fetch_github_commits_async",
+        _async_counting(calls, "commits", (["raw-sha"], ["commit-row"], False)),
+    )
+    monkeypatch.setattr(
+        github,
+        "_fetch_github_commit_stats_async",
+        _async_counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):
@@ -157,14 +211,17 @@ def test_github_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
     monkeypatch.setattr(github, "Repository", _SimpleRepository)
     monkeypatch.setattr(github, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
-        github,
-        "_fetch_github_commits_sync",
-        _counting(calls, "commits", (["raw-sha"], ["commit-row"])),
+        github, "_fetch_github_repo_info_async", _fake_fetch_github_repo_info
     )
     monkeypatch.setattr(
         github,
-        "_fetch_github_commit_stats_sync",
-        _counting(calls, "stats", ["stat-row"]),
+        "_fetch_github_commits_async",
+        _async_counting(calls, "commits", (["raw-sha"], ["commit-row"], False)),
+    )
+    monkeypatch.setattr(
+        github,
+        "_fetch_github_commit_stats_async",
+        _async_counting(calls, "stats", ["stat-row"]),
     )
 
     async def fake_backfill(**kwargs):
@@ -250,6 +307,7 @@ def test_gitlab_commits_run_does_not_fetch_stats_files_or_blame(monkeypatch):
 
     monkeypatch.setattr(gitlab, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(gitlab, "GitLabConnector", _FakeGitLabConnector)
+    _patch_gitlab_project_info(monkeypatch)
     monkeypatch.setattr(gitlab, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
         gitlab,
@@ -293,6 +351,7 @@ def test_gitlab_granular_stats_files_blame_and_legacy_bundle(monkeypatch):
 
     monkeypatch.setattr(gitlab, "CONNECTORS_AVAILABLE", True)
     monkeypatch.setattr(gitlab, "GitLabConnector", _FakeGitLabConnector)
+    _patch_gitlab_project_info(monkeypatch)
     monkeypatch.setattr(gitlab, "IngestionSink", _FakeSink)
     monkeypatch.setattr(
         gitlab,

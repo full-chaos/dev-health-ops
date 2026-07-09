@@ -16,6 +16,7 @@ from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
@@ -24,7 +25,7 @@ from dev_health_ops.models import (
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.users import Organization
 from dev_health_ops.sync.dispatch_outbox import (
-    OUTBOX_KIND_DISPATCH,
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
@@ -136,7 +137,12 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     units = _planned_units(db_session, plan.sync_run_id)
     outbox = (
         db_session.query(SyncDispatchOutbox)
-        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+        .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISCOVERY)
+        .one()
+    )
+    discovery = (
+        db_session.query(SyncRunReferenceDiscovery)
+        .filter_by(sync_run_id=plan.sync_run_id)
         .one()
     )
 
@@ -154,6 +160,90 @@ def test_enabled_sources_and_enabled_datasets_fan_out_to_units(db_session):
     assert {unit.mode for unit in units} == {SyncRunMode.INCREMENTAL.value}
     assert outbox.status == OUTBOX_STATUS_PENDING
     assert outbox.claim_token is None
+    assert discovery.status == "planned"
+    assert discovery.org_id == ORG_ID
+
+
+def test_plan_sync_run_rejects_plan_over_unit_cap(db_session, monkeypatch):
+    """An oversized plan is rejected BEFORE anything is persisted.
+
+    Without the plan-time cap check the run + all its units are persisted,
+    DispatchGuard hard-denies asynchronously, and the caller only learns
+    from a FAILED run after the 202 (the '1872/1000' backfill bug).
+    """
+    from dev_health_ops.sync.planner import SyncPlanUnitCapExceededError
+
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "3")
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health-web")
+    _create_dataset(db_session, integration, "commits")
+    _create_dataset(db_session, integration, "prs")
+
+    with pytest.raises(SyncPlanUnitCapExceededError) as excinfo:
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="manual",
+                before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+            ),
+        )
+
+    assert excinfo.value.planned_units == 4
+    assert excinfo.value.total_cap == 3
+    assert "4/3" in str(excinfo.value)
+    # Fail-fast means NOTHING was persisted: no run, no units, no outbox row.
+    assert db_session.query(SyncRun).count() == 0
+    assert db_session.query(SyncRunUnit).count() == 0
+    assert db_session.query(SyncDispatchOutbox).count() == 0
+    assert db_session.query(SyncRunReferenceDiscovery).count() == 0
+
+
+def test_planner_stamps_single_credential_per_run(db_session):
+    """CHAOS-2755: plan_sync_run stamps credential_id + fingerprint + auth_source
+    ONCE on the SyncRun, and neither PlannedUnit nor SyncRunUnit gains a
+    credential field (credentials are auth state, never dispatch capacity)."""
+    import dataclasses
+
+    from dev_health_ops.credentials.fingerprint import AUTH_SOURCE_ENVIRONMENT
+    from dev_health_ops.sync.planner import PlannedUnit
+
+    integration = _create_integration(db_session)  # env auth (credential_id=None)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health-web")
+    _create_dataset(db_session, integration, "commits")
+    _create_dataset(db_session, integration, "prs")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    sync_run = db_session.get(SyncRun, plan.sync_run_id)
+    assert sync_run is not None
+    # Stamped exactly once, on the run.
+    assert sync_run.auth_source == AUTH_SOURCE_ENVIRONMENT
+    assert sync_run.credential_id is None  # environment auth
+    assert isinstance(sync_run.credential_fingerprint, str)
+    assert len(sync_run.credential_fingerprint) == 64  # sha256 hex digest
+
+    # The run-level columns exist ONLY on sync_runs, never on sync_run_units.
+    unit_columns = set(SyncRunUnit.__table__.columns.keys())
+    assert "credential_id" not in unit_columns
+    assert "credential_fingerprint" not in unit_columns
+    assert "auth_source" not in unit_columns
+
+    # PlannedUnit likewise carries no credential field.
+    planned_fields = {f.name for f in dataclasses.fields(PlannedUnit)}
+    assert not any("credential" in name for name in planned_fields)
 
 
 def test_unsupported_provider_dataset_pairs_are_skipped(db_session):
@@ -466,15 +556,15 @@ def test_existing_watermark_incremental_unchanged(db_session):
 
 
 def test_none_watermark_behavior_incremental_keeps_since_at_none(db_session):
-    """NONE-behavior datasets (repo-metadata, work-item-labels, etc.) must
-    keep since_at=None on incremental — cold-start depth must NOT be applied.
+    """NONE-behavior datasets (repo-metadata only) must keep since_at=None on
+    incremental — cold-start depth must NOT be applied.
     """
     integration = _create_integration(db_session)
     integration.config = {"initial_sync_depth": 30}
     db_session.flush()
     _create_source(db_session, integration, external_id="full-chaos/dev-health")
-    # work-item-labels has WatermarkBehavior.NONE
-    _create_dataset(db_session, integration, "work-item-labels")
+    # repo-metadata is the only remaining WatermarkBehavior.NONE dataset
+    _create_dataset(db_session, integration, "repo-metadata")
 
     plan = plan_sync_run(
         db_session,
@@ -489,7 +579,7 @@ def test_none_watermark_behavior_incremental_keeps_since_at_none(db_session):
     units = _planned_units(db_session, plan.sync_run_id)
     assert len(units) == 1
     assert units[0].since_at is None, (
-        "NONE-behavior dataset must keep since_at=None on incremental, "
+        "NONE-behavior dataset (repo-metadata) must keep since_at=None on incremental, "
         "not receive a cold-start depth window"
     )
 
@@ -648,6 +738,7 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
                 IntegrationSource,
                 IntegrationDataset,
                 SyncRun,
+                SyncRunReferenceDiscovery,
                 SyncRunUnit,
                 SyncDispatchOutbox,
                 SyncWatermark,
@@ -711,7 +802,7 @@ def test_postgres_missing_tier_limits_stays_inside_planner_savepoint():
             units = _planned_units(session, plan.sync_run_id)
             outbox = (
                 session.query(SyncDispatchOutbox)
-                .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISPATCH)
+                .filter_by(sync_run_id=plan.sync_run_id, kind=OUTBOX_KIND_DISCOVERY)
                 .one()
             )
             assert run is not None
@@ -908,3 +999,533 @@ def test_github_work_items_unit_omits_prs_signal_when_prs_disabled(db_session):
     assert work_items_units
     for unit in work_items_units:
         assert (unit.processor_flags or {}).get("sync_prs") is False
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2707: work-item-labels / work-item-projects are now INCREMENTAL
+# ---------------------------------------------------------------------------
+
+
+def test_work_item_labels_incremental_cold_start_uses_depth(db_session):
+    """work-item-labels has WatermarkBehavior.INCREMENTAL (CHAOS-2707).
+
+    With no saved watermark, since_at must equal now - initial_sync_depth,
+    not None.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session, provider="github")
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "work-item-labels")
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None, (
+        "work-item-labels must use cold-start depth (INCREMENTAL), not since_at=None"
+    )
+    expected_start = now - timedelta(days=30)
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    assert abs((since - expected_start).total_seconds()) < 2
+
+
+def test_work_item_projects_incremental_cold_start_uses_depth(db_session):
+    """work-item-projects has WatermarkBehavior.INCREMENTAL (CHAOS-2707).
+
+    With no saved watermark, since_at must equal now - initial_sync_depth,
+    not None.
+    """
+    from datetime import timedelta
+
+    integration = _create_integration(db_session, provider="jira")
+    integration.config = {"initial_sync_depth": 14}
+    db_session.flush()
+    _create_source(db_session, integration, external_id="jira-project", provider="jira")
+    _create_dataset(db_session, integration, "work-item-projects")
+
+    now = datetime.now(timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None, (
+        "work-item-projects must use cold-start depth (INCREMENTAL), not since_at=None"
+    )
+    expected_start = now - timedelta(days=14)
+    since = units[0].since_at.replace(tzinfo=timezone.utc)
+    assert abs((since - expected_start).total_seconds()) < 2
+
+
+def test_work_item_labels_incremental_uses_saved_watermark(db_session):
+    """work-item-labels: when a watermark exists, since_at == watermark (CHAOS-2707).
+
+    Proves the saved watermark is honoured, not overridden by cold-start depth.
+    """
+    integration = _create_integration(db_session, provider="github")
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, "work-item-labels")
+    watermark = datetime(2026, 6, 15, 8, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, "work-item-labels", watermark)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None
+    assert units[0].since_at.replace(tzinfo=timezone.utc) == watermark
+
+
+def test_work_item_projects_incremental_uses_saved_watermark(db_session):
+    """work-item-projects: when a watermark exists, since_at == watermark (CHAOS-2707).
+
+    Proves the saved watermark is honoured, not overridden by cold-start depth.
+    """
+    integration = _create_integration(db_session, provider="jira")
+    integration.config = {"initial_sync_depth": 30}
+    db_session.flush()
+    source = _create_source(
+        db_session, integration, external_id="jira-project", provider="jira"
+    )
+    _create_dataset(db_session, integration, "work-item-projects")
+    watermark = datetime(2026, 6, 10, 0, 0, tzinfo=timezone.utc)
+    set_watermark(
+        db_session, ORG_ID, source.external_id, "work-item-projects", watermark
+    )
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None
+    assert units[0].since_at.replace(tzinfo=timezone.utc) == watermark
+
+
+def test_repo_metadata_still_none_watermark_behavior(db_session):
+    """repo-metadata remains WatermarkBehavior.NONE after CHAOS-2707.
+
+    Regression guard: removing work-item-labels/projects from _NO_WATERMARK_DATASETS
+    must not accidentally change repo-metadata.
+    """
+    from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
+
+    spec = get_dataset_spec("github", "repo-metadata")
+    assert spec is not None
+    assert spec.watermark_behavior == WatermarkBehavior.NONE
+
+
+def test_work_item_labels_and_projects_are_incremental_behavior(db_session):
+    """Registry-level assertion: both datasets now carry WatermarkBehavior.INCREMENTAL.
+
+    Covers all providers that support these datasets.
+    """
+    from dev_health_ops.sync.datasets import WatermarkBehavior, get_dataset_spec
+
+    for provider in ("github", "gitlab", "jira", "linear"):
+        for dataset_key in ("work-item-labels", "work-item-projects"):
+            spec = get_dataset_spec(provider, dataset_key)
+            assert spec is not None, f"{provider}/{dataset_key} not in registry"
+            assert spec.watermark_behavior == WatermarkBehavior.INCREMENTAL, (
+                f"{provider}/{dataset_key} must be INCREMENTAL after CHAOS-2707, "
+                f"got {spec.watermark_behavior}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2710: Linear backfill chunk policy
+# ---------------------------------------------------------------------------
+
+
+def test_linear_work_item_backfill_produces_bounded_windows(db_session, monkeypatch):
+    """Large Linear work-item backfill is split into windows <= LINEAR_BACKFILL_MAX_WINDOW_DAYS.
+
+    A 90-day range with the default 14-day max must produce 7 chunks, each at most
+    14 days wide. Non-Linear providers with the same range keep the 7-day default.
+    """
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    _create_dataset(db_session, integration, "work-items")
+
+    since = datetime(2026, 3, 2, tzinfo=timezone.utc)
+    before = datetime(2026, 5, 30, 23, 59, 59, tzinfo=timezone.utc)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 7, f"expected 7 fortnightly chunks, got {len(units)}"
+    for unit in units:
+        assert unit.since_at is not None
+        assert unit.before_at is not None
+        window_days = (unit.before_at.date() - unit.since_at.date()).days + 1
+        assert window_days <= 14, (
+            f"Linear work-item backfill window too wide: {window_days} days"
+            f" (since={unit.since_at.date()}, before={unit.before_at.date()})"
+        )
+    assert {unit.mode for unit in units} == {SyncRunMode.BACKFILL.value}
+
+
+def test_linear_work_item_backfill_env_override_respected(db_session, monkeypatch):
+    """LINEAR_BACKFILL_MAX_WINDOW_DAYS env override is applied to Linear work-item chunks."""
+    monkeypatch.setenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", "5")
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-2", provider="linear"
+    )
+    _create_dataset(db_session, integration, "work-item-history")
+
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 5, 20, 23, 59, 59, tzinfo=timezone.utc)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) > 0
+    for unit in units:
+        assert unit.since_at is not None
+        assert unit.before_at is not None
+        window_days = (unit.before_at.date() - unit.since_at.date()).days + 1
+        assert window_days <= 5, (
+            f"Linear work-item-history window too wide with env=5: {window_days} days"
+        )
+
+
+def test_non_linear_backfill_keeps_seven_day_chunks(db_session, monkeypatch):
+    """Non-Linear providers are unaffected by the Linear chunk policy.
+
+    A 14-day github backfill must still produce 2 chunks of 7 days each.
+    """
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="owner/repo", provider="github")
+    _create_dataset(db_session, integration, "work-items")
+
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    before = datetime(2026, 6, 14, 23, 59, 59, tzinfo=timezone.utc)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 2, (
+        f"Expected 2 chunks for 14-day github backfill, got {len(units)}"
+    )
+    windows = set()
+    for u in units:
+        assert u.since_at is not None and u.before_at is not None
+        windows.add((u.since_at.date(), u.before_at.date()))
+    assert windows == {
+        (datetime(2026, 6, 1).date(), datetime(2026, 6, 7).date()),
+        (datetime(2026, 6, 8).date(), datetime(2026, 6, 14).date()),
+    }
+
+
+def test_linear_backfill_units_never_write_watermarks(db_session, monkeypatch):
+    """Regression: Linear backfill units must carry mode=backfill and no watermark.
+
+    Mirrors the invariant in test_sync_units.py::test_run_sync_unit_success_skips_watermark_for_backfill.
+    The planner side of the contract: all units produced for a Linear backfill
+    carry mode='backfill', which is the gate the worker checks before writing
+    watermarks (workers/sync_units.py:401-408). This test asserts the planner
+    never emits a non-backfill mode for a backfill request, and that no
+    SyncWatermark rows exist after planning (planning never writes watermarks).
+    """
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-3", provider="linear"
+    )
+    for dataset_key in (
+        "work-items",
+        "work-item-labels",
+        "work-item-projects",
+        "work-item-history",
+        "work-item-comments",
+    ):
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            before=datetime(2026, 5, 10, 23, 59, 59, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) > 0
+    # All units must carry mode=backfill — the worker gate reads this field.
+    assert all(u.mode == SyncRunMode.BACKFILL.value for u in units), (
+        "All Linear backfill units must carry mode=backfill"
+    )
+    # Planning must never write watermarks.
+    assert db_session.query(SyncWatermark).count() == 0, (
+        "plan_sync_run must not write any SyncWatermark rows"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2721 (AD-3): work-item-family plan-time collapse
+# ---------------------------------------------------------------------------
+
+_FAMILY_DATASETS = (
+    "work-items",
+    "work-item-labels",
+    "work-item-projects",
+    "work-item-history",
+    "work-item-comments",
+)
+
+
+def test_work_item_family_collapses_to_single_composite_unit(db_session):
+    """Enabling all five work-item-family datasets emits ONE composite unit
+    (canonical dataset_key="work-items") with a boolean family_dataset_<key>
+    flag per enabled dataset, instead of five units each re-running the full
+    crawl (CHAOS-2721)."""
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1, f"expected ONE composite work-items unit, got {len(units)}"
+    unit = units[0]
+    assert unit.dataset_key == "work-items"
+    flags = unit.processor_flags or {}
+    for dataset_key in _FAMILY_DATASETS:
+        flag = "family_dataset_" + dataset_key.replace("-", "_")
+        assert flags.get(flag) is True, f"{flag} must be set on the composite unit"
+
+
+def test_work_item_family_collapse_uses_earliest_window_across_datasets(db_session):
+    """The composite unit's since_at is the EARLIEST watermark across enabled
+    family datasets, so the single crawl covers every dataset (over-fetch is
+    safe; CHAOS-2721 / AD-3)."""
+    integration = _create_integration(db_session, provider="linear")
+    source = _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    _create_dataset(db_session, integration, "work-items")
+    _create_dataset(db_session, integration, "work-item-comments")
+    # work-items synced more recently than comments -> comments is the laggard.
+    newer = datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc)
+    older = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, "work-items", newer)
+    set_watermark(db_session, ORG_ID, source.external_id, "work-item-comments", older)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].since_at is not None
+    assert units[0].since_at.replace(tzinfo=timezone.utc) == older
+
+
+@pytest.mark.parametrize(
+    "provider, external_id",
+    [
+        ("github", "full-chaos/dev-health"),
+        ("gitlab", "group/project"),
+        ("jira", "jira-project"),
+        ("linear", "linear-team-1"),
+    ],
+)
+def test_work_item_family_collapse_provider_matrix(db_session, provider, external_id):
+    """Family collapse is provider-agnostic: all four providers collapse the
+    enabled family to a single composite unit (provider x entity contract)."""
+    integration = _create_integration(db_session, provider=provider)
+    _create_source(db_session, integration, external_id=external_id, provider=provider)
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert len(work_item_units) == 1
+    assert work_item_units[0].dataset_key == "work-items"
+
+
+def test_work_item_family_collapse_backfill_one_composite_per_chunk(
+    db_session, monkeypatch
+):
+    """A Linear backfill enabling all five family datasets produces ONE composite
+    unit per chunk (7 for a 90-day/14-day backfill), not 5x7=35 (CHAOS-2721)."""
+    monkeypatch.delenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", raising=False)
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(
+        db_session, integration, external_id="linear-team-1", provider="linear"
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    since = datetime(2026, 3, 2, tzinfo=timezone.utc)
+    before = datetime(2026, 5, 30, 23, 59, 59, tzinfo=timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="test",
+            since=since,
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 7, f"expected 7 composite chunks, got {len(units)}"
+    assert {u.dataset_key for u in units} == {"work-items"}
+
+
+def test_github_family_composite_carries_prs_signal_alongside_code_unit(db_session):
+    """github: the composite work-items unit carries sync_prs while the PRS code
+    dataset remains its own unit (collapse only folds the work-item family)."""
+    integration = _create_integration(db_session, provider="github")
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+    _create_dataset(db_session, integration, "prs")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    work_items = [u for u in units if u.dataset_key == "work-items"]
+    prs_units = [u for u in units if u.dataset_key == "prs"]
+    assert len(work_items) == 1
+    assert (work_items[0].processor_flags or {}).get("sync_prs") is True
+    assert len(prs_units) == 1
+
+
+def test_merge_family_windows_rejects_mismatched_window_counts():
+    """The index-aligned merge assumes every enabled family dataset resolves to
+    the same number of windows; a mismatch is a planner invariant violation and
+    must fail fast rather than silently dropping windows."""
+    from dev_health_ops.sync.planner import _merge_family_windows
+
+    a = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    b = datetime(2026, 6, 2, 0, 0, tzinfo=timezone.utc)
+    c = datetime(2026, 6, 3, 0, 0, tzinfo=timezone.utc)
+    d = datetime(2026, 6, 4, 0, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="mismatched window counts"):
+        _merge_family_windows([((a, b),), ((a, b), (c, d))])

@@ -9,39 +9,36 @@ import asyncio
 import hashlib
 import json
 import logging
-import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass
-from queue import Empty as QueueEmpty
-from queue import Queue
 from typing import Any
 
 import valkey as redis
 
 from dev_health_ops.connectors.models import (
-    Author,
-    CommitStats,
-    FileBlame,
-    Organization,
-    PullRequest,
     Repository,
     RepoStats,
 )
-from dev_health_ops.connectors.utils.rate_limit_queue import (
-    RateLimitConfig,
-    RateLimitGate,
-)
+from dev_health_ops.exceptions import RateLimitException as _RootRateLimitException
 
 logger = logging.getLogger(__name__)
 
 
-class RateLimitException(Exception):
-    """Exception raised when API rate limit is reached."""
+class RateLimitException(_RootRateLimitException):
+    """Rate-limit error raised by the legacy Git connectors.
 
-    def __init__(self, message: str, retry_after_seconds: float | None = None):
-        super().__init__(message)
-        self.retry_after_seconds = retry_after_seconds
+    Subclasses the root :class:`dev_health_ops.exceptions.RateLimitException` so a
+    rate limit raised deep in a legacy connector (``connectors/gitlab.py``) is
+    caught by the worker deferral branch in ``workers/sync_units.py`` and deferred
+    as retryable work, instead of falling through to the generic ``Exception``
+    handler and becoming a FAILED unit (the class-split bug this fixes).
+
+    Kept as a *distinct* subclass rather than a plain alias so the
+    ``retry_with_backoff(exceptions=(RateLimitException, ...))`` decorator sites
+    in the legacy connectors keep referencing it by identity and retain their
+    existing in-connector retry semantics. The constructor is inherited from the
+    root (``message``, ``retry_after_seconds``, keyword-only ``signal``).
+    """
 
 
 @dataclass
@@ -95,129 +92,6 @@ class GitConnector(ABC):
         return self._concurrency_semaphore
 
     @abstractmethod
-    def list_organizations(
-        self,
-        max_orgs: int | None = None,
-    ) -> list[Organization]:
-        """
-        List organizations/groups accessible to the authenticated user.
-
-        :param max_orgs: Maximum number of organizations to retrieve.
-        :return: List of Organization objects.
-        """
-        pass
-
-    @abstractmethod
-    def list_repositories(
-        self,
-        org_name: str | None = None,
-        user_name: str | None = None,
-        search: str | None = None,
-        pattern: str | None = None,
-        max_repos: int | None = None,
-    ) -> list[Repository]:
-        """
-        List repositories for an organization, user, or search query.
-
-        :param org_name: Optional organization name.
-        :param user_name: Optional user name.
-        :param search: Optional search query.
-        :param pattern: Optional fnmatch-style pattern to filter repositories.
-        :param max_repos: Maximum number of repositories to retrieve.
-        :return: List of Repository objects.
-        """
-        pass
-
-    @abstractmethod
-    def get_contributors(
-        self,
-        owner: str,
-        repo: str,
-        max_contributors: int | None = None,
-    ) -> list[Author]:
-        """
-        Get contributors for a repository.
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param max_contributors: Maximum number of contributors to retrieve.
-        :return: List of Author objects.
-        """
-        pass
-
-    @abstractmethod
-    def get_commit_stats(
-        self,
-        owner: str,
-        repo: str,
-        sha: str,
-    ) -> CommitStats:
-        """
-        Get statistics for a specific commit.
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param sha: Commit SHA.
-        :return: CommitStats object.
-        """
-        pass
-
-    @abstractmethod
-    def get_repo_stats(
-        self,
-        owner: str,
-        repo: str,
-        max_commits: int | None = None,
-    ) -> RepoStats:
-        """
-        Get aggregated statistics for a repository.
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param max_commits: Maximum number of commits to analyze.
-        :return: RepoStats object.
-        """
-        pass
-
-    @abstractmethod
-    def get_pull_requests(
-        self,
-        owner: str,
-        repo: str,
-        state: str = "all",
-        max_prs: int | None = None,
-    ) -> list[PullRequest]:
-        """
-        Get pull requests/merge requests for a repository.
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param state: State filter ('open', 'closed', 'all').
-        :param max_prs: Maximum number of pull requests to retrieve.
-        :return: List of PullRequest objects.
-        """
-        pass
-
-    @abstractmethod
-    def get_file_blame(
-        self,
-        owner: str,
-        repo: str,
-        path: str,
-        ref: str = "HEAD",
-    ) -> FileBlame:
-        """
-        Get blame information for a file.
-
-        :param owner: Repository owner.
-        :param repo: Repository name.
-        :param path: File path within the repository.
-        :param ref: Git reference (branch, tag, or commit SHA).
-        :return: FileBlame object.
-        """
-        pass
-
-    @abstractmethod
     def close(self) -> None:
         """Close the connector and cleanup resources."""
         pass
@@ -269,177 +143,6 @@ class GitConnector(ABC):
             logger.debug(f"Cache store: {key}")
         except Exception as e:
             logger.warning(f"Cache storage error for {key}: {e}")
-
-    def _get_repositories_for_processing(
-        self,
-        org_name: str | None = None,
-        user_name: str | None = None,
-        pattern: str | None = None,
-        max_repos: int | None = None,
-    ) -> list[Repository]:
-        """Standard implementation of repository discovery for batch processing."""
-        effective_org = org_name
-        effective_user = user_name
-
-        if not org_name and not user_name and pattern:
-            if "/" in pattern:
-                parts = pattern.split("/", 1)
-                owner_part = parts[0]
-                if owner_part and "*" not in owner_part and "?" not in owner_part:
-                    effective_user = owner_part
-                    logger.info(
-                        f"Extracted owner '{owner_part}' from pattern '{pattern}'"
-                    )
-
-        return self.list_repositories(
-            org_name=effective_org,
-            user_name=effective_user,
-            pattern=pattern,
-            max_repos=max_repos,
-        )
-
-    def _process_single_repo_stats(
-        self,
-        repo: Repository,
-        max_commits: int | None = None,
-    ) -> BatchResult:
-        """Standard implementation of single repository processing."""
-        try:
-            parts = repo.full_name.split("/")
-            if len(parts) != 2:
-                return BatchResult(
-                    repository=repo,
-                    error=f"Invalid repository name: {repo.full_name}",
-                    success=False,
-                )
-
-            owner, repo_name = parts
-            stats = self.get_repo_stats(owner, repo_name, max_commits=max_commits)
-
-            return BatchResult(
-                repository=repo,
-                stats=stats,
-                success=True,
-            )
-        except RateLimitException:
-            raise
-        except Exception as e:
-            logger.warning(f"Failed to get stats for {repo.full_name}: {e}")
-            return BatchResult(
-                repository=repo,
-                error=str(e),
-                success=False,
-            )
-
-    def get_repos_with_stats(
-        self,
-        org_name: str | None = None,
-        user_name: str | None = None,
-        pattern: str | None = None,
-        batch_size: int = 10,
-        max_concurrent: int = 4,
-        rate_limit_delay: float = 1.0,
-        max_commits_per_repo: int | None = None,
-        max_repos: int | None = None,
-        on_repo_complete: Callable[[BatchResult], None] | None = None,
-    ) -> list[BatchResult]:
-        """Standard implementation of batch repository processing."""
-        repos = self._get_repositories_for_processing(
-            org_name=org_name,
-            user_name=user_name,
-            pattern=pattern,
-            max_repos=max_repos,
-        )
-
-        logger.info(
-            f"Processing {len(repos)} repositories with batch_size={batch_size}"
-        )
-        results: list[BatchResult] = []
-
-        for batch_start in range(0, len(repos), batch_size):
-            batch_end = min(batch_start + batch_size, len(repos))
-            batch = repos[batch_start:batch_end]
-
-            work_q: Queue[Repository] = Queue()
-            for repo in batch:
-                work_q.put(repo)
-
-            gate = RateLimitGate(
-                RateLimitConfig(initial_backoff_seconds=max(1.0, rate_limit_delay))
-            )
-            results_lock = threading.Lock()
-
-            def worker():
-                while True:
-                    try:
-                        repo = work_q.get_nowait()
-                    except QueueEmpty:
-                        return
-
-                    attempts = 0
-                    while attempts < 10:
-                        gate.wait_sync()
-                        try:
-                            result = self._process_single_repo_stats(
-                                repo, max_commits=max_commits_per_repo
-                            )
-                            gate.reset()
-                            with results_lock:
-                                results.append(result)
-                            if on_repo_complete:
-                                on_repo_complete(result)
-                            break
-                        except RateLimitException as e:
-                            attempts += 1
-                            applied = gate.penalize(e.retry_after_seconds)
-                            logger.info(f"Rate limited; backoff {applied:.1f}s ({e})")
-                        except Exception as e:
-                            with results_lock:
-                                results.append(
-                                    BatchResult(
-                                        repository=repo, error=str(e), success=False
-                                    )
-                                )
-                            break
-
-            threads = [
-                threading.Thread(target=worker)
-                for _ in range(min(max_concurrent, len(batch)))
-            ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-        return results
-
-    async def get_repos_with_stats_async(
-        self,
-        org_name: str | None = None,
-        user_name: str | None = None,
-        pattern: str | None = None,
-        batch_size: int = 10,
-        max_concurrent: int = 4,
-        rate_limit_delay: float = 1.0,
-        max_commits_per_repo: int | None = None,
-        max_repos: int | None = None,
-        on_repo_complete: Callable[[BatchResult], None] | None = None,
-    ) -> list[BatchResult]:
-        """Async implementation of batch repository processing."""
-        # For base implementation, we'll wrap the sync one but in a real provider
-        # this might use aiohttp or similar.
-        return await asyncio.to_thread(
-            self.get_repos_with_stats,
-            org_name=org_name,
-            user_name=user_name,
-            pattern=pattern,
-            batch_size=batch_size,
-            max_concurrent=max_concurrent,
-            rate_limit_delay=rate_limit_delay,
-            max_commits_per_repo=max_commits_per_repo,
-            max_repos=max_repos,
-            on_repo_complete=on_repo_complete,
-        )
 
     def __enter__(self):
         """Context manager entry."""

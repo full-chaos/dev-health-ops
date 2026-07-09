@@ -70,7 +70,7 @@ These inputs are supplied through global flags or environment variables (`--anal
 
 ```bash
 $ dev-hops metrics compounding-risk        # no CLICKHOUSE_URI / org configured
-usage: dev-health-ops metrics compounding-risk [-h] [--day DAY] ...
+usage: dev-health-ops metrics compounding-risk [-h] [--since SINCE | --backfill BACKFILL] ...
 dev-health-ops metrics compounding-risk: error: missing required input(s):
   - ClickHouse analytics database — pass --analytics-db or set CLICKHOUSE_URI (...)
   - organization id — pass --org or set ORG_ID (could not auto-resolve ...)
@@ -145,7 +145,7 @@ dev-hops sync git --provider gitlab \
 | `--project-id` | GitLab project ID |
 | `--since` | Start datetime (ISO 8601). Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Backfill N days ending at `--before`. Mutually exclusive with `--since` |
+| `--backfill N` | Backfill N days ending before `--before`. Mutually exclusive with `--since` |
 | `--sink` | Analytics backend (`clickhouse` only; default) |
 
 `--date` is a deprecated hidden alias for `--before`.
@@ -239,6 +239,16 @@ dev-hops sync blame --provider local --repo-path /path/to/repo
 ```
 
 Accepts the same provider, auth, single-repo, batch-mode, and date-range options as [`sync git`](#sync-git). Providers: `local`, `github`, `gitlab`, `synthetic`.
+
+Planner-managed GitHub/GitLab integrations seed the heavy `blame` dataset when
+the legacy `git` target is selected. This keeps ownership and bus-factor metrics
+reachable from normal code-host onboarding while the per-sync GitHub blame crawl
+remains capped (`BLAME_BACKFILL_MAX_FILES=500`) and coverage-aware. Existing dev
+or support fixtures created before that seed can enable blame by adding an
+`integration_datasets` row for the integration with `dataset_key='blame'`,
+`is_enabled=true`, and options mirroring the integration's existing `git` dataset
+row (for example `{"legacy_targets":["git"]}`); after the row exists, the admin
+dataset endpoint can toggle it like any other dataset.
 
 ### `sync security`
 
@@ -339,7 +349,7 @@ dev-hops metrics daily \
 |--------|-------------|
 | `--since` | Start date. Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Compute N days ending at `--before` (default: 1) |
+| `--backfill N` | Compute N days ending before `--before` (default: 1) |
 | `--repo-id` | Filter to specific repository |
 | `--sink` | Analytics backend (`clickhouse` only) |
 
@@ -364,7 +374,7 @@ dev-hops metrics rebuild \
 | `--repo-id` | Repo UUID to rebuild; repeatable. Omit to rebuild all repos |
 | `--since` | Start date (inclusive). Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Process N days ending at `--before` (default: 1) |
+| `--backfill N` | Process N days ending before `--before` (default: 1) |
 | `--sink` | Analytics backend (`clickhouse` only) |
 | `--provider` | Restrict to a single provider (default: `auto`) |
 
@@ -390,6 +400,8 @@ dev-hops metrics dora --backfill 30 --metrics deployment_frequency,lead_time
 ### `metrics complexity`
 
 Compute file complexity and hotspot metrics from persisted `git_files`/`git_blame` data. Uses `CLICKHOUSE_URI`.
+
+> **Note (CHAOS-2850/CHAOS-2888):** `--backfill N` must not fabricate N days of historical complexity from current file contents. There is no persisted historical file-content snapshot, so the DB complexity path writes complexity only when it has a real target-day input contract; run it daily (or let the scheduled `dispatch_complexity_job` cadence run) to build a genuine trend. Historical API backfills skip complexity recompute unless a future real historical source of truth is added.
 
 ```bash
 dev-hops metrics complexity --backfill 30
@@ -474,20 +486,27 @@ dev-hops metrics validate-flags --lookback 30
 
 Compute the Compounding Risk composite from persisted inputs (`repo_metrics_daily` + `repo_complexity_daily`) and write `compounding_risk_daily`. Requires `CLICKHOUSE_URI` **and** an organization id.
 
+> **Note (CHAOS-2888):** this command exits `0` whenever the compounding-risk query and write both complete, even if some rows have `severity="unknown"` due to missing required inputs — it exits non-zero only for configuration, validation, or infrastructure failures. Missing-input reason counts (`missing_rework_churn`, `missing_complexity_delta`, `missing_review_latency`, `missing_ownership_signal`) are logged per run. For API-triggered backfills, the same missing-input counts and per-day table coverage are surfaced on `GET /backfill-jobs/{job_id}` via `metrics_diagnostics`.
+
 ```bash
 dev-hops metrics compounding-risk --org "$ORG_ID"
 
-# Backfill additional days ending at --day
-dev-hops metrics compounding-risk --day 2025-02-02 --backfill 7
+# Backfill seven days ending before 2025-02-02, i.e. through 2025-02-01
+dev-hops metrics compounding-risk --before 2025-02-02 --backfill 7
+
+# Explicit inclusive start with exclusive end
+dev-hops metrics compounding-risk --since 2025-01-01 --before 2025-02-02
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--day` | Target day (UTC, default: today) |
-| `--backfill N` | Additional days to backfill, inclusive (default: 0) |
+| `--since` | Start date (inclusive). Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, default: tomorrow) |
+| `--backfill N` | Process N days ending before `--before` (default: 1) |
+| `--sink` | Analytics backend (`clickhouse` only) |
 
-> Note: `metrics compounding-risk` uses `--day` + `--backfill` rather than the `--since`/`--before`/`--backfill` range shared by the other metrics commands.
+> CHAOS-2475 follow-up: `--day` is not supported. Use `--before <day-after-target> --backfill 1` for one historical day.
 
 ---
 
@@ -604,7 +623,7 @@ dev-hops fixtures generate \
 | `--pr-count` | `20` | Total pull requests to generate |
 | `--seed` | random | Deterministic seed for repeatable runs |
 | `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira` |
-| `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, etc.) |
+| `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, Cockpit/TestOps risk inputs, etc.) |
 | `--with-work-graph` | off | Build work graph edges after generation (ClickHouse only) |
 | `--team-count` | `8` | Number of synthetic teams to create |
 
@@ -625,6 +644,13 @@ tables are also seeded: `ai_attribution`, `ai_workflow_runs`,
 `ai_workflow_artifact_edges`, and `ai_workflow_issue_edges`. The daily metrics
 job then computes `ai_impact_metrics_daily`, `ai_governance_coverage_daily`,
 and `ai_policy_events` from those source rows.
+
+`--with-metrics` also writes the Cockpit/Govern risk inputs used by Compounding
+Risk and TestOps Delivery Risk: `repo_complexity_daily`, `repo_metrics_daily`,
+`compounding_risk_daily`, `testops_pipeline_metrics_daily`,
+`testops_test_metrics_daily`, and `testops_coverage_metrics_daily`. A base
+fixture run without this flag is suitable for raw-ingest checks, but those risk
+surfaces should be expected to report missing inputs until metrics are computed.
 
 ### `fixtures validate`
 
@@ -874,7 +900,7 @@ dev-hops backfill run \
 | `--config-id` | Sync configuration UUID (required) |
 | `--since` | Start date (ISO 8601). Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Backfill N days ending at `--before`. Mutually exclusive with `--since` |
+| `--backfill N` | Backfill N days ending before `--before`. Mutually exclusive with `--since` |
 | `--sink` | Analytics backend (`clickhouse` only; default) |
 
 Backfill depth is limited by organization tier:
@@ -1046,7 +1072,8 @@ Materialize WorkUnit investment categorization (theme/subcategory distributions 
 # Full org materialization (publishes coverage marker)
 dev-hops investment materialize --db "$CLICKHOUSE_URI" --org "$ORG_ID"
 
-# Date-windowed refresh (does NOT publish org-wide coverage marker)
+# Date-windowed refresh (unscoped → still publishes the org-wide coverage
+# marker via the full-coverage membership projection; CHAOS-2776)
 dev-hops investment materialize --window-days 30 --llm-provider none
 ```
 
@@ -1055,8 +1082,8 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 |--------|-------------|
 | `--db` | ClickHouse connection string (default: `CLICKHOUSE_URI`) |
 | `--from` / `--to` | Date range (`--from` defaults to `--window-days` before `--to`; `--to` defaults to now) |
-| `--window-days` | Window size when `--from` is not set (default: 30). Marks the run as date-windowed: refreshes investments only, no org-wide coverage marker |
-| `--repo-id` / `--team-id` | Filter to specific repos/teams |
+| `--window-days` | Window size when `--from` is not set (default: 30). Windowing does NOT suppress the org-wide membership marker — the post-run projection is full-coverage by construction (CHAOS-2776) |
+| `--repo-id` / `--team-id` | Filter to specific repos/teams. Scoped runs skip the membership projection and publish no org-wide marker |
 | `-l, --llm-provider` | LLM provider (`auto`, `openai`, `anthropic`, `local`, `mock`, `none`). Use `none` for distributions without explanations |
 | `-m, --model` | LLM model name (overrides provider default) |
 | `--persist-evidence-snippets` / `--no-persist-evidence-snippets` | Persist or skip extractive evidence quotes |

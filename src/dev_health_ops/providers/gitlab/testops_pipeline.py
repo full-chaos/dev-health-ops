@@ -7,11 +7,15 @@ from uuid import UUID
 
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 from dev_health_ops.providers._base import BasePipelineAdapter, PipelineSyncBatch
+from dev_health_ops.providers._http import GITLAB_DIAGNOSTIC_HEADER_NAMES
+from dev_health_ops.providers.gitlab.budget import GITLAB_USAGE_RESOLVER
 
 
 class GitLabCIAdapter(BasePipelineAdapter):
     provider = "gitlab_ci"
     token_env_var = "GITLAB_TOKEN"
+    usage_resolver = GITLAB_USAGE_RESOLVER
+    diagnostic_header_names = GITLAB_DIAGNOSTIC_HEADER_NAMES
 
     @property
     def default_headers(self) -> dict[str, str]:
@@ -93,6 +97,7 @@ class GitLabCIAdapter(BasePipelineAdapter):
         pipelines = await self._paginate(
             f"/projects/{encoded_project}/pipelines",
             params=params,
+            operation=f"tests:GET /projects/{project_id}/pipelines",
         )
 
         pipeline_rows: list[PipelineRunExtendedRow] = []
@@ -140,6 +145,7 @@ class GitLabCIAdapter(BasePipelineAdapter):
             jobs = await self._paginate(
                 f"/projects/{encoded_project}/pipelines/{pipeline.get('id')}/jobs",
                 params={"include_retried": True},
+                operation=f"tests:GET /projects/{project_id}/pipelines/{{id}}/jobs",
             )
             for job in jobs:
                 job_started_at = self.parse_datetime(job.get("started_at"))

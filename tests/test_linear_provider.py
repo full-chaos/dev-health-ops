@@ -332,6 +332,19 @@ class TestLinearIssueToWorkItem:
 
         assert work_item.story_points == 5.0
 
+    def test_issue_with_zero_estimate_preserves_story_points(
+        self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
+    ) -> None:
+        issue = _mock_linear_issue(estimate=0.0)
+
+        work_item, _ = linear_issue_to_work_item(
+            issue=issue,
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        assert work_item.story_points == 0.0
+
     def test_issue_with_labels(
         self, mock_identity: IdentityResolver, mock_status_mapping: StatusMapping
     ) -> None:
@@ -667,6 +680,38 @@ class TestLinearProviderRegistration:
         assert provider.capabilities.priority is True
 
 
+class TestLinearClientWindowFilter:
+    def test_iter_issues_pages_emits_gte_and_lte_filter(self) -> None:
+        """CHAOS-2717: both window edges land in the GraphQL updatedAt filter."""
+        from datetime import datetime, timezone
+
+        from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+
+        client = LinearClient(auth=LinearAuth(api_key="test"))
+        captured: dict[str, Any] = {}
+
+        def _fake_execute(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+            captured.update(variables)
+            return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
+
+        since = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 3, 31, 23, 59, 59, tzinfo=timezone.utc)
+        with patch.object(client, "_execute", side_effect=_fake_execute):
+            list(
+                client.iter_issues_pages(
+                    team_keys=["ENG"],
+                    updated_after=since,
+                    updated_before=until,
+                )
+            )
+
+        assert captured["filter"]["updatedAt"] == {
+            "gte": since.isoformat(),
+            "lte": until.isoformat(),
+        }
+        client.close()
+
+
 class TestLinearProviderIngest:
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
@@ -700,6 +745,50 @@ class TestLinearProviderIngest:
         assert isinstance(batch, ProviderBatch)
         assert len(batch.work_items) == 1
         assert len(batch.sprints) == 1
+
+    @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_ingest_passes_window_bounds_to_issue_query(
+        self,
+        mock_from_env: MagicMock,
+        mock_identity: IdentityResolver,
+        mock_status_mapping: StatusMapping,
+    ) -> None:
+        """CHAOS-2717: the issue crawl is bounded by BOTH window edges.
+
+        The provider threads ``window.updated_since`` -> ``updated_after`` and
+        ``window.active_until`` -> ``updated_before`` so each backfill window
+        fetches only its slice (updatedAt gte/lte), not from its start to now.
+        """
+        from datetime import datetime, timezone
+
+        mock_client = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.iter_teams.return_value = [
+            {"id": "team-1", "key": "ENG", "name": "Engineering"}
+        ]
+        mock_client.iter_cycles.return_value = []
+        mock_client.iter_issues_pages.return_value = [[_mock_linear_issue()]]
+
+        provider = LinearProvider(
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+
+        since = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 3, 31, 23, 59, 59, tzinfo=timezone.utc)
+        ctx = IngestionContext(
+            window=IngestionWindow(updated_since=since, active_until=until),
+            repo=None,
+        )
+
+        provider.ingest(ctx)
+
+        mock_client.iter_issues_pages.assert_called_once_with(
+            team_keys=["ENG"],
+            updated_after=since,
+            updated_before=until,
+        )
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
@@ -738,9 +827,11 @@ class TestLinearProviderIngest:
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    @pytest.mark.parametrize("team_key", ["NONEXISTENT", "linear"])
     def test_ingest_team_not_found(
         self,
         mock_from_env: MagicMock,
+        team_key: str,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
@@ -758,7 +849,7 @@ class TestLinearProviderIngest:
 
         ctx = IngestionContext(
             window=IngestionWindow(),
-            repo="NONEXISTENT",
+            repo=team_key,
         )
 
         with pytest.raises(ValueError, match="not found"):

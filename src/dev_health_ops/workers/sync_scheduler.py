@@ -13,6 +13,7 @@ from dev_health_ops.workers.task_utils import (
     _as_dict,
     _as_str,
     _as_uuid,
+    cron_next_run,
 )
 
 if TYPE_CHECKING:
@@ -153,7 +154,6 @@ def _maybe_dispatch_config(
     queue purge), the config becomes dispatchable again at the next cron
     occurrence -- at most one cron interval of delay, no manual cleanup.
     """
-    from croniter import croniter
 
     from dev_health_ops.models.settings import JobStatus, ScheduledJob
 
@@ -205,12 +205,17 @@ def _maybe_dispatch_config(
             return False
 
     cron_expr = _as_str(job.schedule_cron) if job is not None else config_cron
+    tz_name = (
+        _as_str(job.timezone)
+        if job is not None
+        else _as_str(_as_dict(config.sync_options).get("timezone"))
+    ) or "UTC"
     last_sync = (
         config.last_sync_at
         if isinstance(config.last_sync_at, datetime)
         else _as_datetime(config.created_at)
     )
-    next_run = croniter(cron_expr, last_sync).get_next(datetime)
+    next_run = cron_next_run(cron_expr, last_sync, tz_name)
 
     if not next_run <= now:
         return False
@@ -238,32 +243,31 @@ def _maybe_dispatch_config(
                 STALE_RUNNING_TTL_SECONDS,
             )
 
-    marker = croniter(cron_expr, now).get_next(datetime)
+    marker = cron_next_run(cron_expr, now, tz_name)
     if isinstance(marker, datetime):
         job.next_run_at = marker
     session.flush()
 
     session.commit()
 
-    from dev_health_ops.sync.planner import plan_sync_run
-    from dev_health_ops.sync.trigger_routing import (
-        planner_request_for_config_if_routed,
-    )
+    from dev_health_ops.sync.execution_trigger import create_sync_execution_trigger
     from dev_health_ops.workers.sync_units import dispatch_sync_run
-
-    request = planner_request_for_config_if_routed(
-        session, config, triggered_by="schedule", mode="incremental"
-    )
-    if request is None:
-        logger.warning(
-            "Skipping sync config %s because it is not linked to a migrated integration",
-            config.id,
-        )
-        return False
 
     logger.info("Routing config %s through fan-out planner", config.id)
     try:
-        plan = plan_sync_run(session, request)
+        trigger = create_sync_execution_trigger(
+            session,
+            config,
+            org_id,
+            triggered_by="schedule",
+            mode="incremental",
+        )
+        if trigger is None:
+            logger.warning(
+                "Skipping sync config %s because it has no linked integration",
+                config.id,
+            )
+            return False
         session.commit()
     except Exception:
         logger.exception("Fan-out planner failed for config %s", config.id)
@@ -272,12 +276,12 @@ def _maybe_dispatch_config(
 
     try:
         getattr(dispatch_sync_run, "apply_async")(
-            args=(plan.sync_run_id,), queue="sync"
+            args=(trigger.sync_run_id,), queue="sync"
         )
     except Exception:
         logger.warning(
             "sync_scheduler.dispatch_fastpath_failed",
-            extra={"config_id": str(config.id), "sync_run_id": plan.sync_run_id},
+            extra={"config_id": str(config.id), "sync_run_id": trigger.sync_run_id},
             exc_info=True,
         )
     return True

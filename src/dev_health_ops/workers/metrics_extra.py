@@ -90,6 +90,60 @@ def run_complexity_job(
 @celery_app.task(
     bind=True,
     max_retries=3,
+    queue="default",
+    name="dev_health_ops.workers.tasks.dispatch_complexity_job",
+)
+def dispatch_complexity_job(
+    self,
+    db_url: str | None = None,
+    day: str | None = None,
+) -> dict:
+    """Fan out ``run_complexity_job`` per active org on a daily cadence (CHAOS-2850).
+
+    ``run_complexity_job`` previously only ran chained after a git sync
+    (post_sync_dispatch.py), so an org with infrequent syncs left
+    ``repo_complexity_daily`` stale for days at a time. Because
+    ``complexity_delta`` (compounding_risk.py) reads a trailing 30-day
+    window from that table, a stale table reads as a flat trend even
+    though nothing about the compute itself is wrong. This dispatcher
+    gives complexity an independent daily floor cadence -- the same
+    fan-out shape as ``dispatch_release_impact`` /
+    ``dispatch_membership_backfill`` -- so every active org's complexity
+    refreshes at least once per day regardless of sync activity.
+
+    Args:
+        db_url: ClickHouse connection string (defaults to CLICKHOUSE_URI env)
+        day: Target day as ISO string (defaults to today, resolved per task)
+
+    Returns:
+        dict with the list of dispatched org_ids
+    """
+    from dev_health_ops.workers.recommendations_tasks import _discover_active_org_ids
+
+    try:
+        # strict=True: a Postgres enumeration failure must RAISE (not
+        # collapse to ["default"]) so the once-daily run retries instead of
+        # silently reporting a clean empty success while computing zero orgs.
+        org_ids = _discover_active_org_ids(strict=True)
+    except Exception as exc:
+        logger.exception("dispatch_complexity_job failed to enumerate orgs")
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+    dispatched: list[str] = []
+    for org_id in org_ids:
+        run_complexity_job.apply_async(
+            kwargs={"db_url": db_url, "day": day, "org_id": org_id},
+            queue="metrics",
+        )
+        dispatched.append(org_id)
+
+    logger.info("Complexity dispatch: dispatched=%d organizations", len(dispatched))
+    return {"dispatched": dispatched}
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
     queue="metrics",
     name="dev_health_ops.workers.tasks.run_dora_metrics",
 )

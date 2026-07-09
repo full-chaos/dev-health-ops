@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from dev_health_ops.metrics.schemas import (
@@ -18,6 +19,7 @@ from dev_health_ops.metrics.schemas import (
     CommitMetricsRecord,
     DeployMetricsDailyRecord,
     DORAMetricsRecord,
+    EstimateCoverageMetricsDailyRecord,
     FeatureFlagEventRecord,
     FeatureFlagLinkRecord,
     FeatureFlagRecord,
@@ -30,6 +32,7 @@ from dev_health_ops.metrics.schemas import (
     InvestmentExplanationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    LLMTokenSpendSummaryRecord,
     LLMTokenUsageRecord,
     ManualAttributionFallbackRecord,
     MemberRecord,
@@ -55,6 +58,8 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
     WorkUnitMembershipRunRecord,
+    WorkUnitRepoEffortRecord,
+    WorkUnitScopedMembershipRunRecord,
 )
 from dev_health_ops.metrics.testops_schemas import (
     BenchmarkAnomalyRecord,
@@ -173,6 +178,15 @@ class BaseMetricsSink(ABC):
     ) -> None:
         """Write daily aggregate work item metrics."""
         ...
+
+    @abstractmethod
+    def write_estimate_coverage_metrics(
+        self, rows: Sequence[EstimateCoverageMetricsDailyRecord]
+    ) -> None:
+        """Write daily estimate coverage metrics."""
+        raise NotImplementedError(
+            "BaseMetricsSink.write_estimate_coverage_metrics() must be implemented by subclasses."
+        )
 
     @abstractmethod
     def write_work_item_user_metrics(
@@ -362,6 +376,12 @@ class BaseMetricsSink(ABC):
         """Write work unit-level investment materializations."""
         pass
 
+    def write_work_unit_repo_effort(
+        self, rows: Sequence[WorkUnitRepoEffortRecord]
+    ) -> None:
+        """Write per-repository work unit effort allocation rows."""
+        pass
+
     @abstractmethod
     def write_work_unit_investment_quotes(
         self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
@@ -382,6 +402,11 @@ class BaseMetricsSink(ABC):
         have been written.  A run whose run_id has no completion-marker is
         incomplete and invisible to readers.
         """
+        pass
+
+    def write_scoped_membership_runs(
+        self, records: Sequence[WorkUnitScopedMembershipRunRecord]
+    ) -> None:
         pass
 
     def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:
@@ -406,6 +431,15 @@ class BaseMetricsSink(ABC):
 
     def write_llm_token_usage(self, rows: Sequence[LLMTokenUsageRecord]) -> None:
         pass
+
+    def read_llm_token_spend(
+        self,
+        *,
+        org_id: str,
+        limit: int = 20,
+        since: datetime | None = None,
+    ) -> LLMTokenSpendSummaryRecord | None:
+        return None
 
     def read_investment_explanation(
         self, cache_key: str

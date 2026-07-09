@@ -402,3 +402,120 @@ class TestResolveAnalytics:
         assert null_item.value == 0.0  # NULL → 0.0
         normal_item = next(i for i in result.items if i.key == "api-gateway")
         assert normal_item.value == 7.2
+
+    @pytest.mark.asyncio
+    async def test_breakdown_emits_stale_scope_telemetry_when_investment(
+        self, monkeypatch
+    ):
+        """CHAOS-2765: investment breakdown reads compile the membership-scoped
+        CTE, so they must emit the stale-scope counter before execution — parity
+        with timeseries/coverage/sankey."""
+        from datetime import date as date_
+
+        from dev_health_ops.api.graphql.models.inputs import (
+            BreakdownRequestInput,
+            DateRangeInput,
+            DimensionInput,
+            MeasureInput,
+        )
+        from dev_health_ops.api.graphql.resolvers.analytics import (
+            _execute_breakdown_query,
+        )
+
+        recorded: list[str] = []
+
+        async def fake_record(_client, *, org_id):
+            recorded.append(org_id)
+
+        async def fake_query_dicts(_client, _sql, _params):
+            # Assert telemetry fires BEFORE execution, not after.
+            assert recorded == ["org-x"]
+            return [{"dimension_value": "Feature Work", "value": 42.0}]
+
+        def fake_compile_bd(_request, _org_id, _timeout, filters=None):
+            return "SELECT 1", {}
+
+        monkeypatch.setattr(
+            "dev_health_ops.api.graphql.resolvers.analytics."
+            "record_stale_investment_membership_scope",
+            fake_record,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.api.queries.client.query_dicts",
+            fake_query_dicts,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.api.graphql.resolvers.analytics.compile_breakdown",
+            fake_compile_bd,
+        )
+
+        bd_req = BreakdownRequestInput(
+            dimension=DimensionInput.THEME,
+            measure=MeasureInput.COUNT,
+            date_range=DateRangeInput(
+                start_date=date_(2025, 6, 1),
+                end_date=date_(2025, 6, 7),
+            ),
+        )
+        result = await _execute_breakdown_query(
+            MockClient(), bd_req, "org-x", 30, True, None
+        )
+        assert recorded == ["org-x"]
+        assert len(result.items) == 1
+
+    @pytest.mark.asyncio
+    async def test_breakdown_skips_stale_scope_telemetry_when_not_investment(
+        self, monkeypatch
+    ):
+        """CHAOS-2765: non-investment breakdowns don't compile the scoped CTE,
+        so they must NOT emit the stale-scope counter (would over-count)."""
+        from datetime import date as date_
+
+        from dev_health_ops.api.graphql.models.inputs import (
+            BreakdownRequestInput,
+            DateRangeInput,
+            DimensionInput,
+            MeasureInput,
+        )
+        from dev_health_ops.api.graphql.resolvers.analytics import (
+            _execute_breakdown_query,
+        )
+
+        recorded: list[str] = []
+
+        async def fake_record(_client, *, org_id):
+            recorded.append(org_id)
+
+        async def fake_query_dicts(_client, _sql, _params):
+            return [{"dimension_value": "team-a", "value": 3.0}]
+
+        def fake_compile_bd(_request, _org_id, _timeout, filters=None):
+            return "SELECT 1", {}
+
+        monkeypatch.setattr(
+            "dev_health_ops.api.graphql.resolvers.analytics."
+            "record_stale_investment_membership_scope",
+            fake_record,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.api.queries.client.query_dicts",
+            fake_query_dicts,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.api.graphql.resolvers.analytics.compile_breakdown",
+            fake_compile_bd,
+        )
+
+        bd_req = BreakdownRequestInput(
+            dimension=DimensionInput.TEAM,
+            measure=MeasureInput.COUNT,
+            date_range=DateRangeInput(
+                start_date=date_(2025, 6, 1),
+                end_date=date_(2025, 6, 7),
+            ),
+        )
+        result = await _execute_breakdown_query(
+            MockClient(), bd_req, "org-x", 30, False, None
+        )
+        assert recorded == []
+        assert len(result.items) == 1

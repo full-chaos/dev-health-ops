@@ -9,7 +9,7 @@ import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -17,6 +17,7 @@ import pytest
 # pre-existing providers._base <-> connectors circular import when this file
 # is collected in isolation (mirrors tests/test_deployment_pr_inference.py).
 import dev_health_ops.connectors  # noqa: F401
+from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import GitPullRequestReview
 from dev_health_ops.processors import gitlab as gitlab_processor
@@ -40,6 +41,76 @@ def _approvals(*usernames_ids):
             {"user": {"id": uid, "username": name}} for name, uid in usernames_ids
         ]
     }
+
+
+class _FakeGitLabMrCodeClient:
+    def __init__(self, *, mrs=None, approvals_by_iid=None, notes_by_iid=None):
+        self.mrs = mrs or []
+        self.approvals_by_iid = approvals_by_iid or {}
+        self.notes_by_iid = notes_by_iid or {}
+        self.iter_merge_requests_calls: list[dict[str, Any]] = []
+        self.get_merge_requests_page_calls: list[dict[str, Any]] = []
+        self.get_mr_approvals_calls: list[tuple[int, int]] = []
+        self.iter_mr_notes_calls: list[tuple[int, int, int]] = []
+        self.observations = [
+            {"route_family": "merge_requests", "request_count": 1},
+            {"route_family": "notes", "request_count": 1},
+        ]
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def iter_merge_requests(self, *, project_id, state, per_page):
+        self.iter_merge_requests_calls.append(
+            {"project_id": project_id, "state": state, "per_page": per_page}
+        )
+        return list(self.mrs)
+
+    async def get_merge_requests_page(self, *, project_id, page, state, per_page):
+        self.get_merge_requests_page_calls.append(
+            {
+                "project_id": project_id,
+                "page": page,
+                "state": state,
+                "per_page": per_page,
+            }
+        )
+        if page > 1:
+            return []
+        return list(self.mrs)
+
+    async def get_mr_approvals(self, project_id, iid):
+        self.get_mr_approvals_calls.append((project_id, iid))
+        val = self.approvals_by_iid.get(iid)
+        if isinstance(val, Exception):
+            raise val
+        return val
+
+    async def iter_mr_notes(self, project_id, iid, *, per_page):
+        self.iter_mr_notes_calls.append((project_id, iid, per_page))
+        val = self.notes_by_iid.get(iid)
+        if isinstance(val, Exception):
+            raise val
+        return list(val or [])
+
+    def drain_usage_observations(self):
+        observations = list(self.observations)
+        self.observations.clear()
+        return observations
+
+
+class _NoSleepGitLabGate:
+    def wait_sync(self) -> None:
+        return
+
+    def penalize(self, delay_seconds=None) -> float:
+        return float(delay_seconds or 0)
+
+    def reset(self) -> None:
+        return
 
 
 def test_approval_maps_to_approved_state_and_org_scope():
@@ -335,36 +406,49 @@ def test_empty_payloads_yield_no_rows():
     assert map_gitlab_mr_reviews(REPO_ID, 42, {"approved_by": []}, []) == ([], None)
 
 
-def test_fetch_calls_rest_endpoints_and_maps():
-    """The fetch helper wires the REST approvals + notes calls into the mapper."""
+def test_fetch_calls_code_client_endpoints_and_maps():
+    """The fetch helper wires the code-client approvals + notes calls into the mapper."""
     connector = Mock()
     connector.per_page = 100
-    connector.rest_client.get_merge_request_approvals.return_value = _approvals(
-        ("alice", 7)
+    connector.rest_client.get_merge_request_approvals.side_effect = AssertionError(
+        "legacy approvals path must not be called"
     )
-    connector.rest_client.get_merge_request_notes.return_value = [
-        {
-            "id": 200,
-            "system": False,
-            "type": "DiffNote",
-            "body": "looks good",
-            "author": {"username": "carol"},
-            "created_at": "2026-01-03T08:00:00Z",
-        }
-    ]
+    connector.rest_client.get_merge_request_notes.side_effect = AssertionError(
+        "legacy notes path must not be called"
+    )
+    fake_client = _FakeGitLabMrCodeClient(
+        approvals_by_iid={42: _approvals(("alice", 7))},
+        notes_by_iid={
+            42: [
+                {
+                    "id": 200,
+                    "system": False,
+                    "type": "DiffNote",
+                    "body": "looks good",
+                    "author": {"username": "carol"},
+                    "created_at": "2026-01-03T08:00:00Z",
+                }
+            ]
+        },
+    )
 
-    fetched = _fetch_gitlab_mr_reviews(
-        connector=connector,
-        project_id=99,
-        mr={"iid": 42, "author": {"username": "author"}},
-        repo_id=REPO_ID,
-        created_at=CREATED_AT,
-    )
+    with patch.object(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: fake_client,
+    ):
+        fetched = _fetch_gitlab_mr_reviews(
+            connector=connector,
+            project_id=99,
+            mr={"iid": 42, "author": {"username": "author"}},
+            repo_id=REPO_ID,
+            created_at=CREATED_AT,
+        )
 
-    connector.rest_client.get_merge_request_approvals.assert_called_once_with(99, 42)
-    connector.rest_client.get_merge_request_notes.assert_called_once_with(
-        99, 42, page=1, per_page=100
-    )
+    assert fake_client.get_mr_approvals_calls == [(99, 42)]
+    assert fake_client.iter_mr_notes_calls == [(99, 42, 100)]
+    connector.rest_client.get_merge_request_approvals.assert_not_called()
+    connector.rest_client.get_merge_request_notes.assert_not_called()
     assert fetched.known is True
     assert sorted(r.state for r in fetched.reviews) == ["APPROVED", "COMMENTED"]
     assert fetched.first_review_at == datetime(2026, 1, 3, 8, 0, tzinfo=timezone.utc)
@@ -374,16 +458,22 @@ def test_fetch_is_resilient_to_missing_approvals_endpoint():
     """MRs whose approvals endpoint 404s still ingest notes (skip cleanly)."""
     connector = Mock()
     connector.per_page = 100
-    connector.rest_client.get_merge_request_approvals.side_effect = Exception("404")
-    connector.rest_client.get_merge_request_notes.return_value = []
-
-    fetched = _fetch_gitlab_mr_reviews(
-        connector=connector,
-        project_id=99,
-        mr={"iid": 42},
-        repo_id=REPO_ID,
-        created_at=CREATED_AT,
+    fake_client = _FakeGitLabMrCodeClient(
+        approvals_by_iid={42: Exception("404")}, notes_by_iid={42: []}
     )
+
+    with patch.object(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: fake_client,
+    ):
+        fetched = _fetch_gitlab_mr_reviews(
+            connector=connector,
+            project_id=99,
+            mr={"iid": 42},
+            repo_id=REPO_ID,
+            created_at=CREATED_AT,
+        )
 
     # Notes are authoritative and succeeded (empty) -> known, no reviews.
     assert fetched.known is True
@@ -396,18 +486,23 @@ def test_fetch_notes_failure_reports_unknown():
     result is flagged unknown so the caller will NOT zero out review metrics."""
     connector = Mock()
     connector.per_page = 100
-    connector.rest_client.get_merge_request_approvals.return_value = _approvals(
-        ("alice", 7)
+    fake_client = _FakeGitLabMrCodeClient(
+        approvals_by_iid={42: _approvals(("alice", 7))},
+        notes_by_iid={42: Exception("timeout")},
     )
-    connector.rest_client.get_merge_request_notes.side_effect = Exception("timeout")
 
-    fetched = _fetch_gitlab_mr_reviews(
-        connector=connector,
-        project_id=99,
-        mr={"iid": 42},
-        repo_id=REPO_ID,
-        created_at=CREATED_AT,
-    )
+    with patch.object(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: fake_client,
+    ):
+        fetched = _fetch_gitlab_mr_reviews(
+            connector=connector,
+            project_id=99,
+            mr={"iid": 42},
+            repo_id=REPO_ID,
+            created_at=CREATED_AT,
+        )
 
     assert fetched.known is False
     assert fetched.reviews == []
@@ -457,34 +552,22 @@ class _FakeSink:
 
 
 def _make_connector(mrs_page, approvals_by_iid, notes_by_iid):
-    """Build a Mock GitLab connector whose REST client returns the given data."""
     connector = Mock()
     connector.per_page = 100
-
-    pages = {1: mrs_page}
-
-    def _get_merge_requests(*, project_id, state, page, per_page, order_by, sort):
-        return pages.get(page, [])
-
-    connector.rest_client.get_merge_requests.side_effect = _get_merge_requests
-
-    def _approvals_for(project_id, iid):
-        val = approvals_by_iid.get(iid)
-        if isinstance(val, Exception):
-            raise val
-        return val
-
-    def _notes_for(project_id, iid, page=1, per_page=100):
-        val = notes_by_iid.get(iid)
-        if isinstance(val, Exception):
-            raise val
-        all_notes = val or []
-        # Emulate real GitLab note pagination so the exhaustion loop is exercised.
-        start = (page - 1) * per_page
-        return all_notes[start : start + per_page]
-
-    connector.rest_client.get_merge_request_approvals.side_effect = _approvals_for
-    connector.rest_client.get_merge_request_notes.side_effect = _notes_for
+    connector.code_client = _FakeGitLabMrCodeClient(
+        mrs=mrs_page,
+        approvals_by_iid=approvals_by_iid,
+        notes_by_iid=notes_by_iid,
+    )
+    connector.rest_client.get_merge_requests.side_effect = AssertionError(
+        "legacy MR list path must not be called"
+    )
+    connector.rest_client.get_merge_request_approvals.side_effect = AssertionError(
+        "legacy approvals path must not be called"
+    )
+    connector.rest_client.get_merge_request_notes.side_effect = AssertionError(
+        "legacy notes path must not be called"
+    )
     return connector
 
 
@@ -505,12 +588,17 @@ def _run_sync(connector, since=None):
                 loop,
                 50,  # batch_size
                 "all",  # state
-                None,  # gate
+                _NoSleepGitLabGate(),  # gate
                 since,
             ),
         )
 
-    total = asyncio.run(_driver())
+    with patch.object(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda connector: connector.code_client,
+    ):
+        total = asyncio.run(_driver())
     return total, sink
 
 
@@ -660,11 +748,17 @@ def test_live_sync_partial_failure_flushes_good_rows_before_raising():
                 cast(IngestionSink, sink),
                 loop,
                 50,
+                gate=_NoSleepGitLabGate(),
             ),
         )
 
-    with pytest.raises(PartialGitLabMrSyncError) as exc_info:
-        asyncio.run(_driver())
+    with patch.object(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda connector: connector.code_client,
+    ):
+        with pytest.raises(PartialGitLabMrSyncError) as exc_info:
+            asyncio.run(_driver())
 
     # The good MR (41) is persisted; the degraded MR (42) is not.
     assert [pr.number for pr in sink.prs] == [41]
@@ -813,21 +907,23 @@ def test_fetch_all_mr_notes_exhausts_pages():
 
     connector = Mock()
     connector.per_page = 100
+    connector.code_client = _FakeGitLabMrCodeClient(notes_by_iid={42: all_notes})
+    connector.rest_client.get_merge_request_notes.side_effect = AssertionError(
+        "legacy notes path must not be called"
+    )
 
-    def _notes(project_id, iid, page=1, per_page=100):
-        start = (page - 1) * per_page
-        return all_notes[start : start + per_page]
-
-    connector.rest_client.get_merge_request_notes.side_effect = _notes
-
-    fetched = _fetch_all_mr_notes(connector, project_id=99, iid=42)
+    with patch.object(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda connector: connector.code_client,
+    ):
+        fetched = _fetch_all_mr_notes(connector, project_id=99, iid=42)
 
     assert len(fetched) == 101
     # The page-2 approval note survived pagination.
     assert any(n["id"] == 1000 for n in fetched)
-    # Two full-size fetches + one short page would also be valid; here page 2
-    # is short (1 item) so the loop stops after 2 calls.
-    assert connector.rest_client.get_merge_request_notes.call_count == 2
+    assert connector.code_client.iter_mr_notes_calls == [(99, 42, 100)]
+    connector.rest_client.get_merge_request_notes.assert_not_called()
 
 
 def test_live_sync_approval_after_first_note_page_is_counted():
@@ -1037,6 +1133,23 @@ class _FakeBatchConnector:
         self.closed = True
 
 
+class _FakeBatchDiscoveryClient:
+    def __init__(self, projects):
+        self._projects = projects
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def list_projects(self, **_kwargs):
+        return list(self._projects)
+
+    def drain_usage_observations(self):
+        return []
+
+
 def _patch_batch(monkeypatch, projects, sync_behavior):
     """Wire process_gitlab_projects_batch to fakes.
 
@@ -1048,13 +1161,28 @@ def _patch_batch(monkeypatch, projects, sync_behavior):
         "GitLabConnector",
         lambda **kw: _FakeBatchConnector(projects, **kw),
     )
+    monkeypatch.setattr(
+        gitlab_processor,
+        "_gitlab_code_client_from_connector",
+        lambda _connector: _FakeBatchDiscoveryClient(projects),
+    )
     monkeypatch.setattr(gitlab_processor, "IngestionSink", _FakeBatchSink)
     monkeypatch.setattr(gitlab_processor, "CONNECTORS_AVAILABLE", True)
 
     calls: list[int] = []
 
     def _fake_sync_mrs(
-        connector, project_id, repo_id, sink, loop, batch_size, state, gate, since
+        connector,
+        project_id,
+        repo_id,
+        sink,
+        loop,
+        batch_size,
+        state,
+        gate,
+        since,
+        until=None,
+        usage_sink=None,
     ):
         calls.append(project_id)
         outcome = sync_behavior[project_id]
@@ -1115,6 +1243,38 @@ def test_batch_degraded_mr_fetch_raises_and_does_not_report_success(monkeypatch)
     # skipped iids are surfaced, not lost.
     assert [e.project_id for e in exc_info.value.errors] == [2]
     assert exc_info.value.errors[0].skipped_iids == [42, 43]
+
+
+def test_batch_rate_limited_mr_fetch_propagates(monkeypatch):
+    projects = [
+        _FakeProjectInfo(1, "group/healthy"),
+        _FakeProjectInfo(2, "group/limited"),
+        _FakeProjectInfo(3, "group/not-reached"),
+    ]
+    calls = _patch_batch(
+        monkeypatch,
+        projects,
+        sync_behavior={
+            1: 5,
+            2: RateLimitException("limited"),
+            3: 5,
+        },
+    )
+
+    store = Mock()
+    with pytest.raises(RateLimitException):
+        asyncio.run(
+            process_gitlab_projects_batch(
+                store=store,
+                token="tok",
+                group_name="group",
+                pattern="*",
+                max_concurrent=1,
+                **_BATCH_PRS_ONLY,
+            )
+        )
+
+    assert calls[:2] == [1, 2]
 
 
 def test_batch_flushes_healthy_repos_before_raising(monkeypatch):

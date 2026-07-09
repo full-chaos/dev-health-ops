@@ -21,6 +21,15 @@ from dev_health_ops.api.admin.schemas import (
 )
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
 from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.exceptions import (
+    APIException,
+    AuthenticationException,
+    NotFoundException,
+    RateLimitException,
+)
+from dev_health_ops.providers.github.client import GitHubAuth
+from dev_health_ops.providers.github.code_client import GitHubCodeClient
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 from .common import get_session
 
@@ -117,15 +126,7 @@ async def list_credential_repos(
     provider = str(getattr(credential, "provider"))
     config: dict[str, Any] = getattr(credential, "config") or {}
 
-    from dev_health_ops.connectors.exceptions import (
-        AuthenticationException,
-        NotFoundException,
-        RateLimitException,
-    )
-
     if provider == "github":
-        from dev_health_ops.connectors.github import GitHubConnector
-
         github_credentials = _github_credentials_or_400(
             {
                 **decrypted,
@@ -139,46 +140,36 @@ async def list_credential_repos(
             or _string_value(decrypted.get("org"))
         )
         try:
-            github_connector = GitHubConnector(credentials=github_credentials)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=401, detail="GitHub App authentication failed"
-            ) from exc
-        try:
             if not effective_owner and github_credentials.is_app_auth:
-                # GitHub App installation tokens have no user surface.
-                # Enumerate installation repos directly via the REST API,
-                # then apply search as a client-side name filter.
                 repos = await _list_github_app_installation_repos(
                     github_credentials=github_credentials,
                     base_url=github_credentials.base_url or "https://api.github.com",
                     search=search,
                     max_repos=max_repos,
                 )
-            elif not effective_owner and search:
-                # Blank owner + search: enumerate token-wide repos and filter
-                # client-side via pattern to avoid a global GitHub search.
-                repos = github_connector.list_repositories(
-                    org_name=None,
-                    search=None,
-                    pattern=f"*{search}*",
-                    max_repos=max_repos,
-                )
             else:
-                repos = github_connector.list_repositories(
-                    org_name=effective_owner or None,
-                    search=search,
-                    max_repos=max_repos,
-                )
+                client = await _github_repo_list_client(github_credentials)
+                try:
+                    repos = await client.list_repositories(
+                        org_name=effective_owner or None,
+                        search=search if effective_owner else None,
+                        pattern=f"*{search}*"
+                        if search and not effective_owner
+                        else None,
+                        max_repos=max_repos,
+                    )
+                finally:
+                    client.drain_usage_observations()
+                    await client.close()
         except NotFoundException:
             return DiscoveredReposResponse(provider=provider, repos=[], total=0)
         except AuthenticationException as exc:
             raise HTTPException(status_code=401, detail=str(exc))
         except RateLimitException as exc:
             raise HTTPException(status_code=429, detail=str(exc))
+        except APIException as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
     elif provider == "gitlab":
-        from dev_health_ops.connectors.gitlab import GitLabConnector
-
         token = decrypted.get("token")
         url = (
             _string_value(decrypted.get("url"))
@@ -194,23 +185,20 @@ async def list_credential_repos(
         is_valid, url_error = _validate_external_url(url)
         if not is_valid:
             raise HTTPException(status_code=400, detail=url_error)
-        gitlab_connector = GitLabConnector(url=url, private_token=token)
         effective_owner = owner or _string_value(config.get("group"))
         try:
-            if not effective_owner:
-                # Blank owner: enumerate only membership-scoped projects to
-                # avoid returning globally-visible public projects the token
-                # is not a member of. Bypass the connector (frozen) and call
-                # python-gitlab directly with membership=True.
-                repos = _list_gitlab_membership_repos(
+            if effective_owner:
+                repos = await _list_gitlab_code_client_repos(
                     url=url,
-                    token=token,
+                    token=str(token),
+                    owner=effective_owner,
                     search=search,
                     max_repos=max_repos,
                 )
             else:
-                repos = gitlab_connector.list_repositories(
-                    org_name=effective_owner,
+                repos = await _list_gitlab_membership_repos(
+                    url=url,
+                    token=str(token),
                     search=search,
                     max_repos=max_repos,
                 )
@@ -367,6 +355,15 @@ async def test_connection(
         safe_provider = str(payload.provider).replace("\r", "").replace("\n", "")
         logger.exception("Test connection failed for %s", safe_provider)
 
+    # CHAOS-2780: this is the credential-test flow -- the most likely place
+    # for a secret-bearing exception message (or, via the provider helpers
+    # below, a raw external HTTP response body) to appear. Sanitize before
+    # it reaches EITHER sink: the persisted last_test_error (below) and the
+    # HTTP response returned to the caller (below that). sanitize_error_text
+    # is a no-op on None/already-clean text, so this is safe regardless of
+    # which branch above set `error`.
+    error = sanitize_error_text(error)
+
     # Always persist the test result when a stored credential exists
     # (covers both inline pre-save tests and DB-sourced tests)
     if stored is None:
@@ -425,6 +422,29 @@ def _build_safe_url(validated_base: str, path: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, safe_path, "", "", ""))
 
 
+async def _github_repo_list_client(github_credentials: Any) -> GitHubCodeClient:
+    if github_credentials.is_app_auth:
+        from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+
+        assert github_credentials.app_id is not None
+        assert github_credentials.private_key is not None
+        assert github_credentials.installation_id is not None
+        try:
+            token = GitHubAppTokenProvider(
+                app_id=github_credentials.app_id,
+                private_key=github_credentials.private_key,
+                installation_id=github_credentials.installation_id,
+                api_base_url=github_credentials.base_url or "https://api.github.com",
+            ).get_token()
+        except Exception as exc:
+            raise AuthenticationException("GitHub App authentication failed") from exc
+    else:
+        token = github_credentials.token
+    return GitHubCodeClient(
+        auth=GitHubAuth(token=token, base_url=github_credentials.base_url)
+    )
+
+
 async def _list_github_app_installation_repos(
     github_credentials: Any,
     base_url: str,
@@ -438,179 +458,56 @@ async def _list_github_app_installation_repos(
     Applies search as a client-side name filter (fnmatch) to avoid a global
     GitHub search.
     """
-    import fnmatch
-
-    import httpx
-
-    from dev_health_ops.connectors.models import Repository
-    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
-
-    assert github_credentials.app_id is not None
-    assert github_credentials.private_key is not None
-    assert github_credentials.installation_id is not None
-
-    token = GitHubAppTokenProvider(
-        app_id=github_credentials.app_id,
-        private_key=github_credentials.private_key,
-        installation_id=github_credentials.installation_id,
-        api_base_url=base_url,
-    ).get_token()
-
-    pattern = f"*{search}*" if search else None
-    repos: list[Any] = []
-    page = 1
-    per_page = 100
-
-    async with httpx.AsyncClient() as client:
-        while True:
-            resp = await client.get(
-                _build_safe_url(base_url, "installation/repositories"),
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-                params={"per_page": per_page, "page": page},
-                timeout=10,
-            )
-            if resp.status_code == 401:
-                raise HTTPException(
-                    status_code=401,
-                    detail="GitHub App authentication failed",
-                )
-            if resp.status_code == 403:
-                body_lower = resp.text.lower()
-                remaining = resp.headers.get("x-ratelimit-remaining")
-                retry_after = resp.headers.get("retry-after")
-                is_rate_limit = (
-                    remaining == "0"
-                    or retry_after is not None
-                    or "rate limit" in body_lower
-                    or "abuse" in body_lower
-                    or "secondary" in body_lower
-                )
-                if is_rate_limit:
-                    raise HTTPException(
-                        status_code=429,
-                        detail="GitHub API rate limit exceeded",
-                    )
-                raise HTTPException(
-                    status_code=403,
-                    detail="GitHub App permission denied",
-                )
-            if resp.status_code == 429:
-                raise HTTPException(
-                    status_code=429,
-                    detail="GitHub API rate limit exceeded",
-                )
-            if resp.status_code >= 500:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"GitHub API error: {resp.status_code}",
-                )
-            if resp.status_code != 200:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"GitHub API error: {resp.status_code}",
-                )
-            data = resp.json()
-            page_repos = data.get("repositories", [])
-            if not page_repos:
-                break
-            for r in page_repos:
-                if pattern and not fnmatch.fnmatch(
-                    (r.get("full_name") or "").lower(), pattern.lower()
-                ):
-                    continue
-                repos.append(
-                    Repository(
-                        id=r["id"],
-                        name=r["name"],
-                        full_name=r["full_name"],
-                        default_branch=r.get("default_branch") or "main",
-                        description=r.get("description"),
-                        url=r.get("html_url") or "",
-                    )
-                )
-                if len(repos) >= max_repos:
-                    return repos
-            if len(page_repos) < per_page:
-                break
-            page += 1
-
-    return repos
+    _validated_github_base_url(base_url)
+    client = await _github_repo_list_client(github_credentials)
+    try:
+        return await client.list_installation_repositories(
+            search=search,
+            max_repos=max_repos,
+        )
+    except AuthenticationException as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except RateLimitException as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except APIException as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        client.drain_usage_observations()
+        await client.close()
 
 
-def _list_gitlab_membership_repos(
+async def _list_gitlab_code_client_repos(
+    url: str,
+    token: str,
+    owner: str | None,
+    search: str | None,
+    max_repos: int,
+) -> list[Any]:
+    from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
+
+    async with GitLabCodeClient(private_token=token, base_url=url) as client:
+        return await client.list_projects(
+            group_name=owner,
+            search=search if owner else None,
+            pattern=f"*{search}*" if search and not owner else None,
+            membership=owner is None,
+            max_projects=max_repos,
+        )
+
+
+async def _list_gitlab_membership_repos(
     url: str,
     token: str,
     search: str | None,
     max_repos: int,
 ) -> list[Any]:
-    """Enumerate GitLab projects the token is a member of (membership=True).
-
-    Bypasses the frozen connector to call python-gitlab directly with
-    membership=True, ensuring only credential-accessible projects are returned.
-    Applies search as a client-side fnmatch filter to avoid a global search.
-    """
-    import fnmatch
-
-    import gitlab
-    from gitlab.exceptions import GitlabAuthenticationError, GitlabError
-
-    from dev_health_ops.connectors.exceptions import (
-        AuthenticationException,
-        RateLimitException,
+    return await _list_gitlab_code_client_repos(
+        url=url,
+        token=token,
+        owner=None,
+        search=search,
+        max_repos=max_repos,
     )
-    from dev_health_ops.connectors.models import Repository
-
-    gl = gitlab.Gitlab(url=url, private_token=token)
-    pattern = f"*{search}*" if search else None
-    repos: list[Any] = []
-    page = 1
-    per_page = 100
-
-    try:
-        while True:
-            gl_projects = gl.projects.list(
-                membership=True,
-                per_page=per_page,
-                page=page,
-            )
-            if not gl_projects:
-                break
-            for p in gl_projects:
-                full_name = str(
-                    getattr(p, "path_with_namespace", None)
-                    or getattr(p, "name", "")
-                    or ""
-                )
-                if pattern and not fnmatch.fnmatch(full_name.lower(), pattern.lower()):
-                    continue
-                repos.append(
-                    Repository(
-                        id=p.id,
-                        name=p.name,
-                        full_name=full_name,
-                        default_branch=getattr(p, "default_branch", None) or "main",
-                        description=getattr(p, "description", None),
-                        url=getattr(p, "web_url", "") or "",
-                    )
-                )
-                if len(repos) >= max_repos:
-                    return repos
-            if len(gl_projects) < per_page:
-                break
-            page += 1
-    except GitlabAuthenticationError as exc:
-        raise AuthenticationException(str(exc)) from exc
-    except GitlabError as exc:
-        msg = str(exc).lower()
-        if "rate" in msg or "429" in msg:
-            raise RateLimitException(str(exc)) from exc
-        raise
-
-    return repos
 
 
 async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -667,7 +564,20 @@ async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
                     "repository_count": data.get("total_count"),
                 }
             return True, {"user": data.get("login"), "name": data.get("name")}
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -695,7 +605,20 @@ async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
         if resp.status_code == 200:
             data = resp.json()
             return True, {"user": data.get("username"), "name": data.get("name")}
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_jira_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -731,7 +654,20 @@ async def _test_jira_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, 
                 "user": data.get("emailAddress"),
                 "name": data.get("displayName"),
             }
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_linear_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -753,7 +689,20 @@ async def _test_linear_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
             viewer = data.get("data", {}).get("viewer", {})
             if viewer:
                 return True, {"user": viewer.get("email"), "name": viewer.get("name")}
-        return False, {"status": resp.status_code, "error": resp.text[:200]}
+        return False, {
+            "status": resp.status_code,
+            # CHAOS-2780: this is a raw response body from the external
+            # provider, not something this codebase formats -- some
+            # providers echo request details (including the submitted
+            # credential) back in error/diagnostic bodies, so it must go
+            # through the same redaction as any other error-bearing field
+            # in this response. Sanitize the FULL body (not a blind [:200]
+            # slice first) so the 200-char cap can never split a credential
+            # in half and leave a partial, still-identifiable fragment --
+            # same redact-before-truncate ordering sanitize_error_text
+            # itself guarantees internally.
+            "error": sanitize_error_text(resp.text, max_length=200),
+        }
 
 
 async def _test_launchdarkly_connection(

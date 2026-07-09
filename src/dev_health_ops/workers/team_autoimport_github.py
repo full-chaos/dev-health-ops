@@ -59,18 +59,39 @@ async def _populate_async(
     scope: dict[str, Any],
     team_store: Any | None = None,
 ) -> dict[str, Any]:
+    strict = bool(scope.get("strict_reference_discovery"))
     if not _provider_capable():
+        if strict:
+            raise ValueError(
+                "GitHub is not import-capable for strict reference discovery"
+            )
         return _zero_summary(org_id=org_id, reason="provider_not_import_capable")
 
-    token = _first_string(credentials, "token", "access_token", "github_token")
+    try:
+        token = _github_access_token(credentials)
+    except Exception as exc:
+        if strict:
+            raise
+        logger.info(
+            "Skipping GitHub team auto-import for org_id=%s: credential token exchange failed: %s",
+            org_id,
+            exc,
+        )
+        return _zero_summary(org_id=org_id, reason="provider_discovery_skipped")
     org_name = _github_org(credentials=credentials, scope=scope)
     if not token or not org_name:
+        if strict:
+            raise ValueError(
+                "missing GitHub credentials or org for strict reference discovery"
+            )
         return _zero_summary(org_id=org_id, reason="missing_github_credentials_or_org")
 
     discovery = TeamDiscoveryService(session=None, org_id=org_id)
     try:
         teams = await discovery.discover_github(token=token, org_name=org_name)
     except Exception as exc:
+        if strict:
+            raise
         logger.info(
             "Skipping GitHub team auto-import for org_id=%s org=%s: discovery failed: %s",
             org_id,
@@ -96,6 +117,7 @@ async def _populate_async(
         teams=teams,
         now=now,
         resolver=resolver,
+        strict=strict,
     )
     sink = _sink(scope)
     membership_rows = await _split_memberships_for_review(
@@ -122,6 +144,8 @@ async def _populate_async(
 
     return {
         "teams_imported": len(team_rows),
+        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_sprint_ids": [],
         "projects_imported": 0,
         "members_imported": len({row.member_id for row in membership_rows}),
         "team_memberships_imported": len(membership_rows),
@@ -152,6 +176,31 @@ def _zero_summary(*, org_id: str, reason: str) -> dict[str, Any]:
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }
+
+
+def _github_access_token(credentials: Mapping[str, Any]) -> str | None:
+    token = _first_string(credentials, "token", "access_token", "github_token")
+    if token:
+        return token
+
+    from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
+    from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+
+    github_credentials = github_credentials_from_mapping(dict(credentials))
+    if github_credentials is None or not github_credentials.is_app_auth:
+        return None
+    if (
+        github_credentials.app_id is None
+        or github_credentials.private_key is None
+        or github_credentials.installation_id is None
+    ):
+        return None
+    return GitHubAppTokenProvider(
+        app_id=github_credentials.app_id,
+        private_key=github_credentials.private_key,
+        installation_id=github_credentials.installation_id,
+        api_base_url=github_credentials.base_url or "https://api.github.com",
+    ).get_token()
 
 
 def _github_org(
@@ -236,6 +285,7 @@ async def _membership_rows(
     teams: Iterable[Any],
     now: datetime,
     resolver: IdentityResolver,
+    strict: bool,
 ) -> tuple[list[TeamMembershipRecord], dict[str, list[str]], set[tuple[str, str]]]:
     service = TeamMembershipService(session=cast(Any, None), org_id=org_id)
     rows: list[TeamMembershipRecord] = []
@@ -252,6 +302,8 @@ async def _membership_rows(
                 team_slug=team_slug,
             )
         except Exception as exc:
+            if strict:
+                raise
             logger.info(
                 "Skipping GitHub membership import for org_id=%s team=%s: %s",
                 org_id,
@@ -273,10 +325,9 @@ async def _membership_rows(
             # facets[0] is the alias-resolved identity (canonical email when the
             # github:<login> is aliased, else github:<login>) — the facet a
             # no-email assignee resolves to. It goes into raw_provider_user_id
-            # (the only member_by_identity slot free; member_id is the PK and
-            # keeps the bare login) AND, with the provider-qualified id, into the
-            # teams.members roster so BOTH attribution paths match aliased and
-            # non-aliased members (CHAOS-2609).
+            # (member_id is the PK and keeps the bare login), identity_facets,
+            # AND the teams.members roster so BOTH attribution paths match
+            # aliased and non-aliased members (CHAOS-2609, CHAOS-2625).
             facets = resolver.membership_facets(
                 provider=PROVIDER,
                 username=raw_identity,
@@ -294,6 +345,7 @@ async def _membership_rows(
                     member_id=member_id,
                     raw_provider_user_id=facets[0],
                     raw_email=getattr(member, "email", None),
+                    identity_facets=facets,
                     source="provider_access",
                     is_primary=0,
                     specificity=BASE_SPECIFICITY,
@@ -318,7 +370,10 @@ def _roster_from_memberships(
     roster: dict[str, list[str]] = {}
     for row in rows:
         roster_for_team = roster.setdefault(str(row.team_id), [])
-        for value in (row.raw_provider_user_id, row.raw_email):
+        values = tuple(row.identity_facets) or tuple(
+            value for value in (row.raw_provider_user_id, row.raw_email) if value
+        )
+        for value in values:
             if value and value not in roster_for_team:
                 roster_for_team.append(str(value))
     return roster

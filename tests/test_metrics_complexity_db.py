@@ -35,12 +35,14 @@ class FakeClickHouseClient:
 
 def test_load_blame_contents_query_uses_arraysort():
     client = FakeClickHouseClient([])
-    job._load_blame_contents(client, uuid.uuid4(), None, None)
+    job._load_blame_contents(client, uuid.uuid4(), "test-org", None, None)
     assert client.queries
-    query, _params = client.queries[0]
+    query, params = client.queries[0]
     assert "arraySort" in query
     assert "groupArray" in query
     assert "ORDER BY line_no" not in query
+    assert "org_id = {org_id:String}" in query
+    assert params["org_id"] == "test-org"
 
 
 class FakeClickHouseSink:
@@ -150,3 +152,177 @@ def test_complexity_db_job_falls_back_to_blame(monkeypatch):
         "src/alpha.py",
         "src/beta.py",
     }
+
+
+def test_complexity_db_job_backfill_writes_single_day_not_duplicate_flat_rows(
+    monkeypatch,
+):
+    """CHAOS-2850: backfill_days > 1 must not fabricate duplicate flat rows.
+
+    Historical file snapshots are not stored, so re-using the CURRENT
+    git_files content across N backfill days would write N identical
+    cyclomatic_per_kloc rows -- flatlining complexity_delta's trailing
+    30-day window (load_repo_complexity_delta_30d) for the whole backfill
+    period. Only the target day's row may be written.
+    """
+    repo_id = uuid.uuid4()
+    files = [("src/alpha.py", "def alpha():\n    return 1\n")]
+    client = FakeClickHouseClient(files)
+    sink = FakeClickHouseSink(client)
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
+
+    rc = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 30),
+        backfill_days=30,
+        language_globs=None,
+        max_files=None,
+        org_id="test-org",
+    )
+
+    assert rc == 0
+    assert len(sink.dailies) == 1, (
+        f"Expected exactly one repo_complexity_daily row (the target day), "
+        f"got {len(sink.dailies)} -- backfill must not fabricate duplicate "
+        f"flat historical rows."
+    )
+    assert sink.dailies[0].day == date(2025, 1, 30)
+
+
+def test_complexity_db_job_produces_distinct_values_across_days_when_code_differs(
+    monkeypatch,
+):
+    """CHAOS-2850: complexity must NOT be static across days when code changes.
+
+    Each real calendar day's run scans whatever is CURRENTLY in git_files at
+    that moment. A simple function on day 1 and a heavily-branching version
+    of the same file on day 2 must yield genuinely different
+    cyclomatic_per_kloc -- proving the daily cadence (not a fabricated
+    backfill) is what produces a real trend.
+    """
+    repo_id = uuid.uuid4()
+
+    day1_files = [("src/alpha.py", "def alpha():\n    return 1\n")]
+    day2_files = [
+        (
+            "src/alpha.py",
+            "def alpha(x):\n"
+            "    if x > 0 and x < 100 or x == 5:\n"
+            "        return 1\n"
+            "    return 0\n",
+        )
+    ]
+
+    sink1 = FakeClickHouseSink(FakeClickHouseClient(day1_files))
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink1)
+    rc1 = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 5),
+        backfill_days=1,
+        language_globs=None,
+        max_files=None,
+        org_id="test-org",
+    )
+    assert rc1 == 0
+    day1_daily = sink1.dailies[0]
+
+    sink2 = FakeClickHouseSink(FakeClickHouseClient(day2_files))
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink2)
+    rc2 = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 6),
+        backfill_days=1,
+        language_globs=None,
+        max_files=None,
+        org_id="test-org",
+    )
+    assert rc2 == 0
+    day2_daily = sink2.dailies[0]
+
+    assert day1_daily.day == date(2025, 1, 5)
+    assert day2_daily.day == date(2025, 1, 6)
+    assert day1_daily.cyclomatic_per_kloc != day2_daily.cyclomatic_per_kloc, (
+        "Complexity must reflect the actual code scanned on each day, not "
+        "stay static across days."
+    )
+
+
+class FakeTenantCollisionClient:
+    def __init__(self, repo_id, rows_by_org, blame_by_org, last_synced_by_org):
+        self.repo_id = repo_id
+        self.rows_by_org = rows_by_org
+        self.blame_by_org = blame_by_org
+        self.last_synced_by_org = last_synced_by_org
+        self.queries = []
+
+    def query(self, query, parameters=None):
+        params = parameters or {}
+        self.queries.append((query, params))
+        org_id = params.get("org_id")
+        rows = self.rows_by_org.get(org_id, [])
+        if "maxOrNull(last_synced)" in query and "git_files" in query:
+            return FakeQueryResult([[self.last_synced_by_org.get(org_id)]])
+        if "maxOrNull(last_synced)" in query and "git_blame" in query:
+            return FakeQueryResult([[None]])
+        if "FROM git_files" in query and "count()" in query:
+            non_empty = [row for row in rows if row[1]]
+            return FakeQueryResult([[len(rows), len(non_empty)]])
+        if "FROM git_files" in query and "contents" in query and "count()" not in query:
+            return FakeQueryResult(rows)
+        if "FROM git_blame" in query:
+            return FakeQueryResult(self.blame_by_org.get(org_id, []))
+        raise AssertionError(f"Unexpected query: {query}")
+
+
+def test_complexity_db_job_scopes_git_file_reads_by_org_id(monkeypatch):
+    repo_id = uuid.uuid4()
+    client = FakeTenantCollisionClient(
+        repo_id,
+        rows_by_org={
+            "org-a": [("src/a.py", "")],
+            "org-b": [
+                (
+                    "src/b.py",
+                    "",
+                )
+            ],
+        },
+        blame_by_org={
+            "org-a": [("src/a.py", "def a():\n    return 1\n")],
+            "org-b": [
+                (
+                    "src/b.py",
+                    "def b(x):\n    if x:\n        return 1\n    return 0\n",
+                )
+            ],
+        },
+        last_synced_by_org={
+            "org-a": datetime(2025, 1, 2, 3, 4, 5),
+            "org-b": datetime(2025, 1, 9, 3, 4, 5),
+        },
+    )
+    sink = FakeClickHouseSink(client)
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
+
+    rc = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 5),
+        backfill_days=1,
+        language_globs=None,
+        max_files=None,
+        org_id="org-a",
+    )
+
+    assert rc == 0
+    assert {snap.file_path for snap in sink.snapshots} == {"src/a.py"}
+    assert all(
+        "org_id = {org_id:String}" in query and params.get("org_id") == "org-a"
+        for query, params in client.queries
+        if "FROM git_files" in query
+        or "FROM git_blame" in query
+        or "maxOrNull(last_synced)" in query
+    )

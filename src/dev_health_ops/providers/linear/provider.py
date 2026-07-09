@@ -7,8 +7,10 @@ This wraps the Linear client and normalization logic for work item ingestion.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from dataclasses import replace
 from datetime import datetime
+from typing import Any
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -29,6 +31,46 @@ from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    return (
+        row.get(key, default) if isinstance(row, dict) else getattr(row, key, default)
+    )
+
+
+def _linear_reference_team(row: Any, team_key: str) -> dict[str, Any] | None:
+    row_provider = str(_row_value(row, "provider", "") or "")
+    if row_provider and row_provider != "linear":
+        return None
+    row_id = str(_row_value(row, "id", "") or "").strip()
+    row_name = str(_row_value(row, "name", "") or "").strip()
+    native_key = str(_row_value(row, "native_team_key", "") or "").strip()
+    project_keys = [
+        str(key).strip() for key in (_row_value(row, "project_keys", []) or [])
+    ]
+    candidates = {
+        value for value in [row_id, row_name, native_key, *project_keys] if value
+    }
+    if team_key not in candidates:
+        return None
+    return {
+        "id": row_id or team_key,
+        "key": native_key or team_key,
+        "name": row_name or team_key,
+    }
+
+
+def _linear_sprints_from_reference(
+    rows: Sequence[Sprint] | None, *, team_key: str | None
+) -> list[Sprint]:
+    if not team_key:
+        return []
+    return [
+        sprint
+        for sprint in rows or []
+        if sprint.provider == "linear" and sprint.native_team_key == team_key
+    ]
 
 
 class LinearProvider(ProviderWithClient[LinearClient]):
@@ -120,28 +162,98 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         fetch_history = _env_flag("LINEAR_FETCH_HISTORY", True)
         fetch_cycles = _env_flag("LINEAR_FETCH_CYCLES", True)
 
-        cycle_cache: dict[str, Sprint] = {}
-
         updated_after: datetime | None = None
         if ctx.window.updated_since:
             updated_after = _to_utc(ctx.window.updated_since)
+        updated_before: datetime | None = None
+        if ctx.window.active_until:
+            updated_before = _to_utc(ctx.window.active_until)
 
+        yielded_batch = False
         team_key = ctx.repo
+        cycle_cache: dict[str, Sprint] = {
+            sprint.sprint_id: sprint
+            for sprint in _linear_sprints_from_reference(
+                ctx.reference_sprints,
+                team_key=team_key,
+            )
+        }
         teams_to_sync: list[dict] = []
 
         if team_key:
-            all_teams = list(client.iter_teams())
-            for team in all_teams:
-                if team.get("key") == team_key or team.get("name") == team_key:
+            api_team: dict[str, Any] | None = None
+            for row in ctx.reference_teams or []:
+                team = _linear_reference_team(row, team_key)
+                if team:
                     teams_to_sync.append(team)
                     break
             if not teams_to_sync:
-                raise ValueError(
-                    f"Linear team '{team_key}' not found. "
-                    f"Available teams: {[t.get('key') for t in all_teams]}"
-                )
+                api_team = client.get_team_by_key(team_key)
+                team = api_team
+                if not isinstance(api_team, dict) or not api_team:
+                    if ctx.reference_teams is None:
+                        for legacy_team in client.iter_teams():
+                            if (
+                                legacy_team.get("key") == team_key
+                                or legacy_team.get("name") == team_key
+                            ):
+                                team = legacy_team
+                                break
+                    if not isinstance(team, dict) or not team:
+                        raise ValueError(f"Linear team '{team_key}' not found")
+                assert isinstance(team, dict)
+                resolved_team: dict[str, Any] = team
+                teams_to_sync.append(resolved_team)
+            if not cycle_cache and fetch_cycles:
+                fetched_sprints = []
+                if api_team is None:
+                    api_team = client.get_team_by_key(team_key)
+                if api_team and api_team.get("id"):
+                    for cycle in client.iter_cycles(team_id=str(api_team["id"])):
+                        sprint = replace(
+                            linear_cycle_to_sprint(cycle), native_team_key=team_key
+                        )
+                        cycle_cache[sprint.sprint_id] = sprint
+                        fetched_sprints.append(sprint)
+                if fetched_sprints and ctx.reference_sink is not None:
+                    ctx.reference_sink.write_sprints(
+                        [
+                            Sprint(
+                                provider=sprint.provider,
+                                sprint_id=sprint.sprint_id,
+                                name=sprint.name,
+                                state=sprint.state,
+                                started_at=sprint.started_at,
+                                ended_at=sprint.ended_at,
+                                completed_at=sprint.completed_at,
+                                native_team_key=team_key,
+                                last_synced=sprint.last_synced,
+                                org_id=str(ctx.org_id or ""),
+                            )
+                            for sprint in fetched_sprints
+                        ]
+                    )
         else:
             teams_to_sync = list(client.iter_teams())
+            if fetch_cycles:
+                for team in teams_to_sync:
+                    team_id = team.get("id")
+                    if not team_id:
+                        continue
+                    native_team_key = str(team.get("key") or "") or None
+                    for cycle in client.iter_cycles(team_id=team_id):
+                        sprint = replace(
+                            linear_cycle_to_sprint(cycle),
+                            native_team_key=native_team_key,
+                        )
+                        cycle_cache.setdefault(sprint.sprint_id, sprint)
+                if cycle_cache:
+                    yield ProviderBatch(sprints=list(cycle_cache.values()))
+                    yielded_batch = True
+
+        if team_key and cycle_cache:
+            yield ProviderBatch(sprints=list(cycle_cache.values()))
+            yielded_batch = True
 
         logger.info(
             "Linear: syncing %d team(s) (updated_after=%s)",
@@ -152,7 +264,6 @@ class LinearProvider(ProviderWithClient[LinearClient]):
         fetched_count = 0
         fetched_transitions = 0
         fetched_interactions = 0
-        yielded_batch = False
 
         for team in teams_to_sync:
             team_id = team.get("id")
@@ -163,30 +274,12 @@ class LinearProvider(ProviderWithClient[LinearClient]):
 
             logger.info("Linear: fetching issues for team %s", team_key_str)
 
-            batch_sprints: list[Sprint] = []
-            if fetch_cycles:
-                try:
-                    for cycle in client.iter_cycles(team_id=team_id):
-                        sprint = linear_cycle_to_sprint(cycle)
-                        if sprint.sprint_id not in cycle_cache:
-                            cycle_cache[sprint.sprint_id] = sprint
-                            batch_sprints.append(sprint)
-                except Exception as exc:
-                    logger.warning(
-                        "Linear: failed to fetch cycles for team %s: %s",
-                        team_key_str,
-                        exc,
-                    )
-
-            if batch_sprints:
-                yield ProviderBatch(sprints=batch_sprints)
-                yielded_batch = True
-
             try:
                 pages_seen = False
                 for issues_page in client.iter_issues_pages(
                     team_keys=[team_key_str] if team_key_str else None,
                     updated_after=updated_after,
+                    updated_before=updated_before,
                 ):
                     pages_seen = True
                     page_items: list[WorkItem] = []
@@ -266,6 +359,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                         client.iter_issues(
                             team_keys=[team_key_str] if team_key_str else None,
                             updated_after=updated_after,
+                            updated_before=updated_before,
                             limit=ctx.limit,
                         )
                     )

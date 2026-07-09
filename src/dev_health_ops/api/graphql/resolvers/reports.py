@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
 from dev_health_ops.models.settings import JobStatus, ScheduledJob
+from dev_health_ops.utils.datetime import validate_timezone_name
 
 
 @strawberry.type
@@ -323,6 +324,10 @@ async def _ensure_or_update_schedule(
 ) -> None:
     if cron is None:
         return
+
+    # Reject invalid timezones up front so a schedule never silently runs in UTC
+    # at dispatch time (CHAOS-2689). Raises ValueError -> surfaced as a GraphQL error.
+    validate_timezone_name(tz)
 
     if report.schedule_id:
         result = await session.execute(

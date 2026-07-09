@@ -284,6 +284,13 @@ def test_run_sync_unit_success_emits_structured_log(db_session, monkeypatch, cap
     with caplog.at_level(logging.INFO, logger="dev_health_ops.workers.sync_units"):
         getattr(run_sync_unit, "run")(str(unit.id))
 
+    started_records = [r for r in caplog.records if "started" in r.getMessage()]
+    assert started_records, "Expected a run_sync_unit.started log record"
+    started = started_records[0]
+    assert hasattr(started, "budget_estimate")
+    assert started.budget_estimate[0]["bucket"]["provider"] == "github"
+    assert started.budget_estimate[0]["bucket"]["dimension"] == "rest_core"
+
     success_records = [r for r in caplog.records if "success" in r.getMessage()]
     assert success_records, "Expected a run_sync_unit.success log record"
     rec = success_records[0]

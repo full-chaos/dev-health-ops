@@ -4,9 +4,10 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, tzinfo
 from typing import Any
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -295,3 +296,47 @@ def _invalidate_sync_cache(sync_type: str, org_id: str) -> None:
         logger.info("Invalidated %d cache entries after %s sync", count, sync_type)
     except Exception as e:
         logger.warning("Cache invalidation failed (non-fatal): %s", e)
+
+
+def cron_next_run(
+    cron_expr: str, base: datetime, tz_name: str | None = None
+) -> datetime:
+    """Return the next cron occurrence after ``base``, evaluated in ``tz_name``.
+
+    Cron fields are wall-clock times in the schedule's selected timezone. The
+    cron is evaluated in **naive local** wall-clock time and the result is then
+    localized back to the zone, so each cron occurrence maps to exactly one
+    instant: at a DST fall-back the repeated wall-clock hour is not emitted
+    twice (which would double-fire a schedule), and a spring-forward gap still
+    resolves to a single instant. The result is returned as an aware UTC
+    datetime so callers can compare it against a UTC ``now`` and persist it.
+
+    A naive ``base`` is treated as UTC (SQLite returns naive timestamps). An
+    empty or unknown ``tz_name`` falls back to UTC -- this is runtime
+    defense-in-depth only; user-supplied timezones are validated at the
+    schedule write path (see ``api/admin/routers/sync.py`` and the report
+    schedule resolver), so a bad value here means a legacy/corrupt row, not
+    new input.
+    """
+    from croniter import croniter
+
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+
+    tz: tzinfo = timezone.utc
+    if tz_name:
+        try:
+            tz = ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.warning(
+                "Unknown schedule timezone %r; evaluating cron in UTC", tz_name
+            )
+
+    # Evaluate the cron against naive wall-clock time in the target zone so
+    # croniter advances by wall clock; then localize the result back. ``fold``
+    # defaults to 0, picking the earlier offset for an ambiguous fall-back time.
+    local_base = base.astimezone(tz).replace(tzinfo=None)
+    next_local = croniter(cron_expr, local_base).get_next(datetime)
+    if not isinstance(next_local, datetime):  # defensive: honour croniter contract
+        raise TypeError("croniter.get_next did not return a datetime")
+    return next_local.replace(tzinfo=tz).astimezone(timezone.utc)

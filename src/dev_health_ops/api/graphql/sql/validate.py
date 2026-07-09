@@ -24,11 +24,36 @@ class Dimension(str, Enum):
     @classmethod
     def db_column(cls, dim: Dimension, use_investment: bool = False) -> str:
         """Get the database column name for a dimension."""
+        if dim == cls.AUTHOR:
+            # CHAOS-2385/CHAOS-2492: neither ClickHouse source table this
+            # compiler ever selects FROM has a scalar per-row author identity
+            # column. investment_metrics_daily (non-investment) and
+            # latest_work_unit_investments (investment) both lack
+            # author_email; the investment path's work_unit_authors CTE (the
+            # `au` join -- see compiler.py / filter_translation.py) exposes
+            # only an ARRAY column (au.author_emails, one row per work unit)
+            # for hasAny() membership filtering, not a scalar GROUP BY column.
+            # Reject explicitly rather than emit SQL referencing a column
+            # that doesn't exist (mirrors the honest-rejection precedent in
+            # compiler.py's _reject_filtered_same_dimension_flow_matrix,
+            # CHAOS-2487). Filter by who.developers / scope.level=developer
+            # instead of grouping by author.
+            raise ValidationError(
+                "author is not a supported breakdown/grouping dimension; "
+                "filter by who.developers or scope.level=developer instead "
+                "of grouping by author.",
+                field="dimension",
+                value=dim.value,
+            )
         if use_investment:
             mapping = {
                 cls.TEAM: "ifNull(nullIf(ut.team_label, ''), 'unassigned')",
-                cls.REPO: "ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id)))",
-                cls.AUTHOR: "author_id",
+                # Unassigned repo emits '' (NOT the bare 'unassigned'): the web
+                # adapter renders an empty repo label as a distinct "Unassigned
+                # repo" node. Emitting 'unassigned' collides with the TEAM
+                # unassigned label at the ECharts node-name level and folds
+                # TEAM->THEME->REPO into a cycle ("Sankey is a DAG" error).
+                cls.REPO: "ifNull(nullIf(r.repo, ''), if(repo_id IS NULL, '', toString(repo_id)))",
                 cls.WORK_TYPE: "work_unit_type",
                 cls.THEME: "splitByChar('.', subcategory_kv.1)[1]",
                 cls.SUBCATEGORY: "subcategory_kv.1",
@@ -37,7 +62,6 @@ class Dimension(str, Enum):
             mapping = {
                 cls.TEAM: "team_id",
                 cls.REPO: "repo_id",
-                cls.AUTHOR: "author_id",
                 cls.WORK_TYPE: "work_item_type",
                 cls.THEME: "investment_area",
                 cls.SUBCATEGORY: "project_stream",
@@ -75,20 +99,26 @@ class Measure(str, Enum):
         return [m.value for m in cls]
 
     @classmethod
-    def db_expression(cls, measure: Measure, use_investment: bool = False) -> str:
+    def db_expression(
+        cls,
+        measure: Measure,
+        use_investment: bool = False,
+        use_repo_allocation: bool = False,
+    ) -> str:
         if use_investment:
+            throughput_expr = "SUM(subcategory_kv.2)"
+            cycle_time_expr = "AVG(dateDiff('hour', from_ts, to_ts))"
+            if use_repo_allocation:
+                throughput_expr = "SUM(subcategory_kv.2 * allocation_weight)"
+                cycle_time_expr = "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight) / NULLIF(SUM(allocation_weight), 0)"
             mapping: dict[Measure, str] = {
                 cls.COUNT: "SUM(subcategory_kv.2 * effort_value)",
-                # THROUGHPUT: each work unit's subcategory probabilities sum to
-                # ~1.0, so summing them gives the weighted count of work units.
-                cls.THROUGHPUT: "SUM(subcategory_kv.2)",
+                cls.THROUGHPUT: throughput_expr,
                 # CHURN_LOC: effort_value stores the actual churn LOC for work
                 # units whose effort_metric = 'churn_loc'; weight by subcategory
                 # probability to apportion across the ARRAY JOIN fan-out.
                 cls.CHURN_LOC: "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))",
-                # CYCLE_TIME_HOURS: derived from the stored timestamps (from_ts,
-                # to_ts) as the per-work-unit cycle duration in hours.
-                cls.CYCLE_TIME_HOURS: "AVG(dateDiff('hour', from_ts, to_ts))",
+                cls.CYCLE_TIME_HOURS: cycle_time_expr,
             }
         else:
             mapping = {

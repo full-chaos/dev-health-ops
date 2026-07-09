@@ -1,16 +1,16 @@
 """SyncConfiguration to fan-out planner request routing.
 
-The config migration (``config_migration.py``) links each legacy
-``SyncConfiguration`` to integration-era records:
+Every ``SyncConfiguration`` is created integration-native (see
+``api/admin/routers/sync.py``):
 
-* a *parent* config gets ``migrated_integration_id`` set to its Integration;
-* a *child* config gets both ``migrated_integration_id`` (the parent's
-  Integration) and ``migrated_source_id`` (its own IntegrationSource).
+* a *parent* config gets ``integration_id`` set to its Integration;
+* a *child* config gets both ``integration_id`` (the parent's
+  Integration) and ``source_id`` (its own IntegrationSource).
 
 The admin "Sync Now" endpoint and scheduled-sync beat route configs through the
-fan-out planner (``plan_sync_run`` + ``dispatch_sync_run``). Configs that were
-not linked to integration-era records cannot be routed and callers fail or skip
-explicitly instead of falling back to deleted legacy workers.
+fan-out planner (``plan_sync_run`` + ``dispatch_sync_run``). A config with no
+linked integration cannot be routed and callers fail or skip explicitly instead
+of falling back to deleted legacy workers.
 
 The outbox and reconciler relay now recover committed PLANNED runs. This module's `mark_sync_run_failed` helper is kept as a legacy, best-effort fallback for the non-outbox path.
 """
@@ -65,8 +65,8 @@ def map_sync_mode(intent: str) -> str:
 def _dataset_keys_for_config(config: SyncConfiguration) -> tuple[str, ...]:
     """Map a config's legacy ``sync_targets`` to integration dataset keys.
 
-    Mirrors ``config_migration._dataset_keys_for_config`` so a migrated child's
-    trigger replays exactly the datasets the legacy child used to cover.
+    Mirrors the dataset-key mapping used at create time so a child config's
+    trigger replays exactly the datasets it covers.
     """
     targets = {str(t) for t in (config.sync_targets or []) if t is not None}
     if not targets:
@@ -84,23 +84,23 @@ def plan_request_for_config(
     triggered_by: str,
     mode: str = "incremental",
 ) -> SyncPlanRequest | None:
-    """Build a :class:`SyncPlanRequest` for a migrated config, else ``None``.
+    """Build a :class:`SyncPlanRequest` for an integration-linked config, else ``None``.
 
-    Returns ``None`` when the config was never migrated (no
-    ``migrated_integration_id``). The integration planner is the only routing
+    Returns ``None`` when the config has no linked integration (no
+    ``integration_id``). The integration planner is the only routing
     path (the legacy worker was removed in CHAOS-2647), so the caller must fail
     or skip when no planner route exists.
 
     Routing semantics:
 
-    * **Parent config** (no ``migrated_source_id``): leave source and dataset
+    * **Parent config** (no ``source_id``): leave source and dataset
       scope unset. Callers that route planner-managed parents through
       :func:`planner_request_for_config_if_routed` narrow sources to the
       config-tagged ``IntegrationSource`` rows in that session-aware wrapper;
       direct callers keep the historic all-enabled integration fan-out.
-    * **Child config** (``migrated_source_id`` set): scope the run to that one
+    * **Child config** (``source_id`` set): scope the run to that one
       source, and to the dataset keys derived from the child's legacy targets so
-      the migrated trigger covers exactly what the child used to.
+      the trigger covers exactly what the child used to.
 
     Mode resolution (D4 / D5 compat): if the caller passes the default
     ``mode="incremental"`` and the config's ``sync_options`` carries a truthy
@@ -109,11 +109,11 @@ def plan_request_for_config(
     ``mode="backfill"`` or ``mode="full_resync"`` from the caller is never
     overridden.
     """
-    integration_id = getattr(config, "migrated_integration_id", None)
+    integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         return None
 
-    source_id = getattr(config, "migrated_source_id", None)
+    source_id = getattr(config, "source_id", None)
     source_ids: tuple[str, ...] | None = None
     dataset_keys: tuple[str, ...] | None = None
     if source_id is not None:
@@ -148,7 +148,7 @@ def _planner_scoped_source_ids(
     """Return enabled source ids explicitly tagged for a planner-managed parent."""
     from dev_health_ops.models.integrations import IntegrationSource
 
-    integration_id = getattr(config, "migrated_integration_id", None)
+    integration_id = getattr(config, "integration_id", None)
     if integration_id is None:
         return ()
 
@@ -189,7 +189,7 @@ def planner_request_for_config_if_routed(
     if (
         request is not None
         and bool(getattr(config, "planner_managed", False))
-        and getattr(config, "migrated_source_id", None) is None
+        and getattr(config, "source_id", None) is None
     ):
         request = dataclasses.replace(
             request, source_ids=_planner_scoped_source_ids(session, config)
@@ -232,7 +232,7 @@ def canonical_sync_config_for_sync_run(session: Session, sync_run: Any) -> Any |
         session.query(SyncConfiguration)
         .filter(
             SyncConfiguration.org_id == str(org_id),
-            SyncConfiguration.migrated_integration_id == integration_uuid,
+            SyncConfiguration.integration_id == integration_uuid,
             SyncConfiguration.parent_id.is_(None),
         )
         .order_by(SyncConfiguration.created_at.asc(), SyncConfiguration.id.asc())
@@ -279,7 +279,7 @@ def inactive_child_configs_for_sync_run(session: Session, sync_run: Any) -> list
         .filter(
             SyncConfiguration.org_id == str(org_id),
             SyncConfiguration.parent_id.is_not(None),
-            SyncConfiguration.migrated_source_id.in_(source_ids),
+            SyncConfiguration.source_id.in_(source_ids),
             SyncConfiguration.is_active.is_(False),
         )
         .order_by(SyncConfiguration.created_at.asc(), SyncConfiguration.id.asc())

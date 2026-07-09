@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from dev_health_ops.api.queries.investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
+from dev_health_ops.api.queries.investment import (
+    LATEST_WORK_UNIT_AUTHORS_CTE,
+    LATEST_WORK_UNIT_INVESTMENTS_CTE,
+    LATEST_WORK_UNIT_REPO_EFFORT_CTE,
+    PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+)
 
 from ..authz import enforce_org_scope
 from ..errors import ValidationError
@@ -43,6 +48,34 @@ if TYPE_CHECKING:
 
 # Default query timeout in seconds
 DEFAULT_TIMEOUT = 30
+
+
+# CHAOS-2710: investment_metrics_daily is a plain MergeTree (migration 007), so
+# duplicate (re)writes of the same natural key with a newer computed_at do NOT
+# self-merge. A Linear-backfill retry (or the scheduled daily recompute) can leave
+# multiple rows per (org, day, repo, team, area, stream); a flat SUM() over them
+# double-counts. Every other reader (home.py, metrics.py, operating_review.py)
+# already collapses with argMax(col, computed_at) over the natural key -- the generic
+# analytics templates were the last raw reader, so dedup at the source here. Org-scoped
+# only (catalog/value paths bind org_id but not a date range); the template's own
+# date_filter still applies to the already-collapsed rows.
+_INVESTMENT_METRICS_DAILY_DEDUP = """(
+    SELECT
+        org_id,
+        day,
+        repo_id,
+        team_id,
+        investment_area,
+        project_stream,
+        argMax(delivery_units, computed_at) AS delivery_units,
+        argMax(work_items_completed, computed_at) AS work_items_completed,
+        argMax(prs_merged, computed_at) AS prs_merged,
+        argMax(churn_loc, computed_at) AS churn_loc,
+        argMax(cycle_p50_hours, computed_at) AS cycle_p50_hours
+    FROM investment_metrics_daily
+    WHERE org_id = %(org_id)s
+    GROUP BY org_id, day, repo_id, team_id, investment_area, project_stream
+) AS investment_metrics_daily"""
 
 
 @dataclass
@@ -107,6 +140,7 @@ def _get_context_params(
     dimensions: list[Dimension],
     force_investment: bool | None = None,
     needs_team_join: bool = False,
+    needs_author_join: bool = False,
 ) -> dict[str, Any]:
     """Determine source table and extra clauses based on dimensions."""
     # WORK_TYPE belongs to the investment-side ``work_unit_investments`` table —
@@ -121,6 +155,38 @@ def _get_context_params(
 
     if use_investment:
         joins = []
+        use_repo_allocation = Dimension.REPO in dimensions
+        source_table = "latest_work_unit_investments AS work_unit_investments"
+        if use_repo_allocation:
+            source_table = """
+            (
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    wui.work_unit_type AS work_unit_type,
+                    wui.work_unit_name AS work_unit_name,
+                    wui.from_ts AS from_ts,
+                    wui.to_ts AS to_ts,
+                    if(wure.work_unit_id != '', wure.repo_id, wui.repo_id) AS repo_id,
+                    wui.provider AS provider,
+                    if(wure.work_unit_id != '', wure.effort_metric, wui.effort_metric) AS effort_metric,
+                    if(wure.work_unit_id != '', wure.repo_effort_value, wui.effort_value) AS effort_value,
+                    if(wure.work_unit_id != '', wure.allocation_source, 'scalar_fallback') AS allocation_source,
+                    if(wure.work_unit_id != '', if(wui.effort_value > 0, wure.repo_effort_value / wui.effort_value, 0.0), 1.0) AS allocation_weight,
+                    wui.theme_distribution_json AS theme_distribution_json,
+                    wui.subcategory_distribution_json AS subcategory_distribution_json,
+                    wui.structural_evidence_json AS structural_evidence_json,
+                    wui.evidence_quality AS evidence_quality,
+                    wui.evidence_quality_band AS evidence_quality_band,
+                    wui.categorization_status AS categorization_status,
+                    wui.categorization_model_version AS categorization_model_version,
+                    wui.categorization_run_id AS categorization_run_id,
+                    wui.org_id AS org_id
+                FROM latest_work_unit_investments AS wui
+                LEFT JOIN latest_work_unit_repo_effort AS wure
+                    ON wure.org_id = wui.org_id
+                    AND wure.work_unit_id = wui.work_unit_id
+            ) AS work_unit_investments
+            """
         # ALWAYS join subcategory distribution for investment queries
         joins.append(
             "ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv"
@@ -128,7 +194,7 @@ def _get_context_params(
 
         # Add team join if TEAM dimension is used or filters require it
         if Dimension.TEAM in dimensions or needs_team_join:
-            team_join = """
+            team_join = f"""
             LEFT JOIN (
                 SELECT
                     work_unit_id,
@@ -145,15 +211,7 @@ def _get_context_params(
                         JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                         [work_unit_investments.work_unit_id]
                     )) AS issue_id
-                    LEFT JOIN (
-                        SELECT
-                            work_item_id,
-                            argMax(team_id, computed_at) AS team_id,
-                            argMax(team_name, computed_at) AS team_name
-                        FROM work_item_cycle_times
-                        WHERE org_id = %(org_id)s
-                        GROUP BY work_item_id
-                    ) AS t ON t.work_item_id = issue_id
+                    LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                     GROUP BY work_unit_id, team_id, team_label
                 )
                 GROUP BY work_unit_id
@@ -165,20 +223,35 @@ def _get_context_params(
         if Dimension.REPO in dimensions:
             joins.append("LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)")
 
+        # CHAOS-2492: add developer-identity join if AUTHOR dimension is used
+        # or a developer filter (who.developers / scope.level=developer) needs
+        # it. Chains LATEST_WORK_UNIT_AUTHORS_CTE onto the WITH clause -- only
+        # when actually needed, to avoid the extra join cost otherwise.
+        with_parts = [LATEST_WORK_UNIT_INVESTMENTS_CTE]
+        if use_repo_allocation:
+            with_parts.append(LATEST_WORK_UNIT_REPO_EFFORT_CTE)
+        if Dimension.AUTHOR in dimensions or needs_author_join:
+            with_parts.append(LATEST_WORK_UNIT_AUTHORS_CTE)
+            joins.append(
+                "LEFT JOIN work_unit_authors AS au ON au.work_unit_id = work_unit_investments.work_unit_id"
+            )
+
         return {
-            "source_table": "latest_work_unit_investments AS work_unit_investments",
+            "source_table": source_table,
             "date_filter": "work_unit_investments.from_ts < %(end_date)s AND work_unit_investments.to_ts >= %(start_date)s",
             "extra_clauses": "\n".join(joins),
-            "with_clause": f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}",
+            "with_clause": f"WITH {', '.join(with_parts)}",
             "use_investment": True,
+            "use_repo_allocation": use_repo_allocation,
         }
 
     return {
-        "source_table": "investment_metrics_daily",
+        "source_table": _INVESTMENT_METRICS_DAILY_DEDUP,
         "date_filter": "day >= %(start_date)s AND day <= %(end_date)s",
         "extra_clauses": "",
         "with_clause": "",
         "use_investment": False,
+        "use_repo_allocation": False,
     }
 
 
@@ -186,6 +259,24 @@ def _needs_team_join(filters: FilterInput | None) -> bool:
     if not filters or not filters.scope or not filters.scope.ids:
         return False
     return filters.scope.level.value == "team"
+
+
+def _needs_author_join(filters: FilterInput | None) -> bool:
+    """CHAOS-2492: does this request need the investment developer-identity join?
+
+    True when a developer/who filter or a developer-scoped view is active, so
+    the compiler chains LATEST_WORK_UNIT_AUTHORS_CTE and the ``au`` join onto
+    the investment query (see _get_context_params).
+    """
+    if filters is None:
+        return False
+    if filters.who is not None and filters.who.developers:
+        return True
+    return bool(
+        filters.scope is not None
+        and filters.scope.level.value == "developer"
+        and filters.scope.ids
+    )
 
 
 def _has_active_filters(filters: FilterInput | None) -> bool:
@@ -237,6 +328,7 @@ def compile_timeseries(
         [dimension],
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     # Translate filters to SQL clause
@@ -280,6 +372,7 @@ def compile_breakdown(
         [dimension],
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     # Translate filters to SQL clause
@@ -322,6 +415,7 @@ def compile_sankey(
         dimensions,
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     # Translate filters to SQL clause
@@ -384,13 +478,13 @@ def compile_flow_matrix(
     team's distinct work_item count. That yields an asymmetric signal that
     unlocks the chord's directional modes.
 
-    For REPO (CHAOS-1292), edges come from the same table joined to
-    work_items (for repo_id) and bridged through (team_id, day) — i.e., when
-    the same team touches multiple repos on one day those repos become
-    cross-edges. For WORK_TYPE, the bridge is (repo_id, day) — multiple
-    work_types on the same repo+day become cross-edges. In all three cases
-    nodes are sourced from the same underlying data so node ids and edge
-    endpoints stay consistent.
+    For REPO (CHAOS-1292/CHAOS-2848), edges come from cycle-time activity
+    joined to work_items (for repo_id) and latest-primary WITA (for team_id),
+    then bridge through (team_id, day) — i.e., when the same authoritative team
+    touches multiple repos on one day those repos become cross-edges. For
+    WORK_TYPE, the bridge is (repo_id, day) — multiple work_types on the same
+    repo+day become cross-edges. In all three cases nodes are sourced from the
+    same underlying data so node ids and edge endpoints stay consistent.
     """
     dimension = validate_dimension(request.dimension)
     measure = validate_measure(request.measure)
@@ -399,6 +493,7 @@ def compile_flow_matrix(
         [dimension],
         force_investment=request.use_investment,
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     filter_clause, filter_params = translate_filters(
@@ -489,6 +584,7 @@ def compile_catalog_values(
     ctx = _get_context_params(
         [dimension],
         needs_team_join=_needs_team_join(filters),
+        needs_author_join=_needs_author_join(filters),
     )
 
     params: dict[str, Any] = {

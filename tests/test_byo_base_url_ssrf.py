@@ -23,8 +23,17 @@ from dev_health_ops.llm.providers._http import (
     make_hardened_async_httpx_client,
     make_hardened_httpx_client,
 )
+from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
 
 os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+
+
+def _fake_secret(*parts: str) -> str:
+    """Assemble a synthetic, redaction-target-shaped fixture at runtime
+    instead of a literal (see tests/test_error_sanitize.py's module
+    docstring) -- CI's Gitleaks scan matches file bytes, not runtime
+    values."""
+    return "".join(parts)
 
 
 def _addrinfo(address: str):
@@ -146,6 +155,85 @@ def test_org_disallowed_base_url_falls_back_and_audits(
     assert entry.status == "failure"
     assert entry.changes["provider"] == "openai"
     assert entry.changes["base_url"] == "http://evil.example/v1"
+
+
+def test_org_invalid_port_reason_is_sanitized_in_audit_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """CHAOS-2784: validate_llm_base_url's invalid-port branch interpolates
+    the raw exception text verbatim (``f"LLM base_url is invalid: {exc}"``),
+    and urllib's ``SplitResult.port`` embeds whatever the org put after the
+    last ``:`` in its BYO base_url directly into that ValueError message. If
+    that text happens to be credential-shaped, it must not survive into
+    audit_logs.error_message / changes.reason unredacted -- this sink
+    constructs AuditLog(...) directly (not via AuditService.log or
+    emit_audit_log) so it needs its own sanitize_error_text call.
+    """
+    org_id = str(uuid.uuid4())
+    audit_session = _AuditSession()
+
+    @contextmanager
+    def fake_session():
+        yield audit_session
+
+    monkeypatch.setattr("dev_health_ops.db.get_postgres_session_sync", fake_session)
+    fixture_port_value = _fake_secret("ghp_", "FAKEabcdefgh1234567890XYZ")
+    bad_url = f"https://example.test:{fixture_port_value}/v1"
+    org = {
+        "provider": "openai",
+        "api_key": "sk-org",
+        "base_url": bad_url,
+    }
+    with _patch_org(org):
+        assert creds.resolve_usable_org_llm_provider(org_id=org_id) == ""
+
+    assert audit_session.flushed is True
+    assert audit_session.added
+    entry = audit_session.added[0]
+
+    assert entry.error_message is not None
+    assert fixture_port_value not in entry.error_message
+    assert REDACTION_MARKER in entry.error_message
+    assert "LLM base_url is invalid" in entry.error_message
+
+    assert entry.changes["reason"] is not None
+    assert fixture_port_value not in entry.changes["reason"]
+    assert REDACTION_MARKER in entry.changes["reason"]
+
+
+def test_org_userinfo_base_url_is_sanitized_in_audit_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """CHAOS-2784: the SSRF guard rejects a userinfo-bearing base_url with a
+    fixed reason string, but the *original* (credential-bearing) base_url is
+    still what gets passed to the audit fallback for the diagnostic trail --
+    it must be redacted before landing in changes.base_url."""
+    org_id = str(uuid.uuid4())
+    audit_session = _AuditSession()
+
+    @contextmanager
+    def fake_session():
+        yield audit_session
+
+    monkeypatch.setattr("dev_health_ops.db.get_postgres_session_sync", fake_session)
+    fixture_userinfo_value = _fake_secret("Zqxelm", "1234567890", "abc")
+    bad_url = f"https://tenantuser:{fixture_userinfo_value}@example.test/v1"
+    org = {
+        "provider": "openai",
+        "api_key": "sk-org",
+        "base_url": bad_url,
+    }
+    with _patch_org(org):
+        assert creds.resolve_usable_org_llm_provider(org_id=org_id) == ""
+
+    assert audit_session.flushed is True
+    assert audit_session.added
+    entry = audit_session.added[0]
+
+    assert entry.changes["base_url"] is not None
+    assert fixture_userinfo_value not in entry.changes["base_url"]
+    assert REDACTION_MARKER in entry.changes["base_url"]
+    assert "example.test/v1" in entry.changes["base_url"]
 
 
 def test_org_public_https_base_url_is_usable():

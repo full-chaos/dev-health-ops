@@ -22,6 +22,7 @@ from dev_health_ops.metrics.schemas import (
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
 )
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import WORK_ITEMS_DEDUPED
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.extractors.text_parser import (
     RefType,
@@ -210,6 +211,41 @@ class WorkGraphBuilder:
             return Provenance.NATIVE
         return Provenance.NATIVE
 
+    @staticmethod
+    def _parse_pr_dependency_source(value: object) -> tuple[str, int, str] | None:
+        source = str(value or "")
+        if source.startswith("ghpr:"):
+            body = source.removeprefix("ghpr:")
+            separator = "#"
+            provider = "github"
+        elif source.startswith("gitlab:"):
+            body = source.removeprefix("gitlab:")
+            separator = "!"
+            provider = "gitlab"
+        else:
+            return None
+
+        if separator not in body:
+            return None
+        repo_slug, number = body.rsplit(separator, 1)
+        if not repo_slug or not number.isdigit():
+            return None
+        pr_number = int(number)
+        if pr_number <= 0:
+            return None
+        return repo_slug, pr_number, provider
+
+    def _row_org_id(self, row: dict[str, object]) -> str:
+        return str(row.get("org_id") or self.config.org_id or "")
+
+    def _is_linear_pr_attachment_dependency(self, row: dict[str, object]) -> bool:
+        return (
+            str(row.get("relationship_type_raw") or "") == "linear_attachment"
+            and str(row.get("target_work_item_id") or "").startswith("linear:")
+            and self._parse_pr_dependency_source(row.get("source_work_item_id"))
+            is not None
+        )
+
     def add_release_node(
         self,
         release_ref: str,
@@ -380,8 +416,12 @@ class WorkGraphBuilder:
 
         logger.info("Starting work graph build...")
 
+        self._delete_stale_pr_dependency_issue_edges()
+
         # 1. Build issue->issue edges from work_item_dependencies
         stats["issue_issue_edges"] = self._build_issue_issue_edges()
+
+        self._derive_issue_pr_links_from_dependencies()
 
         # 2. Build issue->PR edges from existing fast-path table (prerequisite)
         issue_pr_existing, stats["issue_pr_edges"] = (
@@ -465,7 +505,7 @@ class WorkGraphBuilder:
         known_keys = list(flag_identities.keys())
 
         # 2. Load issue text (work_items title + description).
-        wi_query = "SELECT work_item_id, title, description FROM work_items"
+        wi_query = f"SELECT work_item_id, title, description FROM {WORK_ITEMS_DEDUPED}"
         if self.config.org_id:
             wi_query += f" WHERE org_id = '{self.config.org_id}'"
         wi_rows = self.sink.query_dicts(wi_query, {})
@@ -541,6 +581,190 @@ class WorkGraphBuilder:
         )
         return len(edges)
 
+    def _derive_issue_pr_links_from_dependencies(self) -> int:
+        if not self.config.org_id:
+            return 0
+
+        dependency_query = """
+        SELECT
+            org_id,
+            source_work_item_id,
+            target_work_item_id,
+            relationship_type_raw,
+            last_synced
+        FROM work_item_dependencies FINAL
+        WHERE 1=1
+        """
+        org_id_clause = self._org_id_clause()
+        if org_id_clause:
+            dependency_query += f" {org_id_clause}"
+
+        repo_query = """
+        SELECT org_id, id, repo
+        FROM repos FINAL
+        WHERE 1=1
+        """
+        if org_id_clause:
+            repo_query += f" {org_id_clause}"
+
+        pr_query = """
+        SELECT org_id, repo_id, number, created_at
+        FROM git_pull_requests FINAL
+        WHERE 1=1
+        """
+        if org_id_clause:
+            pr_query += f" {org_id_clause}"
+        if self.config.from_date:
+            pr_query += f" AND created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+        if self.config.to_date:
+            pr_query += f" AND created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+        if self.config.repo_id:
+            pr_query += f" AND repo_id = '{self.config.repo_id}'"
+
+        work_item_query = """
+        SELECT org_id, work_item_id
+        FROM work_items FINAL
+        WHERE 1=1
+        """
+        if org_id_clause:
+            work_item_query += f" {org_id_clause}"
+
+        dependency_rows = self.sink.query_dicts(dependency_query, {})
+        if not dependency_rows:
+            return 0
+
+        repo_rows = self.sink.query_dicts(repo_query, {})
+        pr_rows = self.sink.query_dicts(pr_query, {})
+        work_item_rows = self.sink.query_dicts(work_item_query, {})
+
+        repo_lookup: dict[tuple[str, str], uuid.UUID] = {}
+        for row in repo_rows:
+            repo_slug = str(row.get("repo") or "")
+            repo_id = row.get("id")
+            if not repo_slug or not repo_id:
+                continue
+            try:
+                repo_uuid = (
+                    repo_id
+                    if isinstance(repo_id, uuid.UUID)
+                    else uuid.UUID(str(repo_id))
+                )
+            except ValueError:
+                continue
+            repo_lookup[(self._row_org_id(row), repo_slug)] = repo_uuid
+
+        pr_lookup: dict[tuple[str, uuid.UUID, int], object] = {}
+        for row in pr_rows:
+            repo_id = row.get("repo_id")
+            pr_number = row.get("number")
+            if repo_id is None or pr_number is None:
+                continue
+            try:
+                repo_uuid = (
+                    repo_id
+                    if isinstance(repo_id, uuid.UUID)
+                    else uuid.UUID(str(repo_id))
+                )
+                pr_number_int = int(pr_number)
+            except (TypeError, ValueError):
+                continue
+            pr_lookup[(self._row_org_id(row), repo_uuid, pr_number_int)] = row.get(
+                "created_at"
+            )
+
+        valid_work_items = {
+            (self._row_org_id(row), str(row.get("work_item_id")))
+            for row in work_item_rows
+            if row.get("work_item_id")
+        }
+
+        links: list[WorkGraphIssuePR] = []
+        seen: set[tuple[str, uuid.UUID, int]] = set()
+        for row in dependency_rows:
+            if not self._is_linear_pr_attachment_dependency(row):
+                continue
+            parsed = self._parse_pr_dependency_source(row.get("source_work_item_id"))
+            if not parsed:
+                continue
+            target_work_item_id = str(row.get("target_work_item_id") or "")
+            if not target_work_item_id:
+                continue
+
+            org_id = self._row_org_id(row)
+            if (org_id, target_work_item_id) not in valid_work_items:
+                continue
+
+            repo_slug, pr_number, provider = parsed
+            repo_id = repo_lookup.get((org_id, repo_slug))
+            if not repo_id:
+                continue
+            if (org_id, repo_id, pr_number) not in pr_lookup:
+                continue
+
+            identity = (target_work_item_id, repo_id, pr_number)
+            if identity in seen:
+                continue
+            seen.add(identity)
+
+            last_synced = row.get("last_synced") or self._now
+            if isinstance(last_synced, str):
+                try:
+                    last_synced = datetime.fromisoformat(
+                        last_synced.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    last_synced = self._now
+            if not isinstance(last_synced, datetime):
+                last_synced = self._now
+            if last_synced.tzinfo is None:
+                last_synced = last_synced.replace(tzinfo=timezone.utc)
+
+            links.append(
+                WorkGraphIssuePR(
+                    repo_id=repo_id,
+                    work_item_id=target_work_item_id,
+                    pr_number=pr_number,
+                    confidence=1.0,
+                    provenance=Provenance.NATIVE,
+                    evidence=str(
+                        row.get("relationship_type_raw") or f"{provider}_attachment"
+                    ),
+                    last_synced=last_synced,
+                )
+            )
+
+        self._write_issue_pr_links(links)
+        logger.info(
+            "Derived %d issue->PR links from work_item_dependencies", len(links)
+        )
+        return len(links)
+
+    def _delete_stale_pr_dependency_issue_edges(self) -> None:
+        if not self.config.org_id:
+            return
+        command = getattr(getattr(self.sink, "client", None), "command", None)
+        if not callable(command):
+            return
+
+        where_parts = [
+            "source_type = 'issue'",
+            "target_type = 'issue'",
+            "evidence = 'linear_attachment'",
+            "startsWith(target_id, 'linear:')",
+            "(startsWith(source_id, 'ghpr:') OR startsWith(source_id, 'gitlab:'))",
+        ]
+        params: dict[str, str] = {}
+        if self.config.org_id:
+            where_parts.append("org_id = {org_id:String}")
+            params["org_id"] = self.config.org_id
+
+        command(
+            "ALTER TABLE work_graph_edges DELETE WHERE "
+            + " AND ".join(where_parts)
+            + " SETTINGS mutations_sync=2",
+            parameters=params or None,
+        )
+
     def _build_issue_issue_edges(self) -> int:
         """
         Build edges from work_item_dependencies.
@@ -579,6 +803,10 @@ class WorkGraphBuilder:
             last_synced = row.get("last_synced")
 
             if not source_id or not target_id:
+                continue
+            if self._parse_pr_dependency_source(
+                source_id
+            ) or self._parse_pr_dependency_source(target_id):
                 continue
 
             # Map relationship type to EdgeType
@@ -679,7 +907,7 @@ class WorkGraphBuilder:
             provider,
             project_key,
             project_id
-        FROM work_items
+        FROM work_items FINAL
         """
         if self.config.org_id:
             wi_query += f" WHERE org_id = '{self.config.org_id}'"
@@ -987,7 +1215,7 @@ class WorkGraphBuilder:
             provider,
             project_key,
             project_id
-        FROM work_items
+        FROM work_items FINAL
         """
         if self.config.org_id:
             wi_query += f" WHERE org_id = '{self.config.org_id}'"
@@ -1210,7 +1438,7 @@ class WorkGraphBuilder:
             repo_id,
             work_item_id,
             updated_at
-        FROM work_items
+        FROM work_items FINAL
         WHERE repo_id IS NOT NULL
         """
         org_id_clause = self._org_id_clause()
@@ -1395,8 +1623,12 @@ class WorkGraphBuilder:
             p.evidence,
             p.last_synced,
             pr.created_at
-        FROM work_graph_issue_pr AS p
-        INNER JOIN git_pull_requests AS pr ON (toString(p.repo_id) = toString(pr.repo_id) AND p.pr_number = pr.number)
+        FROM work_graph_issue_pr AS p FINAL
+        INNER JOIN git_pull_requests AS pr FINAL ON (
+            toString(p.repo_id) = toString(pr.repo_id)
+            AND p.pr_number = pr.number
+            AND toString(p.org_id) = toString(pr.org_id)
+        )
         """
         where_parts: list[str] = []
         if self.config.repo_id:
@@ -1657,8 +1889,8 @@ class WorkGraphBuilder:
             p.evidence,
             p.last_synced,
             c.author_when
-        FROM work_graph_pr_commit AS p
-        INNER JOIN git_commits AS c ON (
+        FROM work_graph_pr_commit AS p FINAL
+        INNER JOIN git_commits AS c FINAL ON (
             toString(p.repo_id) = toString(c.repo_id)
             AND p.commit_hash = c.hash
             AND toString(p.org_id) = toString(c.org_id)

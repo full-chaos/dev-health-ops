@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -15,10 +16,12 @@ from dev_health_ops.providers.jira.client import JiraAuth, JiraClient
 class _FakeJira429Response(requests.Response):
     """Minimal requests.Response subclass that simulates a 429 reply."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, reset_at: str | None = None) -> None:
         super().__init__()
         self.status_code = 429
         self.headers["Retry-After"] = "2"
+        if reset_at is not None:
+            self.headers["X-RateLimit-Reset"] = reset_at
         self._content = b"rate limited"
 
     def raise_for_status(self) -> None:
@@ -84,7 +87,9 @@ def test_jira_search_page_persistent_429_exhausts_retries_and_raises(
     gate = MagicMock(spec=RateLimitGate)
     gate.penalize.return_value = 2.0
     client = _make_client(gate, max_retries_429=2)
-    mock_get = MagicMock(return_value=_FakeJira429Response())
+    mock_get = MagicMock(
+        return_value=_FakeJira429Response(reset_at="2025-10-08T15:00:00Z")
+    )
     monkeypatch.setattr(client.session, "get", mock_get)
 
     with pytest.raises(RateLimitException) as exc_info:
@@ -96,3 +101,10 @@ def test_jira_search_page_persistent_429_exhausts_retries_and_raises(
     assert gate.wait_sync.call_count == 3
     assert gate.penalize.call_count == 3
     gate.reset.assert_not_called()
+
+    # CHAOS-2758: X-RateLimit-Reset is an ISO 8601 timestamp for Jira (verified
+    # against Atlassian's Cloud rate-limiting docs), not epoch seconds -- the
+    # signal must parse it as such rather than silently degrading to None.
+    signal = exc_info.value.signal
+    assert signal is not None
+    assert signal.reset_at == datetime(2025, 10, 8, 15, 0, 0, tzinfo=timezone.utc)

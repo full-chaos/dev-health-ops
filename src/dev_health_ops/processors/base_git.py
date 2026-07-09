@@ -16,9 +16,14 @@ import asyncio
 import logging
 import os
 from collections.abc import Coroutine
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from dev_health_ops.analytics.complexity import (
+    DEFAULT_COMPLEXITY_CONFIG_PATH,
+    ComplexityScanner,
+)
+from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -478,13 +483,34 @@ async def backfill_file_records(
         file_paths: List of repository-relative file paths.
         repo_full_name: Human-readable name used in log messages.
         contents_by_path: Optional file text fetched upstream (e.g. via the
-            provider API); paths absent from the mapping persist with NULL
-            contents.
+            provider API); paths absent from the mapping keep any
+            previously-stored contents, or persist with NULL contents when
+            none exist.
     """
     if not file_paths:
         return
 
     contents_by_path = contents_by_path or {}
+
+    # CHAOS-2857: git_files is ReplacingMergeTree(last_synced), so a
+    # paths-only rewrite (incremental sync, degraded content fetch) would
+    # shadow previously-fetched contents with NULL rows and starve the
+    # complexity job. Merge existing contents UNDER freshly fetched ones so
+    # re-backfills never strip good data.
+    getter = getattr(ingestion_sink, "get_git_file_contents_by_path", None)
+    if getter is not None:
+        try:
+            existing_contents = await getter(repo_id)
+        except Exception as e:
+            logger.warning(
+                "Could not load existing git_files contents for %s "
+                "(proceeding without preservation): %s",
+                repo_full_name,
+                e,
+            )
+            existing_contents = {}
+        if existing_contents:
+            contents_by_path = {**existing_contents, **contents_by_path}
     async with AsyncBatchCollector(ingestion_sink.insert_git_file_data) as collector:
         for path in file_paths:
             collector.add(
@@ -503,6 +529,114 @@ async def backfill_file_records(
         len(contents_by_path),
         repo_full_name,
     )
+
+
+def build_complexity_records_from_contents(
+    *,
+    repo_id: Any,
+    day: date,
+    ref_value: str,
+    contents_by_path: dict[str, str],
+    org_id: str,
+) -> tuple[list[FileComplexitySnapshot], RepoComplexityDaily] | None:
+    scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
+    file_results = scanner.scan_file_contents(sorted(contents_by_path.items()))
+    if not file_results:
+        return None
+
+    computed_at = datetime.now(timezone.utc)
+    snapshots: list[FileComplexitySnapshot] = []
+    total_loc = 0
+    total_cc = 0
+    total_high = 0
+    total_very_high = 0
+
+    for file_result in file_results:
+        snapshots.append(
+            FileComplexitySnapshot(
+                repo_id=repo_id,
+                as_of_day=day,
+                ref=ref_value,
+                file_path=file_result.file_path,
+                language=file_result.language,
+                loc=file_result.loc,
+                functions_count=file_result.functions_count,
+                cyclomatic_total=file_result.cyclomatic_total,
+                cyclomatic_avg=file_result.cyclomatic_avg,
+                high_complexity_functions=file_result.high_complexity_functions,
+                very_high_complexity_functions=file_result.very_high_complexity_functions,
+                computed_at=computed_at,
+                org_id=org_id,
+            )
+        )
+        total_loc += file_result.loc
+        total_cc += file_result.cyclomatic_total
+        total_high += file_result.high_complexity_functions
+        total_very_high += file_result.very_high_complexity_functions
+
+    repo_daily = RepoComplexityDaily(
+        repo_id=repo_id,
+        day=day,
+        loc_total=total_loc,
+        cyclomatic_total=total_cc,
+        cyclomatic_per_kloc=(total_cc / (total_loc / 1000.0)) if total_loc > 0 else 0.0,
+        high_complexity_functions=total_high,
+        very_high_complexity_functions=total_very_high,
+        computed_at=computed_at,
+        org_id=org_id,
+    )
+    return snapshots, repo_daily
+
+
+def historical_backfill_day(until: datetime | None) -> date | None:
+    if until is None:
+        return None
+    return until.astimezone(timezone.utc).date()
+
+
+def _new_complexity_sink(store: Any) -> Any | None:
+    conn_string = getattr(store, "conn_string", None)
+    if not isinstance(conn_string, str) or not conn_string:
+        return None
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    sink = ClickHouseMetricsSink(dsn=conn_string)
+    sink.ensure_tables()
+    setattr(sink, "org_id", getattr(store, "org_id", None) or "")
+    return sink
+
+
+def write_historical_complexity(
+    *,
+    store: Any,
+    metrics_sink: Any | None,
+    repo_id: Any,
+    day: date | None,
+    ref_value: str,
+    contents_by_path: dict[str, str],
+) -> None:
+    if day is None or not contents_by_path:
+        return
+    records = build_complexity_records_from_contents(
+        repo_id=repo_id,
+        day=day,
+        ref_value=ref_value,
+        contents_by_path=contents_by_path,
+        org_id=getattr(store, "org_id", None) or "",
+    )
+    if records is None:
+        return
+    snapshots, repo_daily = records
+    sink = metrics_sink or _new_complexity_sink(store)
+    if sink is None:
+        return
+    close_sink = metrics_sink is None
+    try:
+        sink.write_file_complexity_snapshots(snapshots)
+        sink.write_repo_complexity_daily([repo_daily])
+    finally:
+        if close_sink:
+            sink.close()
 
 
 async def backfill_commit_stat_records(

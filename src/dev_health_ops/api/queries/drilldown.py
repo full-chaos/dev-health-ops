@@ -6,6 +6,7 @@ from typing import Any
 from dev_health_ops.api.services.auth import get_current_org_id
 
 from .client import query_dicts
+from .investment import PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
 
 
 def _assert_org_id(org_id: str) -> None:
@@ -69,19 +70,21 @@ async def fetch_issues(
     _assert_org_id(org_id)
     query = f"""
         SELECT
-            work_item_id,
-            provider,
-            status,
-            team_id,
-            cycle_time_hours,
-            lead_time_hours,
-            started_at,
-            completed_at
-        FROM work_item_cycle_times
-        WHERE day >= %(start_day)s AND day < %(end_day)s
-          AND org_id = %(org_id)s
+            wct.work_item_id,
+            wct.provider,
+            wct.status,
+            nullIf(t.team_id, '') AS team_id,
+            wct.cycle_time_hours,
+            wct.lead_time_hours,
+            wct.started_at,
+            wct.completed_at
+        FROM work_item_cycle_times AS wct FINAL
+        LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+          ON t.work_item_id = wct.work_item_id
+        WHERE wct.day >= %(start_day)s AND wct.day < %(end_day)s
+          AND wct.org_id = %(org_id)s
         {scope_filter}
-        ORDER BY completed_at DESC
+        ORDER BY wct.completed_at DESC
         LIMIT %(limit)s
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}

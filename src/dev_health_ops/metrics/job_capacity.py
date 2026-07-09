@@ -4,18 +4,19 @@ import argparse
 import asyncio
 import logging
 from dataclasses import replace
-from datetime import date, timedelta
-from typing import Any
+from datetime import date
 
+from dev_health_ops.metrics.capacity_queries import (
+    discover_team_scopes,
+    get_backlog_from_sink,
+    load_throughput_from_sink,
+)
 from dev_health_ops.metrics.compute_capacity import (
     ForecastResult,
-    ThroughputHistory,
-    ThroughputSample,
     forecast_capacity,
 )
 from dev_health_ops.metrics.schemas import CapacityForecastRecord
 from dev_health_ops.metrics.sinks.factory import create_sink
-from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
 
@@ -47,122 +48,6 @@ def _result_to_record(result: ForecastResult) -> CapacityForecastRecord:
     )
 
 
-async def load_throughput_from_sink(
-    sink: Any,
-    team_id: str | None = None,
-    work_scope_id: str | None = None,
-    history_days: int = 90,
-) -> ThroughputHistory:
-    backend = sink.backend_type
-    start_date = utc_today() - timedelta(days=history_days)
-
-    conditions = [f"day >= '{start_date.isoformat()}'"]
-    params = {}
-
-    if team_id:
-        if backend == "clickhouse":
-            conditions.append("team_id = {team_id:String}")
-        else:
-            conditions.append("team_id = :team_id")
-        params["team_id"] = team_id
-    if work_scope_id:
-        if backend == "clickhouse":
-            conditions.append("work_scope_id = {work_scope_id:String}")
-        else:
-            conditions.append("work_scope_id = :work_scope_id")
-        params["work_scope_id"] = work_scope_id
-
-    where_clause = " AND ".join(conditions)
-
-    query = f"""
-        SELECT day, SUM(items_completed) as items_completed
-        FROM work_item_metrics_daily FINAL
-        WHERE {where_clause}
-        GROUP BY day
-        ORDER BY day
-    """
-
-    if backend == "clickhouse":
-        result = await asyncio.to_thread(sink.client.query, query, parameters=params)
-        rows = result.result_rows or []
-    else:
-        rows = sink.query_dicts(query, params)
-        rows = [(r["day"], r["items_completed"]) for r in rows]
-
-    samples = [
-        ThroughputSample(
-            day=row[0] if isinstance(row[0], date) else date.fromisoformat(str(row[0])),
-            items_completed=int(row[1]),
-            team_id=team_id,
-            work_scope_id=work_scope_id,
-        )
-        for row in rows
-    ]
-
-    return ThroughputHistory(samples)
-
-
-async def get_backlog_from_sink(
-    sink: Any,
-    team_id: str | None = None,
-    work_scope_id: str | None = None,
-) -> int:
-    backend = sink.backend_type
-    conditions = []
-    params = {}
-
-    if team_id:
-        if backend == "clickhouse":
-            conditions.append("team_id = {team_id:String}")
-        else:
-            conditions.append("team_id = :team_id")
-        params["team_id"] = team_id
-    if work_scope_id:
-        if backend == "clickhouse":
-            conditions.append("work_scope_id = {work_scope_id:String}")
-        else:
-            conditions.append("work_scope_id = :work_scope_id")
-        params["work_scope_id"] = work_scope_id
-
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
-
-    query = f"""
-        SELECT wip_count_end_of_day
-        FROM work_item_metrics_daily FINAL
-        WHERE {where_clause}
-        ORDER BY day DESC
-        LIMIT 1
-    """
-
-    if backend == "clickhouse":
-        result = await asyncio.to_thread(sink.client.query, query, parameters=params)
-        if result.result_rows:
-            return int(result.result_rows[0][0])
-        return 0
-    else:
-        rows = sink.query_dicts(query, params)
-        if rows:
-            return int(rows[0].get("wip_count_end_of_day", 0))
-        return 0
-
-
-async def discover_team_scopes(sink: Any) -> list[tuple[str | None, str | None]]:
-    backend = sink.backend_type
-
-    query = """
-        SELECT DISTINCT team_id, work_scope_id
-        FROM work_item_metrics_daily FINAL
-        WHERE day >= today() - 30
-    """
-
-    if backend == "clickhouse":
-        result = await asyncio.to_thread(sink.client.query, query)
-        return [(row[0], row[1]) for row in (result.result_rows or [])]
-    else:
-        rows = sink.query_dicts(query, {})
-        return [(r.get("team_id"), r.get("work_scope_id")) for r in rows]
-
-
 async def run_capacity_forecast(
     db_url: str,
     org_id: str,
@@ -175,6 +60,9 @@ async def run_capacity_forecast(
     all_teams: bool = False,
     persist: bool = True,
 ) -> list[ForecastResult]:
+    if not org_id:
+        raise ValueError("org_id is required for capacity forecast")
+
     sink = create_sink(db_url)
     try:
         setattr(sink, "org_id", org_id)
@@ -268,11 +156,13 @@ def _print_forecast(result: ForecastResult) -> None:
 
 
 async def _run_cli(args: argparse.Namespace) -> int:
+    from dev_health_ops.metrics.sinks.factory import detect_backend
+
+    detect_backend(args.db)
+
     target_date = None
     if args.target_date:
         target_date = date.fromisoformat(args.target_date)
-
-    org_id = getattr(args, "org", None) or ""
 
     results = await run_capacity_forecast(
         db_url=args.db,
@@ -284,7 +174,7 @@ async def _run_cli(args: argparse.Namespace) -> int:
         simulations=args.simulations,
         all_teams=args.all_teams,
         persist=not args.dry_run,
-        org_id=org_id,
+        org_id=args.org or "",
     )
 
     if not results:
@@ -306,6 +196,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--db",
         required=True,
         help="Database connection string",
+    )
+    capacity_parser.add_argument(
+        "--org",
+        help="Organization ID for tenant-scoped forecast queries",
     )
     capacity_parser.add_argument(
         "--team-id",

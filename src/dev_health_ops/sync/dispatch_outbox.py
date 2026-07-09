@@ -39,8 +39,10 @@ from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
 )
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 OUTBOX_KIND_DISPATCH = "dispatch_sync_run"
+OUTBOX_KIND_DISCOVERY = "reference_discovery"
 OUTBOX_KIND_FINALIZE = "finalize_sync_run"
 OUTBOX_KIND_POST_SYNC = "post_sync"
 
@@ -341,7 +343,7 @@ def mark_outbox_publish_failed(
     *,
     row_id: str | uuid.UUID,
     claim_token: str,
-    error: object,
+    error: BaseException | str,
     attempts: int,
     now: datetime | None = None,
 ) -> bool:
@@ -361,7 +363,7 @@ def mark_outbox_publish_failed(
             claim_token=None,
             claim_expires_at=None,
             available_at=failure_now + timedelta(seconds=backoff_seconds(attempts)),
-            last_error=str(error)[:_MAX_ERROR_LENGTH],
+            last_error=sanitize_error_text(error, max_length=_MAX_ERROR_LENGTH),
             updated_at=failure_now,
         )
         .execution_options(synchronize_session=False)

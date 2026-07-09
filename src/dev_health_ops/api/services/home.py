@@ -29,7 +29,11 @@ from ..models.schemas import (
 )
 from ..queries.client import clickhouse_client, query_dicts
 from ..queries.explain import fetch_metric_driver_delta
-from ..queries.freshness import fetch_coverage, fetch_last_ingested_at
+from ..queries.freshness import (
+    fetch_coverage,
+    fetch_last_ingested_at,
+    fetch_source_statuses,
+)
 from ..queries.metrics import (
     fetch_blocked_hours,
     fetch_metric_series,
@@ -245,16 +249,40 @@ _COMPOUNDING_RISK_SQL = """
     SELECT
         scope,
         scope_id,
-        argMax(compounding_risk, computed_at) AS score,
-        argMax(severity,         computed_at) AS severity,
-        max(computed_at)                      AS latest_computed_at
-    FROM compounding_risk_daily
-    WHERE org_id = {org_id:String}
-      AND day = (
-          SELECT max(day)
-          FROM compounding_risk_daily
-          WHERE org_id = {org_id:String}
-      )
+        tupleElement(latest_row, 1) AS score,
+        tupleElement(latest_row, 2) AS severity,
+        tupleElement(latest_row, 3) AS latest_computed_at
+    FROM (
+        SELECT
+            scope,
+            scope_id,
+            argMax(tuple(compounding_risk, severity, computed_at), computed_at) AS latest_row
+        FROM compounding_risk_daily
+        WHERE org_id = {org_id:String}
+          AND day = (
+              SELECT maxOrNull(day)
+              FROM (
+                  SELECT
+                      day,
+                      count() AS row_count,
+                      countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores
+                  FROM (
+                      SELECT
+                          day,
+                          scope,
+                          scope_id,
+                          argMax(tuple(compounding_risk), computed_at) AS latest_row
+                      FROM compounding_risk_daily
+                      WHERE org_id = {org_id:String}
+                        AND day >= {start_day:Date}
+                        AND day < {end_day:Date}
+                      {latest_scope_filter}
+                      GROUP BY day, scope, scope_id
+                  )
+                  GROUP BY day
+              )
+              WHERE row_count > 0 AND missing_scores = 0
+          )
 """
 
 
@@ -772,11 +800,23 @@ async def _fetch_risk_signals(
     sink: BaseMetricsSink,
     *,
     filters: MetricFilter,
+    start_day: date,
+    end_day: date,
     org_id: str,
     data_confidence: HomeDataConfidence,
 ) -> list[HomeSignal]:
-    query = _COMPOUNDING_RISK_SQL
-    params: dict[str, Any] = {"org_id": org_id}
+    latest_scope_filter = ""
+    params: dict[str, Any] = {
+        "org_id": org_id,
+        "start_day": start_day,
+        "end_day": end_day,
+    }
+    if filters.scope.level in {"team", "repo"} and filters.scope.ids:
+        latest_scope_filter = """
+                AND scope = {scope:String}
+                AND scope_id IN {scope_ids:Array(String)}
+        """
+    query = _COMPOUNDING_RISK_SQL.replace("{latest_scope_filter}", latest_scope_filter)
     if filters.scope.level in {"team", "repo"} and filters.scope.ids:
         query += """
       AND scope = {scope:String}
@@ -785,7 +825,8 @@ async def _fetch_risk_signals(
         params["scope"] = filters.scope.level
         params["scope_ids"] = filters.scope.ids
     query += """
-    GROUP BY scope, scope_id
+        GROUP BY scope, scope_id
+    )
     ORDER BY score DESC NULLS LAST
     LIMIT 5
     """
@@ -950,6 +991,7 @@ async def build_home_response(
         (
             last_ingested,
             coverage,
+            sources,
             deltas,
             rework_theme_allocation_rows,
         ) = await asyncio.gather(
@@ -958,6 +1000,11 @@ async def build_home_response(
                 sink,
                 start_day=start_day,
                 end_day=end_day,
+                org_id=org_id,
+            ),
+            fetch_source_statuses(
+                sink,
+                start_day=start_day,
                 org_id=org_id,
             ),
             _metric_deltas(
@@ -994,12 +1041,6 @@ async def build_home_response(
             for row in rework_theme_allocation_rows
         ]
 
-        sources = {
-            "github": "ok" if last_ingested else "down",
-            "gitlab": "ok" if last_ingested else "down",
-            "jira": "ok" if last_ingested else "down",
-            "ci": "ok" if last_ingested else "down",
-        }
         data_confidence = build_data_confidence(coverage=coverage, sources=sources)
         metric_signals = build_metric_signals(deltas, filters, data_confidence)
         recommendation_signals, risk_signals = await asyncio.gather(
@@ -1014,6 +1055,8 @@ async def build_home_response(
             _fetch_risk_signals(
                 sink,
                 filters=filters,
+                start_day=start_day,
+                end_day=end_day,
                 org_id=org_id,
                 data_confidence=data_confidence,
             ),

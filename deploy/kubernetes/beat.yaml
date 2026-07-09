@@ -1,0 +1,77 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-beat
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-beat
+    app.kubernetes.io/component: beat
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dev-health-beat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dev-health-beat
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      initContainers:
+        - name: wait-for-migrations
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              attempts=0
+              until dev-hops migrate clickhouse status --check; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 60 ]; then
+                  echo "ClickHouse migrations still pending after $attempts checks; exiting for restart backoff" >&2
+                  exit 1
+                fi
+                echo "ClickHouse migrations pending; re-checking in 5s (attempt $attempts/60)"
+                sleep 5
+              done
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+      containers:
+        - name: beat
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - celery
+            - -A
+            - dev_health_ops.workers.celery_app
+            - beat
+            - --loglevel=info
+            - --schedule=/tmp/celerybeat-schedule
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"

@@ -104,7 +104,7 @@ def _seed_migrated_config(session: Session, org_id: str = "org-a") -> SyncConfig
         sync_targets=["git"],
         sync_options={},
         is_active=True,
-        migrated_integration_id=integration.id,
+        integration_id=integration.id,
     )
     session.add(config)
     session.flush()
@@ -137,9 +137,9 @@ async def test_trigger_sync_config_rejects_cross_org_service_result(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_trigger_unmigrated_config_returns_400(monkeypatch):
-    """A config not linked to a migrated integration cannot be planner-routed,
-    so the manual trigger returns HTTP 400 instead of enqueuing legacy work."""
+async def test_trigger_config_without_integration_returns_400(monkeypatch):
+    """A config with no linked integration cannot be planner-routed, so the
+    manual trigger returns HTTP 400 instead of enqueuing legacy work."""
 
     config = SimpleNamespace(
         id=uuid.uuid4(),
@@ -148,8 +148,8 @@ async def test_trigger_unmigrated_config_returns_400(monkeypatch):
         sync_targets=["git"],
         sync_options={},
         is_active=True,
-        migrated_integration_id=None,
-        migrated_source_id=None,
+        integration_id=None,
+        source_id=None,
         planner_managed=False,
     )
     monkeypatch.setattr(
@@ -164,7 +164,7 @@ async def test_trigger_unmigrated_config_returns_400(monkeypatch):
         )
 
     assert exc_info.value.status_code == 400
-    assert "not linked to a migrated integration" in exc_info.value.detail
+    assert "no linked integration" in exc_info.value.detail
 
 
 @pytest.mark.asyncio

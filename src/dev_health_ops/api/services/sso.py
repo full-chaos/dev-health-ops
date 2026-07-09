@@ -29,6 +29,7 @@ from dev_health_ops.models.sso import (
     SSOProviderStatus,
 )
 from dev_health_ops.models.users import AuthProvider, Membership, User
+from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 logger = logging.getLogger(__name__)
 
@@ -388,7 +389,12 @@ class SSOService:
     ) -> None:
         provider = await self.get_provider(org_id, provider_id)
         if provider:
-            setattr(provider, "last_error", error)
+            # CHAOS-2784: sso_providers.last_error is a free-form Text column
+            # fed with str(exc) by every call site (SAML/OIDC processing
+            # errors) -- redact credential-shaped substrings before
+            # persisting, same as the other legacy error-text sinks
+            # (CHAOS-2766).
+            setattr(provider, "last_error", sanitize_error_text(error))
             setattr(provider, "last_error_at", datetime.now(timezone.utc))
             setattr(provider, "status", SSOProviderStatus.ERROR.value)
             await self.session.flush()

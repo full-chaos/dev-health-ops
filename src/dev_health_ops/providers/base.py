@@ -8,7 +8,7 @@ along with capability flags and typed envelopes for consistent orchestration.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar
@@ -98,6 +98,10 @@ class IngestionContext:
     work_item_options: WorkItemIngestionOptions = field(
         default_factory=WorkItemIngestionOptions
     )
+    reference_teams: Sequence[dict[str, Any]] | None = None
+    reference_sprints: Sequence[Sprint] | None = None
+    reference_sprints_scope: str | None = None
+    reference_sink: Any | None = None
 
 
 @dataclass
@@ -121,6 +125,7 @@ class ProviderBatch:
     # Records are passed to the ClickHouse sink by the sync orchestrator.
     # NOTE: storage-worker (CHAOS-1579) may add this field too — trivial merge.
     ai_attributions: list[AIAttributionRecord] = field(default_factory=list)
+    observations: dict[str, Any] = field(default_factory=dict)
 
 
 class Provider(ABC):

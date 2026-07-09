@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -17,13 +18,35 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
 )
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 
 DEFAULT_MAX_ATTEMPTS = 5
+
+_GRAPHQL_OPERATION_NAME_RE = re.compile(r"\b(?:query|mutation)\s+(\w+)")
+
+# Linear returns per-request budget headers on every GraphQL POST; capturing
+# them lets recorded actuals join against the GraphQL-cost budget estimate.
+_LINEAR_RATE_LIMIT_HEADERS = (
+    ("x-ratelimit-requests-limit", "limit"),
+    ("x-ratelimit-requests-remaining", "remaining"),
+    ("x-ratelimit-requests-reset", "reset"),
+    ("retry-after", "retry_after"),
+)
+
+
+def _graphql_operation_name(query: str) -> str:
+    """Extract the named GraphQL operation (e.g. ``Issues``) for route-family
+    resolution; falls back to ``graphql`` for anonymous queries."""
+
+    match = _GRAPHQL_OPERATION_NAME_RE.search(query)
+    return match.group(1) if match else "graphql"
 
 
 class LinearGraphQLError(RuntimeError):
@@ -39,7 +62,17 @@ class LinearComplexityLimitError(LinearGraphQLError):
 
     Not retryable: the query itself must be restructured (e.g. smaller
     nested page sizes). See Linear's 10,000-complexity budget.
+
+    Carries an optional provider-neutral :class:`RateLimitSignal` (dimension
+    ``graphql_cost``) so complexity rejections surface in the same observability
+    stream as timed rate limits -- but, crucially, it stays a
+    :class:`LinearGraphQLError` (not a ``RateLimitException``) so the worker
+    deferral branch never re-drives it as retryable work.
     """
+
+    def __init__(self, *args: object, signal: RateLimitSignal | None = None) -> None:
+        super().__init__(*args)
+        self.signal = signal
 
 
 class LinearRateLimitError(RateLimitException):
@@ -192,6 +225,22 @@ query Teams($first: Int!, $after: String) {
     pageInfo {
       hasNextPage
       endCursor
+    }
+  }
+}
+"""
+
+TEAM_BY_KEY_QUERY = """
+query TeamByKey($first: Int!, $filter: TeamFilter) {
+  teams(first: $first, filter: $filter) {
+    nodes {
+      id
+      key
+      name
+      description
+      createdAt
+      updatedAt
+      timezone
     }
   }
 }
@@ -401,6 +450,10 @@ class LinearClient:
         )
         self.max_attempts = max(1, int(max_attempts))
         self._rate_limit: RateLimitInfo | None = None
+
+        from dev_health_ops.providers.linear.budget import LINEAR_USAGE_RESOLVER
+
+        self._usage = UsageRecorder(resolver=LINEAR_USAGE_RESOLVER)
         self._client = httpx.Client(
             headers={
                 "Content-Type": "application/json",
@@ -436,6 +489,9 @@ class LinearClient:
                     self._wait_for_rate_limit()
                     response = self._client.post(LINEAR_API_URL, json=payload)
                     self._update_rate_limit(response)
+                    # Count every POST (including the ones that 429) so recorded
+                    # actuals reflect real GraphQL request volume.
+                    self._record_graphql_usage(query, response)
                     if response.status_code == 429:
                         raise _LinearHTTPRateLimit(self._retry_after_seconds(response))
             except _LinearHTTPRateLimit as exc:
@@ -462,12 +518,26 @@ class LinearClient:
             data = body if isinstance(body, dict) else {}
             return data.get("data") or {}
 
+        retry_after = (
+            last_server_retry_after
+            if last_server_retry_after is not None
+            else last_delay
+        )
         raise LinearRateLimitError(
             f"Linear API rate limited: giving up after {self.max_attempts} "
             f"attempts (last backoff {last_delay:.1f}s)",
-            retry_after_seconds=last_server_retry_after
-            if last_server_retry_after is not None
-            else last_delay,
+            retry_after_seconds=retry_after,
+            signal=RateLimitSignal(
+                provider="linear",
+                host=urlparse(LINEAR_API_URL).netloc or None,
+                dimension=BudgetDimension.GRAPHQL_COST,
+                retry_after_seconds=retry_after,
+                # Linear reports its reset window as epoch MILLISECONDS.
+                reset_at=RateLimitSignal.reset_at_from_epoch_millis(
+                    self._rate_limit.reset_ms if self._rate_limit else None
+                ),
+                reason="primary",
+            ),
         )
 
     def _last_applied_delay(self, retry_after_seconds: float | None) -> float:
@@ -505,7 +575,13 @@ class LinearClient:
         if any(LinearClient._is_complexity_error(e) for e in errors):
             raise LinearComplexityLimitError(
                 "Linear GraphQL complexity limit exceeded "
-                f"(query must be restructured, not retried): {error_msg}"
+                f"(query must be restructured, not retried): {error_msg}",
+                signal=RateLimitSignal(
+                    provider="linear",
+                    host=urlparse(LINEAR_API_URL).netloc or None,
+                    dimension=BudgetDimension.GRAPHQL_COST,
+                    reason="complexity",
+                ),
             )
         raise LinearGraphQLError(f"Linear GraphQL error: {error_msg}")
 
@@ -546,11 +622,29 @@ class LinearClient:
                 dict(headers),
             )
 
+    def _record_graphql_usage(self, query: str, response: httpx.Response) -> None:
+        rate_limit: dict[str, Any] = {}
+        for source, target in _LINEAR_RATE_LIMIT_HEADERS:
+            value = response.headers.get(source)
+            if value is not None:
+                rate_limit[target] = str(value)
+        self._usage.record(
+            transport="graphql",
+            operation=_graphql_operation_name(query),
+            headers={},
+            rate_limit=rate_limit,
+            status=response.status_code,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        return self._usage.drain()
+
     def iter_issues(
         self,
         *,
         team_keys: list[str] | None = None,
         updated_after: datetime | None = None,
+        updated_before: datetime | None = None,
         include_archived: bool = False,
         limit: int | None = None,
     ) -> Iterable[dict[str, Any]]:
@@ -559,6 +653,7 @@ class LinearClient:
         for nodes in self.iter_issues_pages(
             team_keys=team_keys,
             updated_after=updated_after,
+            updated_before=updated_before,
             include_archived=include_archived,
         ):
             for node in nodes:
@@ -572,6 +667,7 @@ class LinearClient:
         *,
         team_keys: list[str] | None = None,
         updated_after: datetime | None = None,
+        updated_before: datetime | None = None,
         include_archived: bool = False,
     ) -> Iterable[list[dict[str, Any]]]:
         cursor: str | None = None
@@ -579,8 +675,13 @@ class LinearClient:
         filter_obj: dict[str, Any] = {}
         if team_keys:
             filter_obj["team"] = {"key": {"in": team_keys}}
+        updated_at_filter: dict[str, Any] = {}
         if updated_after:
-            filter_obj["updatedAt"] = {"gte": updated_after.isoformat()}
+            updated_at_filter["gte"] = updated_after.isoformat()
+        if updated_before:
+            updated_at_filter["lte"] = updated_before.isoformat()
+        if updated_at_filter:
+            filter_obj["updatedAt"] = updated_at_filter
         if not include_archived:
             filter_obj["archivedAt"] = {"null": True}
 
@@ -683,6 +784,18 @@ class LinearClient:
             if not page_info.get("hasNextPage"):
                 break
             cursor = page_info.get("endCursor")
+
+    def get_team_by_key(self, team_key: str) -> dict[str, Any] | None:
+        variables = {
+            "first": 2,
+            "filter": {"key": {"eq": team_key}},
+        }
+        data = self._execute(TEAM_BY_KEY_QUERY, variables)
+        nodes = (data.get("teams") or {}).get("nodes") or []
+        for node in nodes:
+            if node.get("key") == team_key or node.get("name") == team_key:
+                return node
+        return None
 
     def get_team_members(
         self,

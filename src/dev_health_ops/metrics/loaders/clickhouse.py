@@ -28,6 +28,10 @@ from dev_health_ops.metrics.schemas import (
     PullRequestReviewRow,
     PullRequestRow,
 )
+from dev_health_ops.metrics.sinks.clickhouse.idempotency import (
+    WORK_ITEM_TRANSITIONS_DEDUPED,
+    WORK_ITEMS_DEDUPED,
+)
 from dev_health_ops.metrics.testops_schemas import (
     CoverageSnapshotRow,
     JobRunRow,
@@ -240,7 +244,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         params = self._inject_org_id(params)
 
         item_query = f"""
-        SELECT * FROM work_items
+        SELECT * FROM {WORK_ITEMS_DEDUPED}
         WHERE (created_at < {{end:DateTime}})
         AND (status != 'done' OR completed_at >= {{start:DateTime}})
         {repo_filter}
@@ -248,7 +252,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         """
 
         trans_query = f"""
-        SELECT * FROM work_item_transitions
+        SELECT * FROM {WORK_ITEM_TRANSITIONS_DEDUPED}
         WHERE (occurred_at < {{end:DateTime}})
         {repo_filter}
         {org_filter}
@@ -456,6 +460,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 g.member_id,
                 g.raw_provider_user_id,
                 g.raw_email,
+                g.identity_facets,
                 g.is_primary,
                 g.specificity,
                 g.priority,
@@ -469,6 +474,8 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     argMax(o.raw_provider_user_id, (o.updated_at, o.valid_from))
                         AS raw_provider_user_id,
                     argMax(o.raw_email, (o.updated_at, o.valid_from)) AS raw_email,
+                    argMax(o.identity_facets, (o.updated_at, o.valid_from))
+                        AS identity_facets,
                     argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
                     argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
                     argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
@@ -540,13 +547,21 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 "assignee_membership",
                 f"assignee_membership={row.get('member_id') or row.get('raw_email')}",
             )
-            for identity in (
+            identity_values = [
                 row.get("member_id"),
                 row.get("raw_provider_user_id"),
                 row.get("raw_email"),
-            ):
+            ]
+            identity_facets = row.get("identity_facets") or []
+            if isinstance(identity_facets, (list, tuple)):
+                identity_values.extend(identity_facets)
+            else:
+                identity_values.append(identity_facets)
+            seen_identity_keys: set[str] = set()
+            for identity in identity_values:
                 key = " ".join(str(identity or "").strip().lower().split())
-                if key:
+                if key and key not in seen_identity_keys:
+                    seen_identity_keys.add(key)
                     context.member_by_identity.setdefault(
                         (str(row.get("provider") or ""), key), []
                     ).append(candidate)

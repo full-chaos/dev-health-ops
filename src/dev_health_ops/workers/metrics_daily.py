@@ -15,6 +15,7 @@ from dev_health_ops.workers.task_utils import (
     _as_str,
     _get_db_url,
     _invalidate_metrics_cache,
+    cron_next_run,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,6 @@ logger = logging.getLogger(__name__)
 )
 def dispatch_scheduled_metrics(self) -> dict:
     """Check ScheduledJob entries with job_type='metrics' and dispatch any that are due."""
-    from croniter import croniter
 
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import (
@@ -63,8 +63,7 @@ def dispatch_scheduled_metrics(self) -> dict:
                     if isinstance(job.last_run_at, datetime)
                     else _as_datetime(job.created_at)
                 )
-                cron = croniter(cron_expr, last_run)
-                next_run = cron.get_next(datetime)
+                next_run = cron_next_run(cron_expr, last_run, _as_str(job.timezone))
 
                 if next_run <= now:
                     job_config: dict[str, Any] = _as_dict(job.job_config)

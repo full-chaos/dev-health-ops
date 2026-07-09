@@ -110,10 +110,12 @@ def test_verification_uses_builder_sink_client_when_builder_has_no_client():
 
 
 # ---------------------------------------------------------------------------
-# CHAOS-2433 round-4 finding #1: the CLI `investment materialize` entry point
-# must publish a full-coverage membership marker after an ORG-WIDE materialization
-# (the materializer writes investments only). Scoped/windowed manual runs must
-# NOT publish an org-wide marker.
+# CHAOS-2433 round-4 finding #1 (AMENDED by CHAOS-2776): the CLI `investment
+# materialize` entry point must publish a full-coverage membership marker after an
+# UNSCOPED materialization (the materializer writes investments only). The publish
+# gate is SCOPE, not window: because the no-LLM projection is full-coverage by
+# construction (independent of --from/--to/--window-days), an unscoped WINDOWED run
+# still publishes the org-wide marker. Only repo/team-SCOPED runs skip it.
 # ---------------------------------------------------------------------------
 
 
@@ -272,6 +274,70 @@ def test_cli_materialize_threads_inline_llm_credentials_and_concurrency():
     backfill_mock.assert_not_called()
 
 
+def test_cli_materialize_threads_batch_settings():
+    fake_materialize, materialize_mock, backfill_mock = (
+        _patch_materialize_and_projection()
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.runner.materialize_investments",
+            fake_materialize,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+            backfill_mock,
+        ),
+    ):
+        rc = run_investment_materialization(
+            _materialize_ns(
+                repo_id=["repo-uuid-1"],
+                llm_batch_mode="auto",
+                llm_batch_min_items=3,
+                llm_batch_poll_interval_seconds=0.5,
+                llm_batch_timeout_seconds=12.0,
+            )
+        )
+
+    assert rc == 0
+    config = materialize_mock.call_args.args[0]
+    assert config.llm_batch_mode == "auto"
+    assert config.llm_batch_min_items == 3
+    assert config.llm_batch_poll_interval_seconds == 0.5
+    assert config.llm_batch_timeout_seconds == 12.0
+    backfill_mock.assert_not_called()
+
+
+def test_cli_materialize_uses_env_batch_defaults(monkeypatch):
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MODE", "auto")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MIN_ITEMS", "7")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS", "1.5")
+    monkeypatch.setenv("INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "42")
+    fake_materialize, materialize_mock, backfill_mock = (
+        _patch_materialize_and_projection()
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.runner.materialize_investments",
+            fake_materialize,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+            backfill_mock,
+        ),
+    ):
+        rc = run_investment_materialization(_materialize_ns(repo_id=["repo-uuid-1"]))
+
+    assert rc == 0
+    config = materialize_mock.call_args.args[0]
+    assert config.llm_batch_mode == "auto"
+    assert config.llm_batch_min_items == 7
+    assert config.llm_batch_poll_interval_seconds == 1.5
+    assert config.llm_batch_timeout_seconds == 42.0
+    backfill_mock.assert_not_called()
+
+
 def test_cli_materialize_threads_allow_unscoped():
     fake_materialize, materialize_mock, backfill_mock = (
         _patch_materialize_and_projection()
@@ -299,10 +365,12 @@ def test_cli_materialize_threads_allow_unscoped():
     backfill_mock.assert_not_called()
 
 
-def test_cli_date_windowed_materialize_skips_org_marker():
-    """An explicitly date-windowed manual materialize (--window-days / --from /
-    --to) refreshes investments only and does NOT publish an org-wide marker —
-    it could otherwise blank out-of-window components under the new marker."""
+def test_cli_date_windowed_org_wide_materialize_runs_org_marker():
+    """CHAOS-2776: an explicitly date-windowed BUT UNSCOPED manual materialize
+    (--window-days / --from / --to, no repo/team scope) STILL publishes a
+    full-coverage org-wide marker. The no-LLM projection iterates the full current
+    work graph independent of the materialize window, so it cannot publish partial
+    coverage — and running it re-arms the read-path stale-generation guard."""
     fake_materialize, materialize_mock, backfill_mock = (
         _patch_materialize_and_projection()
     )
@@ -319,6 +387,35 @@ def test_cli_date_windowed_materialize_skips_org_marker():
     ):
         # Explicit window via --window-days.
         rc = run_investment_materialization(_materialize_ns(window_days=7))
+
+    assert rc == 0
+    materialize_mock.assert_called_once()
+    backfill_mock.assert_called_once()
+    proj_config = backfill_mock.call_args.args[0]
+    assert proj_config.repo_ids is None  # org-wide projection
+    assert proj_config.is_org_wide is True
+
+
+def test_cli_date_windowed_repo_scoped_materialize_skips_org_marker():
+    """A date-windowed AND repo-scoped run still skips the org-wide marker — the
+    scope (not the window) is what suppresses publishing (CHAOS-2776)."""
+    fake_materialize, materialize_mock, backfill_mock = (
+        _patch_materialize_and_projection()
+    )
+
+    with (
+        patch(
+            "dev_health_ops.work_graph.runner.materialize_investments",
+            fake_materialize,
+        ),
+        patch(
+            "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
+            backfill_mock,
+        ),
+    ):
+        rc = run_investment_materialization(
+            _materialize_ns(window_days=7, repo_id=["repo-uuid-1"])
+        )
 
     assert rc == 0
     materialize_mock.assert_called_once()

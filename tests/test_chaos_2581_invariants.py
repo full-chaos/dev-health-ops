@@ -19,12 +19,14 @@ from dev_health_ops.models import (
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
     SyncWatermark,
 )
 from dev_health_ops.sync.dispatch_outbox import (
+    OUTBOX_KIND_DISCOVERY,
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
@@ -156,6 +158,16 @@ def _seed_run(
         )
         session.add(unit)
         units.append(unit)
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=integration.org_id,
+            sync_run_id=run.id,
+            status="success",
+            attempts=1,
+            available_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     session.flush()
     return run, units
 
@@ -540,7 +552,7 @@ def test_b5_broker_failure_during_reconciler_enqueue_rearms_without_losing_work(
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
     assert dispatch_row.attempts == 1
     assert dispatch_row.claim_token is None
-    assert dispatch_row.last_error == "broker down"
+    assert dispatch_row.last_error == "RuntimeError: broker down"
     assert _aware(dispatch_row.available_at) > before
     assert "reconcile_sync_dispatch.outbox_publish_failed" in caplog.text
 
@@ -695,7 +707,7 @@ def test_a1_first_sync_fresh_source_uses_configured_initial_depth(
     planned_run = db_session.get(SyncRun, uuid.UUID(plan.sync_run_id))
     assert planned_run is not None
     assert (
-        _outbox(db_session, planned_run, OUTBOX_KIND_DISPATCH).status
+        _outbox(db_session, planned_run, OUTBOX_KIND_DISCOVERY).status
         == OUTBOX_STATUS_PENDING
     )
 
@@ -846,7 +858,7 @@ def test_a4_worker_dies_after_running_bucket_frees_and_run_redrives_terminal(
     assert units[0].status == SyncRunUnitStatus.FAILED.value
     assert units[0].result is not None
     assert units[0].result["error_category"] == "worker_lost"
-    assert "lease_expired_at" in units[0].result
+    assert "last_lease_expired_at" in units[0].result
     assert units[0].lease_owner is None
     assert units[1].status == SyncRunUnitStatus.PLANNED.value
     assert dispatches == [((str(run.id),), "sync")]

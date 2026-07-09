@@ -343,6 +343,7 @@ class TeamMembershipRecord:
     updated_at: datetime
     raw_provider_user_id: str | None = None
     raw_email: str | None = None
+    identity_facets: list[str] = field(default_factory=list)
     valid_to: datetime | None = None
     org_id: str = ""
 
@@ -471,6 +472,21 @@ class WorkItemMetricsDailyRecord:
     defect_intro_rate: float = 0.0
     wip_congestion_ratio: float = 0.0
     predictability_score: float = 0.0
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class EstimateCoverageMetricsDailyRecord:
+    day: date
+    provider: str
+    work_scope_id: str
+    team_id: str | None
+    team_name: str | None
+    estimated_count: int
+    unestimated_count: int
+    backlog_size: int
+    ratio: float | None
+    computed_at: datetime
     org_id: str = ""
 
 
@@ -863,6 +879,19 @@ class WorkUnitInvestmentRecord:
 
 
 @dataclass(frozen=True)
+class WorkUnitRepoEffortRecord:
+    work_unit_id: str
+    repo_id: uuid.UUID | None
+    effort_metric: str
+    effort_value: float
+    allocation_weight: float
+    allocation_source: str
+    categorization_run_id: str
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class WorkUnitMembershipRecord:
     """One row per (node, category) — reverse index for theme/subcategory filtering.
 
@@ -912,6 +941,15 @@ class WorkUnitMembershipRunRecord:
 
 
 @dataclass(frozen=True)
+class WorkUnitScopedMembershipRunRecord:
+    org_id: str
+    scope_kind: str
+    scope_id: str
+    run_id: str
+    completed_at: datetime
+
+
+@dataclass(frozen=True)
 class WorkUnitInvestmentEvidenceQuoteRecord:
     work_unit_id: str
     quote: str
@@ -932,6 +970,39 @@ class LLMTokenUsageRecord:
     output_tokens: int
     calls: int
     computed_at: datetime
+    run_id: str = ""
+
+
+@dataclass(frozen=True)
+class LLMTokenSpendRunRecord:
+    run_id: str
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+    failures_by_class: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LLMTokenSpendLegacyRecord:
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+    run_id: str = ""
+    marker: str = "legacy_empty_run_id"
+
+
+@dataclass(frozen=True)
+class LLMTokenSpendSummaryRecord:
+    since: datetime
+    limit: int
+    runs: list[LLMTokenSpendRunRecord] = field(default_factory=list)
+    legacy: list[LLMTokenSpendLegacyRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -8,9 +8,11 @@ the underlying ingestion behavior.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.connectors.exceptions import RateLimitException
 from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -158,11 +160,36 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
         since: datetime | None = None
         if ctx.window.updated_since:
             since = _to_utc(ctx.window.updated_since)
+        until: datetime | None = None
+        if ctx.window.active_until:
+            until = _to_utc(ctx.window.active_until)
+
+        def within_active_window(item: Any) -> bool:
+            if until is None:
+                return True
+            updated_at = _to_utc(getattr(item, "updated_at", None))
+            return updated_at is None or updated_at <= until
+
+        # Cap how many items we page through to find the active window. With no
+        # caller limit we leave it unbounded (None) UNLESS the env var is set.
+        # env_int falls back to its default only for a missing/empty/invalid
+        # value, so a present-but-empty/invalid var here resolves to 0, which
+        # _iter_with_limit treats as "scan nothing". Set a positive integer to
+        # cap, or leave the var unset to keep historical scans unbounded.
+        active_window_scan_limit: int | None = None
+        if until is not None:
+            if ctx.limit is not None:
+                active_window_scan_limit = env_int(
+                    "GITHUB_ACTIVE_WINDOW_SCAN_LIMIT", max(ctx.limit * 10, 100)
+                )
+            elif "GITHUB_ACTIVE_WINDOW_SCAN_LIMIT" in os.environ:
+                active_window_scan_limit = env_int("GITHUB_ACTIVE_WINDOW_SCAN_LIMIT", 0)
 
         logger.info(
-            "GitHub: fetching work items from %s (since=%s)",
+            "GitHub: fetching work items from %s (since=%s, until=%s)",
             repo_full_name,
             since,
+            until,
         )
 
         fetched_count = 0
@@ -178,6 +205,8 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     )
                     sprint_cache[sprint.sprint_id] = sprint
                     sprints.append(sprint)
+            except RateLimitException:
+                raise
             except Exception as exc:
                 logger.warning(
                     "GitHub: failed to fetch milestones for %s: %s", repo_full_name, exc
@@ -191,12 +220,20 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     repo=repo,
                     state="all",
                     since=since,
+                    until=until,
                     limit=ctx.limit,
+                    scan_limit=active_window_scan_limit,
                 )
                 if include_issues
                 else ()
             )
             for issue in issues_iter:
+                # The client already bounds the window (server `since` + `skip`/
+                # scan_limit pagination); re-checking here keeps correctness
+                # independent of client internals and is the enforcement point
+                # for clients/mocks that don't filter. Intentional, not redundant.
+                if not within_active_window(issue):
+                    continue
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 
@@ -249,6 +286,8 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                             )
                             if event:
                                 interactions.append(event)
+                    except RateLimitException:
+                        raise
                     except Exception as exc:
                         logger.debug(
                             "GitHub: failed to fetch comments for issue %s: %s",
@@ -264,13 +303,14 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             )
             raise
 
+        if ctx.limit is not None and fetched_count >= ctx.limit:
+            include_prs = False
+
         # Fetch pull requests
         if include_prs:
             remaining_limit = None
             if ctx.limit is not None:
                 remaining_limit = ctx.limit - fetched_count
-                if remaining_limit <= 0:
-                    remaining_limit = None
 
             try:
                 prs = list(
@@ -278,9 +318,22 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                         owner=owner,
                         repo=repo,
                         state="all",
+                        since=since,
+                        until=until,
                         limit=remaining_limit,
+                        scan_limit=active_window_scan_limit,
                     )
                 )
+                # Belt-and-suspenders: iter_pull_requests already applies the
+                # `until` skip + `limit`, so in production these are no-ops. We
+                # re-apply so the window holds regardless of the client impl and
+                # so tests with non-paginating mock clients stay correct.
+                if until is not None:
+                    prs = [pr for pr in prs if within_active_window(pr)]
+                    if ctx.limit is not None:
+                        prs = prs[: ctx.limit - fetched_count]
+            except RateLimitException:
+                raise
             except Exception as exc:
                 logger.warning(
                     "GitHub: failed to fetch PRs from %s: %s", repo_full_name, exc
@@ -309,6 +362,8 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                             pr_comments_by_number[payload.number] = (
                                 payload.issue_comments
                             )
+                except RateLimitException:
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "GitHub: failed to fetch PR social data from %s: %s",
@@ -461,6 +516,20 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                 repo_full_name,
             )
 
+        from dev_health_ops.providers.usage import (
+            PROVIDER_USAGE_OBSERVATION_KEY,
+            drain_provider_usage,
+        )
+
+        usage_observations = drain_provider_usage(client)
+        observations: dict[str, Any] = {}
+        if usage_observations:
+            # Emit the provider-neutral key (CHAOS-2754) alongside the legacy
+            # github_usage key, which is pinned by tests and the admin schema and
+            # must stay intact.
+            observations["github_usage"] = usage_observations
+            observations[PROVIDER_USAGE_OBSERVATION_KEY] = usage_observations
+
         return ProviderBatch(
             work_items=work_items,
             status_transitions=transitions,
@@ -469,4 +538,5 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             sprints=sprints,
             reopen_events=reopen_events,
             ai_attributions=ai_attributions,
+            observations=observations,
         )

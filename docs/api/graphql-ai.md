@@ -54,7 +54,7 @@ the GraphQL `AIAttributionBucketInput` enum:
 
 ## Query catalog
 
-All seven queries scope to `orgId` (enforced by `OrgIdAuthExtension`).
+All AI analytics queries scope to `orgId` (enforced by `OrgIdAuthExtension`).
 
 ### `aiImpactSummary`
 
@@ -128,6 +128,28 @@ Coverage rollups (`declarationCoverage`, `humanReviewCoverage`,
 `securityScanCoverage`, `inPolicyCoverage`) plus recent violations
 (rule id + severity from the canonical AI policy registry).
 
+### `aiAttributionOverview` (CHAOS-2744)
+
+Backs the dedicated `/ai/attribution` page. Reads `ai_attribution_resolved`
+directly — the highest-precedence, non-superseded signal per subject — and
+returns two projections of the same window:
+
+- `mix`: `[{ kind, count, share }]` from a plain `GROUP BY kind`. No
+  synthesized `human` bucket — use `aiImpactSummary` for the full AI-vs-human
+  PR split, which requires the total PR population, not just detected signals.
+- `rows`: paginated `AIAttributionEvidenceRow` records with `source`,
+  `confidence`, `evidence`, and `actor` always populated (non-nullable on the
+  base table) plus `teamId` resolved via `RepoPatternTeamResolver`, the same
+  mechanism `aiAttributedPrs` uses.
+
+Scoped by `AIAttributionScopeInput` (`repoId`, `teamId`, `buckets`), not the
+shared `AIScopeInput` — `ai_attribution_resolved` carries no `work_type`
+column, so `workType` is deliberately **not exposed** on this query rather
+than accepted and silently ignored (CHAOS-2744). `repoId`/`teamId` are
+applied as a real `WHERE repo_id = ...` / resolved-repo-set predicate before
+`GROUP BY`/`LIMIT`, and `buckets` filters `WHERE kind IN (...)` against the
+view's own `kind` column — all before the SQL `LIMIT`.
+
 ### `aiWorkflowDrilldown`
 
 Partial Work Graph rooted at an issue, PR, or work_unit.  Returns
@@ -143,6 +165,17 @@ input AIScopeInput {
   repoId: String
   teamId: String
   workType: String
+  buckets: [AIAttributionBucketInput!]
+}
+```
+
+`aiAttributionOverview` instead takes the narrower `AIAttributionScopeInput`
+(no `workType` — see above):
+
+```graphql
+input AIAttributionScopeInput {
+  repoId: String
+  teamId: String
   buckets: [AIAttributionBucketInput!]
 }
 ```

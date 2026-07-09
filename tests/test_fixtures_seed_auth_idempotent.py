@@ -18,6 +18,14 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.fixtures.demo_identity import (
+    ONBOARDED_ADMIN_USER_EMAIL,
+    ONBOARDED_ADMIN_USER_FULL_NAME,
+    ONBOARDED_ADMIN_USER_USERNAME,
+    ONBOARDING_ORGLESS_USER_EMAIL,
+    ONBOARDING_ORGLESS_USER_FULL_NAME,
+    ONBOARDING_ORGLESS_USER_USERNAME,
+)
 from dev_health_ops.fixtures.runner import _seed_auth_data
 from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.git import Base
@@ -49,28 +57,29 @@ async def session_maker(tmp_path: Path):
 def _build_user_data() -> dict:
     """Build the same user_data shape the fixtures generator produces.
 
-    Two users (admin + alice) bound to one org, one license. Deterministic
-    UUIDs so a second invocation lands on identical PKs.
+    Two users matching the fixture journeys: one orgless onboarding identity
+    and one onboarded admin bound to one org/license. Deterministic UUIDs make
+    repeated invocations land on identical PKs.
     """
     target_org_id = uuid.UUID("ae600a94-76bc-4166-bf36-051ee4247c73")
 
     admin = User(
-        id=uuid.uuid5(_NS, "admin@devhealth.example"),
-        email="admin@devhealth.example",
-        username="admin",
+        id=uuid.uuid5(_NS, ONBOARDED_ADMIN_USER_EMAIL),
+        email=ONBOARDED_ADMIN_USER_EMAIL,
+        username=ONBOARDED_ADMIN_USER_USERNAME,
         password_hash="$2b$12$dummy",
-        full_name="Admin",
+        full_name=ONBOARDED_ADMIN_USER_FULL_NAME,
         auth_provider="local",
         is_active=True,
         is_verified=True,
         is_superuser=True,
     )
-    alice = User(
-        id=uuid.uuid5(_NS, "alice@example.com"),
-        email="alice@example.com",
-        username="alice",
+    onboarding = User(
+        id=uuid.uuid5(_NS, ONBOARDING_ORGLESS_USER_EMAIL),
+        email=ONBOARDING_ORGLESS_USER_EMAIL,
+        username=ONBOARDING_ORGLESS_USER_USERNAME,
         password_hash="$2b$12$dummy",
-        full_name="Alice",
+        full_name=ONBOARDING_ORGLESS_USER_FULL_NAME,
         auth_provider="local",
         is_active=True,
         is_verified=True,
@@ -91,13 +100,6 @@ def _build_user_data() -> dict:
         role="owner",
         joined_at=now,
     )
-    alice_membership = Membership(
-        id=uuid.uuid5(alice.id, str(org.id)),
-        user_id=alice.id,
-        org_id=org.id,
-        role="member",
-        joined_at=now,
-    )
     license_row = OrgLicense(
         org_id=org.id,
         tier=LicenseTier.ENTERPRISE.value,
@@ -109,8 +111,8 @@ def _build_user_data() -> dict:
     license_row.id = uuid.uuid5(org.id, "org-license")
     return {
         "organizations": [org],
-        "users": [admin, alice],
-        "memberships": [admin_membership, alice_membership],
+        "users": [onboarding, admin],
+        "memberships": [admin_membership],
         "licenses": [license_row],
     }
 
@@ -140,8 +142,8 @@ async def test_seed_auth_data_is_idempotent_on_rerun(session_maker):
 
     assert len(orgs) == 1
     assert len(users) == 2
-    assert len(memberships) == 2
-    assert {m.role for m in memberships} == {"owner", "member"}
+    assert len(memberships) == 1
+    assert {m.role for m in memberships} == {"owner"}
     assert len(licenses) == 1
 
 
@@ -155,9 +157,9 @@ async def test_seed_auth_data_first_invocation_writes_everything(session_maker):
     async with session_maker() as session:
         memberships = (await session.execute(select(Membership))).scalars().all()
 
-    assert len(memberships) == 2
+    assert len(memberships) == 1
     user_org_pairs = {(m.user_id, m.org_id) for m in memberships}
-    assert len(user_org_pairs) == 2  # no accidental collision
+    assert len(user_org_pairs) == 1
 
 
 @pytest.mark.asyncio

@@ -90,6 +90,8 @@ def fetch_jira_work_items_with_extras(
     jql_override: str | None = None,
     fetch_all: bool | None = None,
     use_env_query_options: bool = True,
+    reference_sprints: Sequence[Sprint] | None = None,
+    reference_sink: Any | None = None,
 ) -> tuple[
     list[WorkItem],
     list[WorkItemStatusTransition],
@@ -173,7 +175,11 @@ def fetch_jira_work_items_with_extras(
 
     fetch_comments = _env_flag("JIRA_FETCH_COMMENTS", True)
     comments_limit = int(os.getenv("JIRA_COMMENTS_LIMIT", "0"))  # 0 means no limit
-    sprint_cache: dict[str, Sprint] = {}
+    sprint_cache: dict[str, Sprint] = {
+        sprint.sprint_id: sprint
+        for sprint in reference_sprints or []
+        if sprint.provider == "jira"
+    }
     sprint_ids: set[str] = set()
 
     updated_since = to_utc(since).date().isoformat()
@@ -267,11 +273,12 @@ def fetch_jira_work_items_with_extras(
                     )
 
             if wi.sprint_id:
-                if wi.sprint_id not in sprint_cache:
-                    sprint_ids.add(wi.sprint_id)
+                sprint_ids.add(wi.sprint_id)
 
+    fetched_sprints: list[Sprint] = []
     for sprint_id in sorted(sprint_ids):
         if sprint_id in sprint_cache:
+            sprints.append(sprint_cache[sprint_id])
             continue
         try:
             payload = jira_client.get_sprint(sprint_id=str(sprint_id))
@@ -282,6 +289,9 @@ def fetch_jira_work_items_with_extras(
         if sprint:
             sprint_cache[sprint_id] = sprint
             sprints.append(sprint)
+            fetched_sprints.append(sprint)
+    if reference_sink is not None and fetched_sprints:
+        reference_sink.write_sprints(fetched_sprints)
 
     logger.info("Fetched %d Jira work items (since %s)", len(work_items), updated_since)
     try:
@@ -446,6 +456,8 @@ def fetch_gitlab_work_items(
     include_label_events: bool = True,
     max_label_events: int = 300,
     org_id: str = "",
+    usage_observations: list[dict[str, Any]] | None = None,
+    id_scoped_project_ids: dict[uuid.UUID, str] | None = None,
 ) -> tuple[
     list[WorkItem],
     list[WorkItemStatusTransition],
@@ -468,6 +480,21 @@ def fetch_gitlab_work_items(
 
     Credentials (``token`` and optional ``gitlab_url``) are threaded explicitly
     by the caller; this function never reads from ``os.environ``.
+
+    ``id_scoped_project_ids`` [CHAOS-2763 codex HIGH]: maps ``repo_id`` ->
+    immutable GitLab project id, for repos whose work-item unit was matched
+    by numeric ``settings.project_id`` rather than by path (job_work_items.py
+    scoping). Those repos are fetched from the GitLab API using the numeric
+    id, NOT ``repo.full_name``. Matching a row by its immutable project_id
+    does not make its ``full_name`` safe to fetch by: if the project was
+    renamed/moved after discovery and the stale path was reused by a
+    *different* project, fetching by path would silently pull the wrong
+    project's issues/MRs and attribute them to this row's ``repo_id``. Repos
+    absent from the mapping (path-matched units, org-wide/no-source runs)
+    are unaffected and keep fetching by ``full_name`` as before.
+    ``repo.full_name`` itself is always passed to normalization
+    (``project_full_path=``) unchanged — only the API call identifier
+    changes for id-scoped repos.
     """
     from uuid import UUID
 
@@ -475,6 +502,7 @@ def fetch_gitlab_work_items(
     from dev_health_ops.providers.utils import env_flag
 
     deps = get_metrics_dependencies()
+    id_scoped_project_ids = id_scoped_project_ids or {}
 
     client = deps.gitlab_client_factory(token=token, gitlab_url=gitlab_url)
     work_items: dict[str, WorkItem] = {}
@@ -494,9 +522,13 @@ def fetch_gitlab_work_items(
     for repo in repos:
         if repo.source != "gitlab":
             continue
-        logger.debug("GitLab: project=%s", repo.full_name)
+        # Fetch by the immutable project id when this repo's unit was
+        # id-scoped; otherwise (path-matched or org-wide) fetch by the
+        # discovered path, unchanged from before this fix.
+        api_project_ref = id_scoped_project_ids.get(repo.repo_id, repo.full_name)
+        logger.debug("GitLab: project=%s (api_ref=%s)", repo.full_name, api_project_ref)
         for issue in client.iter_project_issues(
-            project_id_or_path=repo.full_name,
+            project_id_or_path=api_project_ref,
             state="all",
             updated_after=since_utc,
         ):
@@ -525,7 +557,7 @@ def fetch_gitlab_work_items(
             assert org_uuid is not None  # for type checker; guarded by scan_mrs
             try:
                 for mr in client.iter_project_merge_requests(
-                    project_id_or_path=repo.full_name,
+                    project_id_or_path=api_project_ref,
                     state="all",
                     updated_after=since_utc,
                 ):
@@ -550,4 +582,11 @@ def fetch_gitlab_work_items(
         since_utc.isoformat(),
         len(ai_attributions),
     )
+    if usage_observations is not None:
+        # Drain the live-sync GitLab client's request actuals into the caller's
+        # accumulator (CHAOS-2754). This is the sync path the worker actually
+        # runs (GitLabProvider.ingest is the provider-pattern path); both drain.
+        from dev_health_ops.providers.usage import drain_provider_usage
+
+        usage_observations.extend(drain_provider_usage(client))
     return list(work_items.values()), transitions, ai_attributions

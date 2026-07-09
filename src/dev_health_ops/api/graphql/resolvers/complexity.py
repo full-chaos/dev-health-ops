@@ -150,7 +150,13 @@ async def _fetch_repo_timeseries(
     }
     if repo_ids:
         bounded = list(repo_ids)[:limit]
-        query += "\n  AND toString(repo_id) IN {repo_ids:Array(String)}"
+        query += """
+          AND repo_id IN (
+              SELECT id FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+          )
+        """
         params["repo_ids"] = bounded
     else:
         query += """
@@ -220,7 +226,13 @@ async def _fetch_file_timeseries(
     }
     if repo_ids:
         bounded = list(repo_ids)[:limit]
-        query += "\n  AND toString(repo_id) IN {repo_ids:Array(String)}"
+        query += """
+          AND repo_id IN (
+              SELECT id FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+          )
+        """
         params["repo_ids"] = bounded
     query += f"\nGROUP BY day, repo_id, file_path\nORDER BY day, repo_id\nLIMIT {limit}"
     return await query_dicts(client, query, params)
@@ -258,7 +270,13 @@ async def _fetch_hotspot_rows(
     }
     if repo_ids:
         bounded = list(repo_ids)[:MAX_ROWS]
-        query += "\n  AND toString(repo_id) IN {repo_ids:Array(String)}"
+        query += """
+          AND repo_id IN (
+              SELECT id FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+          )
+        """
         params["repo_ids"] = bounded
     query += (
         f"\nGROUP BY repo_id, file_path"

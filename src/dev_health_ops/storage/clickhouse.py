@@ -32,6 +32,7 @@ from dev_health_ops.models.git import (
     Repo,
 )
 from dev_health_ops.models.work_items import (
+    Sprint,
     WorkItem,
     WorkItemDependency,
     WorkItemStatusTransition,
@@ -492,6 +493,40 @@ class ClickHouseStore:
                 parameters={"repo_id": str(self._normalize_uuid(repo_id))},
             )
         return bool(getattr(result, "result_rows", None))
+
+    async def get_git_file_contents_by_path(self, repo_id) -> dict[str, str]:
+        """Latest non-empty ``contents`` per path for a repo (newest wins).
+
+        ``git_files`` is ReplacingMergeTree(last_synced): a paths-only
+        rewrite would otherwise shadow previously-fetched contents with NULL
+        rows (CHAOS-2857). ``backfill_file_records`` merges this map under
+        freshly fetched contents so re-syncs never strip good data. Scoped by
+        ``self.org_id`` when set because ``git_files`` is org-partitioned and
+        ``repo_id`` can be reused across tenants (same rationale as
+        ``get_blamed_paths``).
+        """
+        assert self.client is not None
+        org_id = getattr(self, "org_id", None) or ""
+        query = (
+            "SELECT path, argMax(contents, last_synced) AS contents "
+            "FROM git_files WHERE repo_id = {repo_id:UUID} "
+            "AND contents IS NOT NULL AND contents != ''"
+        )
+        params: dict[str, Any] = {"repo_id": str(self._normalize_uuid(repo_id))}
+        if org_id:
+            query += " AND org_id = {org_id:String}"
+            params["org_id"] = org_id
+        query += " GROUP BY path"
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+        rows = getattr(result, "result_rows", None) or []
+        return {
+            str(row[0]): str(row[1])
+            for row in rows
+            if row and row[0] is not None and row[1]
+        }
 
     async def has_any_git_commit_stats(self, repo_id) -> bool:
         return await self._has_any("git_commit_stats", self._normalize_uuid(repo_id))
@@ -1860,6 +1895,7 @@ class ClickHouseStore:
                 "member_id",
                 "raw_provider_user_id",
                 "raw_email",
+                "identity_facets",
                 "source",
                 "is_primary",
                 "specificity",
@@ -2039,6 +2075,8 @@ class ClickHouseStore:
             "source",
         }:
             return str(value or "")
+        if column == "identity_facets":
+            return list(value or [])
         return value
 
     async def insert_jira_project_ops_team_links(
@@ -2218,6 +2256,48 @@ class ClickHouseStore:
                     )
                 )
         return teams
+
+    async def get_all_sprints(self, org_id: str | None = None) -> list[Sprint]:
+        assert self.client is not None
+        query = (
+            "SELECT provider, sprint_id, argMax(name, last_synced) AS name, "
+            "argMax(state, last_synced) AS state, "
+            "argMax(started_at, last_synced) AS started_at, "
+            "argMax(ended_at, last_synced) AS ended_at, "
+            "argMax(completed_at, last_synced) AS completed_at, "
+            "max(last_synced) AS last_synced_max, "
+            "argMax(native_team_key, last_synced) AS native_team_key, "
+            "org_id FROM sprints"
+        )
+        params: dict[str, str] = {}
+        scoped_org_id = str(org_id or self.org_id or "")
+        if scoped_org_id:
+            query += " WHERE org_id = {org_id:String}"
+            params["org_id"] = scoped_org_id
+        query += " GROUP BY provider, sprint_id, org_id"
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=params
+            )
+
+        sprints: list[Sprint] = []
+        for row in result.result_rows or []:
+            last_synced = _parse_datetime_value(row[7]) or datetime.now(timezone.utc)
+            sprints.append(
+                Sprint(
+                    provider=row[0],
+                    sprint_id=row[1],
+                    name=row[2],
+                    state=row[3],
+                    started_at=_parse_datetime_value(row[4]),
+                    ended_at=_parse_datetime_value(row[5]),
+                    completed_at=_parse_datetime_value(row[6]),
+                    native_team_key=row[8] or None,
+                    last_synced=last_synced,
+                    org_id=row[9],
+                )
+            )
+        return sprints
 
     async def get_jira_project_ops_team_links(self) -> list[JiraProjectOpsTeamLink]:
         from dev_health_ops.models.teams import JiraProjectOpsTeamLink

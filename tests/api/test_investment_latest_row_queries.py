@@ -21,6 +21,19 @@ def _window() -> tuple[datetime, datetime]:
     )
 
 
+def _assert_membership_scope_sql(sql: str) -> None:
+    assert "latest_complete_membership_run AS" in sql
+    assert "investment_membership_scope_state AS" in sql
+    assert "membership_scoped_work_unit_ids AS" in sql
+    assert "argMax(run_id, completed_at) AS latest_run_id" in sql
+    assert "latest_run.latest_run_id != ''" in sql
+    assert "m.run_id = latest_run.latest_run_id" in sql
+    assert "max(computed_at) AS legacy_max_computed_at" in sql
+    assert "m.computed_at = lnm.legacy_max_computed_at" in sql
+    assert "SELECT DISTINCT m.work_unit_id AS work_unit_id" in sql
+    assert "(SELECT scope_enabled FROM investment_membership_scope_state) = 0" in sql
+
+
 def test_latest_row_cte_does_not_shadow_argmax_ordering_column() -> None:
     """Regression: the aggregate in the latest-row CTE must NOT be aliased to
     ``computed_at``.
@@ -38,6 +51,41 @@ def test_latest_row_cte_does_not_shadow_argmax_ordering_column() -> None:
     assert "argMax(effort_value, computed_at)" in cte  # ordering column is used
     assert "max(computed_at) AS computed_at" not in cte  # the shadowing alias
     assert "max(computed_at) AS latest_computed_at" in cte
+    _assert_membership_scope_sql(cte)
+
+
+def test_work_unit_authors_cte_scopes_dedup_by_org() -> None:
+    """Regression for an Oracle NO-GO CRITICAL tenant-isolation leak on
+    CHAOS-2492: ``LATEST_WORK_UNIT_AUTHORS_CTE`` deduped ``git_commits`` by
+    (repo_id, hash) and ``git_pull_requests`` by (repo_id, number) WITHOUT
+    org_id. Those tables are keyed by (org_id, repo_id, hash/number)
+    (migration 027), and repo_id+hash / repo_id+number values CAN collide
+    across tenants -- this exact collision risk is documented at
+    work_graph/builder.py:1643 for the equivalent git_commits join. As
+    written, ``argMax(author_email, ...)`` could pull ANOTHER org's
+    author_email into this org's investment developer filter. Both inner
+    dedupe subqueries must now filter AND group by org_id, and the outer
+    join must pin ca.org_id/pa.org_id to the work unit's own org_id -- a
+    real live-ClickHouse exec proof of this lives in
+    tests/graphql/test_investment_developer_filter_tenant_isolation_live.py
+    (pytest -m clickhouse, opt-in).
+    """
+    cte = investment_queries.LATEST_WORK_UNIT_AUTHORS_CTE
+
+    # git_commits dedupe subquery: filtered AND grouped by org_id, and the
+    # outer join is additionally pinned to the work unit's own org_id.
+    assert "FROM git_commits" in cte
+    assert "GROUP BY org_id, repo_id, hash" in cte
+    assert "ca.org_id = wui.org_id" in cte
+
+    # git_pull_requests dedupe subquery: same tenant scoping.
+    assert "FROM git_pull_requests" in cte
+    assert "GROUP BY org_id, repo_id, number" in cte
+    assert "pa.org_id = wui.org_id" in cte
+
+    # Both inner subqueries filter by the query's own org_id param before
+    # aggregating -- not just after, via the join.
+    assert cte.count("WHERE org_id = %(org_id)s") == 2
 
 
 @pytest.mark.asyncio
@@ -258,7 +306,14 @@ async def test_investment_queries_read_latest_work_unit_rows(
 
     sql = captured["sql"]
     assert "latest_work_unit_investments AS" in sql
-    assert "FROM latest_work_unit_investments AS work_unit_investments" in sql
+    # The data source is the membership-scoped latest-row CTE. Most fetchers read
+    # it directly (``AS work_unit_investments``); the CHAOS-2777 allocation
+    # fetchers wrap it in a repo-effort fan-out derived table (``AS wui``). Either
+    # aliasing is acceptable — both read the deduped, org-scoped CTE.
+    assert (
+        "FROM latest_work_unit_investments AS work_unit_investments" in sql
+        or "FROM latest_work_unit_investments AS wui" in sql
+    )
     assert "argMax(effort_value, computed_at) AS effort_value" in sql
     assert "work_unit_investments.from_ts < %(end_ts)s" in sql
     assert "work_unit_investments.to_ts >= %(start_ts)s" in sql
@@ -267,6 +322,7 @@ async def test_investment_queries_read_latest_work_unit_rows(
     # applied before aggregation and the dedup key must include org_id.
     assert "WHERE org_id = %(org_id)s" in sql
     assert "GROUP BY org_id, work_unit_id" in sql
+    _assert_membership_scope_sql(sql)
 
 
 @pytest.mark.asyncio
@@ -298,6 +354,7 @@ async def test_sankey_flow_items_read_latest_work_unit_rows(
     assert (
         "FROM latest_work_unit_investments AS work_unit_investments" in captured["sql"]
     )
+    _assert_membership_scope_sql(captured["sql"])
 
 
 def test_investment_timeseries_compiler_reads_latest_work_unit_rows() -> None:
@@ -316,3 +373,4 @@ def test_investment_timeseries_compiler_reads_latest_work_unit_rows() -> None:
     assert "latest_work_unit_investments AS" in sql
     assert "FROM latest_work_unit_investments AS work_unit_investments" in sql
     assert "work_unit_investments.org_id = %(org_id)s" in sql
+    _assert_membership_scope_sql(sql)

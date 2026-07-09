@@ -170,6 +170,10 @@ def run_investment_materialize(
     force: bool = False,
     org_id: str = "",
     allow_unscoped: bool = False,
+    llm_batch_mode: str | None = None,
+    llm_batch_min_items: int | None = None,
+    llm_batch_poll_interval_seconds: float | None = None,
+    llm_batch_timeout_seconds: float | None = None,
 ) -> dict:
     """Materialize investment distributions from work graph.
 
@@ -196,6 +200,10 @@ def run_investment_materialize(
     from dev_health_ops.work_graph.investment.materialize import (
         MaterializeConfig,
         materialize_investments,
+        resolve_llm_batch_min_items,
+        resolve_llm_batch_mode,
+        resolve_llm_batch_poll_interval_seconds,
+        resolve_llm_batch_timeout_seconds,
     )
 
     db_url = db_url or _get_db_url()
@@ -233,6 +241,14 @@ def run_investment_materialize(
             force=force,
             org_id=org_id or None,
             allow_unscoped=allow_unscoped,
+            llm_batch_mode=resolve_llm_batch_mode(llm_batch_mode),
+            llm_batch_min_items=resolve_llm_batch_min_items(llm_batch_min_items),
+            llm_batch_poll_interval_seconds=resolve_llm_batch_poll_interval_seconds(
+                llm_batch_poll_interval_seconds
+            ),
+            llm_batch_timeout_seconds=resolve_llm_batch_timeout_seconds(
+                llm_batch_timeout_seconds
+            ),
         )
         stats = run_async(materialize_investments(config))
         return {"status": "success", "stats": stats}
@@ -273,6 +289,11 @@ def run_investment_materialize_chunk(
     computed_at: str = "",
     component_indexes: list[int] | None = None,
     chunk_index: int = 0,
+    llm_batch_mode: str | None = None,
+    llm_batch_min_items: int | None = None,
+    llm_batch_poll_interval_seconds: float | None = None,
+    llm_batch_timeout_seconds: float | None = None,
+    max_component_nodes: int | None = None,
 ) -> dict:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.llm import LLMAuthError, LLMError, resolve_provider_name
@@ -286,6 +307,10 @@ def run_investment_materialize_chunk(
     from dev_health_ops.work_graph.investment.materialize import (
         MaterializeConfig,
         materialize_investments,
+        resolve_llm_batch_min_items,
+        resolve_llm_batch_mode,
+        resolve_llm_batch_poll_interval_seconds,
+        resolve_llm_batch_timeout_seconds,
     )
 
     db_url = db_url or _get_db_url()
@@ -349,6 +374,19 @@ def run_investment_materialize_chunk(
             run_id=run_id,
             computed_at=shared_computed_at,
             component_indexes=component_indexes,
+            chunk_index=chunk_index,
+            llm_batch_mode=resolve_llm_batch_mode(llm_batch_mode),
+            llm_batch_min_items=resolve_llm_batch_min_items(llm_batch_min_items),
+            llm_batch_poll_interval_seconds=resolve_llm_batch_poll_interval_seconds(
+                llm_batch_poll_interval_seconds
+            ),
+            llm_batch_timeout_seconds=resolve_llm_batch_timeout_seconds(
+                llm_batch_timeout_seconds
+            ),
+            # Frozen by the dispatcher: chunk workers must split components with
+            # the SAME cap the dispatcher enumerated with, or component_indexes
+            # would name different work units (CHAOS-2775 codex round 2).
+            max_component_nodes=max_component_nodes,
         )
         stats = run_async(materialize_investments(config))
 
@@ -402,6 +440,9 @@ def finalize_investment_materialize_partitioned(
         "llm_output_tokens": 0,
         "llm_failures": 0,
         "llm_failure_counts": {},
+        "oversized_components": 0,
+        "dropped_edges": 0,
+        "dropped_nodes": 0,
     }
     try:
         for result in chunk_results or []:
@@ -416,6 +457,13 @@ def finalize_investment_materialize_partitioned(
                 "llm_failures",
             ):
                 totals[key] += int(stats.get(key, 0) or 0)
+            # Split stats are aggregated by MAX, not summed: every chunk
+            # rebuilds the FULL component list (then materializes only its
+            # component_indexes slice), so each chunk reports the same
+            # graph-wide split counters — summing would multiply them by the
+            # chunk count (CHAOS-2775 codex round 2).
+            for key in ("oversized_components", "dropped_edges", "dropped_nodes"):
+                totals[key] = max(totals[key], int(stats.get(key, 0) or 0))
             for failure_class, count in dict(
                 stats.get("llm_failure_counts", {})
             ).items():
@@ -459,16 +507,60 @@ def dispatch_investment_materialize_partitioned(
     org_id: str = "",
     allow_unscoped: bool = False,
     chunk_size: int | None = None,
+    llm_batch_mode: str | None = None,
+    llm_batch_min_items: int | None = None,
+    llm_batch_poll_interval_seconds: float | None = None,
+    llm_batch_timeout_seconds: float | None = None,
 ) -> dict:
     from dev_health_ops.metrics.sinks.factory import create_sink
+    from dev_health_ops.work_graph.investment.constants import (
+        resolve_max_component_nodes,
+    )
     from dev_health_ops.work_graph.investment.materialize import (
         _build_components,
         _resolve_repo_ids,
+        resolve_llm_batch_min_items,
+        resolve_llm_batch_mode,
+        resolve_llm_batch_poll_interval_seconds,
+        resolve_llm_batch_timeout_seconds,
     )
     from dev_health_ops.work_graph.investment.queries import fetch_work_graph_edges
 
     # Hoisted to guarantee definite assignment on every return path (CodeQL).
-    run_membership = not (repo_ids or team_ids or from_date or to_date)
+    #
+    # CHAOS-2776: gate the finalizer's membership projection on SCOPE, not window.
+    # The finalizer runs ``backfill_memberships`` (see
+    # ``work_graph.investment.backfill`` module docstring for the CHAOS-2433
+    # run-marker protocol), which is ALWAYS full-coverage BY CONSTRUCTION: it
+    # iterates the FULL current work graph and projects from the latest persisted
+    # investments per unit (argMax(computed_at)), independent of any materialize
+    # window. ``from_date``/``to_date`` only bound which units get NEW LLM
+    # investment rows; they do NOT bound projection coverage. So running the
+    # projection after a WINDOWED org-wide materialize is safe and correct — it
+    # republishes a full-coverage org-wide completion marker at >= the newest
+    # investment clock, re-arming the read-path stale-generation guard
+    # (CHAOS-2764, api/queries/investment_membership_scope.py).
+    #
+    # The old ``... or from_date or to_date`` gate broke the post-sync path: the
+    # dispatcher (post_sync_dispatch.py) ALWAYS forwards the sync window as
+    # from_date/to_date, so the finalizer NEVER projected after a post-sync
+    # materialize. The guard then disarmed (investments newer than the marker,
+    # scope_mode='unscoped_fallback') until the next daily 03:30 org-wide
+    # projection — which the next sync immediately disarmed again, flooding the
+    # Investment charts with stale work-unit generations (~18x effort inflation).
+    #
+    # Only repo/team-SCOPED runs must still skip publishing the org-wide marker: a
+    # scoped projection would only cover in-scope units and blank every other
+    # repo's membership for unscoped reads.
+    run_membership = not (repo_ids or team_ids)
+
+    # Resolve the component-size cap ONCE and freeze it for the whole
+    # partitioned run: chunk workers rebuild the component list from a fresh
+    # fetch, and component_indexes are positional — if a chunk worker resolved
+    # a different INVESTMENT_MAX_COMPONENT_NODES from its own env, the split
+    # would differ and index N would name a different work unit
+    # (CHAOS-2775 codex round 2).
+    frozen_max_component_nodes = resolve_max_component_nodes()
 
     db_url = db_url or _get_db_url()
     sink = create_sink(db_url)
@@ -480,7 +572,9 @@ def dispatch_investment_materialize_partitioned(
         edges = fetch_work_graph_edges(
             sink, repo_ids=resolved_repo_ids, org_id=org_id or ""
         )
-        components = _build_components(edges)
+        components = _build_components(
+            edges, max_component_nodes=frozen_max_component_nodes
+        )
     finally:
         sink.close()
 
@@ -492,6 +586,14 @@ def dispatch_investment_materialize_partitioned(
     chunks = [indexes[i : i + size] for i in range(0, len(indexes), size)]
     run_id = uuid.uuid4().hex
     computed_at = datetime.now(timezone.utc).isoformat()
+    resolved_llm_batch_mode = resolve_llm_batch_mode(llm_batch_mode)
+    resolved_llm_batch_min_items = resolve_llm_batch_min_items(llm_batch_min_items)
+    resolved_llm_batch_poll_interval_seconds = resolve_llm_batch_poll_interval_seconds(
+        llm_batch_poll_interval_seconds
+    )
+    resolved_llm_batch_timeout_seconds = resolve_llm_batch_timeout_seconds(
+        llm_batch_timeout_seconds
+    )
 
     header = []
     for chunk_index, chunk_indexes in enumerate(chunks):
@@ -505,12 +607,17 @@ def dispatch_investment_materialize_partitioned(
             "llm_provider": llm_provider,
             "llm_model": llm_model,
             "llm_concurrency": llm_concurrency,
+            "llm_batch_mode": resolved_llm_batch_mode,
+            "llm_batch_min_items": resolved_llm_batch_min_items,
+            "llm_batch_poll_interval_seconds": resolved_llm_batch_poll_interval_seconds,
+            "llm_batch_timeout_seconds": resolved_llm_batch_timeout_seconds,
             "force": force,
             "org_id": org_id,
             "run_id": run_id,
             "computed_at": computed_at,
             "component_indexes": chunk_indexes,
             "chunk_index": chunk_index,
+            "max_component_nodes": frozen_max_component_nodes,
         }
         if allow_unscoped:
             chunk_kwargs["allow_unscoped"] = True

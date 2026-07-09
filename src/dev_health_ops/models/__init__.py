@@ -12,7 +12,13 @@ from .billing import (
     PlanFeatureBundle,
 )
 from .billing_audit import BillingAuditLog
-from .checkpoints import CheckpointStatus, MetricCheckpoint
+from .checkpoints import (
+    CheckpointStatus,
+    MetricCheckpoint,
+    SyncComputeCheckpoint,
+    SyncComputeCheckpointStatus,
+    SyncComputeType,
+)
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
 from .impersonation import ImpersonationSession
 from .integrations import (
@@ -23,9 +29,16 @@ from .integrations import (
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
+)
+from .investment_batch import (
+    InvestmentBatchItem,
+    InvestmentBatchItemStatus,
+    InvestmentBatchJob,
+    InvestmentBatchJobStatus,
 )
 from .invoices import Invoice, InvoiceLineItem
 from .ip_allowlist import OrgIPAllowlist
@@ -38,6 +51,7 @@ from .licensing import (
     OrgLicense,
 )
 from .org_invite import OrgInvite
+from .rate_limit_observations import ProviderRateLimitObservation
 from .refresh_token import RefreshToken
 from .refunds import Refund, RefundStatus
 from .reports import (
@@ -113,6 +127,10 @@ __all__ = [
     "IntegrationDataset",
     "IntegrationProvider",
     "IntegrationSource",
+    "InvestmentBatchItem",
+    "InvestmentBatchItemStatus",
+    "InvestmentBatchJob",
+    "InvestmentBatchJobStatus",
     "Invoice",
     "InvoiceLineItem",
     "JobRun",
@@ -128,6 +146,7 @@ __all__ = [
     "OrgIPAllowlist",
     "OrgLicense",
     "OrgRetentionPolicy",
+    "ProviderRateLimitObservation",
     "Refund",
     "RefundStatus",
     "RefreshToken",
@@ -147,10 +166,14 @@ __all__ = [
     "SSOProviderStatus",
     "STANDARD_FEATURES",
     "SyncConfiguration",
+    "SyncComputeCheckpoint",
+    "SyncComputeCheckpointStatus",
+    "SyncComputeType",
     "SyncDispatchOutbox",
     "SyncRun",
     "SyncRunMode",
     "SyncRunPostDispatch",
+    "SyncRunReferenceDiscovery",
     "SyncRunStatus",
     "SyncRunUnit",
     "SyncRunUnitStatus",

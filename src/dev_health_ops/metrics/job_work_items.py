@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import re
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -15,6 +20,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 )
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
+    compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
     compute_work_item_team_attributions,
     resolve_team_attribution,
@@ -42,12 +48,18 @@ from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemType,
 )
+from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     load_team_resolver,
     normalize_team_id,
+)
+from dev_health_ops.providers.usage import (
+    attach_partial_observations,
+    drain_provider_usage,
+    read_partial_observations,
 )
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
@@ -59,12 +71,100 @@ from dev_health_ops.utils.cli import (
 
 logger = logging.getLogger(__name__)
 
+_LeaseCheck = Callable[[str], bool]
+_WORK_ITEMS_SYNC_LEASE_CHECK: ContextVar[_LeaseCheck | None] = ContextVar(
+    "work_items_sync_lease_check",
+    default=None,
+)
+
+
+class WorkItemsSyncLeaseLost(RuntimeError):
+    def __init__(self, surface: str) -> None:
+        self.surface = surface
+        super().__init__(f"sync unit lease lost before {surface} write")
+
+
+class WorkItemUnitMissingSource(ValueError):
+    def __init__(self, provider: str, source_kind: str) -> None:
+        self.provider = provider
+        self.source_kind = source_kind
+        super().__init__(
+            f"{provider} work-item unit had no source ({source_kind}); "
+            "refusing org-wide fan-out"
+        )
+
+
+@contextmanager
+def work_items_sync_lease_check(check: _LeaseCheck) -> Iterator[None]:
+    token = _WORK_ITEMS_SYNC_LEASE_CHECK.set(check)
+    try:
+        yield
+    finally:
+        _WORK_ITEMS_SYNC_LEASE_CHECK.reset(token)
+
+
+def _ensure_unit_lease_for_write(surface: str) -> None:
+    check = _WORK_ITEMS_SYNC_LEASE_CHECK.get()
+    if check is not None and not check(surface):
+        raise WorkItemsSyncLeaseLost(surface)
+
 
 def _date_range(end_day: date, backfill_days: int) -> list[date]:
     if backfill_days <= 1:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
+
+
+def _has_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _repo_settings_dict(repo: Any) -> dict[str, Any]:
+    """Return ``repo.settings`` as a dict regardless of on-disk representation.
+
+    ``discover_repos`` (job_daily.py) parses the ClickHouse ``settings`` JSON
+    string into a dict, but this stays defensive: other callers (backfill,
+    directly-constructed ``DiscoveredRepo`` instances, tests) may still hand
+    back a raw JSON string, ``None``, or an already-parsed dict. Malformed
+    JSON or an unexpected type yields ``{}`` — the CHAOS-2763 gitlab numeric-id
+    match then fails closed rather than raising.
+    """
+    settings = getattr(repo, "settings", None)
+    if isinstance(settings, dict):
+        return settings
+    if isinstance(settings, str):
+        try:
+            parsed = json.loads(settings)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _require_work_item_unit_source(
+    *,
+    provider_set: set[str],
+    repo_name: str | None,
+    jira_project_keys: list[str] | None,
+) -> None:
+    required_sources = {
+        "github": (repo_name, "repo"),
+        "gitlab": (repo_name, "project"),
+        "linear": (repo_name, "team"),
+    }
+    for provider, (source, source_kind) in required_sources.items():
+        if provider in provider_set and not _has_text(source):
+            error = WorkItemUnitMissingSource(provider, source_kind)
+            logger.error(str(error))
+            raise error
+
+    if "jira" in provider_set and not any(
+        _has_text(project_key) for project_key in (jira_project_keys or [])
+    ):
+        error = WorkItemUnitMissingSource("jira", "project_keys")
+        logger.error(str(error))
+        raise error
 
 
 def _build_github_work_client(
@@ -220,6 +320,60 @@ def _build_linear_work_client(
     )
 
 
+def _build_work_item_observations(
+    *,
+    github_usage: list[dict[str, Any]],
+    provider_usage: list[dict[str, Any]],
+    linear_page_count: int,
+    linear_batch_count: int,
+    include_linear_counts: bool,
+) -> dict[str, Any]:
+    """Assemble the unit-result ``observations`` fragment.
+
+    Emits the provider-neutral ``provider_usage`` key alongside the legacy
+    ``github_usage`` key (kept intact for pinned tests + admin consumers).
+    """
+
+    observations: dict[str, Any] = {}
+    if github_usage:
+        observations["github_usage"] = github_usage
+    if provider_usage:
+        observations["provider_usage"] = provider_usage
+    if include_linear_counts:
+        observations["linear_page_count"] = linear_page_count
+        observations["linear_batch_count"] = linear_batch_count
+    return observations
+
+
+def attach_work_item_partial_observations(
+    exc: BaseException, observations: dict[str, Any]
+) -> None:
+    """Stash partial usage observations on an in-flight exception (no-op when
+    empty) so a rate-limit deferral / failure can still record actuals.
+
+    Delegates to the provider-neutral ``providers.usage.attach_partial_observations``
+    (CHAOS-2803/CS2), which now owns the exception-attribute mechanism; kept
+    here (same name/behavior) since this is the work-items sync job's public
+    call site and is pinned by existing tests.
+    """
+
+    attach_partial_observations(exc, observations)
+
+
+def read_work_item_partial_observations(
+    exc: BaseException,
+) -> dict[str, Any] | None:
+    """Read observations attached by :func:`attach_work_item_partial_observations`.
+
+    Delegates to ``providers.usage.read_partial_observations`` (CHAOS-2803/CS2)
+    -- same underlying exception attribute, so this also reads observations
+    attached via the provider-neutral ``attach_partial_observations`` alias
+    (e.g. from the code-dataset adapters).
+    """
+
+    return read_partial_observations(exc)
+
+
 def run_work_items_sync_job(
     *,
     db_url: str,
@@ -239,7 +393,8 @@ def run_work_items_sync_job(
     include_pull_requests: bool | None = None,
     fetch_comments: bool | None = None,
     fetch_milestones: bool | None = None,
-) -> None:
+    require_source: bool = False,
+) -> dict[str, Any] | None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
 
@@ -287,20 +442,68 @@ def run_work_items_sync_job(
     for s in sinks:
         setattr(s, "org_id", org_id)
 
+    # Usage accumulators are declared before the try so the failure/deferral
+    # path (the ``except`` below) can attach whatever actuals were gathered
+    # before a mid-sync raise (CHAOS-2754).
+    github_usage_observations: list[dict[str, Any]] = []
+    provider_usage_observations: list[dict[str, Any]] = []
+    linear_page_count = 0
+    linear_batch_count = 0
+
     try:
         for s in sinks:
             s.ensure_tables()
 
         _teams_data = (
             primary_sink.query_dicts(
-                "SELECT id, name, project_keys FROM teams FINAL"
-                + (" WHERE org_id = {org_id:String}" if org_id else ""),
+                "SELECT id, argMax(name, updated_at) AS name, "
+                "argMax(project_keys, updated_at) AS project_keys, provider, native_team_key "
+                "FROM teams"
+                + (" WHERE org_id = {org_id:String}" if org_id else "")
+                + " GROUP BY id, provider, native_team_key, org_id",
                 {"org_id": org_id} if org_id else {},
             )
             if hasattr(primary_sink, "query_dicts")
             else []
         )
         pk_resolver = build_project_key_resolver(_teams_data)
+        from dev_health_ops.models.work_items import Sprint
+
+        _sprints_data = (
+            primary_sink.query_dicts(
+                "SELECT provider, sprint_id, argMax(name, last_synced) AS name, argMax(state, last_synced) AS state, "
+                "argMax(started_at, last_synced) AS started_at, argMax(ended_at, last_synced) AS ended_at, "
+                "argMax(completed_at, last_synced) AS completed_at, max(last_synced) AS last_synced_max, "
+                "argMax(native_team_key, last_synced) AS native_team_key, org_id FROM sprints"
+                + (" WHERE org_id = {org_id:String}" if org_id else "")
+                + " GROUP BY provider, sprint_id, org_id",
+                {"org_id": org_id} if org_id else {},
+            )
+            if hasattr(primary_sink, "query_dicts")
+            else []
+        )
+        reference_sprints = [
+            Sprint(
+                provider=row["provider"],
+                sprint_id=row["sprint_id"],
+                name=row.get("name"),
+                state=row.get("state"),
+                started_at=row.get("started_at"),
+                ended_at=row.get("ended_at"),
+                completed_at=row.get("completed_at"),
+                native_team_key=row.get("native_team_key") or None,
+                last_synced=row.get("last_synced_max") or computed_at,
+                org_id=str(row.get("org_id") or ""),
+            )
+            for row in _sprints_data
+        ]
+
+        if require_source:
+            _require_work_item_unit_source(
+                provider_set=provider_set,
+                repo_name=repo_name,
+                jira_project_keys=jira_project_keys,
+            )
 
         discovered_repos = _discover_repos(
             backend=backend,
@@ -322,6 +525,279 @@ def run_work_items_sync_job(
             len(discovered_repos),
             before,
         )
+
+        # CHAOS-2720 / CHAOS-2763: A config-aware work-item unit carries exactly
+        # one source repo/project in ``repo_name``. ``_discover_repos`` only
+        # short-circuits on ``repo_id`` and otherwise returns every repo for the
+        # org, so without scoping the GitHub/GitLab ingest loops below run a
+        # full ingest per org repo — one unit fanning out into N-repo API
+        # amplification. Scope the discovered repos to the unit's source so a
+        # unit ingests only its own repo/project.
+        #
+        # GitHub: matching is case-insensitive on ``full_name`` because both
+        # the source ``external_id`` and ``repos.repo`` are the GitHub
+        # ``owner/repo`` slug (admin sync planner, api/admin/routers/sync.py).
+        #
+        # GitLab (below, after this block): the unit's ``repo_name`` is the
+        # numeric GitLab project id (``IntegrationSource.external_id``), which
+        # never matches ``repos.repo`` (``path_with_namespace``) — so
+        # ASCII-decimal inputs match instead against the immutable
+        # ``settings.project_id`` captured at code-dataset sync time. Only
+        # path-shaped (non-numeric) inputs — e.g. CLI ``--repo-name
+        # grp/proj`` — fall back to the case-insensitive ``full_name`` match; a
+        # numeric id never falls back to ``full_name`` (a stale row's mutable
+        # path could otherwise coincidentally equal the id string).
+        #
+        # Only GitHub/GitLab-source repos are touched by their respective
+        # blocks; every other source passes through unchanged. When
+        # ``repo_name`` is absent (CLI/org-wide), discovery stays org-wide as
+        # before.
+        if repo_name and "github" in provider_set:
+            wanted = repo_name.strip().lower()
+            scoped: list[Any] = []
+            dropped = 0
+            for repo in discovered_repos:
+                if (
+                    repo.source == "github"
+                    and (repo.full_name or "").strip().lower() != wanted
+                ):
+                    dropped += 1
+                    continue
+                scoped.append(repo)
+            if dropped:
+                logger.info(
+                    "Scoped GitHub work-item unit to source repo '%s': "
+                    "dropped %d off-source repo(s)",
+                    repo_name,
+                    dropped,
+                )
+            discovered_repos = scoped
+
+        # CHAOS-2763: gitlab twin of the GitHub scoping block above. See the
+        # comment there for the full rationale; summary: ASCII-decimal
+        # ``repo_name`` (the unit's canonical source-id shape) matches ONLY
+        # ``settings.project_id`` (never falls back to ``full_name`` —
+        # str.isdigit()-style non-ASCII digits are deliberately excluded via
+        # re.fullmatch so they fall into the path-shaped branch instead).
+        # Path-shaped ``repo_name`` (e.g. CLI ``--repo-name grp/proj``) matches
+        # ``full_name`` case-insensitively, same as GitHub.
+        #
+        # gitlab_id_scoped_project_ids [codex HIGH]: matching a row by its
+        # immutable project_id does NOT make ``repo.full_name`` safe to fetch
+        # by. If project 123 is renamed/moved after discovery and its old
+        # path is later reused by a *different* project, a unit for id "123"
+        # still matches this row by project_id, but fetching by the stale
+        # ``full_name`` would silently pull the wrong project's issues/MRs
+        # and write them under this row's repo_id — defeating the isolation
+        # the id match exists to provide. So every numeric-id-matched repo's
+        # immutable project id is recorded here and threaded into
+        # ``fetch_gitlab_work_items`` to use for the actual GitLab API calls;
+        # ``full_name`` is kept on the (unmodified) ``DiscoveredRepo`` for
+        # display/normalization only. Path-matched and org-wide (no-source)
+        # repos are NOT added here, so they keep fetching by ``full_name`` —
+        # unchanged, existing behavior; only an id-matched unit's identifier
+        # resolution changes.
+        #
+        # CHAOS-2801 [codex HIGH, PR #1143 round-3]: numeric ``project_id``
+        # is only unique WITHIN one GitLab instance — two GitLab integrations
+        # in the same org (different self-hosted instances, or one self-hosted
+        # + gitlab.com) can both expose ``project_id=123``. Without an
+        # instance check, a unit authenticated to instance A could match
+        # instance B's row purely on the numeric id, then fetch project 123
+        # from A and persist/write the result under B's ``repo_id``.
+        #
+        # Resolve this unit's authenticated GitLab client (token + base URL)
+        # up front — *before* the id-matching loop, not after it as before —
+        # so ``gitlab_unit_instance`` is available at match time. This is a
+        # reordering only: ``_build_gitlab_work_client`` was already called
+        # unconditionally whenever "gitlab" is in ``provider_set`` (previously
+        # just after this block, at the ``fetch_gitlab_work_items`` call
+        # site); moving it earlier does not change whether/when it can raise.
+        #
+        # Design semantic — the three-case instance rule (documented in
+        # docs/architecture/sync-unit-model.md and the CHAOS-2801 PR body).
+        # ``normalize_gitlab_instance`` (providers/gitlab/instance.py) is the
+        # SINGLE normalizer, shared with the write sites that persist
+        # ``settings.gitlab_instance_url`` — never fork a second copy
+        # (default-port/case/path spelling differences would otherwise
+        # false-mismatch, codex MED PR #1148 round-1).
+        #
+        # When the unit's instance is KNOWN, per project_id:
+        #   (a) a same-project_id row with a MATCHING discriminator exists
+        #       -> scope to the discriminated match(es) ONLY; mismatching
+        #       and undiscriminated (legacy) rows are dropped. Without the
+        #       legacy drop, absent-accept would act as a CO-MATCH (codex
+        #       HIGH, PR #1148 round-1): both repo_ids would enter
+        #       ``gitlab_id_scoped_project_ids`` and the single fetch
+        #       against this unit's client would also be written under the
+        #       legacy (possibly other-instance) row's ``repo_id``.
+        #   (b) NO discriminated row exists at all for this project_id ->
+        #       ACCEPT legacy rows. This is the compatibility pin: a
+        #       pure-legacy org (every row written before this change) sees
+        #       zero behavior change.
+        #   (c) only MISMATCHING discriminated row(s) exist -> FAIL CLOSED
+        #       for this project_id: the mismatch rows are rejected AND the
+        #       legacy rows are dropped too (codex HIGH, PR #1148 round-2).
+        #       A known mismatching discriminator PROVES cross-instance
+        #       ambiguity exists for this numeric id — the legacy row is
+        #       plausibly that other instance's pre-discriminator row, so
+        #       accepting it risks the exact wrong-repo_id write this fix
+        #       closes. Nothing matches, so the existing CHAOS-2737
+        #       ``require_source`` path below raises with its audit log;
+        #       remediation is re-discovery, which now stamps
+        #       discriminators on every row.
+        # Cases (a)+(c) collapse to one predicate: a legacy row is accepted
+        # ONLY when no same-project_id row carries ANY known discriminator.
+        # When the unit's instance is UNKNOWN (e.g. a bare CLI run with no
+        # resolvable base URL), the check never engages; behavior matches
+        # pre-CHAOS-2801.
+        #
+        # This never changes GitHub-path behavior and never weakens the
+        # existing CHAOS-2737 fail-closed ``require_source`` path below — a
+        # rejected row simply does not count as "discovered", so a unit with
+        # no other matching row still raises exactly as before.
+        gl_token: str = ""
+        gl_url: str | None = None
+        gitlab_unit_instance: str | None = None
+        if "gitlab" in provider_set:
+            gl_token, gl_url = _build_gitlab_work_client(
+                org_id=org_id, credentials=credentials
+            )
+            gitlab_unit_instance = normalize_gitlab_instance(gl_url)
+
+        gitlab_id_scoped_project_ids: dict[uuid.UUID, str] = {}
+        if repo_name and "gitlab" in provider_set:
+            wanted_gl = repo_name.strip()
+            is_numeric_id = re.fullmatch(r"[0-9]+", wanted_gl) is not None
+
+            def _gl_id_match(settings: dict[str, Any]) -> bool:
+                project_id = settings.get("project_id")
+                return project_id is not None and str(project_id).strip() == wanted_gl
+
+            # Pre-pass (codex HIGH, PR #1148 rounds 1+2): does ANY
+            # same-project_id row carry a KNOWN discriminator, and does any
+            # of those MATCH this unit's instance? A legacy
+            # (no-discriminator) row is accepted below ONLY when no known
+            # discriminator exists at all for this project_id — a matching
+            # one shadows it (case a), and a mismatching-only one proves
+            # cross-instance ambiguity and fails closed (case c).
+            has_discriminated_row = False
+            has_discriminated_match = False
+            if is_numeric_id and gitlab_unit_instance is not None:
+                for repo in discovered_repos:
+                    if repo.source != "gitlab":
+                        continue
+                    settings = _repo_settings_dict(repo)
+                    if not _gl_id_match(settings):
+                        continue
+                    row_instance = normalize_gitlab_instance(
+                        settings.get("gitlab_instance_url")
+                    )
+                    if row_instance is not None:
+                        has_discriminated_row = True
+                        if row_instance == gitlab_unit_instance:
+                            has_discriminated_match = True
+                            break
+
+            scoped_gl: list[Any] = []
+            dropped_gl = 0
+            dropped_gl_instance_mismatch = 0
+            dropped_gl_shadowed_legacy = 0
+            dropped_gl_ambiguous_legacy = 0
+            for repo in discovered_repos:
+                if repo.source != "gitlab":
+                    scoped_gl.append(repo)
+                    continue
+                settings = _repo_settings_dict(repo)
+                if is_numeric_id:
+                    matched = _gl_id_match(settings)
+                    if matched and gitlab_unit_instance is not None:
+                        row_instance = normalize_gitlab_instance(
+                            settings.get("gitlab_instance_url")
+                        )
+                        if row_instance is not None and row_instance != (
+                            gitlab_unit_instance
+                        ):
+                            matched = False
+                            dropped_gl_instance_mismatch += 1
+                        elif row_instance is None and has_discriminated_row:
+                            # Some same-project_id row has a KNOWN
+                            # discriminator, so this legacy row must not
+                            # match: shadowed by a matching row (case a) or
+                            # fail-closed on cross-instance ambiguity when
+                            # only mismatching rows exist (case c).
+                            matched = False
+                            if has_discriminated_match:
+                                dropped_gl_shadowed_legacy += 1
+                            else:
+                                dropped_gl_ambiguous_legacy += 1
+                else:
+                    matched = (
+                        repo.full_name or ""
+                    ).strip().lower() == wanted_gl.lower()
+                if not matched:
+                    dropped_gl += 1
+                    continue
+                if is_numeric_id:
+                    gitlab_id_scoped_project_ids[repo.repo_id] = wanted_gl
+                scoped_gl.append(repo)
+            if dropped_gl:
+                logger.info(
+                    "Scoped GitLab work-item unit to source project '%s': "
+                    "dropped %d off-source repo(s)",
+                    repo_name,
+                    dropped_gl,
+                )
+            if dropped_gl_instance_mismatch:
+                logger.warning(
+                    "CHAOS-2801: dropped %d GitLab repo(s) matching project_id "
+                    "'%s' but a different instance than this unit's "
+                    "authenticated GitLab host — cross-instance numeric-id "
+                    "collision, not this unit's project",
+                    dropped_gl_instance_mismatch,
+                    repo_name,
+                )
+            if dropped_gl_shadowed_legacy:
+                logger.warning(
+                    "CHAOS-2801: dropped %d legacy GitLab repo row(s) with no "
+                    "instance discriminator for project_id '%s' — a row "
+                    "discriminated to this unit's instance already matched, "
+                    "so the undiscriminated row(s) must not co-match (they "
+                    "may belong to a different instance); re-discovery will "
+                    "stamp them",
+                    dropped_gl_shadowed_legacy,
+                    repo_name,
+                )
+            if dropped_gl_ambiguous_legacy:
+                logger.warning(
+                    "CHAOS-2801: dropped %d legacy GitLab repo row(s) with no "
+                    "instance discriminator for project_id '%s' — another "
+                    "row carries a KNOWN, MISMATCHING instance discriminator "
+                    "for the same project_id, proving cross-instance "
+                    "ambiguity; failing closed rather than risking a "
+                    "wrong-instance write. Remediation: re-run discovery "
+                    "(it now stamps gitlab_instance_url on every row)",
+                    dropped_gl_ambiguous_legacy,
+                    repo_name,
+                )
+            discovered_repos = scoped_gl
+
+        if require_source:
+            if repo_name and {"github", "gitlab"}.intersection(provider_set):
+                provider_sources = {repo.source for repo in discovered_repos}
+                expected = {
+                    provider
+                    for provider in provider_set
+                    if provider in {"github", "gitlab"}
+                }
+                if not expected.issubset(provider_sources):
+                    logger.error(
+                        "Work-item unit source was not discovered",
+                        extra={"repo_name": repo_name, "providers": sorted(expected)},
+                    )
+                    raise ValueError(
+                        f"Work-item unit source was not discovered: {repo_name}"
+                    )
 
         if "synthetic" in provider_set and not any(
             r.source == "synthetic" for r in discovered_repos
@@ -349,6 +825,9 @@ def run_work_items_sync_job(
         ai_attributions: list[Any] = []
 
         if "jira" in provider_set:
+            jira_client = _build_jira_work_client(
+                org_id=org_id, credentials=credentials
+            )
             (
                 items,
                 tr,
@@ -361,12 +840,15 @@ def run_work_items_sync_job(
                 until=until_dt,
                 status_mapping=status_mapping,
                 identity=identity,
-                client=_build_jira_work_client(org_id=org_id, credentials=credentials),
+                client=jira_client,
                 project_keys=jira_project_keys,
                 jql_override=jira_jql,
                 fetch_all=jira_fetch_all,
                 use_env_query_options=not bool(org_id or credentials),
+                reference_sprints=reference_sprints,
+                reference_sink=primary_sink,
             )
+            provider_usage_observations.extend(drain_provider_usage(jira_client))
             work_items.extend(items)
             transitions.extend(tr)
             dependencies.extend(dep)
@@ -418,6 +900,18 @@ def run_work_items_sync_job(
                     interactions.extend(batch.interactions)
                     sprints.extend(batch.sprints)
                     ai_attributions.extend(batch.ai_attributions)
+                    raw_github_usage = batch.observations.get("github_usage")
+                    if isinstance(raw_github_usage, list):
+                        github_usage_observations.extend(
+                            item for item in raw_github_usage if isinstance(item, dict)
+                        )
+                    raw_provider_usage = batch.observations.get("provider_usage")
+                    if isinstance(raw_provider_usage, list):
+                        provider_usage_observations.extend(
+                            item
+                            for item in raw_provider_usage
+                            if isinstance(item, dict)
+                        )
 
             projects = parse_github_projects_v2_env()
             if projects:
@@ -433,9 +927,10 @@ def run_work_items_sync_job(
                 transitions.extend(list(proj_tr or []))
 
         if "gitlab" in provider_set:
-            gl_token, gl_url = _build_gitlab_work_client(
-                org_id=org_id, credentials=credentials
-            )
+            # gl_token/gl_url were already resolved above (before the
+            # CHAOS-2801 instance-scoping block) so the unit's authenticated
+            # instance is known at match time; reused here rather than
+            # re-resolved.
             items, tr, gl_ai_attributions = fetch_gitlab_work_items(
                 repos=discovered_repos,
                 since=since_dt,
@@ -445,6 +940,8 @@ def run_work_items_sync_job(
                 gitlab_url=gl_url,
                 include_label_events=True,
                 org_id=org_id,
+                usage_observations=provider_usage_observations,
+                id_scoped_project_ids=gitlab_id_scoped_project_ids,
             )
             work_items.extend(items)
             transitions.extend(tr)
@@ -479,22 +976,44 @@ def run_work_items_sync_job(
             from dev_health_ops.providers.base import IngestionContext, IngestionWindow
             from dev_health_ops.providers.linear.provider import LinearProvider
 
+            linear_repo_name = repo_name.strip() if repo_name else None
+            if (repo_name is not None and not linear_repo_name) or (
+                require_source and not linear_repo_name
+            ):
+                logger.error("Linear work-item sync received an empty source context")
+                raise ValueError(
+                    "Linear work-item sync requires a non-empty source team key"
+                )
+
+            linear_client = _build_linear_work_client(
+                org_id=org_id, credentials=credentials
+            )
             linear_provider = LinearProvider(
                 status_mapping=status_mapping,
                 identity=identity,
-                client=_build_linear_work_client(
-                    org_id=org_id, credentials=credentials
-                ),
+                client=linear_client,
             )
             ctx = IngestionContext(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
-                repo=None,
+                repo=linear_repo_name,
                 org_id=uuid.UUID(org_id) if org_id else None,
+                reference_teams=_teams_data,
+                reference_sprints=reference_sprints,
+                reference_sink=primary_sink,
             )
             fetched_items = 0
             fetched_transitions = 0
             fetched_sprints = 0
             for batch in linear_provider.iter_ingest(ctx):
+                linear_batch_count += 1
+                if (
+                    batch.work_items
+                    or batch.status_transitions
+                    or batch.reopen_events
+                    or batch.interactions
+                    or batch.dependencies
+                ):
+                    linear_page_count += 1
                 work_items.extend(batch.work_items)
                 transitions.extend(batch.status_transitions)
                 reopen_events.extend(batch.reopen_events)
@@ -515,6 +1034,7 @@ def run_work_items_sync_job(
                 fetched_transitions,
                 fetched_sprints,
             )
+            provider_usage_observations.extend(drain_provider_usage(linear_client))
 
         logger.info(
             "Work item sync: fetched %d items and %d transitions (providers=%s)",
@@ -563,11 +1083,13 @@ def run_work_items_sync_job(
         # Write raw work items and transitions to sinks
         for s in sinks:
             if hasattr(s, "write_work_items") and work_items:
+                _ensure_unit_lease_for_write("work_items")
                 logger.info(
                     "Writing %d work items to %s", len(work_items), type(s).__name__
                 )
                 s.write_work_items(work_items)
             if hasattr(s, "write_work_item_transitions") and transitions:
+                _ensure_unit_lease_for_write("work_item_transitions")
                 logger.info(
                     "Writing %d transitions to %s", len(transitions), type(s).__name__
                 )
@@ -575,16 +1097,21 @@ def run_work_items_sync_job(
 
         for s in sinks:
             if dependencies and hasattr(s, "write_work_item_dependencies"):
+                _ensure_unit_lease_for_write("work_item_dependencies")
                 s.write_work_item_dependencies(dependencies)
             if reopen_events and hasattr(s, "write_work_item_reopen_events"):
+                _ensure_unit_lease_for_write("work_item_reopen_events")
                 s.write_work_item_reopen_events(reopen_events)
             if interactions and hasattr(s, "write_work_item_interactions"):
+                _ensure_unit_lease_for_write("work_item_interactions")
                 s.write_work_item_interactions(interactions)
             if sprints and hasattr(s, "write_sprints"):
+                _ensure_unit_lease_for_write("sprints")
                 s.write_sprints(sprints)
             # AI attribution records — gated with hasattr so this is a no-op
             # until CHAOS-1579 (storage-worker) lands write_ai_attribution.
             if ai_attributions and hasattr(s, "write_ai_attribution"):
+                _ensure_unit_lease_for_write("ai_attribution")
                 logger.info(
                     "Writing %d AI attribution records to %s",
                     len(ai_attributions),
@@ -692,6 +1219,15 @@ def run_work_items_sync_job(
                     linked_issue_resolver=linked_issue_resolver,
                     attribution_context=team_attribution_context,
                 )
+            )
+            estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
+                day=d,
+                work_items=work_items,
+                computed_at=computed_at,
+                team_resolver=team_resolver,
+                project_key_resolver=pk_resolver,
+                linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
             )
             wi_team_attributions = compute_work_item_team_attributions(
                 work_items=work_items,
@@ -883,27 +1419,65 @@ def run_work_items_sync_job(
 
             for s in sinks:
                 if wi_metrics:
+                    _ensure_unit_lease_for_write("work_item_metrics_daily")
                     s.write_work_item_metrics(wi_metrics)
+                if estimate_coverage_metrics and hasattr(
+                    s, "write_estimate_coverage_metrics"
+                ):
+                    _ensure_unit_lease_for_write("estimate_coverage_metrics_daily")
+                    s.write_estimate_coverage_metrics(estimate_coverage_metrics)
                 if wi_user_metrics:
+                    _ensure_unit_lease_for_write("work_item_user_metrics_daily")
                     s.write_work_item_user_metrics(wi_user_metrics)
                 if wi_cycle_times:
+                    _ensure_unit_lease_for_write("work_item_cycle_times")
                     s.write_work_item_cycle_times(wi_cycle_times)
                 if wi_team_attributions and hasattr(
                     s, "write_work_item_team_attributions"
                 ):
+                    _ensure_unit_lease_for_write("work_item_team_attributions")
                     s.write_work_item_team_attributions(wi_team_attributions)
                 if wi_state_durations:
+                    _ensure_unit_lease_for_write("work_item_state_durations_daily")
                     s.write_work_item_state_durations(wi_state_durations)
 
                 if hasattr(s, "write_issue_type_metrics") and issue_type_metrics_rows:
+                    _ensure_unit_lease_for_write("issue_type_metrics_daily")
                     s.write_issue_type_metrics(issue_type_metrics_rows)
                 if (
                     hasattr(s, "write_investment_classifications")
                     and investment_classifications
                 ):
+                    _ensure_unit_lease_for_write("investment_classifications_daily")
                     s.write_investment_classifications(investment_classifications)
                 if hasattr(s, "write_investment_metrics") and investment_metrics_rows:
+                    _ensure_unit_lease_for_write("investment_metrics_daily")
                     s.write_investment_metrics(investment_metrics_rows)
+        observations = _build_work_item_observations(
+            github_usage=github_usage_observations,
+            provider_usage=provider_usage_observations,
+            linear_page_count=linear_page_count,
+            linear_batch_count=linear_batch_count,
+            include_linear_counts="linear" in provider_set,
+        )
+        if observations:
+            return {"observations": observations}
+        return None
+    except Exception as exc:
+        # Preserve actuals gathered before the raise (partial fetch) so the
+        # worker's rate-limit deferral / failure stamp can persist them
+        # (CHAOS-2754). Never suppresses the error.
+        attach_work_item_partial_observations(
+            exc,
+            _build_work_item_observations(
+                github_usage=github_usage_observations,
+                provider_usage=provider_usage_observations,
+                linear_page_count=linear_page_count,
+                linear_batch_count=linear_batch_count,
+                include_linear_counts="linear" in provider_set,
+            ),
+        )
+        raise
     finally:
         for s in sinks:
             try:

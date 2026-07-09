@@ -28,6 +28,7 @@ from dev_health_ops.providers.base import (
 from dev_health_ops.providers.jira.atlassian_compat import atlassian_client_enabled
 from dev_health_ops.providers.jira.client import JiraClient
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
+from dev_health_ops.providers.usage import provider_usage_observations
 from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
@@ -134,7 +135,11 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                     "Invalid JIRA_COMMENTS_LIMIT value %r; falling back to 0",
                     raw_comments_limit,
                 )
-        sprint_cache: dict[str, Sprint] = {}
+        sprint_cache: dict[str, Sprint] = {
+            sprint.sprint_id: sprint
+            for sprint in ctx.reference_sprints or []
+            if sprint.provider == "jira"
+        }
         sprint_ids: set[str] = set()
 
         # Build time window parameters
@@ -242,17 +247,17 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                             )
 
                     if wi.sprint_id:
-                        if wi.sprint_id not in sprint_cache:
-                            sprint_ids.add(wi.sprint_id)
+                        sprint_ids.add(wi.sprint_id)
 
                     fetched_count += 1
 
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 
-            # Fetch sprint details
+            fetched_sprints: list[Sprint] = []
             for sprint_id in sorted(sprint_ids):
                 if sprint_id in sprint_cache:
+                    sprints.append(sprint_cache[sprint_id])
                     continue
                 try:
                     payload = client.get_sprint(sprint_id=str(sprint_id))
@@ -265,6 +270,9 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                 if sprint:
                     sprint_cache[sprint_id] = sprint
                     sprints.append(sprint)
+                    fetched_sprints.append(sprint)
+            if ctx.reference_sink is not None and fetched_sprints:
+                ctx.reference_sink.write_sprints(fetched_sprints)
 
             logger.info(
                 "Jira: fetched %d work items (updated_since=%s)",
@@ -277,6 +285,8 @@ class JiraProvider(ProviderWithClient[JiraClient]):
             except Exception as exc:
                 logger.warning("Failed to close Jira client: %s", exc)
 
+        # Drain after close: the recorder holds in-memory observations that
+        # client.close() (session teardown) does not clear.
         return ProviderBatch(
             work_items=work_items,
             status_transitions=transitions,
@@ -284,6 +294,7 @@ class JiraProvider(ProviderWithClient[JiraClient]):
             interactions=interactions,
             sprints=sprints,
             reopen_events=reopen_events,
+            observations=provider_usage_observations(client),
         )
 
     def _ingest_via_atlassian_client(self, ctx: IngestionContext) -> ProviderBatch:
@@ -366,7 +377,11 @@ class JiraProvider(ProviderWithClient[JiraClient]):
         work_items: list[WorkItem] = []
         transitions: list[WorkItemStatusTransition] = []
         reopen_events: list[WorkItemReopenEvent] = []
-        sprints: list[Sprint] = []
+        sprints: list[Sprint] = [
+            sprint
+            for sprint in ctx.reference_sprints or []
+            if sprint.provider == "jira"
+        ]
         worklogs: list[Worklog] = []
         sprint_ids: set[str] = set()
 
@@ -515,8 +530,9 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 
-            if _env_flag("JIRA_FETCH_BOARD_SPRINTS", False):
+            if _env_flag("JIRA_FETCH_BOARD_SPRINTS", False) and not sprints:
                 try:
+                    fetched_sprints: list[Sprint] = []
                     for board in iter_boards_via_rest(client):
                         logger.debug(
                             "Jira: fetching sprints for board %s (%s)",
@@ -526,7 +542,12 @@ class JiraProvider(ProviderWithClient[JiraClient]):
                         for sprint in iter_board_sprints_via_rest(
                             client, board_id=int(board.id)
                         ):
-                            sprints.append(canonical_sprint_to_model(sprint=sprint))
+                            fetched_sprints.append(
+                                canonical_sprint_to_model(sprint=sprint)
+                            )
+                    sprints.extend(fetched_sprints)
+                    if ctx.reference_sink is not None and fetched_sprints:
+                        ctx.reference_sink.write_sprints(fetched_sprints)
                 except Exception as exc:
                     logger.warning("Jira: failed to fetch board sprints: %s", exc)
 
@@ -550,4 +571,5 @@ class JiraProvider(ProviderWithClient[JiraClient]):
             sprints=list(sprints),
             reopen_events=reopen_events,
             worklogs=worklogs,
+            observations=provider_usage_observations(client),
         )

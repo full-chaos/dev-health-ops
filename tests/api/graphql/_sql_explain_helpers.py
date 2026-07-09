@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from dev_health_ops.api.graphql.context import GraphQLContext
+
 
 class CapturingSink:
     """Minimal sink stand-in that records ``(sql, params)`` instead of executing.
@@ -46,7 +48,7 @@ class CapturingSink:
 
 
 @dataclass
-class FakeGraphQLContext:
+class FakeGraphQLContext(GraphQLContext):
     """Stand-in for ``GraphQLContext`` accepted by helpers that take a context.
 
     Carries the capturing client and a stable sample org_id. Other context
@@ -55,18 +57,8 @@ class FakeGraphQLContext:
     starts depending on additional attributes, add them here.
     """
 
-    client: Any
     org_id: str = "00000000-0000-0000-0000-000000000001"
     db_url: str = "clickhouse://test/test"
-    request_id: str = "test-explain-request"
-    persisted_query_id: str | None = None
-    loaders: Any = None
-    team_loader: Any = None
-    team_by_name_loader: Any = None
-    repo_loader: Any = None
-    repo_by_name_loader: Any = None
-    cache: Any = None
-    user: Any = None
     db_session: Any = None
     session: Any = None
     extra: dict[str, Any] = field(default_factory=dict)

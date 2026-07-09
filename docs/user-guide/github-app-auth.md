@@ -10,7 +10,8 @@ Grant only the permissions needed for the sync target you run:
 - Metadata: read
 - Pull requests: read (for `sync prs`)
 - Issues: read (for GitHub work item sync)
-- Actions / deployments / security events: read when using the corresponding sync targets
+- Actions / Deployments: read (for the corresponding sync targets)
+- Dependabot alerts / Code scanning alerts / Secret scanning alerts: read (required for security alert sync)
 
 Install the app on the organization or repositories you want Dev Health to ingest.
 

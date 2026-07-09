@@ -171,16 +171,23 @@ async def test_sankey_coverage_respects_resolved_repo_name_filter(
 
 
 @pytest.mark.asyncio
-async def test_sankey_coverage_unavailable_for_investment_developer_filter(
+async def test_sankey_coverage_computed_for_investment_who_developers_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    developer_id = "dev-1"
+    """CHAOS-2492: developer-filtered investment Sankey coverage is no longer
+    forced to None -- the au join (LATEST_WORK_UNIT_AUTHORS_CTE) resolves
+    author_email so hasAny(au.author_emails, ...) can be applied."""
+    developer_id = "alice@example.com"
     captured_sankey_params: list[dict[str, Any]] = []
+    captured_coverage_sql: list[str] = []
     captured_coverage_params: list[dict[str, Any]] = []
 
     async def fake_query_dicts(_client: object, sql: str, params: dict[str, Any]):
         if "assigned_team" in sql:
+            captured_coverage_sql.append(sql)
             captured_coverage_params.append(dict(params))
+            if params.get("developer_ids") == [developer_id]:
+                return [{"total": 4, "assigned_team": 2, "assigned_repo": 2}]
             return [{"total": 4, "assigned_team": 4, "assigned_repo": 4}]
         if "developer_ids" in params:
             captured_sankey_params.append(dict(params))
@@ -191,8 +198,13 @@ async def test_sankey_coverage_unavailable_for_investment_developer_filter(
         fake_query_dicts,
     )
 
-    result = await analytics_resolver.resolve_analytics(
-        GraphQLContext(org_id="org-1", db_url="clickhouse://test", client=object()),
+    context = GraphQLContext(
+        org_id="org-1", db_url="clickhouse://test", client=object()
+    )
+
+    org_wide = await analytics_resolver.resolve_analytics(context, _sankey_batch())
+    filtered = await analytics_resolver.resolve_analytics(
+        context,
         _sankey_batch(FilterInput(who=WhoFilterInput(developers=[developer_id]))),
     )
 
@@ -200,9 +212,68 @@ async def test_sankey_coverage_unavailable_for_investment_developer_filter(
     assert all(
         params["developer_ids"] == [developer_id] for params in captured_sankey_params
     )
-    assert captured_coverage_params == []
-    assert result.sankey is not None
-    assert result.sankey.coverage is None
+    # Coverage is now computed for BOTH requests -- no more silent None
+    # exclusion (previously: captured_coverage_params == [] here).
+    assert len(captured_coverage_params) == 2
+    assert captured_coverage_params[0].get("developer_ids") is None
+    assert captured_coverage_params[1]["developer_ids"] == [developer_id]
+    assert "work_unit_authors" in captured_coverage_sql[1]
+    assert "hasAny(au.author_emails" in captured_coverage_sql[1]
+    assert org_wide.sankey is not None
+    assert org_wide.sankey.coverage is not None
+    assert filtered.sankey is not None
+    assert filtered.sankey.coverage is not None
+    assert org_wide.sankey.coverage.team_coverage == 1.0
+    assert filtered.sankey.coverage.team_coverage == 0.5
+
+
+@pytest.mark.asyncio
+async def test_sankey_coverage_computed_for_investment_scope_level_developer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-2492: scope.level=developer takes the same hasAny(au.author_emails)
+    coverage path as who.developers (CHAOS-2488 no longer excludes it)."""
+    developer_id = "bob@example.com"
+    captured_coverage_sql: list[str] = []
+    captured_coverage_params: list[dict[str, Any]] = []
+
+    async def fake_query_dicts(_client: object, sql: str, params: dict[str, Any]):
+        if "assigned_team" in sql:
+            captured_coverage_sql.append(sql)
+            captured_coverage_params.append(dict(params))
+            if params.get("scope_ids") == [developer_id]:
+                return [{"total": 4, "assigned_team": 1, "assigned_repo": 1}]
+            return [{"total": 4, "assigned_team": 4, "assigned_repo": 4}]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts",
+        fake_query_dicts,
+    )
+
+    context = GraphQLContext(
+        org_id="org-1", db_url="clickhouse://test", client=object()
+    )
+
+    filtered = await analytics_resolver.resolve_analytics(
+        context,
+        _sankey_batch(
+            FilterInput(
+                scope=ScopeFilterInput(
+                    level=ScopeLevelInput.DEVELOPER,
+                    ids=[developer_id],
+                )
+            )
+        ),
+    )
+
+    assert captured_coverage_params
+    assert captured_coverage_params[-1]["scope_ids"] == [developer_id]
+    assert "work_unit_authors" in captured_coverage_sql[-1]
+    assert "hasAny(au.author_emails" in captured_coverage_sql[-1]
+    assert filtered.sankey is not None
+    assert filtered.sankey.coverage is not None
+    assert filtered.sankey.coverage.team_coverage == 0.25
 
 
 @pytest.mark.asyncio

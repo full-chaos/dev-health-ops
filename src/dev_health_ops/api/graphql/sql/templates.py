@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from dev_health_ops.api.queries.investment import (
+    PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+)
+
 from .validate import BucketInterval, Dimension, Measure
 
 
@@ -20,12 +24,17 @@ def timeseries_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for timeseries query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
     trunc_unit = BucketInterval.date_trunc_unit(interval)
 
     # Extract date column from filter for truncating
@@ -56,12 +65,17 @@ def breakdown_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for breakdown (top-N aggregation) query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     return f"""
 {with_clause}
@@ -88,11 +102,16 @@ def sankey_nodes_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey nodes query."""
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     union_parts = []
     for dim in dimensions:
@@ -130,13 +149,18 @@ def sankey_edges_template(
     extra_clauses: str = "",
     with_clause: str = "",
     use_investment: bool = False,
+    use_repo_allocation: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey edges query."""
     source_col = Dimension.db_column(source_dim, use_investment=use_investment)
     target_col = Dimension.db_column(target_dim, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    measure_expr = Measure.db_expression(
+        measure,
+        use_investment=use_investment,
+        use_repo_allocation=use_repo_allocation,
+    )
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     return f"""
 {with_clause}
@@ -161,23 +185,33 @@ SETTINGS max_execution_time = %(timeout)s
 
 
 def flow_matrix_team_nodes_template() -> str:
-    """Nodes query for TEAM flow matrix, sourced from work_item_cycle_times.
+    """Nodes query for TEAM flow matrix.
 
-    Counts distinct work items per team in the window. The cycle_times table
-    carries the canonical per-work-item team assignment (one row per work item
-    per completed day) with real team diversity, unlike investment_metrics_daily
-    which aggregates and may collapse to a single team in sparse data.
+    Counts distinct completed work items per authoritative primary team in the
+    window. ``work_item_cycle_times`` supplies the activity/day/scope bridge;
+    ``work_item_team_attributions`` supplies the team identity.
     """
-    return """
+    return f"""
+WITH team_activity AS (
+    SELECT
+        wct.work_item_id,
+        wct.work_scope_id,
+        wct.day,
+        wct.org_id,
+        t.team_id AS team_id
+    FROM work_item_cycle_times AS wct FINAL
+    INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+      ON t.work_item_id = wct.work_item_id
+    WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+      AND wct.org_id = %(org_id)s
+      AND t.team_id IS NOT NULL
+      AND t.team_id != ''
+)
 SELECT
     'TEAM' AS dimension,
     toString(team_id) AS node_id,
     uniqExact(work_item_id) AS value
-FROM work_item_cycle_times
-WHERE day >= %(start_date)s AND day <= %(end_date)s
-  AND work_item_cycle_times.org_id = %(org_id)s
-  AND team_id IS NOT NULL
-  AND team_id != ''
+FROM team_activity
 GROUP BY node_id
 ORDER BY value DESC
 LIMIT %(limit_per_dim)s
@@ -186,7 +220,7 @@ SETTINGS max_execution_time = %(timeout)s
 
 
 def flow_matrix_team_edges_template() -> str:
-    """Asymmetric cross-team edges from work_item_cycle_times.
+    """Asymmetric cross-team edges from cycle-time activity and WITA teams.
 
     Self-joins on (work_scope_id, day, org_id) so every pair of teams that
     completed work in the same scope on the same day becomes an edge. The
@@ -204,23 +238,34 @@ def flow_matrix_team_edges_template() -> str:
     handoff (schema doesn't encode those natively), but a real directional
     signal that populates on any org with cross-team repo sharing.
     """
-    return """
+    return f"""
+WITH team_activity AS (
+    SELECT
+        wct.work_item_id,
+        wct.work_scope_id,
+        wct.day,
+        wct.org_id,
+        t.team_id AS team_id
+    FROM work_item_cycle_times AS wct FINAL
+    INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+      ON t.work_item_id = wct.work_item_id
+    WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+      AND wct.org_id = %(org_id)s
+      AND t.team_id IS NOT NULL
+      AND t.team_id != ''
+)
 SELECT
     'TEAM' AS source_dimension,
     'TEAM' AS target_dimension,
     toString(a.team_id) AS source,
     toString(b.team_id) AS target,
     uniqExact(a.work_item_id) AS value
-FROM work_item_cycle_times AS a
-INNER JOIN work_item_cycle_times AS b
+FROM team_activity AS a
+INNER JOIN team_activity AS b
   ON a.work_scope_id = b.work_scope_id
   AND a.day = b.day
   AND a.org_id = b.org_id
-WHERE a.day >= %(start_date)s AND a.day <= %(end_date)s
-  AND a.org_id = %(org_id)s
-  AND a.team_id IS NOT NULL AND a.team_id != ''
-  AND b.team_id IS NOT NULL AND b.team_id != ''
-  AND a.team_id != b.team_id
+WHERE a.team_id != b.team_id
 GROUP BY source, target
 ORDER BY value DESC
 LIMIT %(max_edges)s
@@ -228,7 +273,27 @@ SETTINGS max_execution_time = %(timeout)s
 """
 
 
-_FLOW_MATRIX_ENRICHED_CTE = """WITH enriched AS (
+_FLOW_MATRIX_REPO_ENRICHED_CTE = f"""WITH enriched AS (
+    SELECT
+        wct.work_item_id,
+        t.team_id,
+        wct.day,
+        wct.org_id,
+        wi.repo_id,
+        wi.type AS work_item_type
+    FROM work_item_cycle_times AS wct FINAL
+    INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
+      ON t.work_item_id = wct.work_item_id
+    INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
+    WHERE wct.org_id = %(org_id)s
+      AND wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+      AND wi.org_id = %(org_id)s
+      AND t.team_id IS NOT NULL
+      AND t.team_id != ''
+)"""
+
+
+_FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE = """WITH enriched AS (
     SELECT
         wct.work_item_id,
         wct.team_id,
@@ -237,7 +302,7 @@ _FLOW_MATRIX_ENRICHED_CTE = """WITH enriched AS (
         wi.repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct
-    INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+    INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
     WHERE wct.org_id = %(org_id)s
       AND wct.day >= %(start_date)s AND wct.day <= %(end_date)s
       AND wi.org_id = %(org_id)s
@@ -258,7 +323,7 @@ SELECT
     toString(wi.repo_id) AS node_id,
     uniqExact(wct.work_item_id) AS value
 FROM work_item_cycle_times AS wct
-INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
   AND wct.org_id = %(org_id)s
   AND wi.org_id = %(org_id)s
@@ -273,11 +338,12 @@ SETTINGS max_execution_time = %(timeout)s
 def flow_matrix_repo_edges_template() -> str:
     """Asymmetric cross-repo edges bridged through (team_id, day).
 
-    work_item_cycle_times carries team_id + day per work item but NOT repo_id;
-    work_items carries repo_id. An INNER JOIN on work_item_id produces an
-    enriched per-item row. Self-joining that enriched set on (team_id, day,
-    org_id) gives every pair of repos that the same team touched on the same
-    day — the REPO analog of TEAM's (work_scope_id, day) bridge.
+    work_item_cycle_times carries day per work item but its denormalized
+    team_id is not authoritative for identity. The enriched CTE joins
+    work_item_team_attributions for latest-primary team identity and
+    work_items for repo_id. Self-joining that enriched set on (team_id, day,
+    org_id) gives every pair of repos that the same authoritative team touched
+    on the same day — the REPO analog of TEAM's (work_scope_id, day) bridge.
 
     The edge value is `uniqExact(a.work_item_id)` — the count of SOURCE
     repo's distinct work items in the shared team+day cell, not the cartesian
@@ -292,7 +358,7 @@ def flow_matrix_repo_edges_template() -> str:
     signal that populates on any org with teams spanning multiple repos.
     """
     return f"""
-{_FLOW_MATRIX_ENRICHED_CTE}
+{_FLOW_MATRIX_REPO_ENRICHED_CTE}
 SELECT
     'REPO' AS source_dimension,
     'REPO' AS target_dimension,
@@ -329,7 +395,7 @@ SELECT
     wi.type AS node_id,
     uniqExact(wct.work_item_id) AS value
 FROM work_item_cycle_times AS wct
-INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
   AND wct.org_id = %(org_id)s
   AND wi.org_id = %(org_id)s
@@ -344,7 +410,7 @@ SETTINGS max_execution_time = %(timeout)s
 def flow_matrix_work_type_edges_template() -> str:
     """Asymmetric cross-work_type edges bridged through (repo_id, day).
 
-    Uses the same enrichment CTE as the REPO edges template. Self-joins on
+    Uses cycle-time activity enriched with work item metadata. Self-joins on
     (repo_id, day, org_id) so every pair of work_types completed in the same
     repo on the same day becomes an edge. Excludes self-loops.
 
@@ -356,7 +422,7 @@ def flow_matrix_work_type_edges_template() -> str:
     work_type B" — cross-type cooperation within a repo on a single day.
     """
     return f"""
-{_FLOW_MATRIX_ENRICHED_CTE}
+{_FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE}
 SELECT
     'WORK_TYPE' AS source_dimension,
     'WORK_TYPE' AS target_dimension,
@@ -391,7 +457,7 @@ def catalog_values_template(
 ) -> str:
     """Generate SQL template for fetching distinct dimension values."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    source_alias = source_table.split(" AS ")[-1]
+    source_alias = source_table.split(" AS ")[-1].strip()
 
     return f"""
 {with_clause}
@@ -442,7 +508,7 @@ LEFT JOIN (
         COUNT(*) AS count
     FROM {count_source_table}
     WHERE team_id IS NOT NULL
-      AND {count_source_table}.org_id = %(org_id)s
+      AND org_id = %(org_id)s
       AND toString(team_id) != ''
     GROUP BY team_id
 ) AS activity ON activity.team_id = t.id

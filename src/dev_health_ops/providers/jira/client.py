@@ -16,9 +16,24 @@ from dev_health_ops.providers._ratelimit import (
     parse_retry_after_header,
     penalize_from_response,
 )
+from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
+
+_DIAGNOSTIC_HEADER_NAMES = (
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+    "retry-after",
+    "x-request-id",
+    "atl-traceid",
+)
 
 
 def _require_jira() -> Any:
@@ -51,6 +66,14 @@ def _normalize_jira_base_url(value: str) -> str:
     if url.startswith("https://"):
         return url
     return "https://" + url.lstrip("/")
+
+
+def _diagnostic_headers(headers: object) -> dict[str, str]:
+    get_items = getattr(headers, "items", None)
+    if get_items is None:
+        return {}
+    lowered = {str(k).lower(): str(v) for k, v in get_items()}
+    return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
 
 
 @dataclass(frozen=True)
@@ -95,6 +118,10 @@ class JiraClient:
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
         self.max_retries_429 = max(0, int(max_retries_429))
+
+        from dev_health_ops.providers.jira.budget import JIRA_USAGE_RESOLVER
+
+        self._usage = UsageRecorder(resolver=JIRA_USAGE_RESOLVER)
 
         self.session = requests.Session()
         self.session.auth = (auth.email, auth.api_token)
@@ -143,6 +170,9 @@ class JiraClient:
                 resp = self.session.get(
                     url, params=params, timeout=self.timeout_seconds
                 )
+                self._record_rest_usage(
+                    f"GET {path}", headers=resp.headers, status=resp.status_code
+                )
                 if resp.status_code == 429:
                     retry_after = parse_retry_after_header(resp.headers)
                     applied = penalize_from_response(self.gate, resp)
@@ -157,6 +187,22 @@ class JiraClient:
                     raise RateLimitException(
                         f"Jira rate limited: giving up after {attempts} attempts (HTTP 429)",
                         retry_after_seconds=retry_after,
+                        signal=RateLimitSignal(
+                            provider="jira",
+                            host=urlparse(self.auth.base_url).hostname,
+                            dimension=BudgetDimension.REST_CORE,
+                            retry_after_seconds=retry_after,
+                            # Jira's X-RateLimit-Reset is an ISO 8601 timestamp
+                            # (Atlassian Cloud rate-limiting docs), not epoch
+                            # seconds like GitHub/GitLab -- CHAOS-2758 verified
+                            # this against the docs (see RateLimitSignal
+                            # docstring); Retry-After remains authoritative.
+                            reset_at=RateLimitSignal.reset_at_from_iso8601(
+                                resp.headers.get("X-RateLimit-Reset")
+                            ),
+                            reason="primary",
+                            request_id=resp.headers.get("X-AREQUESTID"),
+                        ),
                     )
                 resp.raise_for_status()
                 self.gate.reset()
@@ -176,6 +222,57 @@ class JiraClient:
                 )
                 raise
         raise RuntimeError("Jira request retry loop exited without a result")
+
+    def _record_usage_observation(
+        self,
+        *,
+        transport: str,
+        operation: str,
+        headers: dict[str, str],
+        rate_limit: dict[str, Any],
+        status: int | None = None,
+    ) -> None:
+        # Aggregation/keying by route_family lives in the shared recorder
+        # (CHAOS-2754); this client only owns the header extraction below.
+        self._usage.record(
+            transport=transport,
+            operation=operation,
+            headers=headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def _record_rest_usage(
+        self,
+        operation: str,
+        *,
+        headers: object | None = None,
+        status: int | None = None,
+    ) -> None:
+        safe_headers = _diagnostic_headers(headers or {})
+        rate_limit: dict[str, Any] = {}
+        for source, target in [
+            ("x-ratelimit-remaining", "remaining"),
+            ("x-ratelimit-reset", "reset"),
+            ("x-ratelimit-limit", "limit"),
+            ("ratelimit-remaining", "remaining"),
+            ("ratelimit-reset", "reset"),
+            ("ratelimit-limit", "limit"),
+            ("retry-after", "retry_after"),
+        ]:
+            value = safe_headers.get(source)
+            if value is not None:
+                rate_limit.setdefault(target, value)
+        self._record_usage_observation(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        return self._usage.drain()
 
     def search_issues_page(
         self,
@@ -305,6 +402,41 @@ class JiraClient:
             path=f"/rest/agile/1.0/sprint/{sprint_id}",
             params={},
         )
+
+    def iter_boards(
+        self, *, project_key: str | None = None
+    ) -> Iterator[dict[str, Any]]:
+        start_at = 0
+        while True:
+            params: dict[str, Any] = {
+                "startAt": start_at,
+                "maxResults": self.per_page,
+            }
+            if project_key:
+                params["projectKeyOrId"] = project_key
+            page = self._request_json(path="/rest/agile/1.0/board", params=params)
+            boards = list((page or {}).get("values") or [])
+            if not boards:
+                break
+            yield from boards
+            start_at += len(boards)
+            if (page or {}).get("isLast") is True:
+                break
+
+    def iter_board_sprints(self, *, board_id: int | str) -> Iterator[dict[str, Any]]:
+        start_at = 0
+        while True:
+            page = self._request_json(
+                path=f"/rest/agile/1.0/board/{board_id}/sprint",
+                params={"startAt": start_at, "maxResults": self.per_page},
+            )
+            sprints = list((page or {}).get("values") or [])
+            if not sprints:
+                break
+            yield from sprints
+            start_at += len(sprints)
+            if (page or {}).get("isLast") is True:
+                break
 
     def get_all_projects(self) -> list[dict[str, Any]]:
         """

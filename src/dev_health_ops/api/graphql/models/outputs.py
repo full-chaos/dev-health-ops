@@ -647,6 +647,9 @@ class WorkGraphEdgesResult:
     total_count: int
     page_info: PageInfo
     degraded_reason: str | None = None
+    is_partial: bool = False
+    partial_scope: str | None = None
+    partial_repo_ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
@@ -675,6 +678,9 @@ class WorkGraphFlowResult:
 
     rows: list[WorkGraphFlowRow]
     degraded_reason: str | None = None
+    is_partial: bool = False
+    partial_scope: str | None = None
+    partial_repo_ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
@@ -704,6 +710,9 @@ class WorkGraphArtifactsResult:
 
     rows: list[WorkGraphArtifactRow]
     degraded_reason: str | None = None
+    is_partial: bool = False
+    partial_scope: str | None = None
+    partial_repo_ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
@@ -814,6 +823,20 @@ class ThroughputRiskOverlay:
 
 
 @strawberry.type
+class ThroughputStaleWip:
+    p50_age_hours: float | None = None
+    p90_age_hours: float | None = None
+
+
+@strawberry.type
+class ThroughputEstimateCoverage:
+    ratio: float | None = None
+    estimated_count: int
+    unestimated_count: int
+    backlog_size: int
+
+
+@strawberry.type
 class ThroughputForecast:
     """Throughput-based capacity forecast result.
 
@@ -833,6 +856,8 @@ class ThroughputForecast:
     rolling_windows: list[ThroughputRollingWindow]
     primary_risk: ThroughputRiskOverlay
     wip_congestion: ThroughputRiskOverlay
+    stale_wip: ThroughputStaleWip | None = None
+    estimate_coverage: ThroughputEstimateCoverage | None = None
     review_bottleneck: ThroughputRiskOverlay
     incident_load: ThroughputRiskOverlay
     insufficient_history: bool

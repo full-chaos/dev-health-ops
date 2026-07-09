@@ -42,7 +42,9 @@ def test_dispatch_daily_metrics_partitioned_defaults_none_org_id(
     )
 
     mock_sink_instance = MagicMock()
-    mock_sink_instance.client.query.return_value.result_rows = [(str(uuid.uuid4()),)]
+    mock_sink_instance.client.query.return_value.result_rows = [
+        (str(uuid.uuid4()), "default/repo", None, "github")
+    ]
     mock_sink_cls.return_value = mock_sink_instance
 
     mock_chord_instance = MagicMock()

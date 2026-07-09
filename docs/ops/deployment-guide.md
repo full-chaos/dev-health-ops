@@ -49,11 +49,25 @@ All deployment methods use the same environment variables:
 | Variable | Description |
 |----------|-------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token |
+| `GITHUB_APP_SLUG` | GitHub App URL slug for one-click install/connect |
+| `GITHUB_APP_ID` | GitHub App id for app-based auth |
+| `GITHUB_APP_CLIENT_ID` | GitHub App OAuth Client ID for installation authorization |
+| `GITHUB_APP_CLIENT_SECRET` | GitHub App OAuth Client secret for installation authorization |
+| `GITHUB_APP_CALLBACK_URL` | Exact web callback for GitHub App install, for example `https://app.example.com/org/admin/integrations/github-app/callback` |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to a mounted GitHub App private key |
+| `GITHUB_APP_PRIVATE_KEY` | Inline GitHub App private key for the API GitHub App integration config path; worker sync env fallback uses `GITHUB_APP_PRIVATE_KEY_PATH` |
+| `GITHUB_APP_INSTALLATION_ID` | GitHub App installation id for single-installation fallback |
+| `GITHUB_BASE_URL` | GitHub API base URL |
+| `GITHUB_LINEAR_LINKBACK_BOTS` | Comma-separated GitHub bot actors trusted for Linear linkback comments |
+| `SOCIAL_GITHUB_CLIENT_ID` | GitHub OAuth Client ID used by `/auth/social-login`; may be the same value as `GITHUB_APP_CLIENT_ID` |
+| `SOCIAL_GITHUB_CLIENT_SECRET` | GitHub OAuth Client secret used by `/auth/social-login`; may be the same value as `GITHUB_APP_CLIENT_SECRET` |
 | `GITLAB_TOKEN` | GitLab Private Token |
 | `GITLAB_URL` | GitLab instance URL (default: gitlab.com) |
 | `JIRA_BASE_URL` | Jira Cloud URL (e.g., your-org.atlassian.net) |
 | `JIRA_EMAIL` | Jira account email |
 | `JIRA_API_TOKEN` | Jira API token |
+| `LINEAR_API_KEY` | Linear API key for Linear work-item sync |
+| `LINEAR_TRUSTED_SCM_HOSTS` | Additional self-hosted SCM hosts trusted in Linear issue attachment links |
 
 ### Application
 
@@ -63,6 +77,31 @@ All deployment methods use the same environment variables:
 | `LOG_LEVEL` | Logging verbosity | INFO |
 | `BATCH_SIZE` | Records per batch | 100 |
 | `MAX_WORKERS` | Parallel workers | 4 |
+
+### Sync Routing and Budgets
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PROVIDER_SYNC_QUEUES_ENABLED` | Route provider sync units to `sync.<provider>` queues. Enable only after workers consume those queues. | true in bundled deploy templates |
+| `SYNC_COST_CLASS_QUEUES` | Route eligible sync units to `sync.<provider>.<class>` sub-queues. Requires provider queues. | true in bundled deploy templates |
+| `HIDE_MIGRATED_CHILD_CONFIGS` | Hide migrated child sync configs from operator-facing lists. | true |
+| `SYNC_RUN_MAX_UNITS` | Maximum units allowed in one planned sync run. | 1000 |
+| `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | Concurrent dispatch cap per org/provider/cost-class bucket. | 8 |
+| `SYNC_UNIT_DISPATCH_STALE_SECONDS` | Age after which `DISPATCHING` units can be reclaimed. | 900 |
+| `SYNC_UNIT_RUNNING_STALE_SECONDS` | Age after which running units are treated as stale for reconciliation/reporting. | 3600 |
+| `LINEAR_BACKFILL_MAX_WINDOW_DAYS` | Max window size (days) for a Linear work-item-family backfill chunk. CHAOS-2717 bounds each window's issue crawl to its own slice (`updatedAt` gte/lte), so the size balances a single unit's lease/soft-timeout budget against per-hour request volume; smaller windows re-multiply per-window teams/cycles fetches toward Linear's rate limit. Non-Linear backfills use the 7-day default. | 14 |
+| `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES` | Max times an eligible Linear work-item backfill unit may be retried after an expired lease (or soft-timeout) before it is marked terminal `FAILED` (`worker_lost_retry_exhausted`). Retry is DISABLED on every other surface. | 1 |
+| `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS` | Backoff added to `available_at` when an eligible expired-lease unit is flipped to `RETRYING`, before it is redispatched. | 60 |
+| `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | Delay before redispatching sync-run work. | 60 |
+| `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | Dispatch outbox claim lease duration. | 300 |
+| `SYNC_WATERMARK_OVERLAP` | Seconds subtracted from incremental watermark reads to intentionally re-read a lookback margin. | 0 |
+| `SYNC_BUDGET_BUCKET_LIMITS` | JSON map that enables enforced provider budget deferrals. Values are reservation units, not raw request or GraphQL cost counters. Jira supports route-family keys such as `jira:search:jira_jql`, `jira:rest_core:jira_issue_enrichment`, `jira:rest_core:jira_worklogs`, and `jira:graphql_cost:jira_gql_enrichment`. | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"jira:search:jira_jql":250,"jira:rest_core:jira_issue_enrichment":250,"jira:rest_core:jira_worklogs":100,"jira:graphql_cost:jira_gql_enrichment":250,"linear:graphql_cost":500}` |
+| `SYNC_BUDGET_DEFAULT_LIMIT` | Fallback enforced budget limit for unnamed buckets. | 1000000 |
+| `SYNC_BUDGET_DEFERRAL_SECONDS` | Base countdown when budget enforcement defers a unit. | 60 |
+| `SYNC_BUDGET_DEFERRAL_JITTER_SECONDS` | Jitter added to budget deferrals. | 5 |
+| `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | Optional observation-only provider budget limits. | unset |
+| `SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT` | Fallback dry-run budget limit. | 1000000 |
+| `SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS` | Observation-only deferral estimate. | 60 |
 
 ### Rate Limiting
 

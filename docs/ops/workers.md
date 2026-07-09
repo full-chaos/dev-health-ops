@@ -16,7 +16,8 @@ In contrast, Celery-triggered jobs run inside the worker process, which is start
 
 Key implementation details:
 - **Broker and Result Backend**: Configured in `workers/config.py:8-64` and initialized in `workers/celery_app.py:66-84`. The default broker and result backend URL is `redis://localhost:6379/0` (controlled by `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND`).
-- **Queue Routing**: Defined in `workers/queues.py:7-62`. The `PROVIDER_SYNC_QUEUES_ENABLED` flag gates whether tasks are routed to provider-specific queues.
+- **Queue Routing**: Defined in `workers/queues.py:7-62`. The `PROVIDER_SYNC_QUEUES_ENABLED` flag gates provider-specific queues; `SYNC_COST_CLASS_QUEUES` further routes eligible units to light/medium/heavy sub-queues.
+- **Sync Budget Guard**: Defined in `sync/budget_guard.py`. `SYNC_BUDGET_BUCKET_LIMITS` enables enforced provider budget deferrals; dry-run limits record observations without deferring work.
 
 ### On-Demand Trigger Paths
 
@@ -24,11 +25,12 @@ Operators can trigger background operations on-demand through three primary API 
 
 1. **Data Sync Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/trigger` (defined in `api/admin/routers/sync.py:997-1164`)
-   * **Flow**: Builds a `SyncPlanRequest` from the config's migrated integration, plans a `SyncRun` (one `SyncRunUnit` per source/dataset/window), and enqueues `dispatch_sync_run` onto the `sync` queue. The integration planner is the only routing path — the legacy `run_sync_config` / `dispatch_batch_sync` in-process workers were removed in CHAOS-2647.
+   * **Flow**: Creates a canonical `JobRun` activity row, builds a `SyncPlanRequest` from the config's migrated integration, plans a `SyncRun` (one `SyncRunUnit` per source/dataset/window), stores `sync_run_id` in `JobRun.result`, and enqueues `dispatch_sync_run` onto the `sync` queue. The integration planner is the only routing path — the legacy `run_sync_config` / `dispatch_batch_sync` in-process workers were removed in CHAOS-2647.
+     * The `source × dataset × window` decomposition and why **reference data** (teams/cycles/sprints) belongs on a once-per-run axis is documented in [Sync Unit Model](../architecture/sync-unit-model.md).
 
 2. **Historical Backfill Trigger**
    * **Endpoint**: `POST /api/v1/admin/sync-configs/{config_id}/backfill` (defined in `api/admin/routers/sync.py:1167-1233`)
-   * **Flow**: Creates a `BackfillJob` record, plans a backfill-mode `SyncRun`, and enqueues `dispatch_sync_run` onto the `sync` queue (fan-out). The `BackfillJob` is linked to its run via a `sync_run:<id>` marker on `celery_task_id`, so `finalize_sync_run` updates its status and chunk counts.
+   * **Flow**: Creates a `BackfillJob` domain record plus the same canonical `JobRun` activity row used by manual and scheduled sync, plans a backfill-mode `SyncRun`, stores `sync_run_id` in `JobRun.result`, and enqueues `dispatch_sync_run` onto the `sync` queue (fan-out). The `BackfillJob` is linked to its run via a `sync_run:<id>` marker on `celery_task_id`, so `finalize_sync_run` updates its status and chunk counts.
 
 3. **Report Execution Trigger**
    * **Trigger**: GraphQL `triggerReport` mutation or the "Run Now" button in the Report Center UI.
@@ -52,7 +54,7 @@ Triggering `run_investment_materialize` via the worker ensures the worker-side L
 
 ### Observability Caveat
 
-Tasks like `run_work_graph_build` and `run_investment_materialize` don't persist a `JobRun` row in the database. Their execution status and progress can only be tracked through worker logs and distributed traces. For more details on sync observability, see the [Platform Sync Observability](../architecture/platform-sync-observability.md) documentation.
+Manual sync, scheduled sync, and sync-config backfill all persist a `JobRun` row as the admin-visible activity index and link it to the execution-truth `SyncRun` via `JobRun.result.sync_run_id`. The only difference between manual and scheduled sync is timing: the manual endpoint enqueues immediately, while `dispatch_scheduled_syncs` enqueues when the cron marker is due. Tasks like `run_work_graph_build` and `run_investment_materialize` don't persist a `JobRun` row in the database. Their execution status and progress can only be tracked through worker logs and distributed traces. For more details on sync observability, see the [Platform Sync Observability](../architecture/platform-sync-observability.md) documentation.
 
 ---
 
@@ -108,6 +110,40 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `webhooks` | Webhook event processing, billing notifications |
 | `ingest` | Stream ingestion consumer |
 | `monitoring` | Telemetry and queue depth monitoring |
+
+### Routing and budget environment
+
+The bundled Docker Compose, Kubernetes, and Helm deployments already declare the provider and cost-class queues in their worker `-Q` lists, so they can enable routing by default. Custom deployments must update worker consumers before enabling producer-side routing; otherwise, routed messages can sit on unconsumed queues.
+
+| Variable | Default in deploy templates | Effect |
+|---|---:|---|
+| `PROVIDER_SYNC_QUEUES_ENABLED` | `true` | Routes known providers from `sync` to `sync.<provider>`. |
+| `SYNC_COST_CLASS_QUEUES` | `true` | Routes eligible GitHub/GitLab/Jira/Linear units to cost-class sub-queues after provider routing is enabled. |
+| `HIDE_MIGRATED_CHILD_CONFIGS` | `true` | Hides migrated child sync configs from operator-facing config lists. |
+| `SYNC_RUN_MAX_UNITS` | `1000` | Caps unit count for one planned sync run. |
+| `SYNC_UNIT_CONCURRENCY_PER_BUCKET` | `8` | Caps concurrently dispatchable units per org/provider/cost-class bucket. |
+| `SYNC_UNIT_DISPATCH_STALE_SECONDS` | `900` | Reclaims stale `DISPATCHING` units after this age. |
+| `SYNC_UNIT_RUNNING_STALE_SECONDS` | `3600` | Treats long-running units as stale for reconciliation/reporting. |
+| `LINEAR_BACKFILL_MAX_WINDOW_DAYS` | `14` | Caps the window size (days) of a Linear work-item-family backfill chunk. CHAOS-2717 bounds each window's issue crawl to its own slice (`updatedAt` gte/lte), so the size balances a single unit's lease/soft-timeout budget against per-hour request volume; smaller windows re-multiply per-window teams/cycles fetches toward Linear's rate limit. Non-Linear backfills use the 7-day default. |
+| `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES` | `1` | Max expired-lease (or soft-timeout) retries for an eligible Linear work-item backfill unit before terminal `FAILED` (`worker_lost_retry_exhausted`). Retry is DISABLED on all other surfaces. |
+| `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS` | `60` | Backoff added to `available_at` when an eligible expired-lease unit is flipped to `RETRYING` before redispatch. |
+| `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | `60` | Delay used when redispatching sync-run work. |
+| `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
+| `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
+
+Provider budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not the provider's raw request or GraphQL cost counters. Jira emits separate route-family buckets for REST/JQL listing (`jira:search:jira_jql`), REST issue enrichment (`jira:rest_core:jira_issue_enrichment`), optional worklog fetching (`jira:rest_core:jira_worklogs` when `JIRA_FETCH_WORKLOGS=true`), and Atlassian GraphQL enrichment (`jira:graphql_cost:jira_gql_enrichment` when `ATLASSIAN_GQL_ENABLED=true`). LaunchDarkly feature-flag sync emits `launchdarkly:*` buckets for the `flags`, `audit_log`, and `code_refs` route families (see [LaunchDarkly sync budgeting](../architecture/launchdarkly-sync-budgeting.md)). Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
+
+| Variable | Default in deploy templates | Effect |
+|---|---:|---|
+| `SYNC_BUDGET_BUCKET_LIMITS` | `{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"jira:search:jira_jql":250,"jira:rest_core:jira_issue_enrichment":250,"jira:rest_core:jira_worklogs":100,"jira:graphql_cost:jira_gql_enrichment":250,"linear:graphql_cost":500}` | Enforced per-bucket reservation limits. |
+| `SYNC_BUDGET_DEFAULT_LIMIT` | `1000000` | Fallback enforced limit for buckets not named in the JSON map. |
+| `SYNC_BUDGET_DEFERRAL_SECONDS` | `60` | Base countdown when enforcement defers a unit. |
+| `SYNC_BUDGET_DEFERRAL_JITTER_SECONDS` | `5` | Random jitter added to enforced deferrals. |
+| `SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS` | unset | Observation-only limits; records estimates without deferring work. |
+| `SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT` | `1000000` | Fallback dry-run limit. |
+| `SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS` | `60` | Observation-only deferral estimate. |
+
+Planned LaunchDarkly bucket examples for dry-run rollout: `launchdarkly:rest_core`, `launchdarkly:rest_core:flags`, `launchdarkly:rest_core:projects`, `launchdarkly:secondary_abuse_risk:audit_log`, and `launchdarkly:secondary_abuse_risk:code_refs`.
 ---
 
 ## Task Registry
@@ -125,9 +161,14 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | ~~`sync_team_drift` / `reconcile_team_members`~~ | — | — | **Deleted in CHAOS-2600 CS6 (CHAOS-2607).** Both Celery tasks and `workers/sync_team.py` are removed (they were fail-closed no-ops in CS5). ClickHouse is the team/identity system of record; the Postgres drift engine + member-reconcile no longer exist. |
 | `run_daily_metrics` | `metrics daily` | `metrics` | Computes daily repository and user metrics. Source: `metrics_daily.py`. |
 | `dispatch_daily_metrics_partitioned` | `metrics daily` (partitioned) | `default` | Partitions daily metrics across organizations and fans out. Source: `metrics_partitioned.py`. |
+| `dispatch_daily_metrics_for_all_orgs` | None | `default` | Fans out `dispatch_daily_metrics_partitioned` per active organization (CHAOS-2849) so `repo_metrics_daily` is populated for real (UUID-scoped) tenants, not just the blank-org default. Source: `metrics_partitioned.py`. |
 | `run_daily_metrics_batch` | None | `metrics` | Processes a batch of repositories for daily metrics. Source: `metrics_partitioned.py`. |
 | `run_daily_metrics_finalize_task` | None | `default` | Finalizes daily metrics computation. Source: `metrics_partitioned.py`. |
 | `run_complexity_job` | None | `metrics` | Analyzes code complexity for repositories. Source: `metrics_extra.py:16-319`. |
+| `dispatch_complexity_job` | None | `default` | Fans out `run_complexity_job` per active organization on an independent daily cadence (CHAOS-2850), so complexity refreshes even for orgs with infrequent syncs. Source: `metrics_extra.py`. |
+
+> ⚠️ **Limitation (CHAOS-2888):** `run_complexity_job` computes complexity only from current `git_files`/`git_blame` contents — there is no historical file-content snapshot store. Post-sync dispatch (`post_sync_dispatch.py`) therefore enqueues it only for a current single-day sync (`metrics_backfill_days` in `(None, 1)` and `metrics_day` absent or equal to `utc_today()`); historical single-day and multi-day sync windows skip the complexity enqueue entirely and log a `historical_complexity_unsupported` diagnostic instead of fabricating a misleading flat historical trend. Daily metrics, work-graph build, and investment materialization continue to run over the full requested historical window regardless.
+
 | `run_dora_metrics` | None | `metrics` | Computes DORA metrics. Source: `metrics_extra.py:16-319`. |
 | `run_release_impact_job` | None | `metrics` | Computes release impact metrics. Source: `metrics_extra.py:16-319`. |
 | `dispatch_release_impact` | None | `default` | Fans out release impact computation. Source: `metrics_extra.py`. |
@@ -157,7 +198,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 |----------|------|----------|-------|
 | `dispatch-scheduled-syncs` | `dispatch_scheduled_syncs` | Every 300 seconds (5 minutes) | `default` |
 | `dispatch-scheduled-metrics` | `dispatch_scheduled_metrics` | Every 300 seconds (5 minutes) | `default` |
-| `run-daily-metrics` | `dispatch_daily_metrics_partitioned` | Daily at 01:00 UTC | `default` |
+| `run-complexity-daily` | `dispatch_complexity_job` | Daily at 00:45 UTC | `default` |
+| `run-daily-metrics` | `dispatch_daily_metrics_for_all_orgs` | Daily at 01:00 UTC | `default` |
 | `run-recommendations` | `run_recommendations_job` | Daily at 02:00 UTC | `metrics` |
 | `run-release-impact-daily` | `dispatch_release_impact` | Daily at 01:30 UTC | `default` |
 | `run-capacity-forecast` | `run_capacity_forecast_job` | Mondays at 04:00 UTC | `metrics` |
@@ -192,6 +234,28 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | Result expiry | 86400s (24 hours) |
 
 ---
+
+## Linear Backfill Timeout & Lease Retry
+
+Linear work-item backfills run long, provider-paced chunks. CHAOS-2717 bounds each window's issue crawl to its own slice (`updatedAt` gte/lte) instead of re-scanning from the window start to now, so the planner caps Linear work-item-family backfill windows at `LINEAR_BACKFILL_MAX_WINDOW_DAYS` (default `14`) to balance two budgets: smaller windows re-multiply the per-window fixed overhead (teams + cycles are re-fetched per unit) and push the per-hour request count toward Linear's rate limit, while larger windows lengthen a single unit's crawl toward the lease/soft-timeout budget. Non-Linear backfills keep the default 7-day window. When a worker still loses its lease mid-chunk (crash, `SIGKILL`, or a soft-timeout), the `reconcile_sync_dispatch` relay can **retry** the unit instead of failing it. The retry knobs (`SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`, `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS`) are listed under [Routing and budget environment](#routing-and-budget-environment); the full lifecycle is in [Dispatch Outbox](../architecture/dispatch-outbox.md) and [Data Pipeline → Retry Lifecycle](../architecture/data-pipeline.md#retry-lifecycle-expired-lease-recovery).
+
+These unit-level expired-lease retries are **distinct** from Celery's generic per-task `Max retries (default) 3` autoretry in the table above.
+
+Retry is **eligible only** when ALL hold: `provider == linear`, `mode == backfill`, a work-item-family dataset, the parent run is non-terminal, the unit's `expired_lease_retry_count` is below `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`, and **every** ClickHouse surface the chunk writes is in the proven retry-SAFE set (see the [ClickHouse retry idempotency matrix](../architecture/data-pipeline.md#clickhouse-retry-idempotency-matrix) — currently every Linear work-item backfill surface is SAFE, so no surface disables retry). Retry stays **DISABLED** for everything outside this eligibility gate — a non-eligible expired lease is terminal `FAILED` (`worker_lost`), exactly as before.
+
+### Interpreting `retrying` vs `failed`
+
+Operator states surface in the admin sync-run unit projection (`SyncRunUnitResponse`, `SyncRunUnitSummary`) and the backfill/job-run views:
+
+| State / signal | Where | Meaning | Operator action |
+|---|---|---|---|
+| `retrying` | unit `status` | An eligible Linear backfill unit lost its lease (or hit a soft-timeout) and is waiting on its `available_at` / `next_retry_at` backoff to be redispatched. | None — recovery is automatic. Watch `retry_count` / `next_retry_at`. |
+| `soft_timeout` | unit `error_category` | The unit hit the Celery soft time limit. If eligible it is now `retrying`; otherwise terminal `FAILED`. | None if `retrying`; otherwise treat like `worker_lost`. |
+| `worker_lost` | unit `error_category` (terminal `FAILED`) | The lease expired and the unit was NOT retry-eligible (wrong provider/mode/dataset, or a surface without proven dedupe). | Investigate; backfill never advances watermarks, so re-triggering the window is safe. |
+| `worker_lost_retry_exhausted` | unit `error_category` (terminal `FAILED`) | An eligible unit exhausted `SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES`. | Investigate the persistent cause (provider throttling, oversized window) before re-triggering. |
+| `partial_failed` | run `SyncRunStatus` (`PARTIAL_FAILED`) | The run finished with a mix of `SUCCESS` and `FAILED` units. | Inspect the failed units; re-trigger the affected window if needed. |
+
+A `retrying` unit is **not** a failure — it is in-flight recovery. Only `FAILED` units with a terminal `error_category` (`worker_lost`, `worker_lost_retry_exhausted`, or a provider/processor error) represent work that did not complete.
 
 ## Monitoring
 
@@ -283,6 +347,12 @@ The broker queues are:
 When `PROVIDER_SYNC_QUEUES_ENABLED=false`, provider sync tasks stay on the
 shared `sync` queue. When the flag is enabled, known providers route to their
 `sync.<provider>` queues.
+
+Manual Sync Now dispatch and finalization tasks are still published to the
+shared `sync` queue. Any deployment that splits provider units into a dedicated
+worker pool must keep that provider pool on `sync` too, or Linear/Jira/
+LaunchDarkly unit queues can sit idle while dispatch waits behind saturated
+generic sync work.
 
 ### Clear queued messages
 

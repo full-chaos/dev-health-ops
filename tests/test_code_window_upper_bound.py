@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dev_health_ops.processors.github import (
-    _fetch_github_commits_sync,
     _filter_after,
     _sync_github_test_reports,
 )
@@ -35,44 +34,40 @@ SINCE = datetime(2026, 1, 10, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 1, 12, tzinfo=timezone.utc)
 
 
-def test_github_commits_fetch_passes_until_to_get_commits() -> None:
-    gh_repo = MagicMock()
-    gh_repo.get_commits.return_value = []
+def test_gitlab_commits_fetch_passes_window_to_code_client() -> None:
+    connector = MagicMock()
+    client = _async_cm(MagicMock())
+    client.get_commits = AsyncMock(return_value=[])
+    client.drain_usage_observations = MagicMock(return_value=[])
 
-    _fetch_github_commits_sync(gh_repo, None, "repo-1", since=SINCE, until=UNTIL)
+    with patch(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        return_value=client,
+    ):
+        _fetch_gitlab_commits_sync(
+            connector, 123, None, "repo-1", since=SINCE, until=UNTIL
+        )
 
-    gh_repo.get_commits.assert_called_once_with(since=SINCE, until=UNTIL)
-
-
-def test_github_commits_fetch_omits_until_when_none() -> None:
-    gh_repo = MagicMock()
-    gh_repo.get_commits.return_value = []
-
-    _fetch_github_commits_sync(gh_repo, None, "repo-1", since=SINCE)
-
-    gh_repo.get_commits.assert_called_once_with(since=SINCE)
-
-
-def test_gitlab_commits_fetch_passes_until_to_commits_list() -> None:
-    gl_project = MagicMock()
-    gl_project.commits.list.return_value = []
-
-    _fetch_gitlab_commits_sync(gl_project, None, "repo-1", since=SINCE, until=UNTIL)
-
-    assert gl_project.commits.list.call_count == 1
-    params = gl_project.commits.list.call_args.kwargs
-    assert params["until"] == UNTIL.isoformat().replace("+00:00", "Z")
-    assert params["since"] == SINCE.isoformat().replace("+00:00", "Z")
+    client.get_commits.assert_awaited_once_with(
+        123, max_commits=None, since=SINCE, until=UNTIL
+    )
 
 
 def test_gitlab_commits_fetch_omits_until_when_none() -> None:
-    gl_project = MagicMock()
-    gl_project.commits.list.return_value = []
+    connector = MagicMock()
+    client = _async_cm(MagicMock())
+    client.get_commits = AsyncMock(return_value=[])
+    client.drain_usage_observations = MagicMock(return_value=[])
 
-    _fetch_gitlab_commits_sync(gl_project, None, "repo-1", since=SINCE)
+    with patch(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        return_value=client,
+    ):
+        _fetch_gitlab_commits_sync(connector, 123, None, "repo-1", since=SINCE)
 
-    params = gl_project.commits.list.call_args.kwargs
-    assert "until" not in params
+    client.get_commits.assert_awaited_once_with(
+        123, max_commits=None, since=SINCE, until=None
+    )
 
 
 def _record(ts: datetime | None, field: str = "started_at") -> SimpleNamespace:
@@ -131,37 +126,44 @@ def test_gitlab_test_reports_fetch_skips_post_window_pipelines() -> None:
     # CHAOS-2573 (Codex review): coverage_members carry no timestamp and are
     # ingested unconditionally, so a post-window pipeline must be dropped at the
     # source -- before its native report OR coverage artifacts are collected.
-    in_window = SimpleNamespace(
-        id=1,
-        ref="main",
-        created_at="2026-01-11T00:00:00Z",
-        started_at="2026-01-11T00:00:00Z",
-        finished_at="2026-01-11T01:00:00Z",
-    )
-    post_window = SimpleNamespace(
-        id=2,
-        ref="main",
-        created_at="2026-01-20T00:00:00Z",
-        started_at="2026-01-20T00:00:00Z",
-        finished_at="2026-01-20T01:00:00Z",
-    )
-    gl_project = MagicMock()
-    gl_project.pipelines.list.return_value = [post_window, in_window]
-    connector = MagicMock()
-    connector.rest_client.get_pipeline_test_report.return_value = {
-        "test_suites": [{"name": "suite"}]
+    # CHAOS-2773 CS12: pipeline listing + test_report/jobs now ride the
+    # canonical, instrumented ``GitLabCodeClient`` instead of python-gitlab's
+    # ``gl_project.pipelines.list()`` + ``connector.rest_client.*``.
+    in_window = {
+        "id": 1,
+        "ref": "main",
+        "created_at": "2026-01-11T00:00:00Z",
+        "started_at": "2026-01-11T00:00:00Z",
+        "finished_at": "2026-01-11T01:00:00Z",
     }
-    connector.rest_client.get_list.return_value = []  # no jobs -> no coverage
-
-    test_reports, coverage_members = _fetch_gitlab_test_reports_sync(
-        connector, gl_project, 123, SINCE, "main", 50, UNTIL
+    post_window = {
+        "id": 2,
+        "ref": "main",
+        "created_at": "2026-01-20T00:00:00Z",
+        "started_at": "2026-01-20T00:00:00Z",
+        "finished_at": "2026-01-20T01:00:00Z",
+    }
+    connector = MagicMock()
+    client = _async_cm(MagicMock())
+    client.iter_pipelines_since = AsyncMock(return_value=[post_window, in_window])
+    client.get_pipeline_test_report = AsyncMock(
+        return_value={"test_suites": [{"name": "suite"}]}
     )
+    client.iter_pipeline_jobs = AsyncMock(return_value=[])  # no jobs -> no coverage
+    client.drain_usage_observations = MagicMock(return_value=[])
+
+    with patch(
+        "dev_health_ops.processors.gitlab._gitlab_code_client_from_connector",
+        return_value=client,
+    ):
+        test_reports, coverage_members = _fetch_gitlab_test_reports_sync(
+            connector, 123, SINCE, "main", 50, UNTIL
+        )
 
     assert {run_id for run_id, *_ in test_reports} == {"1"}
     # The post-window pipeline is skipped before any report/coverage fetch.
     queried_ids = {
-        call.args[1]
-        for call in connector.rest_client.get_pipeline_test_report.call_args_list
+        call.args[1] for call in client.get_pipeline_test_report.await_args_list
     }
     assert queried_ids == {1}
 
@@ -252,3 +254,96 @@ async def test_gitlab_test_reports_forwards_until_date_to_testops() -> None:
 
     proc.fetch_and_store.assert_awaited_once()
     assert proc.fetch_and_store.await_args.kwargs["until_date"] == UNTIL
+
+
+@pytest.mark.asyncio
+async def test_gitlab_test_reports_drains_ci_adapter_usage_into_sink() -> None:
+    """CHAOS-2773 CS12: GitLabCIAdapter now opts into BasePipelineAdapter's
+    usage instrumentation (shared foundation with CHAOS-2806/CS5) -- its
+    drained observations must flow into the caller-owned usage_sink in the
+    finally: block, on the success path."""
+    loop = asyncio.get_running_loop()
+    proc = MagicMock()
+    proc.fetch_and_store = AsyncMock(
+        return_value=SimpleNamespace(pipeline_runs=0, job_runs=0)
+    )
+    adapter = _async_cm(MagicMock())
+    adapter.drain_usage_observations = MagicMock(
+        return_value=[{"route_family": "tests"}]
+    )
+    usage_sink: list[dict[str, object]] = []
+
+    with (
+        patch(
+            "dev_health_ops.providers.gitlab.testops_pipeline.GitLabCIAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "dev_health_ops.processors.testops_pipeline.TestOpsPipelineProcessor",
+            return_value=proc,
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_test_reports_sync",
+            return_value=([], []),
+        ),
+    ):
+        await _sync_gitlab_test_reports(
+            connector=MagicMock(),
+            gl_project=MagicMock(default_branch="main"),
+            project_id=123,
+            token="t",
+            repo_id="repo-1",
+            org_id="org-1",
+            ingestion_sink=MagicMock(),
+            loop=loop,
+            since=SINCE,
+            usage_sink=usage_sink,
+        )
+
+    adapter.drain_usage_observations.assert_called_once()
+    assert usage_sink == [{"route_family": "tests"}]
+
+
+@pytest.mark.asyncio
+async def test_gitlab_test_reports_drains_ci_adapter_usage_on_failure_path() -> None:
+    """CHAOS-2773 CS12: the adapter's usage is drained in the finally: block
+    even when fetch_and_store raises -- the CS2 contract requires BOTH the
+    success and failure path to preserve partial observations."""
+    loop = asyncio.get_running_loop()
+    proc = MagicMock()
+    proc.fetch_and_store = AsyncMock(side_effect=RuntimeError("boom"))
+    adapter = _async_cm(MagicMock())
+    adapter.drain_usage_observations = MagicMock(
+        return_value=[{"route_family": "tests"}]
+    )
+    usage_sink: list[dict[str, object]] = []
+
+    with (
+        patch(
+            "dev_health_ops.providers.gitlab.testops_pipeline.GitLabCIAdapter",
+            return_value=adapter,
+        ),
+        patch(
+            "dev_health_ops.processors.testops_pipeline.TestOpsPipelineProcessor",
+            return_value=proc,
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_test_reports_sync",
+            return_value=([], []),
+        ),
+    ):
+        await _sync_gitlab_test_reports(
+            connector=MagicMock(),
+            gl_project=MagicMock(default_branch="main"),
+            project_id=123,
+            token="t",
+            repo_id="repo-1",
+            org_id="org-1",
+            ingestion_sink=MagicMock(),
+            loop=loop,
+            since=SINCE,
+            usage_sink=usage_sink,
+        )
+
+    adapter.drain_usage_observations.assert_called_once()
+    assert usage_sink == [{"route_family": "tests"}]

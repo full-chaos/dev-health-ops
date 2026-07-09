@@ -16,7 +16,9 @@ from dev_health_ops.utils.datetime import utc_today
 logger = logging.getLogger(__name__)
 
 
-def add_date_range_args(parser: argparse.ArgumentParser) -> None:
+def add_date_range_args(
+    parser: argparse.ArgumentParser, *, include_deprecated_aliases: bool = True
+) -> None:
     """Add unified ``--since``, ``--before``, and ``--backfill`` flags.
 
     These three flags define the time window for sync/metrics operations:
@@ -49,13 +51,14 @@ def add_date_range_args(parser: argparse.ArgumentParser) -> None:
         help="End date (exclusive, ISO YYYY-MM-DD). Defaults to tomorrow (i.e. through today).",
     )
 
-    # Hidden deprecated aliases — emit warnings when used
-    parser.add_argument(
-        "--day", type=date.fromisoformat, default=None, help=argparse.SUPPRESS
-    )
-    parser.add_argument(
-        "--date", type=date.fromisoformat, default=None, help=argparse.SUPPRESS
-    )
+    if include_deprecated_aliases:
+        # Hidden deprecated aliases — emit warnings when used.
+        parser.add_argument(
+            "--day", type=date.fromisoformat, default=None, help=argparse.SUPPRESS
+        )
+        parser.add_argument(
+            "--date", type=date.fromisoformat, default=None, help=argparse.SUPPRESS
+        )
 
 
 def add_sink_arg(parser: argparse.ArgumentParser) -> None:

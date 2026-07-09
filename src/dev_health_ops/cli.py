@@ -17,6 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DOTENV_INTERPOLATION_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
 _DOTENV_MALFORMED_INTERPOLATION_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)?")
 
+# Sentinel default for the root --org argument (CHAOS-2780 codex HIGH, round
+# 2). See ``_resolve_org`` for the full rationale: argparse itself must be
+# the thing that decides whether --org was typed, not a re-implementation
+# of its token/abbreviation matching.
+_ORG_UNSET = object()
+
 
 def resolve_org_id(ns: argparse.Namespace) -> str | None:
     """Return the org_id from the CLI namespace, or ``None``.
@@ -139,6 +145,12 @@ async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
         total_deleted,
     )
     return 0
+
+
+def _cmd_maintenance_scrub_error_text(ns: argparse.Namespace) -> int:
+    from dev_health_ops.maintenance.scrub_error_text import run_scrub_error_text
+
+    return run_scrub_error_text(ns)
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +379,14 @@ def _should_resolve_org(ns: argparse.Namespace) -> bool:
         and getattr(ns, "audit_command", None) == "planner-configs"
     ):
         return False
+    # The error-text scrub defaults to ALL orgs too -- its own --org flag is
+    # an explicit opt-in scope, so a missing --org must never silently
+    # narrow it to a single (first) org.
+    if (
+        getattr(ns, "command", None) == "maintenance"
+        and getattr(ns, "maintenance_command", None) == "scrub-error-text"
+    ):
+        return False
     return not (
         getattr(ns, "command", None) == "migrate"
         and getattr(ns, "migrate_command", None) == "clickhouse"
@@ -455,6 +475,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("admin", "bundles", "assign-org"): frozenset({_REQ_POSTGRES}),
     ("billing", "reconcile"): frozenset({_REQ_POSTGRES}),
     ("backfill", "run"): frozenset({_REQ_POSTGRES}),
+    ("maintenance", "scrub-error-text"): frozenset({_REQ_POSTGRES}),
     # --- migrations that connect to a live database ---
     ("migrate", "clickhouse", "upgrade"): frozenset({_REQ_CLICKHOUSE}),
     ("migrate", "clickhouse", "status"): frozenset({_REQ_CLICKHOUSE}),
@@ -468,7 +489,6 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # Bare ``migrate postgres`` / ``migrate clickhouse`` default to upgrade.
     ("migrate", "postgres"): frozenset({_REQ_POSTGRES}),
     ("migrate", "clickhouse"): frozenset({_REQ_CLICKHOUSE}),
-    ("migrate", "configs-to-integrations"): frozenset({_REQ_POSTGRES}),
 }
 
 _REQUIREMENT_MESSAGES: dict[str, str] = {
@@ -601,7 +621,6 @@ def build_parser() -> argparse.ArgumentParser:
         completeness,
         coverage,
         perf,
-        planner_configs,
         schema,
     )
     from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
@@ -643,7 +662,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--org",
-        default=os.getenv("ORG_ID"),
+        # Sentinel, not os.getenv("ORG_ID") directly -- see _resolve_org.
+        # main() resolves this to the ORG_ID env fallback immediately after
+        # parse_args(), before any other code reads ns.org, so this is
+        # transparent to every existing caller of main(); it only matters to
+        # code that calls build_parser().parse_args() directly (tests must
+        # call _resolve_org(ns) themselves in that case).
+        default=_ORG_UNSET,
         help="Organization ID for multi-tenant scoping. Env: ORG_ID. If omitted, resolve from DB.",
     )
     from dev_health_ops.llm.cli import add_llm_arguments
@@ -684,7 +709,6 @@ def build_parser() -> argparse.ArgumentParser:
     schema.register_commands(audit_subparsers)
     perf.register_commands(audit_subparsers)
     coverage.register_commands(audit_subparsers)
-    planner_configs.register_commands(audit_subparsers)
 
     # ---- fixtures ----
     fixtures_runner.register_commands(sub)
@@ -743,9 +767,73 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cleanup_all_parser.set_defaults(func=_cmd_maintenance_cleanup_all)
 
+    scrub_error_text_parser = maintenance_subparsers.add_parser(
+        "scrub-error-text",
+        help=(
+            "Scrub pre-existing raw credential material from legacy "
+            "error-text columns (CHAOS-2780). Dry-run unless --apply is passed."
+        ),
+    )
+    scrub_error_text_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Apply the scrub. Without this flag, reports per-column "
+            "would-change counts only and mutates nothing."
+        ),
+    )
+    scrub_error_text_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Rows to scan per keyset-paginated batch (default: 1000).",
+    )
+    scrub_error_text_parser.set_defaults(func=_cmd_maintenance_scrub_error_text)
+
     _propagate_global_args_to_subparsers(parser)
     _attach_preflight_metadata(parser)
     return parser
+
+
+def _resolve_org(ns: argparse.Namespace) -> None:
+    """Resolve the root ``--org`` argument's sentinel default into its final
+    value, and record whether ``--org`` was actually typed in
+    ``ns.org_explicit``.
+
+    The root ``--org`` argument defaults to the ``_ORG_UNSET`` sentinel
+    (not ``os.getenv("ORG_ID")`` directly) so THIS function -- not a
+    re-implementation of argparse's own token/abbreviation matching -- is
+    what decides whether ``--org`` was typed. An earlier version of this
+    fix scanned raw argv for literal ``--org``/``--org=`` tokens, but
+    argparse's ``allow_abbrev=True`` default means ``--or X`` (or even
+    ``--o X``, unambiguous here) also populates ``ns.org`` -- the argv scan
+    missed that, misclassifying an operator's INTENTIONALLY-scoped
+    ``--apply`` as "no flag" and silently widening it to ALL orgs (the
+    inverse, more dangerous failure vs. the original ORG_ID-env-leak bug;
+    CHAOS-2780 codex HIGH, round 2). Comparing ``ns.org`` against the
+    sentinel by identity is correct for every form argparse recognizes --
+    full, ``--org=X``, or any unambiguous abbreviation, before or after the
+    subcommand -- because it relies on argparse's own action-dispatch
+    (whichever form matched, the action fired and overwrote the sentinel)
+    rather than re-parsing anything ourselves.
+
+    That ambiguity-freedom is harmless for commands that WANT env-var
+    convenience (the common case, preserved below), but commands whose
+    "omit --org" semantics mean "ALL orgs" (``migrate clickhouse repair``,
+    ``audit planner-configs``, ``maintenance scrub-error-text``) must not
+    silently narrow to one tenant just because the operator's shell happens
+    to export ORG_ID -- normal env usage, not an explicit scope opt-in.
+
+    MUST run immediately after ``parser.parse_args()``, before ANY code
+    (including ``_should_resolve_org``) reads ``ns.org`` -- until this
+    runs, ``ns.org`` may still be the raw sentinel object, not a string or
+    None. Code that calls ``build_parser().parse_args(...)`` directly
+    (bypassing ``main()``) must call this itself before reading ``ns.org``
+    or ``ns.org_explicit``.
+    """
+    ns.org_explicit = ns.org is not _ORG_UNSET
+    if not ns.org_explicit:
+        ns.org = os.getenv("ORG_ID")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -773,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             parser = build_parser()
         ns = parser.parse_args(argv)
+        _resolve_org(ns)
 
         if _should_resolve_org(ns):
             ns.org = _resolve_first_org_id(getattr(ns, "db", None))

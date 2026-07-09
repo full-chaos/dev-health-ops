@@ -20,9 +20,11 @@ from ..authz import require_org_id
 from ..context import GraphQLContext
 from ..models.inputs import ThroughputForecastInput
 from ..models.outputs import (
+    ThroughputEstimateCoverage,
     ThroughputForecast,
     ThroughputRiskOverlay,
     ThroughputRollingWindow,
+    ThroughputStaleWip,
 )
 
 
@@ -37,7 +39,12 @@ def _risk_to_output(risk: RiskOverlay) -> ThroughputRiskOverlay:
     )
 
 
-def _result_to_output(result: ThroughputForecastResult) -> ThroughputForecast:
+def _result_to_output(
+    result: ThroughputForecastResult,
+    *,
+    stale_wip: ThroughputStaleWip | None = None,
+    estimate_coverage: ThroughputEstimateCoverage | None = None,
+) -> ThroughputForecast:
     return ThroughputForecast(
         forecast_id=result.forecast_id,
         computed_at=result.computed_at.isoformat(),
@@ -59,6 +66,8 @@ def _result_to_output(result: ThroughputForecastResult) -> ThroughputForecast:
         ],
         primary_risk=_risk_to_output(result.primary_risk),
         wip_congestion=_risk_to_output(result.wip_congestion),
+        stale_wip=stale_wip,
+        estimate_coverage=estimate_coverage,
         review_bottleneck=_risk_to_output(result.review_bottleneck),
         incident_load=_risk_to_output(result.incident_load),
         insufficient_history=result.insufficient_history,
@@ -189,6 +198,110 @@ async def _load_work_item_overlay(
     return float(row.get("current_wip") or 0.0), float(row.get("average_wip") or 0.0)
 
 
+async def _load_stale_wip(
+    context: GraphQLContext,
+    *,
+    team_ids: list[str] | None,
+    work_scope_id: str | None,
+) -> ThroughputStaleWip | None:
+    conditions: list[str] = ["org_id = {org_id:String}"]
+    params: dict[str, Any] = {"org_id": context.org_id}
+    _team_filter(team_ids, conditions, params)
+    if work_scope_id:
+        conditions.append("work_scope_id = {work_scope_id:String}")
+        params["work_scope_id"] = work_scope_id
+    where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = await query_dicts(
+        context.client,
+        f"""
+        SELECT
+            avg(wip_age_p50_hours) AS p50_age_hours,
+            avg(wip_age_p90_hours) AS p90_age_hours
+        FROM (
+            SELECT
+                provider,
+                work_scope_id,
+                team_id,
+                argMax(wip_age_p50_hours, computed_at) AS wip_age_p50_hours,
+                argMax(wip_age_p90_hours, computed_at) AS wip_age_p90_hours
+            FROM work_item_metrics_daily
+            WHERE day = (
+                SELECT max(day) FROM work_item_metrics_daily{where_sql}
+            )
+            {("AND " + " AND ".join(conditions)) if conditions else ""}
+            GROUP BY provider, work_scope_id, team_id
+        )
+        WHERE wip_age_p50_hours IS NOT NULL OR wip_age_p90_hours IS NOT NULL
+        """,
+        params,
+    )
+    row = rows[0] if rows else {}
+    p50_age_hours = row.get("p50_age_hours")
+    p90_age_hours = row.get("p90_age_hours")
+    if p50_age_hours is None and p90_age_hours is None:
+        return None
+    return ThroughputStaleWip(
+        p50_age_hours=float(p50_age_hours) if p50_age_hours is not None else None,
+        p90_age_hours=float(p90_age_hours) if p90_age_hours is not None else None,
+    )
+
+
+async def _load_estimate_coverage(
+    context: GraphQLContext,
+    *,
+    team_ids: list[str] | None,
+    work_scope_id: str | None,
+) -> ThroughputEstimateCoverage | None:
+    conditions: list[str] = ["org_id = {org_id:String}"]
+    params: dict[str, Any] = {"org_id": context.org_id}
+    _team_filter(team_ids, conditions, params)
+    if work_scope_id:
+        conditions.append("work_scope_id = {work_scope_id:String}")
+        params["work_scope_id"] = work_scope_id
+    where_sql = " AND ".join(conditions)
+
+    rows = await query_dicts(
+        context.client,
+        f"""
+        SELECT
+            sum(estimated_count) AS estimated_count,
+            sum(unestimated_count) AS unestimated_count,
+            sum(backlog_size) AS backlog_size
+        FROM (
+            SELECT
+                provider,
+                work_scope_id,
+                team_id,
+                argMax(estimated_count, computed_at) AS estimated_count,
+                argMax(unestimated_count, computed_at) AS unestimated_count,
+                argMax(backlog_size, computed_at) AS backlog_size
+            FROM estimate_coverage_metrics_daily
+            WHERE day = (
+                SELECT max(day) FROM estimate_coverage_metrics_daily WHERE {where_sql}
+            )
+            AND {where_sql}
+            GROUP BY provider, work_scope_id, team_id
+        )
+        """,
+        params,
+    )
+    row = rows[0] if rows else {}
+    backlog_size_raw = row.get("backlog_size")
+    if backlog_size_raw is None:
+        return None
+    estimated_count = int(row.get("estimated_count") or 0)
+    unestimated_count = int(row.get("unestimated_count") or 0)
+    backlog_size = int(backlog_size_raw or 0)
+    ratio = (float(estimated_count) / float(backlog_size)) if backlog_size else None
+    return ThroughputEstimateCoverage(
+        ratio=ratio,
+        estimated_count=estimated_count,
+        unestimated_count=unestimated_count,
+        backlog_size=backlog_size,
+    )
+
+
 async def _load_review_overlay(
     context: GraphQLContext,
     *,
@@ -317,6 +430,13 @@ async def resolve_throughput_forecast(
         )
     if backlog_size < 0:
         raise ValueError("backlog_size must be non-negative")
+    estimate_coverage = None
+    if backlog_size > 0:
+        estimate_coverage = await _load_estimate_coverage(
+            context,
+            team_ids=input.team_ids,
+            work_scope_id=input.work_scope_id,
+        )
     if not history.samples:
         # Empty scope / new team: return a structured no-estimate payload
         # instead of null so callers can distinguish "no data yet" from a
@@ -341,13 +461,18 @@ async def resolve_throughput_forecast(
             incident_load=incident,
             insufficient_history=True,
         )
-        return _result_to_output(no_estimate)
+        return _result_to_output(no_estimate, estimate_coverage=estimate_coverage)
 
     current_wip, average_wip = await _load_work_item_overlay(
         context,
         team_ids=input.team_ids,
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,
+    )
+    stale_wip = await _load_stale_wip(
+        context,
+        team_ids=input.team_ids,
+        work_scope_id=input.work_scope_id,
     )
     review_latency_hours = await _load_review_overlay(
         context,
@@ -368,4 +493,6 @@ async def resolve_throughput_forecast(
         review_latency_hours=review_latency_hours,
         incident_count=incident_count,
     )
-    return _result_to_output(result)
+    return _result_to_output(
+        result, stale_wip=stale_wip, estimate_coverage=estimate_coverage
+    )

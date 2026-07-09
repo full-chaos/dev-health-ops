@@ -8,8 +8,9 @@ from typing import Any
 from dev_health_ops.db import get_postgres_session_sync
 from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
 from dev_health_ops.models.settings import SyncConfiguration
+from dev_health_ops.workers.reference_discovery import _verify_reference_readback
 from dev_health_ops.workers.task_utils import _jira_query_options
-from dev_health_ops.workers.team_autoimport import run_team_autoimport
+from dev_health_ops.workers.team_autoimport import run_team_autoimport_strict
 
 from .chunker import chunk_date_range
 
@@ -71,7 +72,7 @@ def _as_utc_datetime(value: date | datetime, *, end_of_day: bool) -> datetime:
     return datetime.combine(value, boundary, tzinfo=timezone.utc)
 
 
-def _run_team_autoimport_for_backfill(
+def _run_strict_reference_discovery_for_backfill(
     *,
     provider: str,
     org_id: str,
@@ -83,9 +84,7 @@ def _run_team_autoimport_for_backfill(
     window_count: int,
     analytics_db_url: str | None,
 ) -> dict[str, Any] | None:
-    if not sync_options.get("auto_import_teams"):
-        return None
-    return run_team_autoimport(
+    summary = run_team_autoimport_strict(
         provider=provider,
         org_id=org_id,
         credentials=credentials or {},
@@ -99,6 +98,14 @@ def _run_team_autoimport_for_backfill(
         },
         analytics_db_url=analytics_db_url,
     )
+    if analytics_db_url is not None:
+        _verify_reference_readback(
+            org_id=org_id,
+            provider=provider,
+            summary=summary,
+            analytics_db_url=analytics_db_url,
+        )
+    return summary
 
 
 def run_backfill_for_config(
@@ -142,12 +149,25 @@ def run_backfill_for_config(
 
     windows = chunk_date_range(since=since, before=before, chunk_days=chunk_days)
 
+    reference_discovery = _run_strict_reference_discovery_for_backfill(
+        provider=provider,
+        org_id=org_id,
+        credentials=credentials,
+        sync_options=sync_options,
+        sync_config_id=sync_config_id,
+        since=since,
+        before=before,
+        window_count=len(windows),
+        analytics_db_url=db_url,
+    )
+
     for idx, (window_since, window_before) in enumerate(windows, start=1):
         if progress_cb is not None:
             progress_cb(idx, len(windows), window_since, window_before)
 
         backfill_days = (window_before - window_since).days + 1
         jira_project_keys, jira_jql, jira_fetch_all = _jira_query_options(sync_options)
+        github_sync_targets = sync_targets or ["work-items"]
         run_work_items_sync_job(
             db_url=db_url,
             day=window_before,
@@ -165,22 +185,13 @@ def run_backfill_for_config(
             # enabled (None would let the github provider fall back to the
             # GITHUB_INCLUDE_PRS env default, PRs ON). Mirrors the unitized path
             # (processors/dataset_adapters._work_item_kwargs).
+            include_issues=(
+                ("work-items" in github_sync_targets) if provider == "github" else None
+            ),
             include_pull_requests=(
-                ("prs" in sync_targets) if provider == "github" else None
+                ("prs" in github_sync_targets) if provider == "github" else None
             ),
         )
-
-    team_autoimport = _run_team_autoimport_for_backfill(
-        provider=provider,
-        org_id=org_id,
-        credentials=credentials,
-        sync_options=sync_options,
-        sync_config_id=sync_config_id,
-        since=since,
-        before=before,
-        window_count=len(windows),
-        analytics_db_url=db_url,
-    )
 
     result = {
         "status": "success",
@@ -191,6 +202,6 @@ def run_backfill_for_config(
         "since": since.isoformat(),
         "before": before.isoformat(),
     }
-    if team_autoimport is not None:
-        result["team_autoimport"] = team_autoimport
+    if reference_discovery is not None:
+        result["team_autoimport"] = reference_discovery
     return result

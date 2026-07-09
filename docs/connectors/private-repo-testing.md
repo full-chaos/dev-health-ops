@@ -121,9 +121,10 @@ python examples/private_repo_example.py
 
 **Option B: Run integration tests**
 
-```bash
-pytest tests/test_private_repo_access.py::TestGitLabPrivateProjectAccess -v
-```
+GitLab connector-based integration coverage (`TestGitLabPrivateProjectAccess`)
+was retired with the connector's code-dataset fetch methods in CS17 /
+CHAOS-2819. Verify GitLab private-project access through
+`providers/gitlab/code_client.py::GitLabCodeClient` instead.
 
 **Option C: Test with actual data sync**
 
@@ -192,39 +193,25 @@ The test should:
 
 ### GitHub Token Verification
 
-```python
-from dev_health_ops.connectors import GitHubConnector
+The legacy `GitHubConnector.list_repositories`/`get_rate_limit` verification path
+was retired in CS16 / CHAOS-2818 and CS18 / CHAOS-2865. Verify a GitHub token by
+listing repositories through `providers/github/code_client.py::GitHubCodeClient`,
+or with the GitHub CLI (after exporting your token as `GITHUB_TOKEN`):
 
-token = "ghp_your_token"
-connector = GitHubConnector(token=token)
-
-# If this works, token is valid
-rate_limit = connector.get_rate_limit()
-print(f"Token is valid. Rate limit: {rate_limit['remaining']}/{rate_limit['limit']}")
-
-# If you can list private repos, token has 'repo' scope
-repos = connector.list_repositories(max_repos=5)
-print(f"Can access {len(repos)} repositories")
-
-connector.close()
+```bash
+gh api rate_limit
 ```
 
 ### GitLab Token Verification
 
-```python
-from dev_health_ops.connectors import GitLabConnector
+The legacy `GitLabConnector.list_projects`/`get_rate_limit` verification path
+was retired in CS17 / CHAOS-2819. Verify a GitLab token by fetching a known
+project through `providers/gitlab/code_client.py::GitLabCodeClient`, or with
+a direct API call:
 
-token = "glpat_your_token"
-connector = GitLabConnector(url="https://gitlab.com", private_token=token)
-
-# If this works, token is valid
-try:
-    projects = connector.list_projects(max_projects=5)
-    print(f"Token is valid. Can access {len(projects)} projects")
-except Exception as e:
-    print(f"Token validation failed: {e}")
-
-connector.close()
+```bash
+curl --header "PRIVATE-TOKEN: glpat_your_token" \
+  "https://gitlab.com/api/v4/projects/mygroup%2Fmy-private-project"
 ```
 
 ## Best Practices
@@ -260,7 +247,8 @@ pytest tests/test_private_repo_access.py -v
 
 # Run specific test classes
 pytest tests/test_private_repo_access.py::TestGitHubPrivateRepoAccess -v
-pytest tests/test_private_repo_access.py::TestGitLabPrivateProjectAccess -v
+# GitLab private-project connector integration coverage was retired in
+# CS17 / CHAOS-2819; see GitLabCodeClient tests instead.
 
 # Skip integration tests in CI/CD
 export SKIP_INTEGRATION_TESTS=1

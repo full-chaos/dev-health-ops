@@ -175,13 +175,17 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > **aliased** member resolves to the **same canonical identity** an aliased assignee does (e.g.
 > `github:lead` → `lead@example.com`), and a non-aliased member stays `github:<login>` /
 > `gitlab:<username>` / `jira:accountid:<account_id>`. Deriving the identity directly (bypassing the
-> alias map) is the bug that broke aliased orgs. The alias-resolved identity lands in **both**
-> `team_memberships.raw_provider_user_id` (the one facet the ladder's `member_by_identity` indexes that
-> is free) **and** the `teams.members` roster (read by `TeamResolver`). `membership_facets` returns
-> *every* identity an assignee for this member could resolve to — the no-email identity, the
-> provider-qualified id, AND (when the member has an email) the resolver-mapped + normalized **email** —
-> so the roster matches an email-bearing assignee too (the ladder already matched it via `raw_email`,
-> but the roster used to miss). The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
+> alias map) is the bug that broke aliased orgs. `membership_facets` returns *every* identity an
+> assignee for this member could resolve to — the no-email identity, the provider-qualified id, AND
+> (when the member has an email) the resolver-mapped canonical + normalized **email**. ALL of them are
+> persisted to the `team_memberships.identity_facets` `Array(String)` column (migration **060**); the
+> loader `argMax`-reads it and fans **every** facet into the ladder's `member_by_identity` (alongside
+> the legacy `raw_provider_user_id` = `facets[0]` + `raw_email` slots), **and** writes them to the
+> `teams.members` roster (read by `TeamResolver`). This closes the deferred
+> **email-alias-distinct-canonical** edge (**CHAOS-2625**): when an org maps a member's provider id and
+> email to *different* canonicals (`github:lead` → canonicalA, `personal@…` → canonicalB), an assignee
+> resolving to canonicalB now hits the canonical ladder directly with `assignee_membership` provenance
+> instead of the weaker roster fallback. The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
 > form (untouched — it is the ReplacingMergeTree dedup key). A `members` cell is `yes` only when this
 > end-to-end resolution is **proven** (a no-email assignee — aliased AND non-aliased — resolves to the
 > auto-imported team via *both* paths —
@@ -195,6 +199,16 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   same-provider donor), Jira (`test_jira_issue_project_wins_over_linked_issue`,
   `test_assignee_membership_wins_over_jira_linked_donor`). (Provider *link-capture* — distinct from
   the resolver — is also tested per provider, e.g. `test_gitlab_captures_external_key_*`.)
+- **Chart and drilldown team attribution:** Investment Sankey, GraphQL TEAM
+  flow-matrix/chord, GraphQL REPO flow-matrix's cross-repo team bridge, team
+  Cycle Time × Throughput quadrant axes, work-unit investment team evidence,
+  issue drilldowns, and flame issue details read the primary
+  `work_item_team_attributions` snapshot before rolling up or displaying team
+  identity. Cycle-time rows can still provide activity windows, durations,
+  work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
+  owning team identity. Person cohort selection reads ClickHouse `identities`
+  membership (`team_ids`) instead of metric rollup team snapshots so a person's
+  current team comparison does not lag behind admin/team-autoimport membership.
 - **Why it matters:** the team/project/member **dimension** is populated by the per-provider
   team/project/member sync. **"Auto Import" is a UX option** (checkboxes to import teams, projects,
   and members from an integration → `run_team_autoimport`, writing ClickHouse directly); manual
@@ -212,6 +226,14 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   resolves to its team via both the canonical ladder and the roster — previously the roster stored a
   bare login the resolver never matched, so member attribution silently missed for no-email
   github/gitlab/jira assignees. The matrix above is the source of truth for what is/ isn't proven.
+- **Email-alias-distinct-canonical edge → CLOSED by CHAOS-2625:** the canonical ladder now indexes
+  *every* facet a member resolves to via the `team_memberships.identity_facets` `Array(String)` column
+  (migration 060) + loader fan-out, so a member mapped to *two different* canonicals (provider id →
+  canonicalA, email → canonicalB) attributes via the ladder on **either** canonical — previously only
+  `facets[0]` + `raw_email` were indexed, so an assignee resolving to canonicalB missed the ladder and
+  fell back to the weaker roster path. Proven in `tests/test_team_autoimport_executor.py` (canonicalB
+  ladder hit) + the provider×entity writer assertions in
+  `tests/workers/test_team_autoimport_{github_gitlab,jira,linear}.py`.
 
 ### 0.5 Drift-review reconciliation (CHAOS-2622) — rebuilt on ClickHouse
 
@@ -389,10 +411,12 @@ boundary).
 erDiagram
     work_items ||--o{ work_item_dependencies : "source of edges"
     work_items ||--o{ work_item_cycle_times : "completed to cycle row"
+    work_items ||--o{ work_item_team_attributions : "primary attribution candidates"
     work_item_dependencies }o--|| work_items : "target or extkey to donor issue"
-    teams ||--o{ work_item_cycle_times : "team_id"
-    work_item_cycle_times ||--o{ investment_coverage : "team/repo coverage %"
-    work_item_cycle_times ||--o{ team_exchange_chord : "cross-team flows"
+    teams ||--o{ work_item_team_attributions : "team_id"
+    work_item_team_attributions ||--o{ investment_coverage : "team/repo coverage %"
+    work_item_team_attributions ||--o{ team_exchange_chord : "team identity"
+    work_item_cycle_times ||--o{ team_exchange_chord : "activity/day/scope bridge"
 
     work_items {
         string work_item_id PK
@@ -411,9 +435,16 @@ erDiagram
     }
     work_item_cycle_times {
         string work_item_id
-        string team_id "inherited when a PR borrows a donor"
         string work_scope_id
         date   day
+        string org_id
+    }
+    work_item_team_attributions {
+        string work_item_id
+        string team_id "latest primary owner"
+        string source
+        uint8  is_primary
+        datetime computed_at
         string org_id
     }
     teams {
@@ -423,10 +454,9 @@ erDiagram
     }
 ```
 
-The chord and coverage both read `work_item_cycle_times.team_id`. Before
-inheritance, PR rows carried `unassigned`, so they never bridged to the issue
-trackers' teams; after, a PR's row carries the donor issue's team and the two
-providers finally co-occur on a team dimension.
+Coverage and team-identity hydration read latest primary rows from
+`work_item_team_attributions`. Cycle-time rows can still provide activity dates,
+durations, and co-occurrence bridges, but they are not the owning team source.
 
 ---
 
@@ -519,7 +549,16 @@ does not collapse to `unassigned`.
    SELECT count() FROM members WHERE org_id = '<org_id>';
    SELECT count() FROM team_memberships WHERE org_id = '<org_id>' AND provider = 'linear';
    SELECT count() FROM team_project_ownership WHERE org_id = '<org_id>' AND provider = 'linear';
-   SELECT team_id, count() FROM work_item_cycle_times WHERE org_id = '<org_id>' GROUP BY team_id;
+   SELECT team_id, count() FROM work_item_team_attributions FINAL
+   WHERE org_id = '<org_id>'
+     AND is_primary = 1
+     AND (work_item_id, computed_at) IN (
+       SELECT work_item_id, max(computed_at)
+       FROM work_item_team_attributions
+       WHERE org_id = '<org_id>'
+       GROUP BY work_item_id
+     )
+   GROUP BY team_id;
    ```
 
 | Aspect | `job_work_items` (sync) | `job_daily` (recompute) |
@@ -571,12 +610,13 @@ migration**, only a data replay.
 
 ### Why a plain backfill is not enough
 
-The investment **allocation** views derive team at *query time*: the coverage %
-and team-exchange chord read `work_unit_investments` and **LEFT JOIN**
-`work_item_cycle_times` for `argMax(team_id, …)`. So three things must be true,
-and the backfill **runner only re-runs `run_work_items_sync_job` — it does NOT
-fan out** to the work-graph or investment jobs (only the live sync path chains
-those). They must be triggered explicitly.
+The investment **allocation** views derive team at *query time*: the coverage %, 
+team-exchange chord, team Cycle Time × Throughput quadrant, and work-unit
+investment evidence read `work_unit_investments` / cycle-time activity and join
+latest primary `work_item_team_attributions` rows for team identity. So three
+things must be true, and the backfill **runner only re-runs
+`run_work_items_sync_job` — it does NOT fan out** to the work-graph or investment
+jobs (only the live sync path chains those). They must be triggered explicitly.
 
 ```mermaid
 flowchart TD
@@ -585,10 +625,10 @@ flowchart TD
         L["Linear (issues + attachment edges)"]
         G["GitHub / GitLab (PRs/MRs + comment/body edges)"]
     end
-    SYNC --> CT["work_item_dependencies (extkey/attachment edges)<br/>+ work_item_cycle_times.team_id (inherited)"]
+    SYNC --> CT["work_item_dependencies (extkey/attachment edges)<br/>+ work_item_team_attributions (latest primary owner)<br/>+ work_item_cycle_times (activity bridge)"]
     CT --> WG["3. work-graph build"]
     WG --> IM["4. investment materialize (--force)"]
-    IM --> Q["5. allocation coverage % + chord<br/>recover via query-time join to cycle_times"]
+    IM --> Q["5. allocation coverage % + chord<br/>recover via query-time join to primary attribution"]
 ```
 
 ### Ordered steps (per affected org)
@@ -598,14 +638,15 @@ flowchart TD
    nothing: the PR/MR rows and their edges come from the git providers, and the
    donor issues come from Linear. A single `--provider all` run (or per-provider
    with Linear synced so its issues are present) writes the edges and recomputes
-   `work_item_cycle_times.team_id`. The org is derived from the sync config
+   `work_item_team_attributions`. The org is derived from the sync config
    (#923), so `--org` is optional.
 3. **Work-graph build**, then
 4. **Investment materialize (`--force`)** — these rebuild `work_unit_investments`
    + its `structural_evidence_json.issues` (the coverage join keys); the backfill
    does not trigger them.
-5. **Verify & recover** — the coverage % and chord recover automatically via the
-   query-time join. Confirm the links were captured:
+5. **Verify & recover** — the coverage %, chord, team Cycle Time × Throughput
+   quadrant, and work-unit investment evidence recover automatically via the
+   query-time join to primary attribution. Confirm the links were captured:
 
    ```sql
    SELECT relationship_type_raw, count()

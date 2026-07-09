@@ -605,8 +605,54 @@ class _FakeTreeEntry:
         self.type = type_
 
 
+class _FakeGitHubCodeClient:
+    """Stand-in for ``GitHubCodeClient`` (CHAOS-2773 CS7): the processor now
+    fetches blame through this client's async ``get_file_blame`` instead of
+    the frozen connector's sync ``get_file_blame`` (no longer called)."""
+
+    def __init__(self, *, blame_fn: Any) -> None:
+        self._blame_fn = blame_fn
+        self.close = AsyncMock()
+
+    async def get_file_blame(
+        self, *, owner: str, repo: str, path: str, ref: str
+    ) -> Any:
+        return self._blame_fn(owner=owner, repo=repo, path=path, ref=ref)
+
+    def drain_usage_observations(self) -> list[Any]:
+        return []
+
+
+class _FakeGitLabCodeClientForBlame:
+    """Minimal instrumented GitLabCodeClient stand-in for the blame backfill
+    branch (CHAOS-2815/CS14): the real backfill now fetches blame via
+    ``GitLabCodeClient.get_file_blame``, never ``connector.rest_client.
+    get_file_blame`` (frozen, un-instrumented)."""
+
+    def __init__(self, blame_fn, tree_items=None):
+        self._blame_fn = blame_fn
+        self._tree_items = tree_items if tree_items is not None else []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get_file_blame(self, project_id, file_path, *, ref):
+        return self._blame_fn(project_id, file_path, ref)
+
+    async def list_repository_tree(
+        self, project_id, *, ref, per_page=100, max_items=1_000_000
+    ):
+        return self._tree_items
+
+    def drain_usage_observations(self):
+        return []
+
+
 @pytest.mark.asyncio
-async def test_github_blame_backfill_is_capped() -> None:
+async def test_github_blame_backfill_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
     """Onboarding blame must stop at BLAME_BACKFILL_MAX_FILES files.
 
     Drives the real ``_backfill_github_missing_data`` blame branch with a tree
@@ -615,6 +661,7 @@ async def test_github_blame_backfill_is_capped() -> None:
     onboarding into an unbounded GraphQL crawl (CHAOS-2376 / Codex no-ship).
     """
     from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.processors import github as github_module
     from dev_health_ops.processors.github import (
         BLAME_BACKFILL_MAX_FILES,
         _backfill_github_missing_data,
@@ -666,7 +713,11 @@ async def test_github_blame_backfill_is_capped() -> None:
 
     connector = Mock()
     connector.github.get_repo.return_value = gh_repo
-    connector.get_file_blame = Mock(side_effect=fake_blame)
+    monkeypatch.setattr(
+        github_module,
+        "_github_code_client_from_connector",
+        lambda _connector: _FakeGitHubCodeClient(blame_fn=fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()
@@ -695,6 +746,10 @@ async def test_gitlab_blame_backfill_is_capped(
 ) -> None:
     """Onboarding blame must stop at BLAME_BACKFILL_MAX_FILES files (GitLab)."""
     import dev_health_ops.processors.gitlab as gitlab_mod
+    from dev_health_ops.providers.gitlab.code_client import (
+        GitLabBlameRange,
+        GitLabFileBlame,
+    )
 
     n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 9
 
@@ -722,25 +777,29 @@ async def test_gitlab_blame_backfill_is_capped(
     connector = Mock()
     connector.gitlab.projects.get.return_value = project
 
-    # _iter_gitlab_repo_tree yields the (oversized) tree of blobs.
+    # list_repository_tree yields the (oversized) tree of blobs.
     tree_items = [{"type": "blob", "path": f"src/f{i}.py"} for i in range(n_files)]
 
     blame_calls: list[str] = []
 
-    def fake_rest_blame(project_id: int, path: str, ref: str) -> list[dict[str, Any]]:
+    def fake_blame(project_id: int, path: str, ref: str) -> GitLabFileBlame:
         blame_calls.append(path)
-        return [{"commit": {"author_email": "a@ex.com"}, "lines": ["x = 1"]}]
+        return GitLabFileBlame(
+            file_path=path,
+            ranges=(GitLabBlameRange(1, 1, "sha", "Ada", "a@ex.com", 0, ("x",)),),
+        )
 
-    connector.rest_client.get_file_blame = Mock(side_effect=fake_rest_blame)
+    monkeypatch.setattr(
+        gitlab_mod,
+        "_gitlab_code_client_from_connector",
+        lambda connector: _FakeGitLabCodeClientForBlame(
+            fake_blame, tree_items=tree_items
+        ),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()
     db_repo.settings = {"default_branch": "main"}
-
-    # Patch the module-level tree iterator to return the oversized blob list.
-    monkeypatch.setattr(
-        gitlab_mod, "_iter_gitlab_repo_tree", lambda *a, **k: tree_items
-    )
     await gitlab_mod._backfill_gitlab_missing_data(
         store=store,
         ingestion_sink=sink,
@@ -920,7 +979,9 @@ def test_blame_backfill_needed_probe_failure_defers_not_aborts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_github_blame_backfill_resumes_on_second_sync() -> None:
+async def test_github_blame_backfill_resumes_on_second_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A second GitHub sync blames the files the first sync left uncovered.
 
     Proves the cap is not a permanent dead-end: across two runs every file in
@@ -928,6 +989,7 @@ async def test_github_blame_backfill_resumes_on_second_sync() -> None:
     round-3 / Codex no-ship).
     """
     from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.processors import github as github_module
     from dev_health_ops.processors.github import (
         BLAME_BACKFILL_MAX_FILES,
         _backfill_github_missing_data,
@@ -970,7 +1032,11 @@ async def test_github_blame_backfill_resumes_on_second_sync() -> None:
 
     connector = Mock()
     connector.github.get_repo.return_value = gh_repo
-    connector.get_file_blame = Mock(side_effect=fake_blame)
+    monkeypatch.setattr(
+        github_module,
+        "_github_code_client_from_connector",
+        lambda _connector: _FakeGitHubCodeClient(blame_fn=fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()
@@ -1015,25 +1081,35 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
 ) -> None:
     """A second GitLab sync blames the files the first sync left uncovered."""
     import dev_health_ops.processors.gitlab as gitlab_mod
+    from dev_health_ops.providers.gitlab.code_client import (
+        GitLabBlameRange,
+        GitLabFileBlame,
+    )
 
     n_files = gitlab_mod.BLAME_BACKFILL_MAX_FILES + 11
     all_paths = {f"src/f{i}.py" for i in range(n_files)}
     store = _StatefulBlameStore(all_paths)
 
     tree_items = [{"type": "blob", "path": f"src/f{i}.py"} for i in range(n_files)]
-    monkeypatch.setattr(
-        gitlab_mod, "_iter_gitlab_repo_tree", lambda *a, **k: tree_items
-    )
 
     project = Mock()
     project.id = 123
     connector = Mock()
     connector.gitlab.projects.get.return_value = project
 
-    def fake_rest_blame(project_id: int, path: str, ref: str) -> list[dict[str, Any]]:
-        return [{"commit": {"author_email": "a@ex.com"}, "lines": ["x = 1"]}]
+    def fake_blame(project_id: int, path: str, ref: str) -> GitLabFileBlame:
+        return GitLabFileBlame(
+            file_path=path,
+            ranges=(GitLabBlameRange(1, 1, "sha", "Ada", "a@ex.com", 0, ("x",)),),
+        )
 
-    connector.rest_client.get_file_blame = Mock(side_effect=fake_rest_blame)
+    monkeypatch.setattr(
+        gitlab_mod,
+        "_gitlab_code_client_from_connector",
+        lambda connector: _FakeGitLabCodeClientForBlame(
+            fake_blame, tree_items=tree_items
+        ),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()
@@ -1075,13 +1151,16 @@ async def test_gitlab_blame_backfill_resumes_on_second_sync(
 
 
 @pytest.mark.asyncio
-async def test_github_blame_gate_alive_when_files_present_blame_partial() -> None:
+async def test_github_blame_gate_alive_when_files_present_blame_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """needs.blame=False but has_unblamed_files=True still triggers the crawl.
 
     Models a rerun where the any-row gate would say "blame exists, skip" but
     coverage is partial; the coverage gate must keep the blame branch alive.
     """
     from dev_health_ops.connectors.models import BlameRange, FileBlame
+    from dev_health_ops.processors import github as github_module
     from dev_health_ops.processors.github import _backfill_github_missing_data
 
     all_paths = {"src/a.py", "src/b.py", "src/c.py"}
@@ -1120,7 +1199,11 @@ async def test_github_blame_gate_alive_when_files_present_blame_partial() -> Non
 
     connector = Mock()
     connector.github.get_repo.return_value = gh_repo
-    connector.get_file_blame = Mock(side_effect=fake_blame)
+    monkeypatch.setattr(
+        github_module,
+        "_github_code_client_from_connector",
+        lambda _connector: _FakeGitHubCodeClient(blame_fn=fake_blame),
+    )
 
     db_repo = Mock()
     db_repo.id = uuid.uuid4()

@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from celery import chain
 
 from dev_health_ops.models import SyncRun, SyncRunUnit, SyncRunUnitStatus
+from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _GIT_TARGETS, _WORK_ITEM_TARGETS
 
@@ -155,30 +156,71 @@ def _dispatch_post_sync_tasks(
     has_dora = bool(target_set & _DORA_TARGETS)
     dispatched: list[str] = []
 
+    if from_date is not None and to_date is not None:
+        metrics_window_start = date.fromisoformat(from_date)
+        metrics_window_end = date.fromisoformat(to_date)
+        if metrics_day is None:
+            metrics_day = metrics_window_end.isoformat()
+        if metrics_backfill_days is None:
+            metrics_backfill_days = (metrics_window_end - metrics_window_start).days + 1
+
     daily_metrics_kwargs: dict[str, Any] = {"org_id": org_id}
     if metrics_day is not None:
         daily_metrics_kwargs["day"] = metrics_day
     if metrics_backfill_days is not None:
         daily_metrics_kwargs["backfill_days"] = metrics_backfill_days
 
-    if has_git and not has_work_items:
-        celery_app.send_task(
-            "dev_health_ops.workers.tasks.run_daily_metrics",
-            kwargs=daily_metrics_kwargs,
-            queue="metrics",
-        )
+    if has_git or has_work_items:
         dispatched.append("run_daily_metrics")
 
-    if has_work_items:
-        dispatched.append("run_daily_metrics")
-
+    # run_complexity_job writes file_complexity_snapshots, which run_daily_metrics
+    # reads (job_daily._load_complexity_map_for_repo). Chaining complexity ->
+    # daily guarantees the daily risk/hotspot rows reflect the just-synced file
+    # contents instead of the previous cycle's snapshot — important for a newly
+    # onboarded org's first daily run, which would otherwise show zero complexity.
+    #
+    # Trade-off (CHAOS review #1078): as the chain head, a *terminal* complexity
+    # failure (after its 3 internal retries) aborts the rest of the chain
+    # (daily/build/materialize), so the /investment refresh is skipped for that
+    # sync. This is accepted as fresh-or-nothing: terminal complexity failures are
+    # rare and usually stem from ClickHouse being unavailable, in which case the
+    # downstream steps would fail anyway; daily also degrades gracefully on a
+    # missing snapshot, so the next cycle recovers. If hard isolation is ever
+    # needed, decouple via a non-raising wrapper task rather than link_error.
+    # Historical backfills must not enqueue complexity implicitly: run_complexity_db_job
+    # scans CURRENT persisted file contents/blame, so writing it across a
+    # historical window (or a past single day) would fabricate a flat/incorrect
+    # historical complexity trend rather than reflecting real historical state
+    # (CHAOS-2888). Complexity is safe to enqueue only for a current single-day
+    # sync: backfill_days in (None, 1) and day absent or == utc_today().
+    complexity_sig = None
     if has_git:
-        celery_app.send_task(
-            "dev_health_ops.workers.tasks.run_complexity_job",
-            kwargs={"org_id": org_id},
-            queue="metrics",
+        is_current_single_day = metrics_backfill_days in (None, 1) and (
+            metrics_day is None or metrics_day == utc_today().isoformat()
         )
-        dispatched.append("run_complexity_job")
+        if is_current_single_day:
+            complexity_kwargs: dict[str, Any] = {"org_id": org_id}
+            if metrics_day is not None:
+                complexity_kwargs["day"] = metrics_day
+                complexity_kwargs["backfill_days"] = 1
+            complexity_sig = celery_app.signature(
+                "dev_health_ops.workers.tasks.run_complexity_job",
+                kwargs=complexity_kwargs,
+                queue="metrics",
+                immutable=True,
+            )
+            dispatched.append("run_complexity_job")
+        else:
+            logger.warning(
+                "historical_complexity_unsupported: skipping run_complexity_job "
+                "org_id=%s from_date=%s to_date=%s metrics_day=%s "
+                "metrics_backfill_days=%s",
+                org_id,
+                from_date,
+                to_date,
+                metrics_day,
+                metrics_backfill_days,
+            )
 
     if has_git or has_work_items:
         build_kwargs: dict[str, Any] = {"org_id": org_id}
@@ -195,11 +237,13 @@ def _dispatch_post_sync_tasks(
         if to_date is not None:
             materialize_kwargs["to_date"] = to_date
 
+        # Every link below the chain head must be immutable so a parent's return
+        # value is not injected as a positional arg into the next task.
         build_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.run_work_graph_build",
             kwargs=build_kwargs,
             queue="metrics",
-            immutable=has_work_items,
+            immutable=True,
         )
         materialize_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
@@ -207,16 +251,16 @@ def _dispatch_post_sync_tasks(
             queue="default",
             immutable=True,
         )
-        if has_work_items:
-            daily_metrics_sig = celery_app.signature(
-                "dev_health_ops.workers.tasks.run_daily_metrics",
-                kwargs=daily_metrics_kwargs,
-                queue="metrics",
-                immutable=True,
-            )
-            chain(daily_metrics_sig, build_sig, materialize_sig).apply_async()
-        else:
-            chain(build_sig, materialize_sig).apply_async()
+        daily_metrics_sig = celery_app.signature(
+            "dev_health_ops.workers.tasks.run_daily_metrics",
+            kwargs=daily_metrics_kwargs,
+            queue="metrics",
+            immutable=True,
+        )
+        chain_sigs = [daily_metrics_sig, build_sig, materialize_sig]
+        if complexity_sig is not None:
+            chain_sigs.insert(0, complexity_sig)
+        chain(*chain_sigs).apply_async()
         dispatched.append("run_work_graph_build")
         dispatched.append("dispatch_investment_materialize_partitioned")
 

@@ -22,6 +22,8 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitMembershipRecord,
     WorkUnitMembershipRunRecord,
+    WorkUnitRepoEffortRecord,
+    WorkUnitScopedMembershipRunRecord,
 )
 
 if TYPE_CHECKING:
@@ -145,6 +147,27 @@ class InvestmentMixin(_ClickHouseSinkBase):
             rows,
         )
 
+    def write_work_unit_repo_effort(
+        self, rows: Sequence[WorkUnitRepoEffortRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "work_unit_repo_effort",
+            [
+                "work_unit_id",
+                "repo_id",
+                "effort_metric",
+                "effort_value",
+                "allocation_weight",
+                "allocation_source",
+                "categorization_run_id",
+                "computed_at",
+                "org_id",
+            ],
+            rows,
+        )
+
     def write_work_unit_investment_quotes(
         self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
     ) -> None:
@@ -198,6 +221,17 @@ class InvestmentMixin(_ClickHouseSinkBase):
             "work_unit_membership_runs",
             ["org_id", "run_id", "completed_at"],
             [record],
+        )
+
+    def write_scoped_membership_runs(
+        self, records: Sequence[WorkUnitScopedMembershipRunRecord]
+    ) -> None:
+        if not records:
+            return
+        self._insert_rows(
+            "work_unit_membership_scoped_runs",
+            ["org_id", "scope_kind", "scope_id", "run_id", "completed_at"],
+            records,
         )
 
     def prune_membership_runs(self, org_id: str, *, keep: int = 2) -> int:

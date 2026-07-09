@@ -28,8 +28,14 @@ For each `(org_id, repo_id, day)` row, four signals are combined:
 Window: trailing 30 days. The complexity delta uses the first-half-versus-second-half
 average so a recent rise in complexity is captured even when absolute values are small.
 
-If any required input is missing, the score is `NULL` and the severity is `unknown`.
-**Missing data is not zero risk.**
+Inputs come from the current `(org_id, repo_id, day)` compute row. If any
+required input is missing on that row, the persisted score is `NULL` and the
+severity is `unknown`. **Missing data is not zero risk.**
+
+Read surfaces resolve to the most recent complete (fully-scored) day within the
+window: partial or in-progress current days whose latest Compounding Risk score
+is unavailable are skipped. If no scored day exists in the window, the score is
+unavailable rather than carried forward or recomputed.
 
 ---
 
@@ -115,10 +121,11 @@ This is the inspectability contract — no opaque scoring.
 
 ## Scope
 
-v1 persists **repo-scope rows only**. Team-scope views are derived at read time
-by aggregating per-repo rows in the GraphQL resolver (CHAOS-1642). Persisting
-team-scope rows is a follow-up optimization; the read-time aggregation already
-honors the inspectability contract.
+v1 persists **repo-scope rows** and, when a repo-to-team mapping is available,
+**team-scope rows**. Team rows aggregate the resolved per-repo raw inputs by
+unweighted mean and then apply the same formula, preserving inspectability. The
+GraphQL resolver still supports read-time aggregation as a compatibility
+fallback when persisted team rows are absent.
 
 Per the no-surveillance contract, **there is no per-person scope** for this
 metric, and the web surface explicitly locks the scope picker against it.
@@ -127,12 +134,13 @@ metric, and the web surface explicitly locks the scope picker against it.
 
 ## Orchestration
 
-Compounding Risk runs as part of `dev-hops metrics daily`:
+Compounding Risk runs as part of `dev-hops metrics daily` and can also be
+recomputed from persisted inputs with `dev-hops metrics compounding-risk`:
 
 1. `compute_daily_metrics` writes `repo_metrics_daily` for the day.
-2. `build_compounding_risk_rows_for_day` reads back the just-written
+2. `build_compounding_risk_rows_for_day` reads the just-written
    `repo_metrics_daily` rows and queries `repo_complexity_daily` for the
-   complexity delta.
+   current row's complexity delta.
 3. The resulting rows are written via `sink.write_compounding_risk_daily(...)`.
 
 No new connector or processor work is required; the pipeline already

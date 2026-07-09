@@ -4,11 +4,15 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from dev_health_ops.cli import build_parser
 from dev_health_ops.connectors.github import GitHubConnector
 from dev_health_ops.connectors.utils.github_app import (
+    TOKEN_EXCHANGE_MAX_RETRIES,
+    GitHubAppAuthError,
     GitHubAppTokenProvider,
+    GitHubAppTransientError,
     create_github_app_jwt,
 )
 from dev_health_ops.credentials import CredentialSource, GitHubCredentials
@@ -194,3 +198,112 @@ def test_sync_git_cli_rejects_pat_and_app_flags(tmp_path) -> None:
 
     with pytest.raises(SystemExit, match="exactly one mode"):
         _resolve_github_sync_credentials(ns)
+
+
+def _ok_token_response() -> Mock:
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()
+    response = Mock(status_code=201)
+    response.json.return_value = {
+        "token": "installation-token",
+        "expires_at": expires_at,
+    }
+    return response
+
+
+def test_installation_token_exchange_retries_transient_5xx() -> None:
+    transient = Mock(status_code=503)
+    with (
+        patch(
+            "dev_health_ops.connectors.utils.github_app.create_github_app_jwt",
+            return_value="app-jwt",
+        ),
+        patch("dev_health_ops.connectors.utils.retry.time.sleep"),
+        patch(
+            "dev_health_ops.connectors.utils.github_app.requests.post",
+            side_effect=[transient, _ok_token_response()],
+        ) as post,
+    ):
+        provider = GitHubAppTokenProvider(
+            app_id="12345",
+            private_key="synthetic-private-key",
+            installation_id="67890",
+        )
+        token = provider.get_token()
+
+    assert token == "installation-token"
+    assert post.call_count == 2
+
+
+def test_installation_token_exchange_retries_network_error() -> None:
+    with (
+        patch(
+            "dev_health_ops.connectors.utils.github_app.create_github_app_jwt",
+            return_value="app-jwt",
+        ),
+        patch("dev_health_ops.connectors.utils.retry.time.sleep"),
+        patch(
+            "dev_health_ops.connectors.utils.github_app.requests.post",
+            side_effect=[requests.ConnectionError("boom"), _ok_token_response()],
+        ) as post,
+    ):
+        provider = GitHubAppTokenProvider(
+            app_id="12345",
+            private_key="synthetic-private-key",
+            installation_id="67890",
+        )
+        token = provider.get_token()
+
+    assert token == "installation-token"
+    assert post.call_count == 2
+
+
+def test_installation_token_exchange_does_not_retry_4xx() -> None:
+    forbidden = Mock(status_code=401)
+    with (
+        patch(
+            "dev_health_ops.connectors.utils.github_app.create_github_app_jwt",
+            return_value="app-jwt",
+        ),
+        patch("dev_health_ops.connectors.utils.retry.time.sleep") as sleep,
+        patch(
+            "dev_health_ops.connectors.utils.github_app.requests.post",
+            return_value=forbidden,
+        ) as post,
+    ):
+        provider = GitHubAppTokenProvider(
+            app_id="12345",
+            private_key="synthetic-private-key",
+            installation_id="67890",
+        )
+        with pytest.raises(GitHubAppAuthError) as excinfo:
+            provider.get_token()
+
+    assert not isinstance(excinfo.value, GitHubAppTransientError)
+    post.assert_called_once()
+    sleep.assert_not_called()
+
+
+def test_installation_token_exchange_exhausts_retries_on_persistent_5xx() -> None:
+    transient = Mock(status_code=503)
+    with (
+        patch(
+            "dev_health_ops.connectors.utils.github_app.create_github_app_jwt",
+            return_value="app-jwt",
+        ),
+        patch("dev_health_ops.connectors.utils.retry.time.sleep"),
+        patch(
+            "dev_health_ops.connectors.utils.github_app.requests.post",
+            return_value=transient,
+        ) as post,
+    ):
+        provider = GitHubAppTokenProvider(
+            app_id="12345",
+            private_key="synthetic-private-key",
+            installation_id="67890",
+        )
+        with pytest.raises(GitHubAppTransientError) as excinfo:
+            provider.get_token()
+
+    assert post.call_count == TOKEN_EXCHANGE_MAX_RETRIES
+    # Exhausted transient still surfaces as GitHubAppAuthError for existing callers.
+    assert isinstance(excinfo.value, GitHubAppAuthError)

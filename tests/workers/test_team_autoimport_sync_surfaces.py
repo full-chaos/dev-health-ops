@@ -26,41 +26,58 @@ _TEAM_AUTOIMPORT_TASK = "dev_health_ops.workers.tasks.run_post_sync_team_autoimp
 _ORG = "team-autoimport-sync-org"
 
 
-def test_backfill_autoimport_false_or_absent_does_not_call(monkeypatch) -> None:
+def test_backfill_autoimport_false_or_absent_runs_strict_discovery(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
+
+    def fake_run_team_autoimport(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {"status": "success"}
+
     monkeypatch.setattr(
-        backfill_runner, "run_team_autoimport", lambda **kwargs: calls.append(kwargs)
+        backfill_runner,
+        "run_team_autoimport_strict",
+        fake_run_team_autoimport,
     )
 
-    assert (
-        backfill_runner._run_team_autoimport_for_backfill(
-            provider="jira",
-            org_id="org-1",
-            credentials={},
-            sync_options={},
-            sync_config_id="cfg-1",
-            since=date(2026, 1, 1),
-            before=date(2026, 1, 7),
-            window_count=1,
-            analytics_db_url=None,
-        )
-        is None
-    )
-    assert (
-        backfill_runner._run_team_autoimport_for_backfill(
-            provider="jira",
-            org_id="org-1",
-            credentials={},
-            sync_options={"auto_import_teams": False},
-            sync_config_id="cfg-1",
-            since=date(2026, 1, 1),
-            before=date(2026, 1, 7),
-            window_count=1,
-            analytics_db_url=None,
-        )
-        is None
-    )
-    assert calls == []
+    assert backfill_runner._run_strict_reference_discovery_for_backfill(
+        provider="jira",
+        org_id="org-1",
+        credentials={},
+        sync_options={},
+        sync_config_id="cfg-1",
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 7),
+        window_count=1,
+        analytics_db_url=None,
+    ) == {"status": "success"}
+    assert backfill_runner._run_strict_reference_discovery_for_backfill(
+        provider="jira",
+        org_id="org-1",
+        credentials={},
+        sync_options={"auto_import_teams": False},
+        sync_config_id="cfg-1",
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 7),
+        window_count=1,
+        analytics_db_url=None,
+    ) == {"status": "success"}
+    assert len(calls) == 2
+    assert calls[0]["scope"] == {
+        "mode": "backfill",
+        "sync_config_id": "cfg-1",
+        "sync_options": {},
+        "window_count": 1,
+        "since": "2026-01-01",
+        "before": "2026-01-07",
+    }
+    assert calls[1]["scope"] == {
+        "mode": "backfill",
+        "sync_config_id": "cfg-1",
+        "sync_options": {"auto_import_teams": False},
+        "window_count": 1,
+        "since": "2026-01-01",
+        "before": "2026-01-07",
+    }
 
 
 def test_backfill_autoimport_true_calls_once(monkeypatch) -> None:
@@ -71,10 +88,11 @@ def test_backfill_autoimport_true_calls_once(monkeypatch) -> None:
         return {"status": "success"}
 
     monkeypatch.setattr(
-        backfill_runner, "run_team_autoimport", fake_run_team_autoimport
+        backfill_runner, "run_team_autoimport_strict", fake_run_team_autoimport
     )
+    monkeypatch.setattr(backfill_runner, "_verify_reference_readback", lambda **_: None)
 
-    result = backfill_runner._run_team_autoimport_for_backfill(
+    result = backfill_runner._run_strict_reference_discovery_for_backfill(
         provider="jira",
         org_id="org-1",
         credentials={"email": "dev@example.com"},
@@ -223,7 +241,7 @@ def _seed_run_with_config(
         org_id=_ORG,
         sync_targets=["work-items"],
         sync_options=sync_options if sync_options is not None else {},
-        migrated_integration_id=integration.id,
+        integration_id=integration.id,
         parent_id=None,
         planner_managed=True,
     )
@@ -362,6 +380,69 @@ def test_post_sync_team_autoimport_resolves_credentials_from_integration(
     assert captured[0]["credentials"] == {"token": "from-integration-cred"}
 
 
+def test_post_sync_team_autoimport_uses_run_stamped_credential_after_repoint(
+    db_session, monkeypatch
+) -> None:
+    """CHAOS-2755 freeze reaches post-sync attribution: a mid-run repoint of
+    ``Integration.credential_id`` must not switch auto-import onto a different
+    credential than the units that produced the synced data (PR #1109 review M1)."""
+    from dev_health_ops.credentials.fingerprint import (
+        AUTH_SOURCE_INTEGRATION_CREDENTIAL,
+    )
+
+    cred_a = IntegrationCredential(
+        org_id=_ORG,
+        provider="github",
+        name="stamped",
+        credentials_encrypted=None,
+        config={},
+    )
+    cred_b = IntegrationCredential(
+        org_id=_ORG,
+        provider="github",
+        name="repointed",
+        credentials_encrypted=None,
+        config={},
+    )
+    db_session.add_all([cred_a, cred_b])
+    db_session.flush()
+    run, integration, _config = _seed_run_with_config(
+        db_session,
+        status=SyncRunStatus.SUCCESS.value,
+        sync_options={"auto_import_teams": True},
+        credential_id=cred_a.id,
+    )
+    # Mimic the planner stamp (fingerprint None -> verification no-op), then
+    # repoint the mutable integration pointer mid-run.
+    run.credential_id = cred_a.id
+    run.auth_source = AUTH_SOURCE_INTEGRATION_CREDENTIAL
+    run.credential_fingerprint = None
+    integration.credential_id = cred_b.id
+    db_session.flush()
+
+    _patch_session(monkeypatch, db_session)
+    import dev_health_ops.workers.task_utils as task_utils
+
+    monkeypatch.setattr(
+        task_utils,
+        "_credential_mapping",
+        lambda cred: {"token": f"tok-{cred.name}"},
+    )
+    captured: list[dict[str, Any]] = []
+
+    def _run_autoimport(**kwargs: Any) -> dict[str, Any]:
+        captured.append(kwargs)
+        return {"status": "success"}
+
+    monkeypatch.setattr(team_autoimport, "run_team_autoimport", _run_autoimport)
+
+    team_autoimport.run_post_sync_team_autoimport(str(run.id))
+
+    assert len(captured) == 1
+    # Frozen on the stamped credential, NOT the repointed one.
+    assert captured[0]["credentials"] == {"token": "tok-stamped"}
+
+
 def test_post_sync_team_autoimport_skips_when_integration_missing(
     db_session, monkeypatch
 ) -> None:
@@ -374,7 +455,7 @@ def test_post_sync_team_autoimport_skips_when_integration_missing(
         org_id=_ORG,
         sync_targets=["work-items"],
         sync_options={"auto_import_teams": True},
-        migrated_integration_id=orphan_integration_id,
+        integration_id=orphan_integration_id,
         parent_id=None,
         planner_managed=True,
     )

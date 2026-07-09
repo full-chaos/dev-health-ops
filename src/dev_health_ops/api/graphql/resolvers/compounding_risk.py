@@ -64,16 +64,67 @@ def _severity_from_str(value: Any) -> CompoundingRiskSeverity:
 # at runtime against the live sink and is replaced with the canonical helper.
 
 
-async def _latest_day_for_org(client: Any, org_id: str) -> date | None:
-    rows = await query_dicts(
-        client,
-        """
-        SELECT max(day) AS day
-        FROM compounding_risk_daily
-        WHERE org_id = {org_id:String}
-        """,
-        {"org_id": org_id},
-    )
+async def _latest_day_for_org(
+    client: Any,
+    org_id: str,
+    *,
+    scope: str,
+    scope_ids: list[str] | None,
+    start_day: date | None = None,
+    end_day: date | None = None,
+) -> date | None:
+    if scope_ids == []:
+        return None
+
+    bounded_end_day = end_day or datetime.now(timezone.utc).date()
+    bounded_start_day = start_day or bounded_end_day - timedelta(days=29)
+
+    query = """
+        SELECT maxOrNull(day) AS day
+        FROM (
+            SELECT
+                day,
+                count() AS row_count,
+                countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores
+            FROM (
+                SELECT
+                    day,
+                    scope_id,
+                    argMax(tuple(compounding_risk), computed_at) AS latest_row
+                FROM compounding_risk_daily
+                WHERE org_id = {org_id:String}
+                  AND scope = {scope:String}
+                  AND day >= {start_day:Date}
+                  AND day <= {end_day:Date}
+    """
+    params: dict[str, Any] = {
+        "org_id": org_id,
+        "scope": scope,
+        "start_day": bounded_start_day,
+        "end_day": bounded_end_day,
+    }
+    if scope_ids:
+        bounded = list(scope_ids)[:MAX_ROWS]
+        if scope == "repo":
+            query += """
+                  AND scope_id IN (
+                      SELECT toString(id) FROM repos
+                      WHERE org_id = {org_id:String}
+                        AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+                  )
+            """
+            params["repo_ids"] = bounded
+        else:
+            query += "\n                  AND scope_id IN {scope_ids:Array(String)}"
+            params["scope_ids"] = bounded
+    query += """
+                GROUP BY day, scope_id
+            )
+            GROUP BY day
+        )
+        WHERE row_count > 0 AND missing_scores = 0
+    """
+    rows = await query_dicts(client, query, params)
     if not rows:
         return None
     value = rows[0].get("day")
@@ -94,43 +145,86 @@ async def _fetch_latest_rows(
 ) -> list[dict[str, Any]]:
     """Latest per-(scope_id) row at the given day, for one scope value.
 
-    ``argMax`` over ``computed_at`` returns the most-recent compute for each
-    scope_id on that day. All audit-trail fields are passed through so the
-    UI can show the score's full provenance without a second roundtrip.
+    ``argMax(tuple(...), computed_at)`` returns the most-recent compute for
+    each scope_id on that day without ClickHouse skipping nullable score
+    values. All selected fields are unpacked from the same latest tuple so the
+    UI cannot mix an older score with newer audit fields.
     """
+    if scope_ids == []:
+        return []
+
     query = """
         SELECT
             scope_id,
-            argMax(compounding_risk,    computed_at) AS score,
-            argMax(severity,            computed_at) AS severity,
-            argMax(churn_norm,          computed_at) AS churn_norm,
-            argMax(complexity_norm,     computed_at) AS complexity_norm,
-            argMax(ownership_norm,      computed_at) AS ownership_norm,
-            argMax(review_norm,         computed_at) AS review_norm,
-            argMax(rework_churn,        computed_at) AS rework_churn,
-            argMax(complexity_delta,    computed_at) AS complexity_delta,
-            argMax(bus_factor,          computed_at) AS bus_factor,
-            argMax(ownership_gini,      computed_at) AS ownership_gini,
-            argMax(single_owner_ratio,  computed_at) AS single_owner_ratio,
-            argMax(review_latency_p90h, computed_at) AS review_latency_p90h,
-            argMax(w_churn,             computed_at) AS w_churn,
-            argMax(w_complexity,        computed_at) AS w_complexity,
-            argMax(w_ownership,         computed_at) AS w_ownership,
-            argMax(w_review,            computed_at) AS w_review,
-            argMax(threshold_elevated,  computed_at) AS threshold_elevated,
-            argMax(threshold_high,      computed_at) AS threshold_high,
-            max(computed_at)                          AS latest_computed_at
-        FROM compounding_risk_daily
-        WHERE org_id = {org_id:String}
-          AND scope = {scope:String}
-          AND day = {day:Date}
+            tupleElement(latest_row, 1)  AS score,
+            tupleElement(latest_row, 2)  AS severity,
+            tupleElement(latest_row, 3)  AS churn_norm,
+            tupleElement(latest_row, 4)  AS complexity_norm,
+            tupleElement(latest_row, 5)  AS ownership_norm,
+            tupleElement(latest_row, 6)  AS review_norm,
+            tupleElement(latest_row, 7)  AS rework_churn,
+            tupleElement(latest_row, 8)  AS complexity_delta,
+            tupleElement(latest_row, 9)  AS bus_factor,
+            tupleElement(latest_row, 10) AS ownership_gini,
+            tupleElement(latest_row, 11) AS single_owner_ratio,
+            tupleElement(latest_row, 12) AS review_latency_p90h,
+            tupleElement(latest_row, 13) AS w_churn,
+            tupleElement(latest_row, 14) AS w_complexity,
+            tupleElement(latest_row, 15) AS w_ownership,
+            tupleElement(latest_row, 16) AS w_review,
+            tupleElement(latest_row, 17) AS threshold_elevated,
+            tupleElement(latest_row, 18) AS threshold_high,
+            tupleElement(latest_row, 19) AS latest_computed_at
+        FROM (
+            SELECT
+                scope_id,
+                argMax(
+                    tuple(
+                        compounding_risk,
+                        severity,
+                        churn_norm,
+                        complexity_norm,
+                        ownership_norm,
+                        review_norm,
+                        rework_churn,
+                        complexity_delta,
+                        bus_factor,
+                        ownership_gini,
+                        single_owner_ratio,
+                        review_latency_p90h,
+                        w_churn,
+                        w_complexity,
+                        w_ownership,
+                        w_review,
+                        threshold_elevated,
+                        threshold_high,
+                        computed_at
+                    ),
+                    computed_at
+                ) AS latest_row
+            FROM compounding_risk_daily
+            WHERE org_id = {org_id:String}
+              AND scope = {scope:String}
+              AND day = {day:Date}
     """
     params: dict[str, Any] = {"org_id": org_id, "day": day, "scope": scope}
     if scope_ids:
         bounded = list(scope_ids)[:MAX_ROWS]
-        query += "\n  AND scope_id IN {scope_ids:Array(String)}"
-        params["scope_ids"] = bounded
-    query += f"\nGROUP BY scope_id\nORDER BY score DESC NULLS LAST\nLIMIT {MAX_ROWS}"
+        if scope == "repo":
+            query += """
+          AND scope_id IN (
+              SELECT toString(id) FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+          )
+        """
+            params["repo_ids"] = bounded
+        else:
+            query += "\n  AND scope_id IN {scope_ids:Array(String)}"
+            params["scope_ids"] = bounded
+    query += (
+        f"\n    GROUP BY scope_id\n)\nORDER BY score DESC NULLS LAST\nLIMIT {MAX_ROWS}"
+    )
     return await query_dicts(client, query, params)
 
 
@@ -141,6 +235,9 @@ async def _fetch_repo_trend(
     trend_days: int,
     repo_ids: list[str] | None,
 ) -> list[dict[str, Any]]:
+    if repo_ids == []:
+        return []
+
     start_day = end_day - timedelta(days=max(0, trend_days - 1))
     query = """
         SELECT day,
@@ -149,7 +246,7 @@ async def _fetch_repo_trend(
             SELECT
                 day,
                 scope_id,
-                argMax(compounding_risk, computed_at) AS score
+                tupleElement(argMax(tuple(compounding_risk), computed_at), 1) AS score
             FROM compounding_risk_daily
             WHERE org_id = {org_id:String}
               AND scope = 'repo'
@@ -162,7 +259,12 @@ async def _fetch_repo_trend(
     }
     if repo_ids:
         bounded = list(repo_ids)[:MAX_ROWS]
-        query += "\n              AND scope_id IN {repo_ids:Array(String)}"
+        query += """
+              AND scope_id IN (
+                  SELECT toString(id) FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+              )"""
         params["repo_ids"] = bounded
     query += """
             GROUP BY day, scope_id
@@ -170,6 +272,27 @@ async def _fetch_repo_trend(
         GROUP BY day ORDER BY day
     """
     return await query_dicts(client, query, params)
+
+
+async def _repo_scope_ids_for_team_fallback(
+    client: Any,
+    org_id: str,
+    *,
+    repo_ids: list[str] | None,
+    team_ids: list[str] | None,
+) -> list[str] | None:
+    if not team_ids:
+        return repo_ids
+
+    repo_to_team, _ = await _load_team_assignments(client, org_id)
+    team_filter = set(team_ids)
+    repos_for_teams = {
+        repo_id for repo_id, team_id in repo_to_team.items() if team_id in team_filter
+    }
+    if repo_ids:
+        repo_filter = set(repo_ids)
+        return sorted(repo_id for repo_id in repos_for_teams if repo_id in repo_filter)
+    return sorted(repos_for_teams)
 
 
 def _components_from_row(row: dict[str, Any]) -> CompoundingRiskComponents:
@@ -411,8 +534,48 @@ async def resolve_compounding_risk(
     filt = filter or CompoundingRiskFilterInput()
     breakout = filt.breakout
     trend_days = max(1, min(filt.trend_days, MAX_TREND_DAYS))
+    latest_end_day = datetime.now(timezone.utc).date()
+    latest_start_day = latest_end_day - timedelta(days=max(0, trend_days - 1))
+    fallback_repo_scope_ids: list[str] | None = filt.repo_ids
+    team_filtered_repo_scope_ids: list[str] | None = None
 
-    day = filt.day or await _latest_day_for_org(client, authorized_org_id)
+    day: date | None
+    if filt.day is not None:
+        day = filt.day
+    elif breakout == CompoundingRiskScope.TEAM:
+        day = await _latest_day_for_org(
+            client,
+            authorized_org_id,
+            scope="team",
+            scope_ids=filt.team_ids,
+            start_day=latest_start_day,
+            end_day=latest_end_day,
+        )
+        if day is None:
+            team_filtered_repo_scope_ids = await _repo_scope_ids_for_team_fallback(
+                client,
+                authorized_org_id,
+                repo_ids=filt.repo_ids,
+                team_ids=filt.team_ids,
+            )
+            fallback_repo_scope_ids = team_filtered_repo_scope_ids
+            day = await _latest_day_for_org(
+                client,
+                authorized_org_id,
+                scope="repo",
+                scope_ids=fallback_repo_scope_ids,
+                start_day=latest_start_day,
+                end_day=latest_end_day,
+            )
+    else:
+        day = await _latest_day_for_org(
+            client,
+            authorized_org_id,
+            scope="repo",
+            scope_ids=filt.repo_ids,
+            start_day=latest_start_day,
+            end_day=latest_end_day,
+        )
     if day is None:
         return CompoundingRiskResult(
             org_id=authorized_org_id,
@@ -450,13 +613,21 @@ async def resolve_compounding_risk(
             _, team_labels = await _load_team_assignments(client, authorized_org_id)
             points = [_point_from_team_row(r, day, team_labels) for r in team_rows]
         else:
+            if filt.team_ids and team_filtered_repo_scope_ids is None:
+                team_filtered_repo_scope_ids = await _repo_scope_ids_for_team_fallback(
+                    client,
+                    authorized_org_id,
+                    repo_ids=filt.repo_ids,
+                    team_ids=filt.team_ids,
+                )
+                fallback_repo_scope_ids = team_filtered_repo_scope_ids
             # Fallback path: aggregate from the repo rows.
             repo_rows = await _fetch_latest_rows(
                 client,
                 org_id=authorized_org_id,
                 day=day,
                 scope="repo",
-                scope_ids=filt.repo_ids,
+                scope_ids=fallback_repo_scope_ids,
             )
             repo_to_team, team_labels = await _load_team_assignments(
                 client, authorized_org_id
@@ -469,8 +640,21 @@ async def resolve_compounding_risk(
                 day=day,
             )
 
+    if breakout == CompoundingRiskScope.TEAM:
+        if filt.team_ids and team_filtered_repo_scope_ids is None:
+            team_filtered_repo_scope_ids = await _repo_scope_ids_for_team_fallback(
+                client,
+                authorized_org_id,
+                repo_ids=filt.repo_ids,
+                team_ids=filt.team_ids,
+            )
+        trend_repo_scope_ids = (
+            team_filtered_repo_scope_ids if filt.team_ids else fallback_repo_scope_ids
+        )
+    else:
+        trend_repo_scope_ids = filt.repo_ids
     trend_rows = await _fetch_repo_trend(
-        client, authorized_org_id, day, trend_days, filt.repo_ids
+        client, authorized_org_id, day, trend_days, trend_repo_scope_ids
     )
     trend = [
         CompoundingRiskTrendPoint(

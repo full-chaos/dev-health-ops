@@ -6,6 +6,11 @@ from typing import Any
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
+from .investment_membership_scope import (
+    INVESTMENT_MEMBERSHIP_SCOPE_CTES,
+    INVESTMENT_MEMBERSHIP_SCOPE_FILTER,
+    record_stale_investment_membership_scope,
+)
 
 # NOTE: This CTE MUST stay tenant-scoped. The ReplacingMergeTree dedup key for
 # work_unit_investments is (org_id, work_unit_id) (migration 027), so org_id is
@@ -15,7 +20,8 @@ from .client import query_dicts
 # `WHERE org_id = %(org_id)s` drops the losing tenant's data entirely
 # (cross-org leak / undercount — CHAOS-2374). Every consumer of this CTE already
 # supplies the `org_id` query param.
-LATEST_WORK_UNIT_INVESTMENTS_CTE = """
+LATEST_WORK_UNIT_INVESTMENTS_CTE = f"""
+{INVESTMENT_MEMBERSHIP_SCOPE_CTES},
         latest_work_unit_investments AS (
             SELECT
                 work_unit_id,
@@ -46,9 +52,237 @@ LATEST_WORK_UNIT_INVESTMENTS_CTE = """
                 max(computed_at) AS latest_computed_at
             FROM work_unit_investments
             WHERE org_id = %(org_id)s
+{INVESTMENT_MEMBERSHIP_SCOPE_FILTER}
             GROUP BY org_id, work_unit_id
         )
 """.rstrip()
+
+
+# CHAOS-2777: work_unit_repo_effort is a ReplacingMergeTree deduped on
+# computed_at with the RMT/GROUP key (org_id, work_unit_id, repo_id). Each
+# materialize run stamps ALL of a unit's per-repo rows with a single run
+# ``computed_at`` (materialize.py: one clock per run) -- INCLUDING the
+# categorization-skipped path, which rewrites repo-effort even when the
+# investment row is left untouched. So a unit's allocation is versioned
+# independently of its work_unit_investments row, and if a later generation
+# emits a SMALLER repo set (a repo's churn share drops to zero), the per-repo
+# dedup key keeps the stale (unit, dropped-repo) row alive under its own older
+# ``computed_at``. A naive per-repo argMax would then fan BOTH the current repos
+# AND the stale repo out, over-counting effort and breaking the sum invariant.
+#
+# Fix: scope to the unit's LATEST allocation generation. ``d`` dedups each
+# (org, work_unit_id, repo_id) to its newest row; ``g`` is the per-unit clock
+# = max(computed_at) across ALL of that unit's repo rows (i.e. the newest run
+# that touched it). We keep only rows whose own newest ``computed_at`` equals
+# that per-unit clock, dropping repos that only exist in older generations.
+# The clock is the allocation table's OWN per-unit max -- NOT the investments
+# computed_at -- because the skipped path legitimately writes allocation rows
+# newer than the investments row. ``has_allocation = 1`` is an explicit
+# match flag so consumers never depend on a non-empty work_unit_id sentinel.
+#
+# KNOWN THEORETICAL EDGE (accepted, not fixed): two DIFFERENT generations of a
+# unit's allocation sharing an IDENTICAL millisecond ``computed_at`` cannot be
+# told apart by this clock — a stale repo row from the tied older generation
+# would survive. Reaching it requires a retried chunk within one
+# frozen-``computed_at`` run to compute a DIFFERENT repo set mid-run; there is
+# no per-row version column beyond ``computed_at`` to break such a tie, and a
+# schema change is not warranted for it (codex round-3 on CHAOS-2777).
+LATEST_WORK_UNIT_REPO_EFFORT_CTE = """
+        latest_work_unit_repo_effort AS (
+            SELECT
+                d.work_unit_id AS work_unit_id,
+                d.repo_id AS repo_id,
+                d.effort_metric AS effort_metric,
+                d.repo_effort_value AS repo_effort_value,
+                d.allocation_source AS allocation_source,
+                d.org_id AS org_id,
+                d.latest_repo_effort_computed_at AS latest_repo_effort_computed_at,
+                1 AS has_allocation
+            FROM (
+                SELECT
+                    work_unit_id,
+                    repo_id,
+                    org_id,
+                    argMax(effort_metric, computed_at) AS effort_metric,
+                    argMax(effort_value, computed_at) AS repo_effort_value,
+                    argMax(allocation_source, computed_at) AS allocation_source,
+                    max(computed_at) AS latest_repo_effort_computed_at
+                FROM work_unit_repo_effort
+                WHERE org_id = %(org_id)s
+                GROUP BY org_id, work_unit_id, repo_id
+            ) AS d
+            INNER JOIN (
+                SELECT
+                    org_id,
+                    work_unit_id,
+                    max(computed_at) AS unit_generation_at
+                FROM work_unit_repo_effort
+                WHERE org_id = %(org_id)s
+                GROUP BY org_id, work_unit_id
+            ) AS g
+                ON g.org_id = d.org_id
+                AND g.work_unit_id = d.work_unit_id
+            WHERE d.latest_repo_effort_computed_at = g.unit_generation_at
+        )
+""".rstrip()
+
+
+# CHAOS-2777: multi-repo work units carry a NULL scalar ``repo_id`` in
+# work_unit_investments; their real per-repo effort split lives in
+# work_unit_repo_effort (migration 064, one row per (work_unit, repo)). This
+# derived table LEFT JOINs the latest-generation per-repo allocation onto
+# latest_work_unit_investments and, for units WITH allocation rows, fans each
+# unit out to one row per allocated repo -- replacing the scalar ``repo_id`` /
+# ``effort_value`` with the per-repo ``repo_id`` / ``repo_effort_value``. Units
+# WITHOUT any allocation row keep their scalar repo_id + full effort_value. The
+# match is gated on the explicit ``wure.has_allocation = 1`` flag (an unmatched
+# LEFT JOIN yields 0 under join_use_nulls=0 and NULL otherwise, both of which
+# fall through to the scalar branch), so no unit is ever dropped and we never
+# rely on a non-empty work_unit_id sentinel. ``has_allocation`` is re-exposed so
+# consumers (e.g. the unassigned-repo count) can tell "no allocation row" apart
+# from "allocation row with a NULL repo".
+#
+# Because a unit's per-repo effort sums to its total effort by construction
+# (materialize allocates the unit's effort across its repos) AND the CTE is
+# scoped to the unit's latest allocation generation, a downstream
+# ``sum(subcategory_kv.2 * effort_value)`` is UNCHANGED for single-repo units and
+# split -- same total -- across repos for multi-repo units (the allocation sum
+# invariant). Keyed on (org_id, work_unit_id) so tenant isolation is preserved.
+# Mirrors the GraphQL compiler (api/graphql/sql/compiler.py) and coverage-stats
+# (api/graphql/resolvers/analytics.py) scalar-fallback pattern. Callers MUST
+# chain LATEST_WORK_UNIT_REPO_EFFORT_CTE into the WITH clause and expose the
+# alias ``work_unit_investments`` so existing column references keep resolving.
+REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE = """
+            (
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    wui.from_ts AS from_ts,
+                    wui.to_ts AS to_ts,
+                    wui.org_id AS org_id,
+                    if(wure.has_allocation = 1, wure.repo_id, wui.repo_id) AS repo_id,
+                    if(wure.has_allocation = 1, wure.repo_effort_value, wui.effort_value) AS effort_value,
+                    if(wure.has_allocation = 1, 1, 0) AS has_allocation,
+                    wui.subcategory_distribution_json AS subcategory_distribution_json,
+                    wui.structural_evidence_json AS structural_evidence_json
+                FROM latest_work_unit_investments AS wui
+                LEFT JOIN latest_work_unit_repo_effort AS wure
+                    ON wure.org_id = wui.org_id
+                    AND wure.work_unit_id = wui.work_unit_id
+            ) AS work_unit_investments
+""".rstrip()
+
+
+async def _query_investment_dicts(
+    sink: BaseMetricsSink, query: str, params: dict[str, Any]
+) -> list[dict[str, Any]]:
+    org_id = str(params.get("org_id") or "")
+    if org_id:
+        await record_stale_investment_membership_scope(sink, org_id=org_id)
+    return await query_dicts(sink, query, params)
+
+
+# CHAOS-2492: work_unit_investments carries NO author/developer column at all
+# (see the WorkUnitInvestmentRecord write columns in metrics/sinks/clickhouse/
+# investment.py) -- the closest thing to a developer identity is the set of
+# commit/PR node ids recorded in structural_evidence_json (written by
+# work_graph/investment/materialize.py using the canonical
+# "{repo_uuid}@{sha}" / "{repo_uuid}#pr{number}" id formats from
+# work_graph/ids.py). This companion CTE resolves those refs to the REAL
+# ClickHouse identity column -- author_email (git_commits, git_pull_requests;
+# same column chosen in CHAOS-2385) -- and collapses to one deduplicated
+# array of contributor emails per work unit.
+#
+# Must chain AFTER LATEST_WORK_UNIT_INVESTMENTS_CTE in the same WITH clause
+# (references `latest_work_unit_investments`); only pulled in by callers that
+# actually need developer filtering, to avoid the extra join cost otherwise.
+# Tenant isolation: git_commits / git_pull_requests carry an org_id column
+# (migration 027), and repo_id+hash / repo_id+number values CAN collide
+# across tenants -- this exact collision risk is documented at
+# work_graph/builder.py:1643 for the equivalent git_commits join. Both inner
+# dedupe subqueries below MUST be scoped to the CURRENT org: the
+# `WHERE org_id = %(org_id)s` filter (the org_id param is already supplied by
+# every consumer of this CTE, since it is only ever chained onto the WITH
+# clause alongside LATEST_WORK_UNIT_INVESTMENTS_CTE, which requires the same
+# param) plus `org_id` in the GROUP BY keeps each org's argMax(author_email, ...)
+# computed over ONLY that org's rows. The `ca.org_id = wui.org_id` /
+# `pa.org_id = wui.org_id` join predicate is a second, redundant layer of the
+# same tenant-scoping (mirrors the dual WHERE-filter + join pattern in
+# work_graph/builder.py's PR/commit edge builder). Without BOTH layers, a
+# repo_id+hash (or repo_id+number) collision across two orgs lets argMax pull
+# ANOTHER org's author_email into this org's investment developer filter --
+# a tenant-isolation leak.
+LATEST_WORK_UNIT_AUTHORS_CTE = """
+        work_unit_authors AS (
+            SELECT
+                work_unit_id,
+                groupUniqArray(author_email) AS author_emails
+            FROM (
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    ca.author_email AS author_email
+                FROM latest_work_unit_investments AS wui
+                ARRAY JOIN JSONExtract(wui.structural_evidence_json, 'commits', 'Array(String)') AS commit_ref
+                INNER JOIN (
+                    SELECT
+                        org_id,
+                        concat(toString(repo_id), '@', hash) AS commit_ref,
+                        argMax(author_email, last_synced) AS author_email
+                    FROM git_commits
+                    WHERE org_id = %(org_id)s
+                    GROUP BY org_id, repo_id, hash
+                ) AS ca ON ca.commit_ref = commit_ref AND ca.org_id = wui.org_id
+                WHERE ca.author_email IS NOT NULL AND ca.author_email != ''
+
+                UNION ALL
+
+                SELECT
+                    wui.work_unit_id AS work_unit_id,
+                    pa.author_email AS author_email
+                FROM latest_work_unit_investments AS wui
+                ARRAY JOIN JSONExtract(wui.structural_evidence_json, 'prs', 'Array(String)') AS pr_ref
+                INNER JOIN (
+                    SELECT
+                        org_id,
+                        concat(toString(repo_id), '#pr', toString(number)) AS pr_ref,
+                        argMax(author_email, last_synced) AS author_email
+                    FROM git_pull_requests
+                    WHERE org_id = %(org_id)s
+                    GROUP BY org_id, repo_id, number
+                ) AS pa ON pa.pr_ref = pr_ref AND pa.org_id = wui.org_id
+                WHERE pa.author_email IS NOT NULL AND pa.author_email != ''
+            )
+            GROUP BY work_unit_id
+        )
+""".rstrip()
+
+
+# CHAOS-2833: Investment Sankey/coverage team resolution previously joined
+# work_item_cycle_times for team_id/team_name -- a cycle-time metrics rollup,
+# not the authoritative attribution source. A work item can carry a primary
+# row in work_item_team_attributions (the CHAOS-2600 precedence-resolved
+# winner) with no matching work_item_cycle_times row, which surfaced as a
+# false TEAM:unassigned Sankey node even though attribution already existed.
+# This is the single source every Investment Sankey/coverage team join must
+# read from: work_item_team_attributions FINAL, is_primary = 1, latest by
+# computed_at per work_item_id (docs/architecture/team-attribution.md §0).
+# Filter to the latest snapshot before reading plain nullable team fields so a
+# newer primary row with NULL team fields clears an older assigned team.
+# Centralized so no caller drifts back onto work_item_cycle_times.
+PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE = """(
+    SELECT
+        work_item_id,
+        team_id,
+        team_name
+    FROM work_item_team_attributions FINAL
+    WHERE org_id = %(org_id)s
+      AND is_primary = 1
+      AND (work_item_id, computed_at) IN (
+          SELECT work_item_id, max(computed_at)
+          FROM work_item_team_attributions
+          WHERE org_id = %(org_id)s
+          GROUP BY work_item_id
+      )
+)""".rstrip()
 
 
 async def fetch_investment_breakdown(
@@ -89,7 +323,7 @@ async def fetch_investment_breakdown(
         GROUP BY subcategory, theme
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_mock_fixture_investment_row_count(
@@ -134,7 +368,7 @@ async def fetch_mock_fixture_investment_row_count(
         {scope_filter}
         {category_filter}
     """
-    rows = await query_dicts(sink, query, params)
+    rows = await _query_investment_dicts(sink, query, params)
     if not rows:
         return 0
     return int(rows[0].get("count") or 0)
@@ -174,7 +408,7 @@ async def fetch_investment_edges(
         GROUP BY source, target
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_subcategory_edges(
@@ -216,7 +450,7 @@ async def fetch_investment_subcategory_edges(
         GROUP BY source, target
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_team_edges(
@@ -257,15 +491,7 @@ async def fetch_investment_team_edges(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -289,7 +515,7 @@ async def fetch_investment_team_edges(
         GROUP BY source, target
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_repo_team_edges(
@@ -316,6 +542,7 @@ async def fetch_investment_repo_team_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -325,20 +552,12 @@ async def fetch_investment_repo_team_edges(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -352,7 +571,7 @@ async def fetch_investment_repo_team_edges(
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -364,7 +583,7 @@ async def fetch_investment_repo_team_edges(
         GROUP BY subcategory, repo, team
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_team_category_repo_edges(
@@ -391,6 +610,7 @@ async def fetch_investment_team_category_repo_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -400,20 +620,12 @@ async def fetch_investment_team_category_repo_edges(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -427,7 +639,7 @@ async def fetch_investment_team_category_repo_edges(
             splitByChar('.', subcategory_kv.1)[1] AS category,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -439,7 +651,7 @@ async def fetch_investment_team_category_repo_edges(
         GROUP BY team, category, repo
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_team_subcategory_repo_edges(
@@ -466,6 +678,7 @@ async def fetch_investment_team_subcategory_repo_edges(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -475,20 +688,12 @@ async def fetch_investment_team_subcategory_repo_edges(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -502,7 +707,7 @@ async def fetch_investment_team_subcategory_repo_edges(
             subcategory_kv.1 AS subcategory,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
@@ -514,7 +719,7 @@ async def fetch_investment_team_subcategory_repo_edges(
         GROUP BY team, subcategory, repo
         ORDER BY value DESC
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_unassigned_counts(
@@ -545,6 +750,7 @@ async def fetch_investment_unassigned_counts(
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
         WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE},
+        {LATEST_WORK_UNIT_REPO_EFFORT_CTE},
         unit_team AS (
             SELECT
                 work_unit_id,
@@ -554,20 +760,12 @@ async def fetch_investment_unassigned_counts(
                     work_unit_investments.work_unit_id AS work_unit_id,
                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                FROM latest_work_unit_investments AS work_unit_investments
+                FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
                 ARRAY JOIN arrayDistinct(arrayConcat(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -578,12 +776,24 @@ async def fetch_investment_unassigned_counts(
             GROUP BY work_unit_id
         )
         SELECT
-            countDistinctIf(work_unit_investments.work_unit_id, repo_id IS NULL) AS missing_repo,
+            -- CHAOS-2777: a unit is only "missing repo" when it has a NULL scalar
+            -- repo_id AND no per-repo allocation row at all. Multi-repo units carry
+            -- a NULL scalar repo_id but DO have work_unit_repo_effort rows mapping
+            -- their effort to real repos, so they must NOT be counted as unassigned.
+            -- Reading from the same repo-allocated source as the Sankey edges keeps
+            -- the repo scope_filter applied to the fanned repo_id: there
+            -- ``has_allocation = 0 AND repo_id IS NULL`` is exactly the
+            -- no-allocation + NULL-scalar unit (allocated repos are non-null and
+            -- flagged), and countDistinct collapses the per-repo fan-out.
+            countDistinctIf(
+                work_unit_investments.work_unit_id,
+                has_allocation = 0 AND repo_id IS NULL
+            ) AS missing_repo,
             countDistinctIf(
                 work_unit_investments.work_unit_id,
                 ifNull(nullIf(unit_team.team, ''), '') = ''
             ) AS missing_team
-        FROM latest_work_unit_investments AS work_unit_investments
+        FROM {REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE}
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
@@ -591,7 +801,7 @@ async def fetch_investment_unassigned_counts(
         {scope_filter}
         {category_filter}
     """
-    rows = await query_dicts(sink, query, params)
+    rows = await _query_investment_dicts(sink, query, params)
     if not rows:
         return {"missing_team": 0, "missing_repo": 0}
     row = rows[0]
@@ -647,7 +857,7 @@ async def fetch_investment_sunburst(
         ORDER BY value DESC
         LIMIT %(limit)s
     """
-    return await query_dicts(sink, query, params)
+    return await _query_investment_dicts(sink, query, params)
 
 
 async def fetch_investment_quality_stats(
@@ -682,7 +892,7 @@ async def fetch_investment_quality_stats(
     team_filter = ""
     if team_scope_ids:
         params["team_scope_ids"] = team_scope_ids
-        team_join = """
+        team_join = f"""
         LEFT JOIN (
             SELECT
                 work_unit_id,
@@ -699,15 +909,7 @@ async def fetch_investment_quality_stats(
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                     [work_unit_investments.work_unit_id]
                 )) AS issue_id
-                LEFT JOIN (
-                    SELECT
-                        work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
-                    FROM work_item_cycle_times
-                    WHERE org_id = %(org_id)s
-                    GROUP BY work_item_id
-                ) AS t ON t.work_item_id = issue_id
+                LEFT JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
                   AND work_unit_investments.org_id = %(org_id)s
@@ -743,7 +945,7 @@ async def fetch_investment_quality_stats(
         {team_filter}
         {category_filter}
     """
-    rows = await query_dicts(sink, query, params)
+    rows = await _query_investment_dicts(sink, query, params)
     if not rows:
         return {}
     return dict(rows[0])

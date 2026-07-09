@@ -1,8 +1,10 @@
 """Tests verifying org_id flows through schemas, sinks, and storage."""
 
+import importlib.util
 import uuid
 from dataclasses import asdict, fields
 from datetime import date, datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +14,7 @@ from dev_health_ops.metrics.schemas import (
     CommitMetricsRecord,
     DeployMetricsDailyRecord,
     DORAMetricsRecord,
+    EstimateCoverageMetricsDailyRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
@@ -41,6 +44,7 @@ from dev_health_ops.metrics.schemas import (
     WorkItemUserMetricsDailyRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    WorkUnitScopedMembershipRunRecord,
 )
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -61,6 +65,7 @@ ALL_SCHEMA_CLASSES = [
     FileMetricsRecord,
     TeamMetricsDailyRecord,
     WorkItemMetricsDailyRecord,
+    EstimateCoverageMetricsDailyRecord,
     WorkItemUserMetricsDailyRecord,
     WorkItemCycleTimeRecord,
     WorkItemStateDurationDailyRecord,
@@ -199,6 +204,44 @@ def test_clickhouse_sink_write_repo_metrics_includes_org_id():
         assert matrix[0][org_id_idx] == "test-org"
 
 
+def test_clickhouse_sink_write_estimate_coverage_metrics_includes_org_id():
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    with patch.object(
+        ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None
+    ):
+        sink = ClickHouseMetricsSink("clickhouse://dummy")
+        sink.client = MagicMock()
+
+        row = EstimateCoverageMetricsDailyRecord(
+            day=date(2026, 6, 30),
+            provider="jira",
+            work_scope_id="PROJ",
+            team_id="team-a",
+            team_name="Team A",
+            estimated_count=2,
+            unestimated_count=1,
+            backlog_size=3,
+            ratio=2 / 3,
+            computed_at=datetime(2026, 6, 30, tzinfo=timezone.utc),
+            org_id="test-org",
+        )
+        sink.write_estimate_coverage_metrics([row])
+
+        assert sink.client.insert.called
+        call_args = sink.client.insert.call_args
+        column_names = call_args[1].get("column_names") or call_args[0][2]
+        assert call_args[0][0] == "estimate_coverage_metrics_daily"
+        assert "org_id" in column_names
+        assert "ratio" in column_names
+
+        matrix = call_args[0][1]
+        org_id_idx = list(column_names).index("org_id")
+        ratio_idx = list(column_names).index("ratio")
+        assert matrix[0][org_id_idx] == "test-org"
+        assert matrix[0][ratio_idx] == 2 / 3
+
+
 def test_clickhouse_sink_write_work_graph_edges_includes_org_id():
     """Pattern B: write_work_graph_edges must include org_id in both column_names and data."""
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -236,6 +279,32 @@ def test_clickhouse_sink_write_work_graph_edges_includes_org_id():
         matrix = call_args[0][1]
         org_id_idx = list(column_names).index("org_id")
         assert matrix[0][org_id_idx] == "edge-org"
+
+
+def test_clickhouse_sink_write_scoped_membership_runs_includes_org_id():
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    with patch.object(
+        ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None
+    ):
+        sink = ClickHouseMetricsSink("clickhouse://dummy")
+        insert_rows = MagicMock()
+
+        row = WorkUnitScopedMembershipRunRecord(
+            org_id="scoped-org",
+            scope_kind="repo",
+            scope_id="repo-1",
+            run_id="run-1",
+            completed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        )
+        with patch.object(sink, "_insert_rows", insert_rows):
+            sink.write_scoped_membership_runs([row])
+
+        insert_rows.assert_called_once_with(
+            "work_unit_membership_scoped_runs",
+            ["org_id", "scope_kind", "scope_id", "run_id", "completed_at"],
+            [row],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -302,4 +371,29 @@ def test_migration_024_covers_all_tables():
     for table in expected_tables:
         assert f"ALTER TABLE {table}" in content, (
             f"Migration 024 missing ALTER TABLE for {table}"
+        )
+
+
+def test_migration_061_rebuilds_teams_sprints_with_org_id_first_sorting_keys():
+    """CHAOS-2735: teams/sprints RMT dedup keys must be tenant-scoped."""
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "dev_health_ops"
+        / "migrations"
+        / "clickhouse"
+        / "061_teams_sprints_org_id_dedup_keys.py"
+    )
+    spec = importlib.util.spec_from_file_location(migration_path.stem, migration_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.TABLES == {
+        "teams": "(org_id, id)",
+        "sprints": "(org_id, provider, sprint_id)",
+    }
+    for table, order_by in module.TABLES.items():
+        assert order_by.startswith("(org_id,"), (
+            f"{table}: migration 061 ORDER BY must prepend org_id, got {order_by!r}"
         )

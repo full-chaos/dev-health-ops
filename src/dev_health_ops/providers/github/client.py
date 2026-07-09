@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NoReturn, Protocol, TypedDict, TypeVar, cast
 from urllib.parse import urlparse
+
+from urllib3.util.retry import Retry
 
 from dev_health_ops.connectors.exceptions import (
     APIException,
@@ -28,12 +31,91 @@ from dev_health_ops.credentials.resolver import (
 )
 from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.github.ratelimit import classify_github_403
+from dev_health_ops.providers.usage import UsageRecorder
+from dev_health_ops.sync.budget_types import BudgetDimension
+from dev_health_ops.sync.rate_limit_signal import RateLimitSignal
 
 logger = logging.getLogger(__name__)
 
+
+def _github_http_backoff_max() -> float:
+    """Return the maximum backoff cap in seconds for GitHub REST retries.
+
+    Reads ``GITHUB_HTTP_BACKOFF_MAX`` from the environment (default 30).
+    Always returns at least 1.0 second.
+    """
+    try:
+        return max(1.0, float(os.getenv("GITHUB_HTTP_BACKOFF_MAX", "30")))
+    except ValueError:
+        return 30.0
+
+
+def _github_http_retry() -> Retry | int:
+    """Return a bounded urllib3 Retry for idempotent GitHub REST reads.
+
+    Only 502/503/504 (transient infrastructure errors) are retried, and only
+    for safe methods (GET/HEAD/OPTIONS).  4xx responses — including 403
+    rate-limit — are intentionally excluded so RateLimitGate and
+    _raise_github_exception keep full ownership of rate-limit semantics.
+    Mutations (POST/PATCH/PUT/DELETE) are never retried to avoid double-writes.
+    ``raise_on_status=False`` lets PyGithub surface the final 5xx as its
+    normal GithubException rather than a urllib3 MaxRetryError.
+
+    ``respect_retry_after_header=False`` is intentional: urllib3 v2's
+    ``is_retry()`` retries 413/429/503 when they carry a ``Retry-After``
+    header and ``respect_retry_after_header=True``, even if those codes are
+    not in ``status_forcelist``.  That would silently transport-retry GitHub
+    secondary-rate-limit 429s instead of letting them surface as
+    ``RateLimitException`` for the worker deferral path, and would sleep for
+    an unbounded ``Retry-After`` (urllib3 default ``retry_after_max`` ~6 h)
+    inside a single ``RateLimitGate`` call, outside the socket timeout.
+    With ``respect_retry_after_header=False`` only the codes in
+    ``status_forcelist`` are retried, using bounded exponential backoff
+    (capped at ``backoff_max``) — never a ``Retry-After`` sleep.
+    """
+    try:
+        total = int(os.getenv("GITHUB_HTTP_MAX_RETRIES", "3"))
+    except ValueError:
+        total = 3
+    if total <= 0:
+        return 0
+    try:
+        backoff = float(os.getenv("GITHUB_HTTP_BACKOFF_FACTOR", "1.0"))
+    except ValueError:
+        backoff = 1.0
+    return Retry(
+        total=total,
+        connect=total,
+        read=total,
+        status=total,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+        backoff_factor=backoff,
+        backoff_max=_github_http_backoff_max(),
+        respect_retry_after_header=False,
+        raise_on_status=False,
+    )
+
+
+def _github_http_timeout() -> int:
+    """Return the HTTP timeout in seconds for PyGithub REST calls.
+
+    Reads ``GITHUB_HTTP_TIMEOUT_SECONDS`` from the environment (default 30).
+    Always returns at least 1 second.
+    """
+    try:
+        return max(1, int(os.getenv("GITHUB_HTTP_TIMEOUT_SECONDS", "30")))
+    except ValueError:
+        return 30
+
+
 _DIAGNOSTIC_HEADER_NAMES = (
+    "x-ratelimit-limit",
     "x-ratelimit-remaining",
     "x-ratelimit-reset",
+    "x-ratelimit-used",
+    "x-ratelimit-resource",
     "retry-after",
     "x-github-request-id",
     "x-accepted-github-permissions",
@@ -65,11 +147,35 @@ def _parse_github_datetime(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _item_updated_before(item: object, cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return False
+    updated_at = _parse_github_datetime(getattr(item, "updated_at", None))
+    return updated_at is not None and updated_at < cutoff
+
+
+def _item_updated_after(item: object, cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return False
+    updated_at = _parse_github_datetime(getattr(item, "updated_at", None))
+    return updated_at is not None and updated_at > cutoff
+
+
 def _diagnostic_headers(headers: object) -> dict[str, str]:
     if not isinstance(headers, dict):
         return {}
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
     return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
+
+
+def _prefixed_operation(operation_family: str | None, label: str) -> str:
+    """Apply the CS1 explicit-prefix resolver convention (``providers/usage.py::
+    OperationResolver``) to a GraphQL operation label: ``"<family>:<label>"``
+    when ``operation_family`` is given, else ``label`` unchanged (CHAOS-2803).
+    """
+    if not operation_family:
+        return label
+    return f"{operation_family}:{label}"
 
 
 def _github_error_message(data: object) -> str:
@@ -80,23 +186,6 @@ def _github_error_message(data: object) -> str:
     if data is None:
         return ""
     return str(data)
-
-
-def _retry_after_seconds(headers: dict[str, str]) -> float | None:
-    retry_after = headers.get("retry-after")
-    if retry_after is not None:
-        try:
-            return float(retry_after)
-        except ValueError:
-            return None
-
-    reset = headers.get("x-ratelimit-reset")
-    if reset is not None:
-        try:
-            return max(0.0, float(reset) - time.time())
-        except ValueError:
-            return None
-    return None
 
 
 class _GitHubLabelLike(Protocol):
@@ -283,6 +372,9 @@ class GitHubWorkClient:
             host=host,
             config=RateLimitConfig(initial_backoff_seconds=1.0),
         )
+        from dev_health_ops.providers.github.budget import GITHUB_USAGE_RESOLVER
+
+        self._usage = UsageRecorder(resolver=GITHUB_USAGE_RESOLVER)
         self._app_token_provider: GitHubAppTokenProvider | None = None
 
         token = auth.token
@@ -312,13 +404,15 @@ class GitHubWorkClient:
                 base_url=auth.base_url,
                 auth=pygithub_auth,
                 per_page=self.per_page,
-                retry=None,
+                retry=_github_http_retry(),
+                timeout=_github_http_timeout(),
             )
         else:
             self.github = Github(
                 auth=pygithub_auth,
                 per_page=self.per_page,
-                retry=None,
+                retry=_github_http_retry(),
+                timeout=_github_http_timeout(),
             )
 
         # GraphQL client (api.github.com only for now).
@@ -352,9 +446,105 @@ class GitHubWorkClient:
     def _call_github(self, operation: str, call: Callable[[], _TItem]) -> _TItem:
         with gate_call(self.gate):
             try:
-                return call()
+                result = call()
+                self._record_rest_usage(operation)
+                return result
             except Exception as exc:
                 self._raise_github_exception(exc, operation=operation)
+
+    def _query_graphql(
+        self,
+        operation: str,
+        query: str,
+        *,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        data = self.graphql.query(query, variables=variables)
+        headers = getattr(self.graphql, "last_response_headers", {})
+        status = getattr(self.graphql, "last_response_status", None)
+        rate_limit_data = getattr(self.graphql, "last_rate_limit_data", None)
+        rate_limit = dict(rate_limit_data) if isinstance(rate_limit_data, dict) else {}
+        self._record_usage_observation(
+            transport="graphql",
+            operation=operation,
+            headers=_diagnostic_headers(headers),
+            rate_limit=rate_limit,
+            status=status if isinstance(status, int) else None,
+        )
+        return data
+
+    def _record_usage_observation(
+        self,
+        *,
+        transport: str,
+        operation: str,
+        headers: dict[str, str],
+        rate_limit: dict[str, Any],
+        status: int | None = None,
+    ) -> None:
+        # Re-keying by (transport, route_family, dimension) now lives in the
+        # shared recorder (CHAOS-2754). This client keeps ownership of the
+        # provider-specific header/rate-limit extraction only. The getattr guard
+        # preserves the pre-refactor tolerance of a stubbed __init__ (some tests
+        # replace __init__ to capture auth without constructing a real client).
+        recorder = getattr(self, "_usage", None)
+        if recorder is None:
+            return
+        recorder.record(
+            transport=transport,
+            operation=operation,
+            headers=headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def _record_rest_usage(
+        self,
+        operation: str,
+        *,
+        headers: dict[str, str] | None = None,
+        status: int | None = None,
+    ) -> None:
+        safe_headers = _diagnostic_headers(headers or {})
+        rate_limit: dict[str, Any] = {}
+        remaining = safe_headers.get("x-ratelimit-remaining")
+        reset = safe_headers.get("x-ratelimit-reset")
+        limit = safe_headers.get("x-ratelimit-limit")
+        used = safe_headers.get("x-ratelimit-used")
+        resource = safe_headers.get("x-ratelimit-resource")
+
+        if remaining is None or limit is None:
+            rate_limiting = getattr(self.github, "rate_limiting", None)
+            if isinstance(rate_limiting, Sequence) and len(rate_limiting) >= 2:
+                remaining = remaining or str(rate_limiting[0])
+                limit = limit or str(rate_limiting[1])
+        if reset is None:
+            reset_time = getattr(self.github, "rate_limiting_resettime", None)
+            if reset_time is not None:
+                reset = str(reset_time)
+
+        for name, value in {
+            "remaining": remaining,
+            "reset": reset,
+            "limit": limit,
+            "used": used,
+            "resource": resource,
+        }.items():
+            if value is not None:
+                rate_limit[name] = value
+        self._record_usage_observation(
+            transport="rest",
+            operation=operation,
+            headers=safe_headers,
+            rate_limit=rate_limit,
+            status=status,
+        )
+
+    def drain_usage_observations(self) -> list[dict[str, Any]]:
+        recorder = getattr(self, "_usage", None)
+        if recorder is None:
+            return []
+        return recorder.drain()
 
     def _raise_github_exception(self, exc: Exception, *, operation: str) -> NoReturn:
         from github import GithubException, RateLimitExceededException
@@ -364,15 +554,31 @@ class GitHubWorkClient:
         if isinstance(exc, RateLimitException):
             raise exc
         if isinstance(exc, RateLimitExceededException):
+            self._record_rest_usage(operation)
+            reset_delay = self._rate_limit_reset_delay_seconds()
             raise RateLimitException(
                 f"GitHub rate limit on {operation}: {exc}",
-                retry_after_seconds=self._rate_limit_reset_delay_seconds(),
+                retry_after_seconds=reset_delay,
+                signal=RateLimitSignal(
+                    provider="github",
+                    dimension=BudgetDimension.REST_CORE,
+                    retry_after_seconds=reset_delay,
+                    reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                        getattr(self.github, "rate_limiting_resettime", None)
+                    ),
+                    reason="primary",
+                ),
             )
         if not isinstance(exc, GithubException):
             raise APIException(f"GitHub API error on {operation}: {exc}") from exc
 
         status = getattr(exc, "status", None)
         headers = _diagnostic_headers(getattr(exc, "headers", None))
+        self._record_rest_usage(
+            operation,
+            headers=headers,
+            status=status if isinstance(status, int) else None,
+        )
         message = _github_error_message(getattr(exc, "data", None))
         if status == 401:
             raise AuthenticationException(
@@ -383,16 +589,12 @@ class GitHubWorkClient:
                 f"GitHub resource not found on {operation}: {message} (headers={headers})"
             ) from exc
         if status == 403:
-            lowered = message.lower()
-            is_rate_limit = (
-                headers.get("x-ratelimit-remaining") == "0"
-                or "retry-after" in headers
-                or "rate limit" in lowered
-                or "abuse" in lowered
-                or "secondary" in lowered
-            )
-            if is_rate_limit:
-                retry_after = _retry_after_seconds(headers)
+            # 403 triage (primary rate limit / secondary-abuse / permission-SSO)
+            # is extracted to providers/github/ratelimit.py::classify_github_403
+            # (CHAOS-2773 CS1) so this REST work client and any future httpx
+            # GitHubCodeClient share ONE classifier -- no second copy.
+            classification = classify_github_403(headers=headers, message=message)
+            if classification.is_rate_limit:
                 logger.warning(
                     "GitHub rate limit (403) on %s headers=%s message=%s",
                     operation,
@@ -401,7 +603,17 @@ class GitHubWorkClient:
                 )
                 raise RateLimitException(
                     f"GitHub rate limit (403) on {operation}: {message} (headers={headers})",
-                    retry_after_seconds=retry_after,
+                    retry_after_seconds=classification.retry_after_seconds,
+                    signal=RateLimitSignal(
+                        provider="github",
+                        dimension=classification.dimension,
+                        retry_after_seconds=classification.retry_after_seconds,
+                        reset_at=RateLimitSignal.reset_at_from_epoch_seconds(
+                            headers.get("x-ratelimit-reset")
+                        ),
+                        reason=classification.reason,
+                        request_id=headers.get("x-github-request-id"),
+                    ),
                 ) from exc
             logger.warning(
                 "GitHub 403 on %s headers=%s message=%s",
@@ -431,16 +643,35 @@ class GitHubWorkClient:
         *,
         limit: int | None,
         skip: Callable[[_TItem], bool] | None = None,
+        stop: Callable[[_TItem], bool] | None = None,
+        scan_limit: int | None = None,
+        operation: str | None = None,
     ) -> Iterable[_TItem]:
-        """Yield items from ``source`` respecting ``limit`` and optional skip filter.
+        """Yield items from ``source`` respecting ``limit`` and optional filters.
 
         ``skip`` receives each item and returns ``True`` when the item should be
         excluded (used for PR-vs-issue filtering on the issues feed).
+        ``stop`` receives each item and returns ``True`` when pagination can stop.
         """
         if limit is not None and int(limit) <= 0:
             return
+        if scan_limit is not None and int(scan_limit) <= 0:
+            return
         count = 0
+        scanned = 0
         for item in source:
+            if scan_limit is not None and scanned >= int(scan_limit):
+                if operation is not None:
+                    logger.warning(
+                        "GitHub: stopped %s after scanning %s items before reaching result limit %s",
+                        operation,
+                        scan_limit,
+                        limit,
+                    )
+                return
+            scanned += 1
+            if stop is not None and stop(item):
+                return
             if skip is not None and skip(item):
                 continue
             yield item
@@ -455,10 +686,20 @@ class GitHubWorkClient:
         operation: str,
         limit: int | None,
         skip: Callable[[_TItem], bool] | None = None,
+        stop: Callable[[_TItem], bool] | None = None,
+        scan_limit: int | None = None,
     ) -> Iterable[_TItem]:
         with gate_call(self.gate):
             try:
-                yield from self._iter_with_limit(source, limit=limit, skip=skip)
+                yield from self._iter_with_limit(
+                    source,
+                    limit=limit,
+                    skip=skip,
+                    stop=stop,
+                    scan_limit=scan_limit,
+                    operation=operation,
+                )
+                self._record_rest_usage(operation)
             except Exception as exc:
                 self._raise_github_exception(exc, operation=operation)
 
@@ -469,18 +710,28 @@ class GitHubWorkClient:
         repo: str,
         state: str = "all",
         since: datetime | None = None,
+        until: datetime | None = None,
         limit: int | None = None,
+        scan_limit: int | None = None,
     ) -> Iterable[_GitHubIssueLike]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
         operation = f"GET /repos/{owner}/{repo}/issues"
         issues = self._call_github(
             operation, lambda: gh_repo.get_issues(state=state, since=since)
         )
+        cutoff = _parse_github_datetime(until) if until is not None else None
+
+        def skip_issue(issue: _GitHubIssueLike) -> bool:
+            return getattr(
+                issue, "pull_request", None
+            ) is not None or _item_updated_after(issue, cutoff)
+
         yield from self._iter_github_items(
             issues,
             operation=operation,
             limit=limit,
-            skip=lambda issue: getattr(issue, "pull_request", None) is not None,
+            skip=skip_issue,
+            scan_limit=scan_limit,
         )
 
     def iter_issue_events(
@@ -517,7 +768,10 @@ class GitHubWorkClient:
         state: str = "all",
         sort: str = "updated",
         direction: str = "desc",
+        since: datetime | None = None,
+        until: datetime | None = None,
         limit: int | None = None,
+        scan_limit: int | None = None,
     ) -> Iterable[_GitHubPullRequestLike]:
         """
         Iterate pull requests in a repository via REST.
@@ -528,7 +782,30 @@ class GitHubWorkClient:
             operation,
             lambda: gh_repo.get_pulls(state=state, sort=sort, direction=direction),
         )
-        yield from self._iter_github_items(pulls, operation=operation, limit=limit)
+        cutoff = _parse_github_datetime(since) if since is not None else None
+        until_cutoff = _parse_github_datetime(until) if until is not None else None
+        stop: Callable[[_GitHubPullRequestLike], bool] | None = None
+        if sort == "updated" and direction == "desc" and cutoff is not None:
+
+            def stop_at_cutoff(pr: _GitHubPullRequestLike) -> bool:
+                return _item_updated_before(pr, cutoff)
+
+            stop = stop_at_cutoff
+        skip: Callable[[_GitHubPullRequestLike], bool] | None = None
+        if until_cutoff is not None:
+
+            def skip_after_until(pr: _GitHubPullRequestLike) -> bool:
+                return _item_updated_after(pr, until_cutoff)
+
+            skip = skip_after_until
+        yield from self._iter_github_items(
+            pulls,
+            operation=operation,
+            limit=limit,
+            skip=skip,
+            stop=stop,
+            scan_limit=scan_limit,
+        )
 
     def iter_issue_comments(
         self, issue: _GitHubIssueBaseLike, *, limit: int | None = None
@@ -572,6 +849,7 @@ class GitHubWorkClient:
         reviews_limit: int | None = None,
         events_limit: int | None = 0,
         batch_size: int = 50,
+        operation_family: str | None = None,
     ) -> Iterable[BatchedPRPayload]:
         """Fetch PR issue comments, reviews, and review comments in GraphQL batches.
 
@@ -582,6 +860,14 @@ class GitHubWorkClient:
         query per up-to-50 PRs. Nested connections are page-limited to control
         GraphQL cost and are paginated per PR only when the first page indicates
         more data.
+
+        ``operation_family`` (CHAOS-2803/CS1 short-circuit convention), when
+        given, prefixes every GraphQL operation label this call emits with
+        ``"<family>:"`` so ``OperationResolver`` resolves the recorded usage
+        DIRECTLY to that route family, bypassing the substring marker scan.
+        ``None`` (the default) preserves the existing unprefixed label exactly
+        -- unshifted attribution for callers that predate this convention
+        (``providers/github/provider.py``'s work-items PR-as-work-item path).
         """
         numbers: list[int] = []
         for pr in prs:
@@ -603,6 +889,7 @@ class GitHubWorkClient:
                 review_comments_first=self._connection_first(review_comments_limit),
                 reviews_first=self._connection_first(reviews_limit),
                 events_first=self._connection_first(events_limit),
+                operation_family=operation_family,
             )
             yield from self._complete_pr_social_payloads(
                 owner=owner,
@@ -612,6 +899,7 @@ class GitHubWorkClient:
                 review_comments_limit=review_comments_limit,
                 reviews_limit=reviews_limit,
                 events_limit=events_limit,
+                operation_family=operation_family,
             )
 
     def iter_pr_comments_batch(
@@ -659,8 +947,12 @@ class GitHubWorkClient:
         repo: str,
         prs: Sequence[_GitHubPullRequestLike],
         limit: int | None = None,
+        operation_family: str | None = None,
     ) -> Iterable[tuple[int, tuple[GitHubGraphQLReview, ...]]]:
-        """Return reviews keyed by PR number."""
+        """Return reviews keyed by PR number.
+
+        See :meth:`iter_pr_social_data_batch` for ``operation_family``.
+        """
         for payload in self.iter_pr_social_data_batch(
             owner=owner,
             repo=repo,
@@ -668,6 +960,7 @@ class GitHubWorkClient:
             comments_limit=0,
             review_comments_limit=0,
             reviews_limit=limit,
+            operation_family=operation_family,
         ):
             yield payload.number, payload.reviews
 
@@ -754,6 +1047,7 @@ class GitHubWorkClient:
         reviews_after: str | None = None,
         events_first: int = 0,
         events_after: str | None = None,
+        operation_family: str | None = None,
     ) -> dict[int, dict[str, Any]]:
         aliases: list[str] = []
         for idx, number in enumerate(numbers):
@@ -805,7 +1099,8 @@ class GitHubWorkClient:
         }}
         """
         with gate_call(self.gate):
-            data = self.graphql.query(
+            data = self._query_graphql(
+                _prefixed_operation(operation_family, "POST /graphql PR social data"),
                 query,
                 variables={"owner": owner, "repo": repo},
             )
@@ -823,6 +1118,7 @@ class GitHubWorkClient:
         review_id: str,
         first: int,
         after: str | None,
+        operation_family: str | None = None,
     ) -> dict[str, Any] | None:
         query = """
         query($reviewId: ID!, $first: Int!, $after: String) {
@@ -837,7 +1133,10 @@ class GitHubWorkClient:
         }
         """
         with gate_call(self.gate):
-            data = self.graphql.query(
+            data = self._query_graphql(
+                _prefixed_operation(
+                    operation_family, "POST /graphql PR review comments"
+                ),
                 query,
                 variables={"reviewId": review_id, "first": first, "after": after},
             )
@@ -855,6 +1154,7 @@ class GitHubWorkClient:
         review_comments_limit: int | None,
         reviews_limit: int | None,
         events_limit: int | None = 0,
+        operation_family: str | None = None,
     ) -> Iterable[BatchedPRPayload]:
         for number, pr_node in initial.items():
             comments_connection = pr_node.get("comments")
@@ -876,6 +1176,7 @@ class GitHubWorkClient:
                     review_comments_first=0,
                     reviews_first=0,
                     comments_after=comments_cursor,
+                    operation_family=operation_family,
                 ).get(number, {})
                 more_connection = (
                     more.get("comments") if isinstance(more, dict) else None
@@ -904,6 +1205,7 @@ class GitHubWorkClient:
                     review_comments_first=self._connection_first(review_comments_limit),
                     reviews_first=self._connection_first(remaining_reviews),
                     reviews_after=reviews_cursor,
+                    operation_family=operation_family,
                 ).get(number, {})
                 more_reviews = more.get("reviews") if isinstance(more, dict) else None
                 reviews_nodes.extend(self._connection_nodes(more_reviews))
@@ -936,6 +1238,7 @@ class GitHubWorkClient:
                         review_id=review_node_id,
                         first=self._connection_first(remaining_comments),
                         after=review_comment_cursor,
+                        operation_family=operation_family,
                     )
                     review_comments.extend(
                         self._comment_from_graphql(node)
@@ -969,6 +1272,7 @@ class GitHubWorkClient:
                     reviews_first=0,
                     events_first=self._connection_first(remaining_events),
                     events_after=events_cursor,
+                    operation_family=operation_family,
                 ).get(number, {})
                 more_events = (
                     more.get("timelineItems") if isinstance(more, dict) else None
@@ -1131,7 +1435,8 @@ class GitHubWorkClient:
         fetched = 0
         while True:
             with gate_call(self.gate):
-                data = self.graphql.query(
+                data = self._query_graphql(
+                    "POST /graphql project v2 items",
                     query,
                     variables={
                         "login": org_login,
@@ -1243,7 +1548,8 @@ class GitHubWorkClient:
         }
         """
 
-        data = self.graphql.query(
+        data = self._query_graphql(
+            "POST /graphql project v2 item changes",
             query,
             variables={
                 "itemId": item_id,

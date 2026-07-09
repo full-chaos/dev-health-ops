@@ -102,10 +102,11 @@ deterministic.
 `validate_llm_payload` (in `llm_schema.py`) enforces:
 
 - top-level keys are exactly `subcategories`, `evidence_quotes`, `uncertainty`;
+- the prompt and schema require all 15 canonical subcategory keys, with `0` for irrelevant categories; runtime validation defensively fills any missing canonical keys after sum validation and before normalization;
 - every subcategory key is in the canonical set; each probability in `[0, 1]`;
-- the distribution sums within `[0.9, 1.1]` — a clean `[0.98, 1.02]` sum is accepted as-is, a near-miss is renormalized and flagged `probability_sum_renormalized` in the audit, and `≤ 0` or outside `[0.9, 1.1]` is rejected;
+- the distribution sums within `[0.9, 1.1]`, a clean `[0.98, 1.02]` sum is accepted as-is, a near-miss is renormalized and flagged `probability_sum_renormalized` in the audit, and `≤ 0` or outside `[0.9, 1.1]` is rejected;
 - each evidence quote is a **literal substring** of the provided source text
-  (anti-hallucination), 1–10 quotes, `source ∈ {issue, pr, commit}`;
+  (anti-hallucination), 1-10 quotes, `source ∈ {issue, pr, commit}`, and each quote is `≤ 280` chars;
 - `uncertainty` is non-empty and ≤ 280 chars.
 
 On failure, exactly **one repair re-prompt** is attempted (the validation errors are

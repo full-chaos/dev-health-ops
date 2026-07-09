@@ -58,18 +58,23 @@ class TestCompileFlowMatrix:
         assert len(nodes_queries) == 1
         assert len(edges_queries) == 1
 
-    def test_team_edges_use_asymmetric_cooccurrence(self) -> None:
-        """TEAM edges come from a self-join on work_item_cycle_times counting
-        the SOURCE team's distinct work items per shared scope+day — so edge
-        (A, B).value counts A's items, (B, A).value counts B's, producing an
-        asymmetric matrix whenever team volumes differ.
+    def test_team_edges_use_primary_attribution_and_asymmetric_cooccurrence(
+        self,
+    ) -> None:
+        """TEAM edges bridge cycle-time activity through primary attribution.
+
+        The SOURCE team's distinct work items per shared scope+day still make
+        edge (A, B).value count A's items and (B, A).value count B's, producing
+        an asymmetric matrix whenever team volumes differ.
         """
         _, edges_queries = compile_flow_matrix(_req("team"), org_id="org-1")
         edge_sql, _params = edges_queries[0]
         assert "'TEAM' AS source_dimension" in edge_sql
         assert "'TEAM' AS target_dimension" in edge_sql
-        assert "work_item_cycle_times AS a" in edge_sql
-        assert "INNER JOIN work_item_cycle_times AS b" in edge_sql
+        assert "FROM work_item_cycle_times AS wct FINAL" in edge_sql
+        assert "FROM work_item_team_attributions FINAL" in edge_sql
+        assert "is_primary = 1" in edge_sql
+        assert "INNER JOIN team_activity AS b" in edge_sql
         assert "a.work_scope_id = b.work_scope_id" in edge_sql
         assert "a.day = b.day" in edge_sql
         # asymmetric: count source-side items only, not product of both
@@ -82,7 +87,9 @@ class TestCompileFlowMatrix:
         stay consistent after the adapter's prefix-strip."""
         nodes_queries, _ = compile_flow_matrix(_req("team"), org_id="org-1")
         nodes_sql, _ = nodes_queries[0]
-        assert "work_item_cycle_times" in nodes_sql
+        assert "FROM work_item_cycle_times AS wct FINAL" in nodes_sql
+        assert "FROM work_item_team_attributions FINAL" in nodes_sql
+        assert "is_primary = 1" in nodes_sql
         assert "'TEAM' AS dimension" in nodes_sql
 
     @pytest.mark.parametrize("dim", ["team", "repo", "work_type"])
@@ -186,13 +193,22 @@ class TestCompileFlowMatrix:
 
 class TestRepoEdgesTemplate:
     """CHAOS-1292: REPO edges use the same asymmetric-cooccurrence shape as
-    TEAM, bridged via (team_id, day) instead of (work_scope_id, day)."""
+    TEAM, bridged via latest-primary WITA team identity and day instead of
+    (work_scope_id, day)."""
 
     def test_self_joins_on_team_day_bridge(self) -> None:
         sql = flow_matrix_repo_edges_template()
         assert "a.team_id = b.team_id" in sql
         assert "a.day = b.day" in sql
         assert "a.org_id = b.org_id" in sql
+
+    def test_bridge_team_identity_comes_from_primary_attribution(self) -> None:
+        sql = flow_matrix_repo_edges_template()
+        assert "FROM work_item_cycle_times AS wct FINAL" in sql
+        assert "FROM work_item_team_attributions FINAL" in sql
+        assert "is_primary = 1" in sql
+        assert "t.team_id" in sql
+        assert "wct.team_id" not in sql
 
     def test_excludes_self_loops(self) -> None:
         """a.repo_id != b.repo_id drops self-loops at the SQL layer so the
@@ -220,13 +236,11 @@ class TestRepoEdgesTemplate:
         assert "'REPO' AS source_dimension" in sql
         assert "'REPO' AS target_dimension" in sql
 
-    def test_guards_both_sides_of_bridge_against_null_and_empty_team(self) -> None:
-        """Without b-side guards, empty-string team_ids would match each other
-        via the JOIN on a.team_id = b.team_id and emit spurious edges. Both
-        sides of the join must filter NULL + empty."""
+    def test_guards_bridge_against_null_and_empty_team(self) -> None:
+        """Empty latest-primary WITA team_ids must not emit repo edges."""
         sql = flow_matrix_repo_edges_template()
-        assert "a.team_id IS NOT NULL AND a.team_id != ''" in sql
-        assert "b.team_id IS NOT NULL AND b.team_id != ''" in sql
+        assert "t.team_id IS NOT NULL" in sql
+        assert "t.team_id != ''" in sql
 
 
 class TestWorkTypeEdgesTemplate:

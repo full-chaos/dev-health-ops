@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -27,7 +27,7 @@ def _client() -> tuple[GitHubWorkClient, MagicMock, MagicMock]:
     return client, graphql_cls.return_value, gate
 
 
-def test_work_client_uses_pygithub_token_auth_without_internal_retry() -> None:
+def test_work_client_uses_pygithub_token_auth_with_retry() -> None:
     gate = MagicMock()
     with (
         patch("github.Github") as github_cls,
@@ -37,13 +37,11 @@ def test_work_client_uses_pygithub_token_auth_without_internal_retry() -> None:
 
     _, kwargs = github_cls.call_args
     assert kwargs["auth"].__class__.__name__ == "Token"
-    assert kwargs["retry"] is None
+    assert kwargs["retry"] is not None
     assert "login_or_token" not in kwargs
 
 
-def test_work_client_uses_pygithub_app_installation_auth_without_internal_retry() -> (
-    None
-):
+def test_work_client_uses_pygithub_app_installation_auth_with_retry() -> None:
     gate = MagicMock()
     with (
         patch("github.Github") as github_cls,
@@ -65,7 +63,7 @@ def test_work_client_uses_pygithub_app_installation_auth_without_internal_retry(
     _, kwargs = github_cls.call_args
     assert kwargs["auth"].__class__.__name__ == "AppInstallationAuth"
     assert kwargs["auth"].installation_id == 456
-    assert kwargs["retry"] is None
+    assert kwargs["retry"] is not None
     assert "login_or_token" not in kwargs
 
 
@@ -96,6 +94,76 @@ def test_work_client_get_repo_classifies_primary_rate_limit_403(monkeypatch) -> 
     assert "REQ:5" in message
     assert exc_info.value.retry_after_seconds == pytest.approx(5.0)
     gate.penalize.assert_called_once_with(5.0)
+
+
+def test_work_client_records_rest_usage_from_pygithub_rate_limit_state() -> None:
+    client, _graphql, _gate = _client()
+    cast(Any, client.github).rate_limiting = (42, 5000)
+    cast(Any, client.github).rate_limiting_resettime = 1234567890
+    cast(Any, client.github).get_repo = MagicMock(return_value=object())
+
+    client.get_repo(owner="full-chaos", repo="dev-health-web")
+
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "rest",
+            "route_family": "work_items",
+            "dimension": "rest_core",
+            "request_count": 1,
+            "example_operation": "GET /repos/full-chaos/dev-health-web",
+            "rate_limit": {
+                "remaining": "42",
+                "reset": "1234567890",
+                "limit": "5000",
+            },
+        }
+    ]
+
+
+def test_work_client_records_graphql_usage_from_headers_and_rate_limit_payload() -> (
+    None
+):
+    client, graphql, _gate = _client()
+    graphql.query.return_value = {"viewer": {"login": "octocat"}}
+    graphql.last_response_status = 200
+    graphql.last_response_headers = {
+        "x-ratelimit-remaining": "4998",
+        "x-ratelimit-reset": "1234567890",
+        "x-github-request-id": "REQ:1",
+        "authorization": "must-not-leak",
+    }
+    graphql.last_rate_limit_data = {
+        "limit": 5000,
+        "remaining": 4998,
+        "used": 2,
+        "resetAt": "2026-01-01T00:00:00Z",
+    }
+
+    client._query_graphql("POST /graphql test", "query { viewer { login } }")
+
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "graphql",
+            "route_family": "work_item_prs",
+            "dimension": "graphql_cost",
+            "request_count": 1,
+            "example_operation": "POST /graphql test",
+            "latest_status": 200,
+            "latest_headers": {
+                "x-ratelimit-remaining": "4998",
+                "x-ratelimit-reset": "1234567890",
+                "x-github-request-id": "REQ:1",
+            },
+            "rate_limit": {
+                "limit": 5000,
+                "remaining": 4998,
+                "used": 2,
+                "resetAt": "2026-01-01T00:00:00Z",
+            },
+        }
+    ]
 
 
 def test_work_client_get_repo_classifies_permission_403() -> None:
@@ -255,6 +323,100 @@ def _pr(number: int) -> MagicMock:
         "REST review comments should not be used"
     )
     return pr
+
+
+def _issue(number: int) -> MagicMock:
+    issue = MagicMock()
+    issue.number = number
+    issue.pull_request = None
+    return issue
+
+
+def test_work_client_iter_issues_filters_until_before_counting_limit() -> None:
+    client, _graphql, _gate = _client()
+    until = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    future = _issue(1)
+    future.updated_at = until + timedelta(days=1)
+    in_window = _issue(2)
+    in_window.updated_at = until
+    repo = MagicMock()
+    repo.get_issues.return_value = [future, in_window]
+    cast(Any, client.github).get_repo.return_value = repo
+
+    result = list(
+        client.iter_issues(
+            owner="full-chaos",
+            repo="dev-health",
+            until=until,
+            limit=1,
+            scan_limit=2,
+        )
+    )
+
+    assert [issue.number for issue in result] == [2]
+
+
+def test_work_client_iter_pull_requests_warns_when_stopping_at_scan_limit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _graphql, _gate = _client()
+    until = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    future = _pr(1)
+    future.updated_at = until + timedelta(days=1)
+    in_window = _pr(2)
+    in_window.updated_at = until
+    repo = MagicMock()
+
+    def pulls() -> Iterable[MagicMock]:
+        yield future
+        yield in_window
+        raise AssertionError("scan should stop before this item")
+
+    repo.get_pulls.return_value = pulls()
+    cast(Any, client.github).get_repo.return_value = repo
+
+    result = list(
+        client.iter_pull_requests(
+            owner="full-chaos",
+            repo="dev-health",
+            until=until,
+            limit=1,
+            scan_limit=1,
+        )
+    )
+
+    assert result == []
+    assert (
+        "stopped GET /repos/full-chaos/dev-health/pulls after scanning 1 items"
+        in caplog.text
+    )
+
+
+def test_work_client_iter_pull_requests_stops_at_since_cutoff() -> None:
+    client, _graphql, _gate = _client()
+    since = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    newer = _pr(1)
+    newer.updated_at = since + timedelta(seconds=1)
+    equal = _pr(2)
+    equal.updated_at = since
+    older = _pr(3)
+    older.updated_at = since - timedelta(seconds=1)
+    repo = MagicMock()
+
+    def pulls() -> Iterable[MagicMock]:
+        yield newer
+        yield equal
+        yield older
+        raise AssertionError("pagination should stop after the first older PR")
+
+    repo.get_pulls.return_value = pulls()
+    cast(Any, client.github).get_repo.return_value = repo
+
+    result = list(
+        client.iter_pull_requests(owner="full-chaos", repo="dev-health", since=since)
+    )
+
+    assert [pr.number for pr in result] == [1, 2]
 
 
 def _comment_node(comment_id: int, body: str = "comment") -> dict[str, object]:
@@ -444,6 +606,148 @@ def test_batched_pr_reviews_preserve_rest_consumed_fields() -> None:
     assert reviews[0].submitted_at == datetime(2026, 1, 3, 3, 4, 5, tzinfo=timezone.utc)
     assert reviews[0].body == "LGTM"
     assert reviews[0].url == "https://github.test/review/10"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2803/CS2: pr_social usage-drain call-count + attribution proofs.
+# ---------------------------------------------------------------------------
+
+
+def test_iter_pr_reviews_batch_with_operation_family_records_pr_social_usage() -> None:
+    """N GraphQL requests issued by the review batch (here: one initial page
+    plus one pagination follow-up, forced via hasNextPage) aggregate into
+    exactly ONE drained observation with request_count == N, keyed to the
+    pr_social route family -- proving both the re-bucketing (Task B) and that
+    every physical request is counted (not just the first)."""
+    client, graphql, _gate = _client()
+    graphql.last_response_status = 200
+    graphql.query.side_effect = [
+        {
+            "repository": {
+                "pr0": {
+                    "number": 1,
+                    "reviews": {
+                        "nodes": [_review_node(10)],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "r1"},
+                    },
+                }
+            }
+        },
+        {
+            "repository": {
+                "pr0": {
+                    "number": 1,
+                    "reviews": {
+                        "nodes": [_review_node(11)],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }
+            }
+        },
+    ]
+
+    reviews = dict(
+        client.iter_pr_reviews_batch(
+            owner="owner",
+            repo="repo",
+            prs=[_pr(1)],
+            limit=10,
+            operation_family="pr_social",
+        )
+    )[1]
+
+    assert [review.id for review in reviews] == [10, 11]
+    assert graphql.query.call_count == 2
+
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "graphql",
+            "route_family": "pr_social",
+            "dimension": "graphql_cost",
+            "request_count": 2,
+            "example_operation": "pr_social:POST /graphql PR social data",
+            "latest_status": 200,
+        }
+    ]
+
+
+def test_iter_pr_reviews_batch_without_operation_family_stays_work_item_prs() -> None:
+    """No operation_family (the pre-CS2 call shape, still used by the
+    work-items PR-as-work-item path in providers/github/provider.py) keeps
+    the unprefixed label and resolves via the transport default -- proving
+    the CS2 fix is additive, not a change to the default resolution."""
+    client, graphql, _gate = _client()
+    graphql.last_response_status = 200
+    graphql.query.return_value = {
+        "repository": {
+            "pr0": {
+                "number": 1,
+                "reviews": {
+                    "nodes": [_review_node(10)],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                },
+            }
+        }
+    }
+
+    dict(
+        client.iter_pr_reviews_batch(owner="owner", repo="repo", prs=[_pr(1)], limit=10)
+    )
+
+    observations = client.drain_usage_observations()
+    assert len(observations) == 1
+    assert observations[0]["route_family"] == "work_item_prs"
+    assert observations[0]["example_operation"] == "POST /graphql PR social data"
+
+
+def test_iter_pr_reviews_batch_failure_mid_pagination_leaves_partial_usage_drained() -> (
+    None
+):
+    """A raise on the SECOND (pagination) request must not discard the
+    observation recorded for the FIRST, successful request -- the recorder
+    aggregates per physical round trip as it goes, so whatever succeeded
+    before a mid-batch failure is still present when the caller drains."""
+    client, graphql, gate = _client()
+    graphql.last_response_status = 200
+    graphql.query.side_effect = [
+        {
+            "repository": {
+                "pr0": {
+                    "number": 1,
+                    "reviews": {
+                        "nodes": [_review_node(10)],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "r1"},
+                    },
+                }
+            }
+        },
+        RateLimitException("limited", retry_after_seconds=5.0),
+    ]
+
+    with pytest.raises(RateLimitException):
+        list(
+            client.iter_pr_reviews_batch(
+                owner="owner",
+                repo="repo",
+                prs=[_pr(1)],
+                limit=10,
+                operation_family="pr_social",
+            )
+        )
+
+    gate.penalize.assert_called_once_with(5.0)
+    observations = client.drain_usage_observations()
+    assert observations == [
+        {
+            "transport": "graphql",
+            "route_family": "pr_social",
+            "dimension": "graphql_cost",
+            "request_count": 1,
+            "example_operation": "pr_social:POST /graphql PR social data",
+            "latest_status": 200,
+        }
+    ]
 
 
 def _timeline_node(typename: str, created_at: str, login: str) -> dict[str, object]:

@@ -31,8 +31,11 @@ from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncRun,
 )
 from dev_health_ops.models.settings import (
+    JobRun,
+    JobRunStatus,
     JobStatus,
     ScheduledJob,
     SyncConfiguration,
@@ -88,7 +91,7 @@ def _make_config(
     and one enabled dataset so the scheduler can route it through the fan-out
     planner. Pass ``migrated=False`` to exercise the planner-only skip path.
     """
-    migrated_integration_id: uuid.UUID | None = None
+    integration_id: uuid.UUID | None = None
     if migrated:
         integration = Integration(
             org_id=org_id,
@@ -122,7 +125,7 @@ def _make_config(
             ]
         )
         session.flush()
-        migrated_integration_id = integration.id
+        integration_id = integration.id
 
     config = SyncConfiguration(
         name=name,
@@ -135,7 +138,7 @@ def _make_config(
         if sync_options is not None
         else {"owner": "org", "repo": "repo", "schedule_cron": "0 * * * *"},
         is_active=True,
-        migrated_integration_id=migrated_integration_id,
+        integration_id=integration_id,
     )
     if last_sync_at is not None:
         config.last_sync_at = last_sync_at
@@ -226,13 +229,23 @@ class TestDispatchIdempotency:
         assert dispatch_mock.apply_async.call_count == 1
         # Fan-out dispatch enqueues the planner run on the shared sync queue.
         assert dispatch_mock.apply_async.call_args.kwargs["queue"] == "sync"
+        sync_run_id = dispatch_mock.apply_async.call_args.kwargs["args"][0]
         # The dispatch marker was stamped to the next cron occurrence.
         assert job.next_run_at is not None
         assert _aware(job.next_run_at) > now
 
+        sync_run = db_session.query(SyncRun).filter(SyncRun.id == sync_run_id).one()
+        runs = db_session.query(JobRun).filter(JobRun.job_id == job.id).all()
+        assert sync_run is not None
+        assert len(runs) == 1
+        assert runs[0].status == JobRunStatus.PENDING.value
+        assert runs[0].triggered_by == "schedule"
+        assert runs[0].result["sync_run_id"] == str(sync_run.id)
+
         second = _call(task)
         assert second["dispatched"] == []
         assert dispatch_mock.apply_async.call_count == 1
+        assert db_session.query(JobRun).count() == 1
 
     def test_expired_dispatch_marker_allows_redispatch(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)

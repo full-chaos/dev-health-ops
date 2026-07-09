@@ -23,10 +23,10 @@ class RefreshToken(Base):
         nullable=False,
         index=True,
     )
-    org_id: Mapped[uuid.UUID] = mapped_column(
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     token_hash: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True, index=True

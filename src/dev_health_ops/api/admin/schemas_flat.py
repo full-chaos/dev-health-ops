@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SettingResponse(BaseModel):
@@ -43,12 +43,55 @@ class LLMSettingsResponse(BaseModel):
     concurrency: int | None = None
 
 
+class LLMSettingsStatusResponse(BaseModel):
+    configured: bool
+    active: bool
+    degraded: bool
+    reason_code: Literal[
+        "not_configured",
+        "unknown_provider",
+        "missing_credentials",
+        "invalid_base_url",
+        "active",
+    ]
+    last_fallback_at: datetime | None = None
+
+
 class LLMSettingsUpsert(BaseModel):
     provider: str = Field(..., min_length=1)
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
     concurrency: int | None = Field(default=None, ge=1, le=32)
+
+
+class LLMSpendRun(BaseModel):
+    run_id: str
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+    failures_by_class: dict[str, int] = Field(default_factory=dict)
+
+
+class LLMSpendLegacyUsage(BaseModel):
+    run_id: str = ""
+    marker: Literal["legacy_empty_run_id"] = "legacy_empty_run_id"
+    provider: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    computed_at: datetime
+
+
+class LLMSpendResponse(BaseModel):
+    since: datetime
+    limit: int
+    runs: list[LLMSpendRun] = Field(default_factory=list)
+    legacy: list[LLMSpendLegacyUsage] = Field(default_factory=list)
 
 
 class IntegrationCredentialResponse(BaseModel):
@@ -109,6 +152,9 @@ class SyncConfigResponse(BaseModel):
     id: str
     name: str
     provider: str
+    # CHAOS-2762: SyncConfiguration stores no credential of its own -- this is
+    # resolved live from the linked Integration.credential_id (the single
+    # sanctioned surface) each time a response is built, never a stored mirror.
     credential_id: str | None
     sync_targets: list[str]
     sync_options: dict[str, Any]
@@ -127,6 +173,8 @@ class SyncConfigResponse(BaseModel):
 class SyncConfigCreate(BaseModel):
     name: str = Field(..., min_length=1)
     provider: str = Field(..., min_length=1)
+    # CHAOS-2762: write-only input -- seeds the created Integration's
+    # credential_id. SyncConfiguration itself stores no credential column.
     credential_id: str | None = None
     sync_targets: list[str] = Field(default_factory=list)
     sync_options: dict[str, Any] = Field(default_factory=dict)
@@ -140,6 +188,8 @@ class SyncConfigBatchCreate(BaseModel):
 
     name: str = Field(..., min_length=1)
     provider: str = Field(..., min_length=1)
+    # CHAOS-2762: write-only input -- seeds the created Integration's
+    # credential_id. SyncConfiguration itself stores no credential column.
     credential_id: str | None = None
     sync_targets: list[str] = Field(default_factory=list)
     sync_options: dict[str, Any] = Field(default_factory=dict)
@@ -205,6 +255,86 @@ JOB_RUN_STATUS_LABELS: dict[int, str] = {
 }
 
 
+SyncCoverageHealth = Literal["healthy", "stale", "gaps", "failed", "insufficient_data"]
+SyncCoverageStatus = Literal[
+    "healthy",
+    "stale",
+    "gaps",
+    "failed",
+    "insufficient_data",
+    "paused",
+    "not_scheduled",
+    "running",
+]
+
+
+class SyncCoverageRange(BaseModel):
+    since: datetime
+    before: datetime
+    source_ids: list[str] = Field(default_factory=list)
+    run_ids: list[str] = Field(default_factory=list)
+
+
+class SyncRunJobEnrichment(BaseModel):
+    mode: str
+    triggered_by: str
+    requested_range: SyncCoverageRange | None = None
+    covered_range: SyncCoverageRange | None = None
+    total_units: int
+    completed_units: int
+    failed_units: int
+    sync_run_id: str
+
+
+class SyncCoverageOverall(BaseModel):
+    health: SyncCoverageHealth
+    latest_successful_run_at: datetime | None = None
+    latest_covered_through: datetime | None = None
+    next_scheduled_run_at: datetime | None = None
+    gap_count: int
+    stale_dataset_count: int
+    failed_range_count: int
+
+
+class SyncCoverageDataset(BaseModel):
+    dataset_key: str
+    status: SyncCoverageStatus
+    covered_through: datetime | None = None
+    requested_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+    covered_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+    gaps: list[SyncCoverageRange] = Field(default_factory=list)
+    stale_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+    failed_ranges: list[SyncCoverageRange] = Field(default_factory=list)
+
+
+class SyncCoverageSource(BaseModel):
+    source_id: str
+    source_name: str
+    status: SyncCoverageStatus
+    covered_through: datetime | None = None
+    gap_count: int
+    failed_range_count: int
+
+
+class SyncCoverageSummaryResponse(BaseModel):
+    """Coverage for this sync config's effective source/dataset scope.
+
+    Parent configs can cover planner-managed sources tagged to the config;
+    child/source-scoped configs cover their configured source and dataset keys.
+    Coverage is derived from persisted SyncRunUnit windows, not watermarks.
+    """
+
+    config_id: str
+    provider: str
+    generated_at: datetime
+    data_basis: Literal["planner", "legacy"]
+    history_lookback_days: int
+    truncated_before: datetime
+    overall: SyncCoverageOverall
+    datasets: list[SyncCoverageDataset]
+    sources: list[SyncCoverageSource]
+
+
 class JobRunResponse(BaseModel):
     id: str
     job_id: str
@@ -216,6 +346,7 @@ class JobRunResponse(BaseModel):
     result: dict[str, Any] | None = None
     error: str | None = None
     triggered_by: str
+    sync_run: SyncRunJobEnrichment | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -507,12 +638,20 @@ class DeletionResultResponse(BaseModel):
 
 
 class OrganizationCreate(BaseModel):
-    name: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=100)
     slug: str | None = None
     description: str | None = None
     tier: str = "community"
     settings: dict[str, Any] = Field(default_factory=dict)
     owner_user_id: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Workspace name is required")
+        return normalized
 
 
 class OrganizationUpdate(BaseModel):
@@ -803,3 +942,53 @@ class PlatformStatsResponse(BaseModel):
     active_sync_configs: int
     recent_syncs_success: int
     recent_syncs_failed: int
+
+
+class OnboardingStateResponse(BaseModel):
+    """CHAOS-2670 contract C1: GET /api/v1/auth/onboarding/state.
+
+    Single source of truth for first-run routing. ``next_step`` is computed
+    server-side from membership + connected-integration + persisted skip state
+    (organizations.onboarding_integration_skipped_at). Callable with a verified
+    orgless token; superuser/admin resolves to ``dashboard``.
+    """
+
+    needs_onboarding: bool
+    org_created: bool
+    org_id: str | None = None
+    org_name: str | None = None
+    first_integration_connected: bool
+    integration_skipped: bool
+    recommended_provider: str = "github"
+    next_step: Literal["workspace", "integration", "complete", "dashboard"]
+    blocker: str | None = None
+
+
+class SetupStatusResponse(BaseModel):
+    """CHAOS-2670 contract C2: GET /api/v1/admin/setup/status.
+
+    Powers the dashboard "value-or-precise-blocker" surface: distinguishes
+    not-connected, connected-no-config, config-failed, and sync-running states.
+    Org-scoped admin auth.
+    """
+
+    has_integration: bool
+    providers: list[str] = Field(default_factory=list)
+    has_sync_config: bool
+    sync_config_id: str | None = None
+    first_sync_started: bool
+    first_sync_completed: bool = False
+    sync_status: Literal[
+        "none", "pending", "running", "partial", "complete", "failed"
+    ] = "none"
+    selected_repositories_count: int = 0
+    last_sync_error: str | None = None
+    can_start_sync: bool = False
+    next_action: Literal[
+        "connect_integration",
+        "select_repositories",
+        "create_sync_config",
+        "start_sync",
+        "complete",
+    ]
+    blocker: str | None = None

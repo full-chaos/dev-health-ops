@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from collections.abc import Callable, Iterator
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.llm_settings import (
@@ -17,18 +21,43 @@ from dev_health_ops.api.admin.llm_settings import (
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
     LLMSettingsResponse,
+    LLMSettingsStatusResponse,
     LLMSettingsUpsert,
+    LLMSpendResponse,
     SettingCreate,
     SettingResponse,
     SettingsListResponse,
     SettingUpdate,
 )
 from dev_health_ops.api.services.configuration import SettingsService
+from dev_health_ops.db import require_clickhouse_uri
+from dev_health_ops.llm.credentials import (
+    evaluate_org_llm_status,
+    latest_recent_org_byo_base_url_fallback_at,
+)
+from dev_health_ops.metrics.schemas import LLMTokenSpendSummaryRecord
+from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.settings import SettingCategory
 
 from .common import get_session
 
 router = APIRouter()
+
+LLMSpendReader = Callable[..., LLMTokenSpendSummaryRecord | None]
+
+
+def read_llm_token_spend_summary(
+    *, org_id: str, limit: int, since: datetime | None
+) -> LLMTokenSpendSummaryRecord | None:
+    sink = create_sink(require_clickhouse_uri())
+    try:
+        return sink.read_llm_token_spend(org_id=org_id, limit=limit, since=since)
+    finally:
+        sink.close()
+
+
+def get_llm_spend_reader() -> Iterator[LLMSpendReader]:
+    yield read_llm_token_spend_summary
 
 
 def _setting_response(setting: object) -> SettingResponse:
@@ -97,6 +126,53 @@ async def get_llm_settings(
     await _require_byo_llm_tier(session, org_id)
     svc = SettingsService(session, org_id)
     return await get_llm_settings_response(svc)
+
+
+@router.get(
+    "/llm-settings/status",
+    response_model=LLMSettingsStatusResponse,
+)
+async def get_llm_settings_status(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> LLMSettingsStatusResponse:
+    await _require_byo_llm_tier(session, org_id)
+    svc = SettingsService(session, org_id)
+    evaluation = await evaluate_org_llm_status(org_id, svc)
+    last_fallback_at = await latest_recent_org_byo_base_url_fallback_at(
+        session, org_id, evaluation
+    )
+    return LLMSettingsStatusResponse(
+        configured=evaluation.configured,
+        active=evaluation.active,
+        degraded=evaluation.reason_code == "invalid_base_url",
+        reason_code=evaluation.reason_code,
+        last_fallback_at=last_fallback_at,
+    )
+
+
+@router.get(
+    "/llm-settings/spend",
+    response_model=LLMSpendResponse,
+)
+async def get_llm_settings_spend(
+    limit: int = Query(20, ge=1),
+    since: datetime | None = None,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+    spend_reader: LLMSpendReader = Depends(get_llm_spend_reader),
+) -> LLMSpendResponse:
+    await _require_byo_llm_tier(session, org_id)
+    response_since = since or datetime.now(timezone.utc) - timedelta(days=30)
+    response_limit = min(max(1, limit), 100)
+    svc = SettingsService(session, org_id)
+    evaluation = await evaluate_org_llm_status(org_id, svc)
+    if not evaluation.active:
+        return LLMSpendResponse(since=response_since, limit=response_limit)
+    summary = spend_reader(org_id=org_id, limit=limit, since=since)
+    if summary is None:
+        return LLMSpendResponse(since=response_since, limit=response_limit)
+    return LLMSpendResponse.model_validate(asdict(summary))
 
 
 @router.put(

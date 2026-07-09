@@ -429,6 +429,8 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
                 project_path,
             )
 
+        from dev_health_ops.providers.usage import provider_usage_observations
+
         return ProviderBatch(
             work_items=work_items,
             status_transitions=transitions,
@@ -437,4 +439,5 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
             sprints=sprints,
             reopen_events=reopen_events,
             ai_attributions=ai_attributions,
+            observations=provider_usage_observations(client),
         )

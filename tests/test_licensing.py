@@ -26,6 +26,7 @@ from dev_health_ops.licensing.registry import (
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     GRACE_DAYS,
+    TIER_ORDER,
     LicenseLimits,
 )
 from dev_health_ops.licensing.validator import ValidationResult
@@ -1224,7 +1225,7 @@ class TestGetFeaturesForTier:
         assert features["capacity_forecast"] is True
 
     def test_agent_context_runtime_requires_explicit_purchase_for_every_tier(self):
-        for tier in LicenseTier:
+        for tier in TIER_ORDER:
             features = get_features_for_tier(tier)
 
             assert features["agent_context_runtime"] is False

@@ -11,6 +11,12 @@ from dev_health_ops.licensing.types import TIER_ORDER, FeatureCategory, LicenseT
 
 STANDARD_FEATURE_ROW = tuple[str, str, FeatureCategory, LicenseTier, str]
 
+EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset({"agent_context_runtime"})
+
+
+def is_explicit_purchase_feature(feature_key: str) -> bool:
+    return feature_key in EXPLICIT_PURCHASE_FEATURES
+
 
 def get_features_for_tier(tier: LicenseTier) -> dict[str, bool]:
     """Return a feature-key → enabled dict for the given tier.
@@ -22,7 +28,7 @@ def get_features_for_tier(tier: LicenseTier) -> dict[str, bool]:
     result: dict[str, bool] = {}
     for key, _name, _category, min_tier, _desc in STANDARD_FEATURES:
         min_index = TIER_ORDER.index(min_tier) if min_tier in TIER_ORDER else 0
-        result[key] = tier_index >= min_index
+        result[key] = tier_index >= min_index and not is_explicit_purchase_feature(key)
     return result
 
 
@@ -138,6 +144,13 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         FeatureCategory.INTEGRATIONS,
         LicenseTier.TEAM,
         "Customer-owned external ingestion runners",
+    ),
+    (
+        "agent_context_runtime",
+        "Agent Context Runtime",
+        FeatureCategory.INTEGRATIONS,
+        LicenseTier.COMMUNITY,
+        "Hosted evidence-backed context for authorized coding agents",
     ),
     (
         "scheduled_jobs",

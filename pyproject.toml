@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Open Source Development Team Operation Analytics"
 readme = "README.md"
 authors = [{ name = "Chris Geo", email = "chris@example.com" }]
-license = { text = "MIT" }
+license = { file = "LICENSE.md" }
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -16,7 +16,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
-  "License :: OSI Approved :: MIT License",
+  "License :: Other/Proprietary License",
   "Operating System :: OS Independent",
 ]
 keywords = ["metrics", "git", "analytics", "developer-experience"]
@@ -109,6 +109,8 @@ enterprise-sso = ["signxml>=3.0.0"]
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"
 Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
+Documentation = "https://github.com/chrisgeo/dev-health-ops/blob/main/docs/architecture/licensing.md"
+License = "https://github.com/chrisgeo/dev-health-ops/blob/main/LICENSE.md"
 
 [project.scripts]
 dev-health-ops = "dev_health_ops.cli:main"

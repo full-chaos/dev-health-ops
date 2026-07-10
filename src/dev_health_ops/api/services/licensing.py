@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import jwt
 from jwt.exceptions import InvalidTokenError
 
+from dev_health_ops.licensing.registry import is_explicit_purchase_feature
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.licensing import (
     STANDARD_FEATURES,
@@ -351,6 +352,12 @@ class FeatureService:
                         allowed=False,
                         reason="Feature disabled in license",
                     )
+
+        if is_explicit_purchase_feature(feature_key):
+            return FeatureAccess(
+                allowed=False,
+                reason="Requires an explicit organization purchase",
+            )
 
         feature_min_tier = LicenseTier(feature.min_tier)
         tier_order = [

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.licensing.registry import is_explicit_purchase_feature
 from dev_health_ops.licensing.types import LicenseTier
 
 router = APIRouter(prefix="/api/v1/licensing", tags=["licensing"])
@@ -110,8 +111,12 @@ async def get_entitlements(
     features: dict[str, bool] = {}
     flags_by_key = {str(flag.key): flag for flag in all_flags}
     for flag in all_flags:
+        feature_key = str(flag.key)
+        if is_explicit_purchase_feature(feature_key):
+            features[feature_key] = False
+            continue
         min_tier = _coerce_license_tier(flag.min_tier)
-        features[str(flag.key)] = bool(flag.is_enabled) and org_rank >= TIER_RANK.get(
+        features[feature_key] = bool(flag.is_enabled) and org_rank >= TIER_RANK.get(
             min_tier, 0
         )
 
@@ -120,8 +125,14 @@ async def get_entitlements(
             override_flag = flags_by_key.get(key)
             if override_flag is None:
                 features[key] = (
-                    False if key == _CUSTOMER_PUSH_FEATURE else bool(enabled)
+                    False
+                    if key == _CUSTOMER_PUSH_FEATURE
+                    or is_explicit_purchase_feature(key)
+                    else bool(enabled)
                 )
+                continue
+            if is_explicit_purchase_feature(key):
+                features[key] = bool(enabled) and bool(override_flag.is_enabled)
                 continue
             min_tier = _coerce_license_tier(override_flag.min_tier)
             tier_allowed = org_rank >= TIER_RANK.get(min_tier, 0)
@@ -135,9 +146,15 @@ async def get_entitlements(
                 now = datetime.now().astimezone()
                 if override.expires_at and override.expires_at < now:
                     continue
+                feature_key = str(flag.key)
+                if is_explicit_purchase_feature(feature_key):
+                    features[feature_key] = bool(override.is_enabled) and bool(
+                        flag.is_enabled
+                    )
+                    break
                 min_tier = _coerce_license_tier(flag.min_tier)
                 tier_allowed = org_rank >= TIER_RANK.get(min_tier, 0)
-                features[str(flag.key)] = (
+                features[feature_key] = (
                     bool(override.is_enabled) and bool(flag.is_enabled) and tier_allowed
                 )
                 break

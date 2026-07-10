@@ -266,6 +266,16 @@ Every task execution records Prometheus metrics via `record_celery_task()`:
 - Completion state (success/failure)
 - Duration in seconds
 
+Investment LLM telemetry is dual-emitted. FastAPI exposes its process-local Prometheus
+copy at `/metrics`; Celery prefork children push the equivalent bounded
+`devhealth_investment_llm_*` time series through OTLP gRPC. Each child initializes its
+exporter after fork and force-flushes it during graceful process shutdown, so worker
+recycling and horizontal replicas do not depend on scraping a worker HTTP endpoint.
+
+Configure `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_METRIC_EXPORT_INTERVAL` on every worker
+pool. Collection topology, label restrictions, and the production verification query are
+documented in [Investment LLM Telemetry](../llm/investment-llm-telemetry.md).
+
 ### Logging & Tracing
 
 Workers initialize on startup:

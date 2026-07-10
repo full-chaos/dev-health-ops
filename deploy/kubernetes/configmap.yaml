@@ -23,7 +23,11 @@ data:
   CELERY_RESULT_BACKEND: "redis://valkey:6379/0"
   WORKER_CONCURRENCY: "4"
   WORKER_HEAVY_CONCURRENCY: "2"
-
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
+  OTEL_SERVICE_NAME: "dev-health-ops"
+  OTEL_METRIC_EXPORT_INTERVAL: "60000"
+  
   PROVIDER_SYNC_QUEUES_ENABLED: "true"
   SYNC_COST_CLASS_QUEUES: "true"
   HIDE_MIGRATED_CHILD_CONFIGS: "true"

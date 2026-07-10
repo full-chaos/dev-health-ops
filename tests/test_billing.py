@@ -833,6 +833,14 @@ def test_validate_bundle_feature_keys_valid():
     validate_bundle_feature_keys(["git_sync", "api_access"])
 
 
+def test_validate_bundle_feature_keys_accepts_acr_purchased_feature():
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
+
+    validate_bundle_feature_keys(["agent_context_runtime"])
+
+
 def test_validate_bundle_feature_keys_unknown_raises():
     """Creating a bundle with an unknown key raises ValueError naming the key."""
     from dev_health_ops.api.billing.bundle_validation import (

@@ -214,6 +214,106 @@ async def test_entitlements_return_effective_false_when_feature_globally_disable
 
 
 @pytest.mark.asyncio
+async def test_entitlements_keep_acr_false_for_paid_org_without_purchase(
+    session_maker, seeded_org, monkeypatch
+):
+    async with session_maker() as session:
+        session.add(
+            FeatureFlag(
+                key="agent_context_runtime",
+                name="Agent Context Runtime",
+                category="integrations",
+                min_tier="community",
+            )
+        )
+        await session.commit()
+
+    user = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="member@example.com",
+        org_id=seeded_org,
+        role="member",
+        is_superuser=False,
+    )
+
+    app = FastAPI()
+    app.include_router(licensing_router)
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr(
+        _licensing_router_module,
+        "get_postgres_session",
+        _make_postgres_patcher(session_maker),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/licensing/entitlements/{seeded_org}")
+
+    assert response.status_code == 200
+    assert response.json()["features"]["agent_context_runtime"] is False
+
+
+@pytest.mark.asyncio
+async def test_billing_entitlements_enable_acr_for_explicit_bundle_grant(
+    session_maker, seeded_org
+):
+    async with session_maker() as session:
+        session.add_all(
+            [
+                FeatureFlag(
+                    key="agent_context_runtime",
+                    name="Agent Context Runtime",
+                    category="integrations",
+                    min_tier="community",
+                ),
+                OrgLicense(
+                    org_id=uuid.UUID(seeded_org),
+                    tier="team",
+                    features_override={"agent_context_runtime": True},
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with session_maker() as session:
+        entitlements = await get_org_entitlements_from_db(
+            uuid.UUID(seeded_org), session
+        )
+
+    assert entitlements["features"]["agent_context_runtime"] is True
+
+
+@pytest.mark.asyncio
+async def test_billing_entitlements_enable_acr_for_active_org_override(
+    session_maker, seeded_org
+):
+    async with session_maker() as session:
+        feature_flag = FeatureFlag(
+            key="agent_context_runtime",
+            name="Agent Context Runtime",
+            category="integrations",
+            min_tier="community",
+        )
+        session.add(feature_flag)
+        await session.flush()
+        session.add(
+            OrgFeatureOverride(
+                org_id=uuid.UUID(seeded_org),
+                feature_id=feature_flag.id,
+                is_enabled=True,
+            )
+        )
+        await session.commit()
+
+    async with session_maker() as session:
+        entitlements = await get_org_entitlements_from_db(
+            uuid.UUID(seeded_org), session
+        )
+
+    assert entitlements["features"]["agent_context_runtime"] is True
+
+
+@pytest.mark.asyncio
 async def test_entitlements_keep_customer_push_false_below_tier_with_positive_license_override(
     session_maker, seeded_org, monkeypatch
 ):

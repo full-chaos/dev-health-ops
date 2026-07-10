@@ -2,9 +2,11 @@ import argparse
 import base64
 import json
 import time
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
+import tomllib
 from nacl.signing import SigningKey
 
 from dev_health_ops.licensing import (
@@ -17,10 +19,14 @@ from dev_health_ops.licensing import (
     sign_license,
     sign_payload,
 )
-from dev_health_ops.licensing.registry import get_features_for_tier
+from dev_health_ops.licensing.registry import (
+    get_features_for_tier,
+    is_explicit_purchase_feature,
+)
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     GRACE_DAYS,
+    TIER_ORDER,
     LicenseLimits,
 )
 from dev_health_ops.licensing.validator import ValidationResult
@@ -1218,15 +1224,24 @@ class TestGetFeaturesForTier:
         assert features["scheduled_jobs"] is True
         assert features["capacity_forecast"] is True
 
+    def test_agent_context_runtime_requires_explicit_purchase_for_every_tier(self):
+        for tier in TIER_ORDER:
+            features = get_features_for_tier(tier)
+
+            assert features["agent_context_runtime"] is False
+
+    def test_agent_context_runtime_is_registered_as_explicit_purchase(self):
+        assert is_explicit_purchase_feature("agent_context_runtime") is True
+
     def test_all_tiers_return_same_key_set(self):
         community = get_features_for_tier(LicenseTier.COMMUNITY)
         team = get_features_for_tier(LicenseTier.TEAM)
         enterprise = get_features_for_tier(LicenseTier.ENTERPRISE)
         assert set(community.keys()) == set(team.keys()) == set(enterprise.keys())
 
-    def test_returns_27_features(self):
+    def test_returns_28_features(self):
         features = get_features_for_tier(LicenseTier.COMMUNITY)
-        assert len(features) == 27
+        assert len(features) == 28
 
     def test_sign_license_uses_canonical_registry(self):
         """sign_license() with no explicit features uses get_features_for_tier."""
@@ -1273,6 +1288,7 @@ class TestGetFeaturesForTier:
             from dev_health_ops.licensing import sign_license
 
             LicenseManager.reset()
+
             real_license = sign_license(
                 kp.private_key, org_id="org-1", tier="enterprise"
             )
@@ -1282,6 +1298,16 @@ class TestGetFeaturesForTier:
             assert result == "ok"
         finally:
             LicenseManager.reset()
+
+
+def test_package_metadata_identifies_bsl_and_links_canonical_docs():
+    project_path = Path(__file__).parents[1] / "pyproject.toml"
+    project = tomllib.loads(project_path.read_text())["project"]
+
+    assert project["license"] == {"file": "LICENSE.md"}
+    assert "License :: Other/Proprietary License" in project["classifiers"]
+    assert project["urls"]["License"].endswith("/LICENSE.md")
+    assert project["urls"]["Documentation"].endswith("/docs/architecture/licensing.md")
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,33 @@ In the SaaS model, entitlements are managed dynamically through our billing inte
    stripe
 ```
 
+### Hosted Agent Context Runtime
+
+`agent_context_runtime` is a purchased hosted product entitlement, not a tier
+benefit. It is present in the canonical feature registry, but is `false` for
+Community, Team, and Enterprise defaults. A paid tier, trial, or self-hosted
+install must not enable it implicitly.
+
+The billing bridge grants the entitlement only when the organization purchases a
+`FeatureBundle` containing `agent_context_runtime`; it persists the resolved key
+in `OrgLicense.features_override`. A superadmin may also use the existing
+organization-scoped `OrgFeatureOverride` for a support-approved grant or
+revocation. The global `FeatureFlag.is_enabled` kill switch still wins over both
+paths, and expired organization overrides are ignored.
+
+Self-hosted default license payloads also report the key as `false`. A
+self-hosted deployment must not infer hosted ACR access from its license tier.
+
+### ACR Consumer Contract
+
+The future hosted ACR API resolves the entitlement server-side from
+`GET /api/v1/licensing/entitlements/{org_id}`. It may treat only
+`features.agent_context_runtime == true` as product authorization after it has
+independently authenticated the caller and resolved the organization and
+repository scope. `false`, a missing feature row, or an unavailable entitlement
+record denies access. The Dev Health license key is entitlement evidence only;
+it is never an ACR API bearer credential.
+
 ---
 
 ## Self-Hosted Licensing (Secondary)

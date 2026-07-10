@@ -12,7 +12,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.licensing.registry import get_features_for_tier
+from dev_health_ops.licensing.registry import (
+    EXPLICIT_PURCHASE_FEATURES,
+    get_features_for_tier,
+)
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     TIER_ORDER,
@@ -424,6 +427,31 @@ async def get_org_entitlements_from_db(
                     else False
                 )
         features["customer_push_ingest"] = customer_push_enabled
+
+    for feature_key in EXPLICIT_PURCHASE_FEATURES:
+        explicit_flag_result = await session.execute(
+            select(FeatureFlag).filter_by(key=feature_key)
+        )
+        explicit_flag = explicit_flag_result.scalar_one_or_none()
+        features[feature_key] = False
+        if explicit_flag is None or not explicit_flag.is_enabled:
+            continue
+
+        if org_license is not None and org_license.features_override:
+            feature_overrides = _coerce_bool_map(org_license.features_override)
+            if feature_key in feature_overrides:
+                features[feature_key] = feature_overrides[feature_key]
+
+        org_override_result = await session.execute(
+            select(OrgFeatureOverride).filter_by(
+                org_id=org_id, feature_id=explicit_flag.id
+            )
+        )
+        org_override = org_override_result.scalar_one_or_none()
+        if org_override is not None:
+            now = datetime.now(timezone.utc)
+            if not org_override.expires_at or org_override.expires_at >= now:
+                features[feature_key] = bool(org_override.is_enabled)
 
     subscription_result = await session.execute(
         select(Subscription)

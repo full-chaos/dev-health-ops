@@ -6,20 +6,41 @@ from datetime import datetime, timezone
 from typing import Any
 
 from celery import Celery
-from celery.signals import before_task_publish, task_postrun, task_prerun
+from celery.signals import (
+    before_task_publish,
+    task_postrun,
+    task_prerun,
+    worker_process_init,
+    worker_process_shutdown,
+)
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
-from dev_health_ops.tracing import init_tracing, instrument_celery
+from dev_health_ops.tracing import (
+    init_metrics,
+    init_tracing,
+    instrument_celery,
+    shutdown_metrics,
+)
 
 # Configure logging, Sentry, and OpenTelemetry for Celery workers
 configure_logging()
 init_sentry()
-init_tracing()
+init_tracing(configure_metrics=False)
 instrument_celery()
 
 # Per-task start-time registry for duration tracking
 _task_start: dict[str, float] = {}
+
+
+@worker_process_init.connect
+def _init_worker_metrics(**kwargs: Any) -> None:
+    init_metrics(shutdown_on_exit=False)
+
+
+@worker_process_shutdown.connect
+def _shutdown_worker_metrics(**kwargs: Any) -> None:
+    shutdown_metrics()
 
 
 @before_task_publish.connect

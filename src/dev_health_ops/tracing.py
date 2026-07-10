@@ -24,13 +24,16 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
 _initialized = False
+_metrics_initialized = False
+_meter_provider: Any = None
 
 
-def init_tracing() -> bool:
+def init_tracing(*, configure_metrics: bool = True) -> bool:
     """Initialise the OpenTelemetry tracer with OTLP gRPC export.
 
     Returns True if tracing was activated, False if skipped or unavailable.
@@ -85,44 +88,8 @@ def init_tracing() -> bool:
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
 
-        # ----- Metrics (OTLP push) -----
-        try:
-            from opentelemetry import metrics as otel_metrics
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                OTLPMetricExporter,
-            )
-            from opentelemetry.sdk.metrics import MeterProvider
-            from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-
-            metric_export_interval = int(
-                os.getenv("OTEL_METRIC_EXPORT_INTERVAL", "60000")
-            )
-
-            metric_exporter = OTLPMetricExporter(endpoint=otlp_endpoint)
-            metric_reader = PeriodicExportingMetricReader(
-                metric_exporter,
-                export_interval_millis=metric_export_interval,
-            )
-            meter_provider = MeterProvider(
-                resource=resource,
-                metric_readers=[metric_reader],
-            )
-            otel_metrics.set_meter_provider(meter_provider)
-
-            logger.info(
-                "OpenTelemetry metrics initialised",
-                extra={
-                    "otlp_endpoint": otlp_endpoint,
-                    "export_interval_ms": metric_export_interval,
-                },
-            )
-        except ImportError as exc:
-            logger.warning(
-                "opentelemetry metrics packages not installed — metrics push disabled: %s",
-                exc,
-            )
-        except Exception as exc:
-            logger.warning("OpenTelemetry metrics initialisation failed: %s", exc)
+        if configure_metrics:
+            init_metrics(resource=resource, otlp_endpoint=otlp_endpoint)
 
         _initialized = True
         logger.info(
@@ -142,6 +109,83 @@ def init_tracing() -> bool:
         return False
     except Exception as exc:
         logger.warning("OpenTelemetry initialisation failed: %s", exc)
+        return False
+
+
+def init_metrics(
+    *,
+    resource: Any = None,
+    otlp_endpoint: str | None = None,
+    shutdown_on_exit: bool = True,
+) -> bool:
+    """Initialise the process-local OTLP metrics exporter."""
+    global _meter_provider, _metrics_initialized
+    if _metrics_initialized:
+        return True
+    enabled = os.getenv("OTEL_ENABLED", "true").lower() not in ("false", "0", "no")
+    if not enabled:
+        return False
+    try:
+        from opentelemetry import metrics as otel_metrics
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+            OTLPMetricExporter,
+        )
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.resources import Resource
+
+        endpoint = otlp_endpoint or os.getenv(
+            "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
+        )
+        base_resource = resource or Resource.create(
+            {
+                "service.name": os.getenv("OTEL_SERVICE_NAME", "dev-health-ops"),
+                "deployment.environment": os.getenv("OTEL_ENVIRONMENT", "production"),
+            }
+        )
+        metric_resource = base_resource.merge(
+            Resource({"service.instance.id": str(uuid4())})
+        )
+        metric_export_interval = int(os.getenv("OTEL_METRIC_EXPORT_INTERVAL", "60000"))
+        metric_reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=endpoint),
+            export_interval_millis=metric_export_interval,
+        )
+        _meter_provider = MeterProvider(
+            resource=metric_resource,
+            metric_readers=[metric_reader],
+            shutdown_on_exit=shutdown_on_exit,
+        )
+        otel_metrics.set_meter_provider(_meter_provider)
+        _metrics_initialized = True
+        logger.info(
+            "OpenTelemetry metrics initialised",
+            extra={
+                "otlp_endpoint": endpoint,
+                "export_interval_ms": metric_export_interval,
+            },
+        )
+        return True
+    except ImportError as exc:
+        logger.warning(
+            "opentelemetry metrics packages not installed — metrics push disabled: %s",
+            exc,
+        )
+    except Exception as exc:
+        logger.warning("OpenTelemetry metrics initialisation failed: %s", exc)
+    return False
+
+
+def shutdown_metrics() -> bool:
+    """Flush and close the process-local OTLP metrics exporter."""
+    if _meter_provider is None:
+        return False
+    try:
+        flushed = _meter_provider.force_flush(timeout_millis=10_000)
+        _meter_provider.shutdown(timeout_millis=30_000)
+        return bool(flushed)
+    except Exception as exc:
+        logger.warning("OpenTelemetry metrics shutdown failed: %s", exc)
         return False
 
 

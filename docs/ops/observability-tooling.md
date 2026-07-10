@@ -29,7 +29,7 @@ Open-source observability stack evaluation for replacing Sentry SaaS while pre-r
 |-------|------|--------|
 | Errors | `sentry-sdk[fastapi,celery]>=2.0.0` | DSN-based, 10% traces, 0% profiles |
 | Tracing | `opentelemetry-*>=1.24.0` | OTLP gRPC to `localhost:4317`; instruments FastAPI, HTTPX, SQLAlchemy, Celery |
-| Metrics | `prometheus-fastapi-instrumentator` | `/metrics` endpoint with custom counters/histograms for Celery, ClickHouse, LLM, GitHub |
+| Metrics | Prometheus + OpenTelemetry metrics | FastAPI `/metrics` plus OTLP push for bounded investment LLM time series from API and Celery processes |
 | Logs | `python-json-logger` | JSON structured logging with correlation IDs via `X-Request-ID` |
 | Alerting | Prometheus rules | `alerts/rules.yml` — API availability, ClickHouse, Celery, LLM, GitHub rate limits |
 

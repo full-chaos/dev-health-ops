@@ -204,6 +204,10 @@ services:
       CELERY_BROKER_URL: redis://valkey:6379/0
       CELERY_RESULT_BACKEND: redis://valkey:6379/0
       LOG_LEVEL: INFO
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-dev-health-ops}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
       # Schema is applied by the one-shot `migrate` service — workers must
       # never run migrations themselves (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"

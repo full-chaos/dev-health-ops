@@ -381,6 +381,10 @@ config:
   GRAPHQL_QUERY_TIMEOUT: "30"
   BATCH_SIZE: "100"
   MAX_WORKERS: "4"
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
+  OTEL_SERVICE_NAME: "dev-health-ops"
+  OTEL_METRIC_EXPORT_INTERVAL: "60000"
   # -- Celery (auto-set if valkey.enabled, override for external broker)
   CELERY_BROKER_URL: ""
   CELERY_RESULT_BACKEND: ""

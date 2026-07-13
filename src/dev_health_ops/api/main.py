@@ -8,6 +8,7 @@ from typing import Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.metrics.sinks.factory import detect_backend
@@ -63,6 +64,7 @@ from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router
 from .auth.router import get_current_user
 from .billing import router as billing_router
+from .dependencies import get_postgres_session_dep
 from .graphql.app import create_graphql_app
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
@@ -391,6 +393,7 @@ async def home_post(
     request: Request,
     payload: HomeRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
+    semantic_session: AsyncSession = Depends(get_postgres_session_dep),
 ) -> HomeResponse:
     try:
         return await build_home_response(
@@ -398,6 +401,7 @@ async def home_post(
             filters=payload.filters,
             cache=HOME_CACHE,
             org_id=current_user.org_id,
+            semantic_session=semantic_session,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -415,6 +419,7 @@ async def home(
     start_date: date | None = None,
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
+    semantic_session: AsyncSession = Depends(get_postgres_session_dep),
 ) -> HomeResponse:
     try:
         filters = _filters_from_query(
@@ -425,6 +430,7 @@ async def home(
             filters=filters,
             cache=HOME_CACHE,
             org_id=current_user.org_id,
+            semantic_session=semantic_session,
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"

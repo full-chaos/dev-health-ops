@@ -7,6 +7,9 @@ import re
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from ..models.filters import MetricFilter
@@ -40,6 +43,7 @@ from ..queries.metrics import (
     fetch_metric_value,
     fetch_rework_theme_allocation,
 )
+from ..queries.sync_freshness import fetch_latest_successful_sync_at
 from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import (
@@ -965,11 +969,38 @@ async def build_home_response(
     filters: MetricFilter,
     cache: TTLCache,
     org_id: str = "",
+    semantic_session: AsyncSession | None = None,
 ) -> HomeResponse:
     cache_key = filter_cache_key("home", org_id, filters)
     cached = cache.get(cache_key)
+    if semantic_session is None:
+        if cached is not None:
+            return HomeResponse.model_validate(cached)
+        latest_successful_sync_at = None
+    else:
+        try:
+            latest_successful_sync_at = await fetch_latest_successful_sync_at(
+                semantic_session,
+                org_id=org_id,
+            )
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "home.sync_freshness_unavailable",
+                extra={"org_id": org_id},
+                exc_info=exc,
+            )
+            if cached is not None:
+                return HomeResponse.model_validate(cached)
+            latest_successful_sync_at = None
     if cached is not None:
-        return HomeResponse.model_validate(cached)
+        response = HomeResponse.model_validate(cached)
+        return response.model_copy(
+            update={
+                "freshness": response.freshness.model_copy(
+                    update={"latest_successful_sync_at": latest_successful_sync_at}
+                )
+            }
+        )
 
     start_day, end_day, compare_start, compare_end = time_window(filters)
 
@@ -1177,6 +1208,7 @@ async def build_home_response(
         response = HomeResponse(
             freshness=Freshness(
                 last_ingested_at=last_ingested,
+                latest_successful_sync_at=latest_successful_sync_at,
                 sources=sources,
                 coverage=Coverage(**coverage),
             ),

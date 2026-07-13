@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.main import app
 from dev_health_ops.api.models.filters import MetricFilter
 from dev_health_ops.api.models.schemas import (
@@ -30,6 +33,7 @@ _FAKE_USER = AuthenticatedUser(
     org_id="test-org",
     role="admin",
 )
+_SEMANTIC_SESSION = MagicMock(spec=AsyncSession)
 
 
 def _validate(model, payload):
@@ -41,14 +45,17 @@ def _validate(model, payload):
 @pytest.fixture
 def client():
     app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
+    app.dependency_overrides[get_postgres_session_dep] = lambda: _SEMANTIC_SESSION
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
 def test_home_endpoint_schema(client, monkeypatch):
+    captured = {}
     sample = HomeResponse(
         freshness=Freshness(
             last_ingested_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            latest_successful_sync_at=datetime(2024, 1, 2, tzinfo=timezone.utc),
             sources={"github": "ok", "gitlab": "ok", "jira": "ok", "ci": "ok"},
             coverage=Coverage(
                 repos_covered_pct=90.0,
@@ -94,7 +101,8 @@ def test_home_endpoint_schema(client, monkeypatch):
         ],
     )
 
-    async def _fake_home(**_):
+    async def _fake_home(**kwargs):
+        captured.update(kwargs)
         return sample
 
     monkeypatch.setattr("dev_health_ops.api.main.build_home_response", _fake_home)
@@ -102,14 +110,20 @@ def test_home_endpoint_schema(client, monkeypatch):
     response = client.get("/api/v1/home")
     assert response.status_code == 200
     _validate(HomeResponse, response.json())
+    assert (
+        response.json()["freshness"]["latest_successful_sync_at"]
+        == "2024-01-02T00:00:00Z"
+    )
     assert response.headers.get("X-DevHealth-Deprecated") == "use POST with filters"
+    assert captured["org_id"] == _FAKE_USER.org_id
+    assert captured["semantic_session"] is _SEMANTIC_SESSION
 
 
 def test_home_post_uses_filters(client, monkeypatch):
     captured = {}
 
     async def _fake_home(**kwargs):
-        captured["filters"] = kwargs["filters"]
+        captured.update(kwargs)
         return HomeResponse(
             freshness=Freshness(
                 last_ingested_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -153,6 +167,8 @@ def test_home_post_uses_filters(client, monkeypatch):
     assert filters.time.compare_days == 7
     assert filters.scope.level == "team"
     assert filters.scope.ids == ["team-a"]
+    assert captured["org_id"] == _FAKE_USER.org_id
+    assert captured["semantic_session"] is _SEMANTIC_SESSION
 
 
 def test_home_query_translation_matches_post(client, monkeypatch):

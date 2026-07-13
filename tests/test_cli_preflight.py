@@ -134,6 +134,7 @@ _MISSING_CASES = [
     # Bare migrate forms default to upgrade and must be guarded too.
     (("migrate", "postgres"), ("PostgreSQL",)),
     (("migrate", "clickhouse"), ("ClickHouse",)),
+    (("service-credentials", "list"), ("PostgreSQL",)),
     # sync teams persists to ClickHouse after generating teams.
     (("sync", "teams", "--provider", "synthetic"), ("ClickHouse",)),
 ]
@@ -189,6 +190,17 @@ def test_work_graph_build_rejects_unsupported_db_scheme_cleanly() -> None:
     assert "Traceback" not in result.stderr
     assert "Unknown or unsupported sink scheme 'sqlite'" in result.stderr
     assert "Only ClickHouse is supported" in result.stderr
+
+
+def test_service_credentials_rejects_non_postgres_db_flag_cleanly(tmp_path) -> None:
+    invalid_db = tmp_path / "not-postgres.db"
+    result = _run_cli("--db", f"sqlite:///{invalid_db}", "service-credentials", "list")
+
+    assert result.returncode == 2, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "PostgreSQL" in result.stderr
+    invalid_db.unlink(missing_ok=True)
+    assert not invalid_db.exists()
 
 
 def test_sync_rejects_unsupported_analytics_scheme_cleanly() -> None:

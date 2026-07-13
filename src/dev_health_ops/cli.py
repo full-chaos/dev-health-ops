@@ -367,6 +367,17 @@ def _is_push_invocation(argv: list[str] | None) -> bool:
     return bool(args) and args[0] == "push"
 
 
+def _is_service_credential_invocation(argv: list[str] | None) -> bool:
+    args = sys.argv[1:] if argv is None else argv
+    return "service-credentials" in args
+
+
+def _route_logs_to_stderr() -> None:
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.StreamHandler):
+            handler.setStream(sys.stderr)
+
+
 @contextlib.contextmanager
 def _suppress_parser_construction_noise():
     previous_disable_level = logging.root.manager.disable
@@ -494,6 +505,10 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("admin", "bundles", "assign-plan"): frozenset({_REQ_POSTGRES}),
     ("admin", "bundles", "assign-org"): frozenset({_REQ_POSTGRES}),
     ("billing", "reconcile"): frozenset({_REQ_POSTGRES}),
+    ("service-credentials", "create"): frozenset({_REQ_POSTGRES}),
+    ("service-credentials", "list"): frozenset({_REQ_POSTGRES}),
+    ("service-credentials", "rotate"): frozenset({_REQ_POSTGRES}),
+    ("service-credentials", "revoke"): frozenset({_REQ_POSTGRES}),
     ("backfill", "run"): frozenset({_REQ_POSTGRES}),
     ("maintenance", "scrub-error-text"): frozenset({_REQ_POSTGRES}),
     # --- migrations that connect to a live database ---
@@ -598,6 +613,10 @@ def run_preflight_checks(
     from dev_health_ops.db import validate_sink_uri_scheme
 
     try:
+        if _REQ_POSTGRES in requires and (uri := getattr(ns, "db", None)):
+            from dev_health_ops.db import validate_postgres_uri_scheme
+
+            validate_postgres_uri_scheme(uri)
         if _REQ_CLICKHOUSE in requires and (uri := _clickhouse_value(ns)):
             validate_sink_uri_scheme(uri)
         if _REQ_SINK_DB in requires and (uri := _sink_db_value(ns)):
@@ -635,6 +654,7 @@ def build_parser() -> argparse.ArgumentParser:
     import dev_health_ops.api.billing.cli as billing_cli
     import dev_health_ops.backfill.cli as backfill_cli
     from dev_health_ops import migrate as migrate_mod
+    from dev_health_ops import service_credentials
     from dev_health_ops.api import runner as api_runner
     from dev_health_ops.api.admin import cli as admin_cli
     from dev_health_ops.audit import (
@@ -738,6 +758,7 @@ def build_parser() -> argparse.ArgumentParser:
     api_runner.register_commands(sub)
 
     billing_cli.register_commands(sub)
+    service_credentials.register_commands(sub)
 
     # ---- admin (user/org management) ----
     admin_cli.register_commands(sub)
@@ -876,12 +897,17 @@ def main(argv: list[str] | None = None) -> int:
     quiet_json_inspect = _is_workers_inspect_json_invocation(
         argv
     ) or _is_push_invocation(argv)
+    service_credentials_output = _is_service_credential_invocation(argv)
     previous_otel_enabled = os.environ.get("OTEL_ENABLED")
     if quiet_json_inspect:
         os.environ["OTEL_ENABLED"] = "false"
 
     try:
-        if _is_help_invocation(argv) or quiet_json_inspect:
+        if (
+            _is_help_invocation(argv)
+            or quiet_json_inspect
+            or service_credentials_output
+        ):
             with _suppress_parser_construction_noise():
                 parser = build_parser()
         else:
@@ -893,6 +919,11 @@ def main(argv: list[str] | None = None) -> int:
             ns.org = _resolve_first_org_id(getattr(ns, "db", None))
 
         run_preflight_checks(parser, ns)
+        if _REQ_POSTGRES in (getattr(ns, "_requires", None) or frozenset()) and ns.db:
+            os.environ["POSTGRES_URI"] = ns.db
+
+        if service_credentials_output:
+            _route_logs_to_stderr()
 
         level_name = str(getattr(ns, "log_level", "") or "INFO").upper()
         level = getattr(logging, level_name, logging.INFO)

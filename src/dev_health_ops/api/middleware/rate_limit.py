@@ -65,6 +65,7 @@ INGEST_AUTH_ATTEMPT_IP_LIMIT = "100/minute"
 # concern (the attempt ceiling already bounds that unconditionally); it
 # exists purely to penalize repeated *wrong credentials* specifically.
 INGEST_AUTH_FAILURE_IP_LIMIT = "30/minute"
+INTERNAL_ACR_AUTH_ATTEMPT_IP_LIMIT = "100/minute"
 
 
 def get_ingest_token_key(request: Request) -> str:

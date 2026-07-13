@@ -281,6 +281,15 @@ echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
     --with-work-graph
 )
 
+echo "==> migrating PostgreSQL for internal credential lifecycle coverage"
+run_dev_hops --db "${POSTGRES_URI}" migrate postgres upgrade
+
+echo "==> running service credential subprocess lifecycle against live PostgreSQL"
+DEV_HEALTH_POSTGRES_TEST_URI="${POSTGRES_URI}" \
+  run_python -m pytest \
+  tests/test_service_credentials_cli.py::test_service_credential_create_emits_only_token_and_db_flag_is_honored \
+  -q
+
 # JWT_SECRET_KEY is now required (no SHA256 derivation fallback) — derive the same
 # value generate_auth_token() uses so tokens match between API and e2e client.
 if [ -z "${JWT_SECRET_KEY:-}" ]; then

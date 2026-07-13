@@ -146,6 +146,12 @@ def get_postgres_uri() -> str | None:
     return None
 
 
+def validate_postgres_uri_scheme(uri: str) -> None:
+    drivername = make_url(uri).drivername
+    if drivername not in {"postgresql", "postgresql+asyncpg"}:
+        raise ValueError("PostgreSQL --db must use a postgresql:// URI")
+
+
 def get_clickhouse_uri() -> str | None:
     """Get ClickHouse connection URI."""
     return os.getenv("CLICKHOUSE_URI")

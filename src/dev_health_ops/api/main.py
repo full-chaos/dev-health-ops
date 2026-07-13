@@ -29,6 +29,7 @@ from dev_health_ops.api.external_ingest.errors import (
 from dev_health_ops.api.external_ingest.status import (
     status_router as external_ingest_status_router,
 )
+from dev_health_ops.api.internal import router as internal_acr_router
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
@@ -215,6 +216,7 @@ app.include_router(product_telemetry_router)
 app.include_router(ingest_router)
 app.include_router(external_ingest_router)
 app.include_router(external_ingest_status_router)
+app.include_router(internal_acr_router)
 app.include_router(orgs_router)
 
 register_observability(app)

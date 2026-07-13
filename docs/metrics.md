@@ -96,7 +96,10 @@ For PRs with `merged_at` on day **D**:
 
 ### Daily user metrics (`user_metrics_daily`)
 
-Keyed by `(repo_id, author_email, day)` where `author_email` falls back to `author_name` when email is missing.
+Keyed by `(repo_id, author_email, day)` where `author_email` falls back to
+`author_name` when email is missing. API filter pickers expose only email-shaped
+values from this column for developer filters, because `who.developers` matches
+git author email exactly.
 
 - Commits: counts, LOC added/deleted, distinct files changed (union across the day), large commits, avg commit size
 - PRs: authored (created that day), merged (merged that day), avg/p50/p75/p90 PR cycle hours (for PRs merged that day)

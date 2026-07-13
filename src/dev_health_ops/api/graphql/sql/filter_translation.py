@@ -23,14 +23,12 @@ if TYPE_CHECKING:
 # CHAOS-2385/CHAOS-2492: author_email is the only identity column any
 # developer/author predicate can ever match (git_commits, git_pull_requests,
 # user_metrics_daily, commit_metrics; /api/v1/filters/options populates the
-# quick-filter picker with exactly this column). GraphQL input, URL-decoded
-# REST query params, and the advanced WhoSection UI (web repo) can all pass
-# arbitrary free-form strings (e.g. a raw "alice, bob" string instead of a
-# properly split array) -- silently building a predicate against a
-# non-email value would just match nothing and look like an unrelated bug
-# rather than a bad-input error. Validate format before ANY of who.developers
-# / scope.level=developer becomes a predicate (or a rejection).
-_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# quick-filter picker with exactly this column). scope.level=developer is a
+# first-class scoped query and stays strict. who.developers may arrive from
+# stale bookmarked URLs created before the email-only picker contract; keep
+# those values loadable and let the author_email predicate honestly match no
+# rows instead of rejecting the page load.
+_EMAIL_PATTERN = re.compile(r"^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$")
 
 
 def _validate_developer_emails(values: list[str], field: str) -> None:
@@ -246,8 +244,12 @@ def translate_filters(
 
     # Who filter - developers
     if filters.who is not None and filters.who.developers:
-        _validate_developer_emails(filters.who.developers, field="who")
         if use_investment:
+            # CHAOS-2746: stale URLs may still carry historical non-email
+            # developer tokens. Preserve them in the author_email predicate so
+            # the request loads as an honest-empty result instead of a
+            # validation error; new picker/free-form UI values are filtered to
+            # email-shaped values before they reach this layer.
             # CHAOS-2492: same hasAny() array-membership predicate as above.
             clauses.append(" AND hasAny(au.author_emails, %(developer_ids)s)")
             params["developer_ids"] = filters.who.developers

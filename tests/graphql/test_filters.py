@@ -205,14 +205,34 @@ class TestFilterTranslation:
             compile_timeseries(request, org_id="org1", filters=filters)
         assert exc_info.value.field == "scope"
 
-    def test_who_filter_rejects_non_email_values(self):
-        """CHAOS-2385: who.developers values must look like email
-        addresses -- GraphQL input, URL-decoded REST query params, and the
-        advanced WhoSection UI (web repo) can all pass arbitrary free-form
-        strings (e.g. a raw "alice, bob" string instead of a properly split
-        array). Validate format before it ever reaches a predicate (or the
-        "not yet supported" rejection above)."""
+    def test_who_filter_preserves_stale_non_email_values_for_investment_query(self):
+        """CHAOS-2746: stale bookmarked URLs can still carry historical
+        non-email developer tokens. The advanced picker no longer offers or
+        adds those values, but old URLs should compile to an honest-empty
+        author_email predicate instead of rejecting page load."""
         filters = FilterInput(who=WhoFilterInput(developers=["alice, bob"]))
+        request = BreakdownRequest(
+            dimension="theme",
+            measure="count",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+            use_investment=True,
+        )
+
+        sql, params = compile_breakdown(request, org_id="org1", filters=filters)
+
+        assert "work_unit_authors" in sql
+        assert "hasAny(au.author_emails, %(developer_ids)s)" in sql
+        assert params["developer_ids"] == ["alice, bob"]
+
+    def test_scope_filter_developer_rejects_non_email_values(self):
+        """CHAOS-2385: scope.level=developer ids must look like email
+        addresses -- same gap as who.developers above."""
+        filters = FilterInput(
+            scope=ScopeFilterInput(
+                level=ScopeLevelInput.DEVELOPER, ids=["not-an-email"]
+            )
+        )
         request = TimeseriesRequest(
             dimension="team",
             measure="count",
@@ -223,15 +243,19 @@ class TestFilterTranslation:
 
         with pytest.raises(ValidationError) as exc_info:
             compile_timeseries(request, org_id="org1", filters=filters)
-        assert exc_info.value.field == "who"
+        assert exc_info.value.field == "scope"
         assert "email" in str(exc_info.value).lower()
 
-    def test_scope_filter_developer_rejects_non_email_values(self):
-        """CHAOS-2385: scope.level=developer ids must look like email
-        addresses -- same gap as who.developers above."""
+    def test_scope_filter_developer_rejects_angle_bracket_email_values(self):
+        """CHAOS-2746: the GraphQL _EMAIL_PATTERN previously lacked the
+        <> exclusion present in the REST picker regex (_EMAIL_VALUE_RE in
+        api/queries/filters.py), so a raw GraphQL request could sneak
+        'alice@example.com>' past strict scope.level=developer validation
+        even though the picker/REST/web stack would never emit or accept
+        such a value. Pins the stricter, REST-aligned shape."""
         filters = FilterInput(
             scope=ScopeFilterInput(
-                level=ScopeLevelInput.DEVELOPER, ids=["not-an-email"]
+                level=ScopeLevelInput.DEVELOPER, ids=["alice@example.com>"]
             )
         )
         request = TimeseriesRequest(

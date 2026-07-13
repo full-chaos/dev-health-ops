@@ -14,6 +14,7 @@ class Coverage(BaseModel):
 
 class Freshness(BaseModel):
     last_ingested_at: datetime | None
+    latest_successful_sync_at: datetime | None = None
     sources: dict[str, str]
     coverage: Coverage
 

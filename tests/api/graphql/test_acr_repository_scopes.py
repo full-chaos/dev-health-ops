@@ -32,21 +32,42 @@ query ACRRepositoryScopes {
 }
 """
 
+_TRAILING_FRAGMENT_QUERY = """
+query ACRRepositoryScopes($orgId: String!) {
+  catalogA: catalog(orgId: $orgId, dimension: REPO) {
+    values { value count }
+  }
+  ...CrossOrganizationCatalog
+}
+
+fragment CrossOrganizationCatalog on Query {
+  catalogB: catalog(orgId: "org-b", dimension: REPO) {
+    values { value count }
+  }
+}
+"""
+
 
 def _context(
-    org_id: str, *, is_superuser: bool = False, client: object | None = None
+    org_id: str,
+    *,
+    is_superuser: bool = False,
+    is_superuser_verified: bool = True,
+    client: object | None = None,
 ) -> GraphQLContext:
+    user = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="member@example.com",
+        org_id=org_id,
+        role="member",
+        is_superuser=is_superuser,
+    )
+    user.is_superuser_verified = is_superuser_verified
     return GraphQLContext(
         org_id=org_id,
         db_url="clickhouse://test",
         client=client or object(),
-        user=AuthenticatedUser(
-            user_id=str(uuid.uuid4()),
-            email="member@example.com",
-            org_id=org_id,
-            role="member",
-            is_superuser=is_superuser,
-        ),
+        user=user,
     )
 
 
@@ -61,11 +82,14 @@ async def test_acr_repository_scopes_returns_sorted_unique_canonical_values(
         observed_org_ids.append(str(params["org_id"]))
         return [
             {"value": "Zeta/Api", "count": 2},
-            {"value": " acme / api ", "count": 3},
+            {"value": " Acme/API ", "count": 3},
             {"value": "ACME/API", "count": 4},
             {"value": "not-a-slug", "count": 9},
             {"value": "other//extra", "count": 5},
             {"value": "group/subgroup/repository", "count": 6},
+            {"value": "acme/trailing-", "count": 7},
+            {"value": "acme/leading_", "count": 8},
+            {"value": f"acme/{'a' * 101}", "count": 9},
         ]
 
     monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", _query_dicts)
@@ -82,7 +106,6 @@ async def test_acr_repository_scopes_returns_sorted_unique_canonical_values(
         "catalog": {
             "values": [
                 {"value": "acme/api", "count": 7},
-                {"value": "group/subgroup/repository", "count": 6},
                 {"value": "zeta/api", "count": 2},
             ]
         }
@@ -138,6 +161,30 @@ async def test_acr_repository_scopes_rejects_noncanonical_cross_organization_syn
     result = await schema.execute(
         query,
         variable_values=variables,
+        context_value=_context("org-a"),
+    )
+
+    assert result.data is None
+    assert result.errors is not None
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_acr_repository_scopes_rejects_cross_organization_in_trailing_fragment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def _query_dicts(_client: object, _sql: str, _params: dict[str, object]):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", _query_dicts)
+
+    result = await schema.execute(
+        _TRAILING_FRAGMENT_QUERY,
+        variable_values={"orgId": "org-a"},
         context_value=_context("org-a"),
     )
 
@@ -203,6 +250,30 @@ async def test_acr_repository_scopes_rejects_superuser_cross_organization_during
 
 
 @pytest.mark.asyncio
+async def test_acr_repository_scopes_rejects_demoted_superuser_stale_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def _query_dicts(_client: object, _sql: str, _params: dict[str, object]):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", _query_dicts)
+
+    result = await schema.execute(
+        _QUERY,
+        variable_values={"orgId": "org-b"},
+        context_value=_context("org-a", is_superuser=True, is_superuser_verified=False),
+    )
+
+    assert result.data is None
+    assert result.errors is not None
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_acr_repository_scopes_allows_superuser_cross_organization_variable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -225,6 +296,29 @@ async def test_acr_repository_scopes_allows_superuser_cross_organization_variabl
     assert result.data == {
         "catalog": {"values": [{"value": "other/repository", "count": 1}]}
     }
+
+
+@pytest.mark.asyncio
+async def test_acr_repository_scopes_limits_values_after_canonicalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _query_dicts(_client: object, _sql: str, _params: dict[str, object]):
+        return [
+            {"value": f"owner/repository-{index:03}", "count": 1}
+            for index in range(101)
+        ]
+
+    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", _query_dicts)
+
+    result = await schema.execute(
+        _QUERY,
+        variable_values={"orgId": "org-a"},
+        context_value=_context("org-a"),
+    )
+
+    assert result.errors is None
+    assert result.data is not None
+    assert len(result.data["catalog"]["values"]) == 100
 
 
 @pytest.mark.asyncio

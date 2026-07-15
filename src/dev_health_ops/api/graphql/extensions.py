@@ -42,8 +42,6 @@ def _operation_org_id(execution_context) -> str | None:
             and definition.name.value == operation_name
         ):
             operation = definition
-            if operation_name is not None:
-                break
     if operation is None:
         return None
 
@@ -154,7 +152,10 @@ class OrgIdAuthExtension(SchemaExtension):
             is_impersonating = bool(
                 impersonation is not None and getattr(impersonation, "is_active", False)
             )
-            is_superuser = bool(getattr(context.user, "is_superuser", False))
+            is_superuser = bool(
+                getattr(context.user, "is_superuser", False)
+                and getattr(context.user, "is_superuser_verified", False)
+            )
             if requested_org_id is not None:
                 if (not is_superuser or is_impersonating) and (
                     requested_org_id != original_org_id

@@ -126,6 +126,7 @@ class AuthenticatedUser:
     full_name: str | None = None
     impersonated_by: str | None = None
     token_version: int | None = None
+    is_superuser_verified: bool = False
 
     @property
     def is_admin(self) -> bool:
@@ -377,9 +378,9 @@ class AuthService:
             return None
 
         result = await db.execute(
-            select(User.id, User.is_active, User.token_version).where(
-                User.id == user_uuid
-            )
+            select(
+                User.id, User.is_active, User.is_superuser, User.token_version
+            ).where(User.id == user_uuid)
         )
         db_user = result.one_or_none()
         if db_user is None:
@@ -403,6 +404,8 @@ class AuthService:
             logger.warning("Access denied: stale session for user %s", user.user_id)
             return None
 
+        user.is_superuser = bool(db_user.is_superuser)
+        user.is_superuser_verified = True
         user.token_version = token_version
         return user
 

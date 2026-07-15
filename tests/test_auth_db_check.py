@@ -169,7 +169,12 @@ async def test_get_current_user_accepts_active_user(auth_service):
     token = _make_token(auth_service, user_id=str(user_id))
     header = f"Bearer {token}"
 
-    active_row = SimpleNamespace(id=user_id, is_active=True, token_version=0)
+    active_row = SimpleNamespace(
+        id=user_id,
+        is_active=True,
+        is_superuser=False,
+        token_version=0,
+    )
     session = _mock_session(_FakeResult(row=active_row))
 
     from contextlib import asynccontextmanager
@@ -187,6 +192,31 @@ async def test_get_current_user_accepts_active_user(auth_service):
         result = await get_current_user(authorization=header)
         assert isinstance(result, AuthenticatedUser)
         assert result.user_id == str(user_id)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_access_token_replaces_stale_superuser_claim(auth_service):
+    user_id = uuid.uuid4()
+    token = _make_token(
+        auth_service,
+        user_id=str(user_id),
+        is_superuser=True,
+    )
+    demoted_row = SimpleNamespace(
+        id=user_id,
+        is_active=True,
+        is_superuser=False,
+        token_version=0,
+    )
+
+    result = await auth_service.authenticate_access_token(
+        token,
+        _mock_session(_FakeResult(row=demoted_row)),
+    )
+
+    assert result is not None
+    assert result.is_superuser is False
+    assert result.is_superuser_verified is True
 
 
 @pytest.mark.asyncio

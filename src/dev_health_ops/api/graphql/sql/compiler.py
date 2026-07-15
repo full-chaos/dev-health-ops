@@ -587,10 +587,7 @@ def compile_catalog_values(
         needs_author_join=_needs_author_join(filters),
     )
 
-    params: dict[str, Any] = {
-        "limit": request.limit,
-        "timeout": timeout,
-    }
+    params: dict[str, Any] = {"limit": request.limit, "timeout": timeout}
 
     if dimension == Dimension.REPO:
         if _has_active_filters(filters):
@@ -603,12 +600,18 @@ def compile_catalog_values(
         return (
             """
 SELECT
-    repo AS value,
+    canonical_repo AS value,
     count() AS count
-FROM repos FINAL
-WHERE org_id = %(org_id)s
-  AND repo != ''
-GROUP BY value
+FROM (
+    SELECT lowerUTF8(trimBoth(repo)) AS canonical_repo
+    FROM repos FINAL
+    WHERE org_id = %(org_id)s
+)
+WHERE match(
+    canonical_repo,
+    '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$'
+)
+GROUP BY canonical_repo
 ORDER BY value
 LIMIT %(limit)s
 SETTINGS max_execution_time = %(timeout)s

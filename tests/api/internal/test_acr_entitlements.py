@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.internal.acr import router
 from dev_health_ops.api.services.auth import AuthService
+from dev_health_ops.licensing.generator import generate_test_license
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.internal_service_credential import (
     InternalServiceCredential,
@@ -115,6 +117,19 @@ def _user_jwt() -> str:
     )
 
 
+def _unknown_internal_service_token() -> str:
+    return "Bearer " + generate_internal_service_token()
+
+
+def _license_key_token() -> str:
+    return "Bearer " + generate_test_license(org_id=str(uuid.uuid4()))
+
+
+def _acr_client_credential_token() -> str:
+    token = "fcacr_" + base64.urlsafe_b64encode(b"a" * 32).decode().rstrip("=")
+    return "Bearer " + token
+
+
 @pytest.mark.asyncio
 async def test_acr_entitlement_returns_exact_minimal_contract_for_valid_service_token(
     session_maker, entitled_org, monkeypatch
@@ -145,9 +160,9 @@ async def test_acr_entitlement_returns_exact_minimal_contract_for_valid_service_
         None,
         "Basic abc",
         "Bearer invalid",
-        "Bearer svc_acr_bad",
-        "Bearer fcacr_client_credential",
-        "Bearer license_key_not_a_service_credential",
+        _unknown_internal_service_token,
+        _acr_client_credential_token,
+        _license_key_token,
         _user_jwt,
     ],
 )

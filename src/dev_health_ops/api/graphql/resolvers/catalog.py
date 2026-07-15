@@ -30,7 +30,8 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-_REPOSITORY_PART = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+_REPOSITORY_PART = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$")
+_REPOSITORY_VALUE_LIMIT = 100
 
 
 def _canonical_repository_values(
@@ -42,8 +43,8 @@ def _canonical_repository_values(
         count = raw_value.get("count")
         if not isinstance(value, str) or not isinstance(count, int):
             continue
-        parts = [part.strip().lower() for part in value.strip().split("/")]
-        if len(parts) < 2 or not all(
+        parts = value.strip().lower().split("/")
+        if len(parts) != 2 or not all(
             _REPOSITORY_PART.fullmatch(part) for part in parts
         ):
             continue
@@ -51,7 +52,7 @@ def _canonical_repository_values(
         counts[slug] = counts.get(slug, 0) + count
     return [
         CatalogValueItem(value=slug, count=count)
-        for slug, count in sorted(counts.items())
+        for slug, count in sorted(counts.items())[:_REPOSITORY_VALUE_LIMIT]
     ]
 
 

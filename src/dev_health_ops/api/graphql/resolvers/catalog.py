@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Any
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
 from ..cost import DEFAULT_LIMITS
+from ..errors import ValidationError
 from ..loaders.dimension_loader import (
     get_dimension_descriptions,
     get_measure_descriptions,
@@ -28,6 +30,29 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+_REPOSITORY_PART = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+
+
+def _canonical_repository_values(
+    raw_values: list[dict[str, Any]],
+) -> list[CatalogValueItem]:
+    counts: dict[str, int] = {}
+    for raw_value in raw_values:
+        value = raw_value.get("value")
+        count = raw_value.get("count")
+        if not isinstance(value, str) or not isinstance(count, int):
+            continue
+        parts = [part.strip().lower() for part in value.strip().split("/")]
+        if len(parts) < 2 or not all(
+            _REPOSITORY_PART.fullmatch(part) for part in parts
+        ):
+            continue
+        slug = "/".join(parts)
+        counts[slug] = counts.get(slug, 0) + count
+    return [
+        CatalogValueItem(value=slug, count=count)
+        for slug, count in sorted(counts.items())
+    ]
 
 
 async def resolve_catalog(
@@ -86,9 +111,15 @@ async def resolve_catalog(
                 limit=100,
                 filters=filters,
             )
-            values = [
-                CatalogValueItem(value=v["value"], count=v["count"]) for v in raw_values
-            ]
+            if dimension == DimensionInput.REPO:
+                values = _canonical_repository_values(raw_values)
+            else:
+                values = [
+                    CatalogValueItem(value=v["value"], count=v["count"])
+                    for v in raw_values
+                ]
+        except ValidationError:
+            raise
         except Exception as e:
             logger.warning("Failed to load dimension values: %s", e)
             values = []

@@ -915,10 +915,41 @@ async def _get_customer_id(org_id: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+async def require_billing_entitlement_access(
+    org_id: uuid.UUID,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)],
+) -> None:
+    from sqlalchemy import select
+
+    from dev_health_ops.models.users import Membership, User
+
+    try:
+        user_id = uuid.UUID(user.user_id)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access forbidden") from None
+    current_user = await db.get(User, user_id)
+    if current_user is None or not current_user.is_active:
+        raise HTTPException(status_code=403, detail="Access forbidden")
+    if current_user.is_superuser:
+        return
+    if user.org_id != str(org_id):
+        raise HTTPException(status_code=403, detail="Access forbidden")
+    membership = await db.execute(
+        select(Membership.id).where(
+            Membership.user_id == user_id,
+            Membership.org_id == org_id,
+        )
+    )
+    if membership.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Access forbidden")
+
+
 @router.get("/entitlements/{org_id}", response_model=EntitlementResponse)
 async def get_org_entitlements(
     org_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(postgres_session_dependency)],
+    _: Annotated[None, Depends(require_billing_entitlement_access)],
 ) -> EntitlementResponse:
     gating = importlib.import_module("dev_health_ops.licensing.gating")
     entitlements = await gating.get_org_entitlements_from_db(org_id=org_id, session=db)

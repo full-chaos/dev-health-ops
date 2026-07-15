@@ -37,6 +37,11 @@ def set_current_org_id(org_id: str) -> contextvars.Token[str | None]:
     return _current_org_id.set(org_id)
 
 
+def reset_current_org_id(token: contextvars.Token[str | None]) -> None:
+    """Restore the request organization after a temporary scope override."""
+    _current_org_id.reset(token)
+
+
 def get_current_org_id() -> str | None:
     """Get the org_id for the current request context, or None if unset."""
     return _current_org_id.get(None)

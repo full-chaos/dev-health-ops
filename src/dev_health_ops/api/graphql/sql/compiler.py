@@ -592,6 +592,30 @@ def compile_catalog_values(
         "timeout": timeout,
     }
 
+    if dimension == Dimension.REPO:
+        if _has_active_filters(filters):
+            raise ValidationError(
+                "repository catalog filters are not supported",
+                field="filters",
+                value="repo",
+            )
+        params = enforce_org_scope(org_id, params)
+        return (
+            """
+SELECT
+    repo AS value,
+    count() AS count
+FROM repos FINAL
+WHERE org_id = %(org_id)s
+  AND repo != ''
+GROUP BY value
+ORDER BY value
+LIMIT %(limit)s
+SETTINGS max_execution_time = %(timeout)s
+""",
+            params,
+        )
+
     if dimension == Dimension.TEAM:
         # Filter scope/category clauses target event-table columns, which
         # do not apply when listing teams from the semantic source of

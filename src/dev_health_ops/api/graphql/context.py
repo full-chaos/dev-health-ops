@@ -63,6 +63,27 @@ class GraphQLContext(BaseContext):
 
             raise AuthorizationError("org_id is required")
 
+    def rebind_org_id(self, org_id: str) -> None:
+        """Rebuild tenant-bound loaders for an authorized operation scope."""
+        self.org_id = org_id
+        if self.client is None:
+            return
+        from .loaders import (
+            RepoByNameLoader,
+            RepoLoader,
+            TeamByNameLoader,
+            TeamLoader,
+        )
+
+        self.team_loader = TeamLoader(self.client, org_id, cache=self.cache)
+        self.team_by_name_loader = TeamByNameLoader(
+            self.client, org_id, cache=self.cache
+        )
+        self.repo_loader = RepoLoader(self.client, org_id, cache=self.cache)
+        self.repo_by_name_loader = RepoByNameLoader(
+            self.client, org_id, cache=self.cache
+        )
+
 
 def build_context(
     org_id: str,

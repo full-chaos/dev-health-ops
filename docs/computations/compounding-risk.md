@@ -32,10 +32,12 @@ Inputs come from the current `(org_id, repo_id, day)` compute row. If any
 required input is missing on that row, the persisted score is `NULL` and the
 severity is `unknown`. **Missing data is not zero risk.**
 
-Read surfaces resolve to the most recent complete (fully-scored) day within the
-window: partial or in-progress current days whose latest Compounding Risk score
-is unavailable are skipped. If no scored day exists in the window, the score is
-unavailable rather than carried forward or recomputed.
+Read surfaces resolve to the most recent day within the window that has at least
+one fully-scored scope. Repositories missing required inputs remain visible as
+`unknown` alongside their scored peers; one sparse repository must not hide an
+otherwise usable day. Days where every scope is unscored are skipped. If no
+scored day exists in the window, the score is unavailable rather than carried
+forward or recomputed.
 
 ---
 

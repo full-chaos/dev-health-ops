@@ -84,8 +84,7 @@ async def _latest_day_for_org(
         FROM (
             SELECT
                 day,
-                count() AS row_count,
-                countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores
+                countIf(tupleElement(latest_row, 1) IS NOT NULL) AS scored_rows
             FROM (
                 SELECT
                     day,
@@ -122,7 +121,7 @@ async def _latest_day_for_org(
             )
             GROUP BY day
         )
-        WHERE row_count > 0 AND missing_scores = 0
+        WHERE scored_rows > 0
     """
     rows = await query_dicts(client, query, params)
     if not rows:

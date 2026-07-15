@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _REPOSITORY_PART = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$")
-_REPOSITORY_VALUE_LIMIT = 100
+_REPOSITORY_SCOPE_LIMIT = 100
 
 
 def _canonical_repository_values(
@@ -50,9 +50,15 @@ def _canonical_repository_values(
             continue
         slug = "/".join(parts)
         counts[slug] = counts.get(slug, 0) + count
+    if len(counts) > _REPOSITORY_SCOPE_LIMIT:
+        raise ValidationError(
+            "repository catalog exceeds supported scope limit",
+            field="dimension",
+            value="repo",
+        )
     return [
         CatalogValueItem(value=slug, count=count)
-        for slug, count in sorted(counts.items())[:_REPOSITORY_VALUE_LIMIT]
+        for slug, count in sorted(counts.items())
     ]
 
 
@@ -105,11 +111,14 @@ async def resolve_catalog(
     values = None
     if dimension is not None and context.client is not None:
         try:
+            limit = (
+                _REPOSITORY_SCOPE_LIMIT + 1 if dimension == DimensionInput.REPO else 100
+            )
             raw_values = await load_dimension_values(
                 client=context.client,
                 dimension=dimension.value,
                 org_id=org_id,
-                limit=100,
+                limit=limit,
                 filters=filters,
             )
             if dimension == DimensionInput.REPO:

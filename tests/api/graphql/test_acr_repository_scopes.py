@@ -299,13 +299,18 @@ async def test_acr_repository_scopes_allows_superuser_cross_organization_variabl
 
 
 @pytest.mark.asyncio
-async def test_acr_repository_scopes_limits_values_after_canonicalization(
+async def test_acr_repository_scopes_rejects_catalog_exceeding_supported_scope_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _query_dicts(_client: object, _sql: str, _params: dict[str, object]):
+    async def _query_dicts(_client: object, _sql: str, params: dict[str, object]):
+        assert params["limit"] == 101
         return [
             {"value": f"owner/repository-{index:03}", "count": 1}
-            for index in range(101)
+            for index in range(130)
+        ] + [
+            {"value": " OWNER/REPOSITORY-000 ", "count": 1},
+            {"value": "owner/trailing-", "count": 1},
+            {"value": "group/subgroup/repository", "count": 1},
         ]
 
     monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", _query_dicts)
@@ -316,9 +321,11 @@ async def test_acr_repository_scopes_limits_values_after_canonicalization(
         context_value=_context("org-a"),
     )
 
-    assert result.errors is None
-    assert result.data is not None
-    assert len(result.data["catalog"]["values"]) == 100
+    assert result.data is None
+    assert result.errors is not None
+    assert (
+        result.errors[0].message == "repository catalog exceeds supported scope limit"
+    )
 
 
 @pytest.mark.asyncio
@@ -345,7 +352,7 @@ async def test_acr_repository_scopes_keeps_query_wrapper_in_superuser_scope() ->
         _current_org_id.reset(token)
 
     assert result.errors is None
-    assert sink.params == [{"limit": 100, "timeout": 30, "org_id": "org-b"}]
+    assert sink.params == [{"limit": 101, "timeout": 30, "org_id": "org-b"}]
 
 
 @pytest.mark.asyncio

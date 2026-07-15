@@ -79,6 +79,7 @@ class RiskSeed:
     score: float | None
     severity: str
     computed_at: datetime
+    scope_id: str = "repo-live"
 
 
 def _scratch_db() -> str:
@@ -99,7 +100,7 @@ def _risk_row(seed: RiskSeed) -> list[Any]:
         seed.org_id,
         seed.day,
         "repo",
-        "repo-live",
+        seed.scope_id,
         seed.score,
         seed.severity,
         seed.score,
@@ -196,14 +197,14 @@ async def test_empty_state_when_no_scored_day_for_org() -> None:
     result = await resolve_compounding_risk(ctx, ORG_ID)
 
     latest_query: str = ctx.client.query.call_args_list[0].args[0]
-    assert "missing_scores = 0" in latest_query
+    assert "scored_rows > 0" in latest_query
     assert result.org_id == ORG_ID
     assert result.rows == []
     assert result.trend == []
 
 
 @pytest.mark.asyncio
-async def test_latest_day_skips_partial_null_day_and_returns_complete_score() -> None:
+async def test_latest_day_selector_accepts_mixed_scored_and_unknown_scopes() -> None:
     ctx = _ctx()
     columns = [
         "scope_id",
@@ -239,9 +240,10 @@ async def test_latest_day_skips_partial_null_day_and_returns_complete_score() ->
     assert "maxOrNull(day) AS day" in latest_query
     assert "argMax(tuple(compounding_risk), computed_at) AS latest_row" in latest_query
     assert (
-        "countIf(tupleElement(latest_row, 1) IS NULL) AS missing_scores" in latest_query
+        "countIf(tupleElement(latest_row, 1) IS NOT NULL) AS scored_rows"
+        in latest_query
     )
-    assert "missing_scores = 0" in latest_query
+    assert "scored_rows > 0" in latest_query
     assert latest_params["org_id"] == ORG_ID
     assert latest_params["scope"] == "repo"
     assert "start_day" in latest_params
@@ -322,6 +324,78 @@ async def test_live_latest_day_preserves_newer_null_score(clickhouse_sink: Any) 
         assert latest_rows[0]["severity"] == "unknown"
         assert result.rows[0].day == complete_day
         assert result.rows[0].score == pytest.approx(0.42)
+    finally:
+        _cleanup_risk_rows(clickhouse_sink, org_id)
+
+
+@pytest.mark.clickhouse
+@LIVE_CLICKHOUSE
+@pytest.mark.asyncio
+async def test_live_latest_day_accepts_mixed_scored_and_unknown_scopes(
+    clickhouse_sink: Any,
+) -> None:
+    org_id = f"test-compounding-risk-mixed-{uuid.uuid4()}"
+    end_day = datetime.now(timezone.utc).date()
+    earlier_day = end_day - timedelta(days=1)
+    computed_at = datetime(2026, 5, 21, 2, 0, tzinfo=timezone.utc)
+    try:
+        clickhouse_sink.client.insert(
+            "compounding_risk_daily",
+            [
+                _risk_row(
+                    RiskSeed(
+                        org_id=org_id,
+                        day=earlier_day,
+                        score=0.42,
+                        severity="elevated",
+                        computed_at=computed_at,
+                    )
+                ),
+                _risk_row(
+                    RiskSeed(
+                        org_id=org_id,
+                        day=end_day,
+                        scope_id="repo-scored",
+                        score=0.68,
+                        severity="high",
+                        computed_at=computed_at,
+                    )
+                ),
+                _risk_row(
+                    RiskSeed(
+                        org_id=org_id,
+                        day=end_day,
+                        scope_id="repo-unknown",
+                        score=None,
+                        severity="unknown",
+                        computed_at=computed_at,
+                    )
+                ),
+            ],
+            column_names=RISK_COLUMNS,
+        )
+
+        latest_day = await _latest_day_for_org(
+            clickhouse_sink,
+            org_id,
+            scope="repo",
+            scope_ids=None,
+            start_day=earlier_day,
+            end_day=end_day,
+        )
+        ctx = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI or "")
+        ctx.client = clickhouse_sink
+
+        result = await resolve_compounding_risk(
+            ctx, org_id, CompoundingRiskFilterInput(trend_days=2)
+        )
+
+        assert latest_day == end_day
+        assert [row.scope_id for row in result.rows] == [
+            "repo-scored",
+            "repo-unknown",
+        ]
+        assert [row.score for row in result.rows] == [pytest.approx(0.68), None]
     finally:
         _cleanup_risk_rows(clickhouse_sink, org_id)
 

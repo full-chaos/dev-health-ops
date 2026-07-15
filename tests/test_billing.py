@@ -398,12 +398,20 @@ async def test_portal_success(authed_client):
 
 @pytest.mark.asyncio
 async def test_entitlements_org_endpoint_returns_per_org_state(client, app):
+    from dev_health_ops.api.auth.router import get_current_user
+    from dev_health_ops.api.services.auth import AuthenticatedUser
     from dev_health_ops.db import postgres_session_dependency
 
     async def _override_session():
         yield AsyncMock()
 
     app.dependency_overrides[postgres_session_dependency] = _override_session
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        user_id="00000000-0000-0000-0000-000000000002",
+        email="member@example.com",
+        org_id="00000000-0000-0000-0000-000000000001",
+        role="member",
+    )
 
     mock_entitlements = {
         "tier": "team",
@@ -429,6 +437,7 @@ async def test_entitlements_org_endpoint_returns_per_org_state(client, app):
             )
     finally:
         app.dependency_overrides.pop(postgres_session_dependency, None)
+        app.dependency_overrides.pop(get_current_user, None)
 
     assert resp.status_code == 200
     body = resp.json()

@@ -20,7 +20,9 @@ import pytest
 
 from dev_health_ops.api.graphql import app as gql_app
 from dev_health_ops.api.services.auth import (
+    _current_org_id,
     _impersonation_ctx,
+    set_current_org_id,
     set_impersonation_context,
 )
 
@@ -118,6 +120,21 @@ async def test_get_context_uses_jwt_org_without_impersonation(
     ctx = await gql_app.get_context(request)  # type: ignore[arg-type]
 
     assert ctx.org_id == admin_org
+
+
+@pytest.mark.asyncio
+async def test_get_context_uses_verified_request_organization_before_jwt_org(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_admin_auth(monkeypatch, admin_org="org-admin-gql-3")
+    request = _FakeRequest(headers={"Authorization": "Bearer faketoken"})
+    token = set_current_org_id("org-selected-gql-3")
+    try:
+        ctx = await gql_app.get_context(request)  # type: ignore[arg-type]
+    finally:
+        _current_org_id.reset(token)
+
+    assert ctx.org_id == "org-selected-gql-3"
 
 
 def _superuser_graphql_context(org_id: str = "org-x"):

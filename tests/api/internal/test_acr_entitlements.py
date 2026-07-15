@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.internal.acr import router
+from dev_health_ops.api.services.auth import AuthService
+from dev_health_ops.licensing.generator import generate_test_license
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.internal_service_credential import (
     InternalServiceCredential,
@@ -104,6 +107,29 @@ def _patch_session(monkeypatch, session_maker) -> None:
     monkeypatch.setattr(acr, "get_postgres_session", _session)
 
 
+def _user_jwt() -> str:
+    return "Bearer " + AuthService(
+        secret_key="test-secret-key-for-internal-acr"
+    ).create_access_token(
+        user_id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        org_id="22222222-2222-2222-2222-222222222222",
+    )
+
+
+def _unknown_internal_service_token() -> str:
+    return "Bearer " + generate_internal_service_token()
+
+
+def _license_key_token() -> str:
+    return "Bearer " + generate_test_license(org_id=str(uuid.uuid4()))
+
+
+def _acr_client_credential_token() -> str:
+    token = "fcacr_" + base64.urlsafe_b64encode(b"a" * 32).decode().rstrip("=")
+    return "Bearer " + token
+
+
 @pytest.mark.asyncio
 async def test_acr_entitlement_returns_exact_minimal_contract_for_valid_service_token(
     session_maker, entitled_org, monkeypatch
@@ -130,7 +156,15 @@ async def test_acr_entitlement_returns_exact_minimal_contract_for_valid_service_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "authorization",
-    [None, "Basic abc", "Bearer invalid", "Bearer svc_acr_bad"],
+    [
+        None,
+        "Basic abc",
+        "Bearer invalid",
+        _unknown_internal_service_token,
+        _acr_client_credential_token,
+        _license_key_token,
+        _user_jwt,
+    ],
 )
 async def test_acr_entitlement_rejects_missing_malformed_or_unknown_tokens(
     session_maker, entitled_org, monkeypatch, authorization
@@ -138,7 +172,14 @@ async def test_acr_entitlement_rejects_missing_malformed_or_unknown_tokens(
     _patch_session(monkeypatch, session_maker)
     app = FastAPI()
     app.include_router(router)
-    headers = {} if authorization is None else {"Authorization": authorization}
+    resolved_authorization = (
+        authorization() if callable(authorization) else authorization
+    )
+    headers = (
+        {}
+        if resolved_authorization is None
+        else {"Authorization": resolved_authorization}
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(

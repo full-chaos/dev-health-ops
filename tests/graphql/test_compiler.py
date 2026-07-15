@@ -449,20 +449,23 @@ class TestCompileCatalogValues:
         assert params["org_id"] == org_id
         assert params["limit"] == 100
 
-    def test_non_team_catalog_uses_event_table_directly(self):
-        """REPO and other non-team dimensions retain the original
-        event-table catalog behavior."""
+    def test_repository_catalog_uses_org_filtered_persisted_repositories(self):
         request = CatalogValuesRequest(dimension="repo", limit=100)
         org_id = "test-org"
 
-        sql, _ = compile_catalog_values(request, org_id)
+        sql, params = compile_catalog_values(request, org_id)
 
         assert "SELECT" in sql
-        assert "repo_id" in sql
-        assert "COUNT(*)" in sql
+        assert "repo AS value" in sql
+        assert "count()" in sql
         assert "GROUP BY" in sql
-        assert "investment_metrics_daily" in sql
-        # No teams FINAL or LEFT JOIN for non-team dimensions.
+        assert "FROM repos FINAL" in sql
+        assert "org_id = %(org_id)s" in sql
+        assert "lowerUTF8(trimBoth(repo)) AS canonical_repo" in sql
+        assert "WHERE match(" in sql
+        assert "GROUP BY canonical_repo" in sql
+        assert "LIMIT %(limit)s" in sql
+        assert params["limit"] == 100
         assert "teams FINAL" not in sql
         assert "LEFT JOIN" not in sql
 

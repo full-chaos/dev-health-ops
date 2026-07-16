@@ -58,7 +58,11 @@ def should_skip(target: str) -> bool:
 
 
 def check_link(
-    source: Path, raw_target: str, anchor_cache: dict[Path, set[str]]
+    source: Path,
+    raw_target: str,
+    anchor_cache: dict[Path, set[str]],
+    docs_root: Path,
+    root: Path,
 ) -> str | None:
     if should_skip(raw_target):
         return None
@@ -71,30 +75,35 @@ def check_link(
 
     destination = source if not target_path else (source.parent / target_path).resolve()
     try:
-        destination.relative_to(DOCS_ROOT)
+        destination.relative_to(docs_root)
     except ValueError:
         return None
 
     if not destination.exists():
-        return f"{source.relative_to(ROOT)} -> {raw_target}: missing file"
+        return f"{source.relative_to(root)} -> {raw_target}: missing file"
     if destination.suffix != ".md":
         return None
 
     if anchor:
         anchors = anchor_cache.setdefault(destination, anchors_for(destination))
         if anchor not in anchors:
-            return f"{source.relative_to(ROOT)} -> {raw_target}: missing anchor"
+            return f"{source.relative_to(root)} -> {raw_target}: missing anchor"
     return None
 
 
-def main() -> int:
+def check_docs(docs_root: Path, root: Path) -> list[str]:
     errors: list[str] = []
     anchor_cache: dict[Path, set[str]] = {}
-    for path in sorted(DOCS_ROOT.rglob("*.md")):
+    for path in sorted(docs_root.rglob("*.md")):
         for target in iter_links(path):
-            error = check_link(path, target, anchor_cache)
+            error = check_link(path, target, anchor_cache, docs_root, root)
             if error:
                 errors.append(error)
+    return errors
+
+
+def main() -> int:
+    errors = check_docs(DOCS_ROOT, ROOT)
     if errors:
         for error in errors:
             print(f"ERROR: {error}")

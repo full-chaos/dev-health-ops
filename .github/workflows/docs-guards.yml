@@ -84,7 +84,8 @@ jobs:
         run: |
           python scripts/check_external_links.py \
             --built-site .build/site \
-            --allowlist docs/external-link-allowlist.yml
+            --allowlist docs/external-link-allowlist.yml \
+            --site-url https://docs.fullchaos.dev
 
   docs-guards:
     name: docs-guards

@@ -20,13 +20,16 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ALLOWLIST = ROOT / "docs" / "external-link-allowlist.yml"
+DEFAULT_SITE_URL = "https://docs.fullchaos.dev"
 
 HREF_RE = re.compile(r'<a\b[^>]*\bhref="(https?://[^"]+)"')
+ID_RE = re.compile(r'\bid="([^"]+)"')
 USER_AGENT = (
     "Mozilla/5.0 (compatible; dev-health-docs-link-check/1.0; "
     "+https://github.com/full-chaos/dev-health-ops)"
@@ -87,12 +90,51 @@ def _fetch_with_retries(url: str, fetcher: Fetcher, max_retries: int) -> FetchRe
     return False, detail
 
 
+def _origin(url: str) -> tuple[str, str, int] | None:
+    parsed_url = urlsplit(url)
+    if parsed_url.hostname is None:
+        return None
+    try:
+        port = parsed_url.port
+    except ValueError:
+        return None
+    scheme = parsed_url.scheme.lower()
+    default_port = 443 if scheme == "https" else 80
+    return scheme, parsed_url.hostname.lower(), port or default_port
+
+
+def _same_site_error(site_dir: Path, url: str, site_url: str | None) -> str | None:
+    if site_url is None:
+        return None
+    parsed_url = urlsplit(url)
+    url_origin = _origin(url)
+    site_origin = _origin(site_url)
+    if url_origin is None or url_origin != site_origin:
+        return None
+
+    destination = (site_dir / unquote(parsed_url.path).lstrip("/")).resolve()
+    try:
+        destination.relative_to(site_dir.resolve())
+    except ValueError:
+        return f"missing built page for {url}"
+    if destination.is_dir():
+        destination = destination / "index.html"
+    if not destination.is_file():
+        return f"missing built page for {url}"
+
+    anchor = unquote(parsed_url.fragment)
+    if anchor and anchor not in ID_RE.findall(destination.read_text(encoding="utf-8")):
+        return f"missing anchor '{anchor}' for {url}"
+    return ""
+
+
 def check_external_links(
     site_dir: Path,
     allowlist_path: Path,
     fetcher: Fetcher,
     today: date,
     max_retries: int = 3,
+    site_url: str | None = None,
 ) -> list[str]:
     allowlist = load_allowlist(allowlist_path)
     errors: list[str] = []
@@ -107,6 +149,11 @@ def check_external_links(
                 f"{source.relative_to(site_dir)}: allowlist entry for {url} expired on "
                 f"{entry.expires.isoformat()} (owner: {entry.owner}, reason: {entry.reason})"
             )
+            continue
+        same_site_error = _same_site_error(site_dir, url, site_url)
+        if same_site_error is not None:
+            if same_site_error:
+                errors.append(f"{source.relative_to(site_dir)}: {same_site_error}")
             continue
         if entry is not None:
             continue
@@ -143,6 +190,7 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--built-site", type=Path, required=True)
     parser.add_argument("--allowlist", type=Path, default=DEFAULT_ALLOWLIST)
+    parser.add_argument("--site-url", type=str, default=DEFAULT_SITE_URL)
     args = parser.parse_args(argv)
 
     if not args.built_site.is_dir():
@@ -152,7 +200,11 @@ def main(argv: list[str]) -> int:
         return 1
 
     errors = check_external_links(
-        args.built_site, args.allowlist, default_fetcher, date.today()
+        args.built_site,
+        args.allowlist,
+        default_fetcher,
+        date.today(),
+        site_url=args.site_url,
     )
     if errors:
         for error in errors:

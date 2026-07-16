@@ -22,7 +22,7 @@ docs\:check-built-site:
 
 docs\:check-external-links:
 	mkdocs build --strict --site-dir .build/site
-	python3 scripts/check_external_links.py --built-site .build/site --allowlist docs/external-link-allowlist.yml
+	python3 scripts/check_external_links.py --built-site .build/site --allowlist docs/external-link-allowlist.yml --site-url https://docs.fullchaos.dev
 
 docs\:check-freshness:
 	python3 scripts/check_freshness_inventory.py

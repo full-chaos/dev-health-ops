@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/ai-review-load/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Review AI risk
+  url: user-guide/views/ai-risk/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # AI Review Load
 
 The AI Review Load view is the diagnostic surface for **how AI-attributed

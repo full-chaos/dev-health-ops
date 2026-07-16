@@ -1,8 +1,8 @@
-site_name: dev-health-ops
-site_description: Developer health and operations analytics platform
+site_name: Dev Health documentation
+site_description: An evidence-led manual for understanding, using, and operating Dev Health.
 site_url: https://docs.fullchaos.dev
 
-repo_name: dev-health-ops
+repo_name: Full Chaos / Dev Health
 repo_url: https://github.com/full-chaos/dev-health-ops
 edit_uri: ""
 
@@ -17,125 +17,40 @@ theme:
     - search.suggest
 
 nav:
-  - Home: index.md
-  - Product:
-      - PRD: product/prd.md
-      - Feature Flag and User Impact PRD: product/feature-flags/feature-flag-user-impact-prd.md
-      - Feature Flag PRD Review: product/feature-flags/feature-flag-prd-review.md
-      - Product Brief: product/product-brief.md
-      - Concepts: product/concepts.md
-      - Investment Taxonomy: product/investment-taxonomy.md
-      - Capacity Planning: product/capacity-planning.md
-      - Monetization Strategy: product/monetization-strategy.md
-      - TestOps PRD: product/test-ops-prd.md
-  - Getting Started: getting-started.md
-  - Self-Hosted Quickstart: self-hosted-quickstart.md
-  - Configuration: configuration.md
-  - Team Configuration: team-configuration.md
-  - Email Setup: email-setup.md
-  - SSO Setup: sso-setup.md
-  - Webhooks: webhooks.md
-  - Customer Push Ingestion:
-      - Overview: customer-push-ingestion/overview.md
-      - API Reference: customer-push-ingestion/api-reference.md
-      - Schemas & Idempotency: customer-push-ingestion/schemas-and-idempotency.md
-      - Troubleshooting: customer-push-ingestion/troubleshooting.md
-      - Setup Guide: customer-push-ingestion/setup-guide.md
-      - Examples & Quickstart: customer-push-ingestion/examples.md
-      - CI/CD Examples: customer-push-ingestion/ci-cd.md
-  - Alerting: alerting.md
-  - Architecture:
-      - Overview: architecture.md
-      - Data Pipeline: architecture/data-pipeline.md
-      - Durable Dispatch Outbox: architecture/dispatch-outbox.md
-      - Sync Unit Model: architecture/sync-unit-model.md
-      - Team Attribution: architecture/team-attribution.md
-      - Investment Categorization Pipeline: architecture/investment-categorization-pipeline.md
-      - Investment Data Model: architecture/investment-data-model.md
-      - Repo Layout: architecture/repo-layout.md
-      - Frontend Architecture: architecture/frontend-architecture.md
-      - Middleware Impersonation: architecture/middleware-impersonation.md
-      - Auth User Journeys: architecture/auth-journey.md
-      - Database Architecture: architecture/database-architecture.md
-      - Worker Scaling Readiness: architecture/worker-scaling-readiness.md
-      - Normalization Helpers: architecture/normalization-helpers.md
-      - Enterprise Overview: architecture/enterprise-overview.md
-      - Licensing: architecture/licensing.md
-      - ADR-001 Enterprise Edition: architecture/adr/001-enterprise-edition.md
-      - ADR-003 External Ingest Test/Docs Strategy: architecture/adr/003-external-ingest-test-docs-strategy.md
-      - BYO-LLM Architecture: architecture/byo-llm-architecture.md
-  - Operations:
-      - Observability Tooling: ops/observability-tooling.md
-      - Deployment Guide: ops/deployment-guide.md
-      - Connector Inventory: ops/connector-inventory.md
-      - Stripe Billing Runbook: ops/stripe-billing-runbook.md
-      - Testing Governance: ops/testing-governance.md
-      - Enterprise Test Plan: ops/enterprise-test-plan.md
-      - Workers: ops/workers.md
-      - SLOs: slos.md
-      - Customer Offboarding: ops/customer-offboarding.md
-      - Investment Materialization: ops/investment-materialization.md
-  - CLI:
-      - Overview: cli.md
-      - Reference: ops/cli-reference.md
-  - Connectors:
-      - Usage: connectors/usage.md
-      - Private Repos: connectors/private-repo-testing.md
-      - GitHub App Auth: user-guide/github-app-auth.md
-      - GitHub App Setup: user-guide/github-app-setup.md
-  - Providers:
-      - Rate-Limit Policy: providers/rate-limit-policy.md
-  - Metrics:
-      - Overview: metrics.md
-      - Inventory: metrics-inventory.md
-      - Canonical Metrics (API Mapping): canonical-metrics.md
-      - Canonical Metrics (PRD): computations/canonical-metrics-prd.md
-      - AI Opportunity Detector: computations/ai-opportunity-detector.md
-      - Metric Calculations: computations/metric-calculations.md
-      - Computations Index: computations/index.md
-      - Views Index: user-guide/views-index.md
-      - Views:
-          - Investment View: user-guide/investment-view.md
-          - Investment Mix: user-guide/views/investment-mix.md
-          - Investment Flows: user-guide/views/investment-flows.md
-          - Investment Expense: user-guide/views/investment-expense.md
-          - Code Hotspots: user-guide/views/code-hotspots.md
-          - PR Flow: user-guide/views/pr-flow.md
-          - Quadrants: user-guide/views/quadrants.md
-          - Flame Diagrams: user-guide/views/flame-diagrams.md
-          - Capacity Planning: user-guide/views/capacity-planning.md
-          - Work Graph View: user-guide/views/work-graph.md
-          - AI Impact: user-guide/views/ai-impact.md
-          - AI Review Load: user-guide/views/ai-review-load.md
-          - AI Risk: user-guide/views/ai-risk.md
-          - AI Attribution: user-guide/views/ai-attribution.md
-      - Work Graph: user-guide/work-graph.md
-      - Reports: user-guide/reports.md
-      - Product Telemetry: user-guide/product-telemetry.md
-      - Product Telemetry Dashboard Assessment: product/product-telemetry-dashboard-assessment.md
-  - API:
-      - GraphQL Overview: api/graphql-overview.md
-      - Investment API: api/investment-api.md
-      - AI Workflow Analytics: api/graphql-ai.md
-      - GraphQL Security: api/graphql-security.md
-      - Persisted Queries: api/persisted-queries.md
-      - View Mapping: api/view-mapping.md
-      - Web GraphQL Client: api/web-graphql-client.md
-      - Web Investment Queries: api/web-graphql-investment.md
-      - Team Catalog Source of Truth: api/team-catalog-source-of-truth.md
-      - Operating Review Aggregation: api/operating-review.md
-  - Visualizations: visualizations/patterns.md
-  - LLM:
-      - Categorization Contract: llm/categorization-contract.md
-      - Credential Resolution: llm/byo-llm-credentials.md
-      - Errors and Circuit-Breaker: llm/errors-circuit-breaker.md
-      - Materialize Fan-Out: llm/materialize-fanout.md
-      - Spend Observability: llm/spend-observability.md
-      - User Flows: llm/user-flow.md
-  - Task Trackers: task_trackers.md
-  - Appendix:
-      - Legacy: appendix/legacy/index.md
-      - Export Schema Usage Audit: appendix/legacy/export-schema-usage-audit.md
+  - Start here:
+      - Welcome: index.md
+      - Understand Dev Health: product/concepts.md
+      - Find the right view: user-guide/views-index.md
+      - Read the Investment model: user-guide/investment-view.md
+  - Use Dev Health:
+      - Explore views and charts: user-guide/views-index.md
+      - Read metrics with care: metrics.md
+      - Investigate investment: user-guide/views/investment-mix.md
+      - Follow work relationships: user-guide/views/work-graph.md
+      - Review reports: user-guide/reports.md
+  - Administer & integrate:
+      - Configure a workspace: configuration.md
+      - Manage teams: team-configuration.md
+      - Connect GitHub: user-guide/github-app-setup.md
+      - Ingest your data: customer-push-ingestion/overview.md
+      - Set up webhooks: webhooks.md
+  - Deploy & operate:
+      - Self-host Dev Health: self-hosted-quickstart.md
+      - Deploy in production: ops/deployment-guide.md
+      - Run background work: ops/workers.md
+      - Monitor the platform: ops/observability-tooling.md
+      - Diagnose ingestion: ops/runbook-ingestion-failures.md
+  - Develop & extend:
+      - Set up a contributor environment: getting-started.md
+      - Use the GraphQL API: api/graphql-overview.md
+      - Build an ingestion integration: customer-push-ingestion/api-reference.md
+      - Understand provider limits: providers/rate-limit-policy.md
+  - Reference & history:
+      - Architecture overview: architecture.md
+      - API field mapping: api/view-mapping.md
+      - Canonical metrics: canonical-metrics.md
+      - Investment taxonomy: product/investment-taxonomy.md
+      - Documentation primitives: reference/primitive-showcase.md
 
 # Kept in lockstep with the excluded_internal patterns in docs/publication.yml
 # (tests/docs/test_publication_manifest.py::test_exclude_docs_matches_publication_manifest
@@ -162,11 +77,13 @@ plugins:
 
 extra_css:
   - overrides/extra.css
+  - overrides/audience.css
 
 markdown_extensions:
   - admonition
   - attr_list
   - footnotes
+  - md_in_html
   - toc:
       permalink: true
   - pymdownx.details

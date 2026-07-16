@@ -1,0 +1,24 @@
+{
+  "queries": [
+    { "query": "Inspectability", "synonyms": ["product concepts"], "canonical_url": "/product/concepts/" },
+    { "query": "WorkUnits", "synonyms": ["evidence containers"], "canonical_url": "/product/concepts/" },
+    { "query": "views and charts", "synonyms": ["find a view"], "canonical_url": "/user-guide/views-index/" },
+    { "query": "Investment View Product Specification", "synonyms": ["investment mix"], "canonical_url": "/user-guide/views/investment-mix/" },
+    { "query": "investment flows", "synonyms": ["sankey"], "canonical_url": "/user-guide/views/investment-flows/" },
+    { "query": "investment expense", "synonyms": ["cost of effort"], "canonical_url": "/user-guide/views/investment-expense/" },
+    { "query": "code hotspots", "synonyms": ["code churn"], "canonical_url": "/user-guide/views/code-hotspots/" },
+    { "query": "PR Flow", "synonyms": ["pull request flow"], "canonical_url": "/user-guide/views/pr-flow/" },
+    { "query": "quadrants", "synonyms": ["raw values"], "canonical_url": "/user-guide/views/quadrants/" },
+    { "query": "flame diagrams", "synonyms": ["single item diagnosis"], "canonical_url": "/user-guide/views/flame-diagrams/" },
+    { "query": "Capacity Planning View", "synonyms": ["backlog capacity"], "canonical_url": "/user-guide/views/capacity-planning/" },
+    { "query": "Work Graph View", "synonyms": ["work relationships"], "canonical_url": "/user-guide/views/work-graph/" },
+    { "query": "AI impact", "synonyms": ["AI assistance"], "canonical_url": "/user-guide/views/ai-impact/" },
+    { "query": "AI review load", "synonyms": ["review assistance"], "canonical_url": "/user-guide/views/ai-review-load/" },
+    { "query": "AI risk", "synonyms": ["AI governance"], "canonical_url": "/user-guide/views/ai-risk/" },
+    { "query": "AI attribution", "synonyms": ["assisted work"], "canonical_url": "/user-guide/views/ai-attribution/" },
+    { "query": "self host", "synonyms": ["self-hosted quickstart"], "canonical_url": "/self-hosted-quickstart/" },
+    { "query": "ingest data", "synonyms": ["customer push ingestion"], "canonical_url": "/customer-push-ingestion/overview/" },
+    { "query": "GraphQL API", "synonyms": ["API query"], "canonical_url": "/api/graphql-overview/" },
+    { "query": "Repository boundaries", "synonyms": ["contribute"], "canonical_url": "/contributing/platform-contract/" }
+  ]
+}

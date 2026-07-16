@@ -71,3 +71,5 @@ public_reference:
   - "coverage-matrix.md"
   - "design-system.md"
   - "graphql.md"
+  - "*.md"
+  - "**/*.md"

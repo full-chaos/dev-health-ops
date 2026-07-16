@@ -36,6 +36,9 @@
   --fc-radius-md: 0.5rem;
   --fc-radius-lg: 0.75rem;
   --fc-layer-skip: 100;
+  --fc-rule-width: 1px;
+  --fc-audience-card-min: 16rem;
+  --fc-action-min-height: 2.75rem;
   --fc-focus-ring: 0 0 0 0.22rem var(--fc-paper), 0 0 0 0.42rem var(--fc-orange);
   --fc-shadow-raised: 0 1.1rem 3rem rgb(44 36 27 / 12%);
   --fc-font-editorial: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;

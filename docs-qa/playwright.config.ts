@@ -28,6 +28,11 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], channel: "chrome" },
       testMatch: "**/*.a11y.spec.ts",
     },
+    {
+      name: "chrome-search",
+      use: { ...devices["Desktop Chrome"], channel: "chrome" },
+      testMatch: "**/*.search.spec.ts",
+    },
   ],
   ...(usesRemotePreview
     ? {}

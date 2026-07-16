@@ -106,6 +106,9 @@ All spacing is on a 4px scale.
 | `--fc-showcase-measure` | `52rem` | Wide specimen-only layout; prose stays narrower |
 | `--fc-evidence-rail-measure` | `14rem` | Legible desktop evidence column |
 | `--fc-evidence-rail-extent` | `20rem` | Sustained desktop evidence rail presence |
+| `--fc-audience-card-min` | `16rem` | Minimum width for landing task paths |
+| `--fc-action-min-height` | `2.75rem` | Minimum actionable path touch target |
+| `--fc-rule-width` | `1px` | Rule and compact panel border weight |
 
 - **Reading layout:** main prose uses `--fc-reading-measure`; wide tables and code
   blocks may use the available content width with horizontal scrolling instead of
@@ -136,6 +139,18 @@ All spacing is on a 4px scale.
 - **Accessibility:** semantic nav labels, one current-page indicator, visible focus,
   skip link preserved, search remains keyboard reachable.
 - **Motion:** Material drawer/search transitions only; no added decorative motion.
+
+### Audience task paths and page guidance
+
+- **Structure:** the manual landing exposes six task links before its first content
+  section; page templates pair audience, owner, review date, and canonical address with
+  next-step, troubleshooting, and feedback paths.
+- **Variants:** the task grid collapses from responsive columns to a single stacked path;
+  the page-end path uses one orange next action with neutral utility paths.
+- **Spacing:** `--fc-space-3` through `--fc-space-12`; task cards never use a width below
+  `--fc-audience-card-min` and use `--fc-action-min-height` for touch access.
+- **Accessibility:** links remain semantic anchors with named destinations; metadata is a
+  labelled definition list, not status communicated by color alone.
 
 ### Evidence trail
 

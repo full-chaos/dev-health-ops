@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/investment-mix/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Compare investment flows
+  url: user-guide/views/investment-flows/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # Investment View — Product Specification
 
 ## Status

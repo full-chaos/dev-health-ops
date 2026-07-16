@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/ai-impact/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Compare AI review load
+  url: user-guide/views/ai-review-load/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # AI Impact
 
 The AI Impact view summarizes how AI-assisted and agent-created work

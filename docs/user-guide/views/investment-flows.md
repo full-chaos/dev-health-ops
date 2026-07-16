@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/investment-flows/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Inspect investment expense
+  url: user-guide/views/investment-expense/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # Investment Flows (Sankey)
 
 ## What it answers

@@ -27,6 +27,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-docs.txt
 
+      - name: Set up Node
+        uses: actions/setup-node@1e60f620b9541d59f6531b8cd2c53f536c270a64 # v4.0.4
+        with:
+          node-version: "22"
+
+      - name: Run docs search acceptance
+        run: |
+          corepack enable
+          pnpm --dir docs-qa install --frozen-lockfile
+          pnpm --dir docs-qa run typecheck
+          pnpm --dir docs-qa run test:search
+
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"

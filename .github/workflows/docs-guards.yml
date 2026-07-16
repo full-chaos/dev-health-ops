@@ -44,6 +44,7 @@ jobs:
               - 'src/dev_health_ops/investment_taxonomy.py'
               - 'src/dev_health_ops/work_graph/investment/llm_schema.py'
               - 'requirements-docs.txt'
+              - 'docs-qa/**'
               - 'Makefile'
               - '.github/workflows/docs-guards.yml'
 
@@ -86,6 +87,21 @@ jobs:
             --built-site .build/site \
             --allowlist docs/external-link-allowlist.yml \
             --site-url https://docs.fullchaos.dev
+
+      - name: Set up Node
+        uses: actions/setup-node@1e60f620b9541d59f6531b8cd2c53f536c270a64 # v4.0.4
+        with:
+          node-version: "22"
+
+      - name: Install docs browser QA dependencies
+        run: |
+          corepack enable
+          pnpm --dir docs-qa install --frozen-lockfile
+
+      - name: Run docs search acceptance
+        run: |
+          pnpm --dir docs-qa run typecheck
+          pnpm --dir docs-qa run test:search
 
   docs-guards:
     name: docs-guards

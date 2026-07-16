@@ -7,6 +7,11 @@
   `.omo/evidence/task-8-unified-cloudflare-documentation/baseline/material-default-1280.png`.
   It established a generic indigo/Roboto shell, repository-index hierarchy, no
   documentation-specific tokens, and no evidence-first wayfinding.
+- **Current showcase audit:** the evidence rail and article were re-measured in real
+  Chrome at 1280px after the foundation CSS landed. The source-backed desktop shell
+  needs a full, legible evidence specimen in the showcase—not a Material-style
+  sidebar insert—and fresh `375/768/1280` captures live at
+  `.omo/evidence/task-8-unified-cloudflare-documentation/showcase/`.
 - **Structural reference:** Stripe documentation was studied for its precise editorial
   hierarchy, readable content measure, conservative rounding, tabular metadata, and
   chromatic elevation. Its purple CTA and luxury retail tone are deliberately not
@@ -98,12 +103,19 @@ All spacing is on a 4px scale.
 | `--fc-space-8` | `2rem` | Component groups |
 | `--fc-space-12` | `3rem` | Section separation |
 | `--fc-space-16` | `4rem` | Major editorial cadence |
+| `--fc-showcase-measure` | `52rem` | Wide specimen-only layout; prose stays narrower |
+| `--fc-evidence-rail-measure` | `14rem` | Legible desktop evidence column |
+| `--fc-evidence-rail-extent` | `20rem` | Sustained desktop evidence rail presence |
 
 - **Reading layout:** main prose uses `--fc-reading-measure`; wide tables and code
   blocks may use the available content width with horizontal scrolling instead of
   shrinking text.
+- **Showcase layout:** a primitive specimen may use `--fc-showcase-measure` to prove
+  its composition. This never expands body paragraphs past `--fc-reading-measure`.
 - **Desktop (>= 60rem):** the primary navigation, readable content column, and
-  evidence trail rail form the operational shell.
+  `--fc-evidence-rail-measure` evidence trail rail form the operational shell. The
+  rail is a visible secondary column, not a compressed Material sidebar afterthought.
+  Its `--fc-evidence-rail-extent` preserves a sustained trail from source to action.
 - **Tablet (>= 48rem):** body measure is retained; panels may arrange into two columns
   only when their labels remain readable.
 - **Mobile (< 48rem):** navigation uses Material's drawer, all primitive panels stack,
@@ -130,6 +142,9 @@ All spacing is on a 4px scale.
 - **Structure:** labelled `aside`, three numbered stages (source, interpretation,
   responsible action), and a real link to evidence standards.
 - **Variants:** rail on desktop, card in the primitive showcase and narrow layouts.
+- **Desktop composition:** the showcase contains the actual three-step rail component
+  at `--fc-evidence-rail-measure`; the documentation shell repeats it as a sticky
+  secondary column so the reader can inspect evidence without losing their place.
 - **Spacing:** `--fc-space-3`, `--fc-space-4`, `--fc-space-6`.
 - **States:** default, link hover, link focus-visible; no disabled or loading state.
 - **Accessibility:** the label explains purpose; numbers are supplementary rather than
@@ -147,7 +162,8 @@ All spacing is on a 4px scale.
 ### Code and table frame
 
 - **Structure:** labelled command/code block with safe wrapping, or a native table
-  inside a horizontally scrollable frame.
+  inside a horizontally scrollable frame. On narrow layouts, a visible text cue
+  names the horizontal-scroll interaction before the table.
 - **Variants:** command, API fragment, data table, diagram caption.
 - **States:** copy affordance comes from Material; native focus/selection remains
   usable; overflow is scrollable rather than clipped.

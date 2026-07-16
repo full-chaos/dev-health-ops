@@ -1,7 +1,22 @@
 # Primitive showcase
 
-This page is the visual contract for the public Dev Health manual. It demonstrates
-the reusable documentation primitives before audience pages compose them.
+<div class="fc-showcase-brief">
+  <div>
+    <p class="fc-eyebrow">Manual reference</p>
+    <p class="fc-showcase-brief__lede">This page is the visual contract for the public Dev
+    Health manual. It demonstrates the reusable documentation primitives before audience
+    pages compose them.</p>
+  </div>
+  <aside class="fc-evidence-rail fc-evidence-rail--showcase" aria-label="Evidence trail example">
+    <p class="fc-evidence-rail__label">Evidence trail</p>
+    <ol class="fc-evidence-rail__steps">
+      <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">01</span><span>Locate the source.</span></li>
+      <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">02</span><span>Read the caveat.</span></li>
+      <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">03</span><span>Choose the next step.</span></li>
+    </ol>
+    <a class="fc-evidence-rail__link" href="../product/concepts/">Read the evidence standard</a>
+  </aside>
+</div>
 
 ## Navigation and search
 
@@ -46,6 +61,8 @@ not a repository filename.
 CLICKHOUSE_URI="clickhouse://analytics.example/dev-health" \
   dev-hops metrics daily
 ```
+
+<p class="fc-table-hint">Scroll horizontally to read all evidence columns.</p>
 
 | Evidence | Interpretation | Next step |
 | --- | --- | --- |

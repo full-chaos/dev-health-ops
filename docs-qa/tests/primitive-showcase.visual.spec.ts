@@ -55,6 +55,68 @@ test.describe("primitive showcase", () => {
     await expect(action).toHaveCSS("transition-duration", "0s");
   });
 
+  test("gives the desktop article and evidence rail separate readable measures", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(showcasePath);
+
+    const layout = await page.evaluate(() => {
+      const article = document.querySelector(".md-content__inner");
+      const rail = document.querySelector(".md-sidebar--secondary .fc-evidence-rail");
+
+      if (!(article instanceof HTMLElement) || !(rail instanceof HTMLElement)) {
+        return null;
+      }
+
+      const articleBounds = article.getBoundingClientRect();
+      const railBounds = rail.getBoundingClientRect();
+      return {
+        articleWidth: articleBounds.width,
+        railHeight: railBounds.height,
+        railWidth: railBounds.width,
+        railStartsAfterArticle: railBounds.left >= articleBounds.right,
+      };
+    });
+
+    expect(layout).not.toBeNull();
+    if (layout === null) {
+      return;
+    }
+
+    expect(layout.articleWidth).toBeGreaterThanOrEqual(650);
+    expect(layout.railHeight).toBeGreaterThanOrEqual(320);
+    expect(layout.railWidth).toBeGreaterThanOrEqual(256);
+    expect(layout.railStartsAfterArticle).toBeTruthy();
+  });
+
+  test("renders a full desktop evidence rail in the primitive showcase", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(showcasePath);
+
+    const rail = page.locator(".fc-evidence-rail--showcase");
+    await expect(rail).toBeVisible();
+    await expect(rail).toContainText("Locate the source.");
+    await expect(rail).toContainText("Read the caveat.");
+    await expect(rail).toContainText("Choose the next step.");
+
+    const railBounds = await rail.boundingBox();
+    expect(railBounds?.width).toBeGreaterThanOrEqual(220);
+  });
+
+  test("labels the horizontally scrollable evidence table on mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 900 });
+    await page.goto(showcasePath);
+
+    const hint = page.locator(".fc-table-hint");
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText("Scroll horizontally");
+
+    const dimensions = await page.locator(".md-typeset__table").evaluate((table) => ({
+      clientWidth: table.clientWidth,
+      scrollWidth: table.scrollWidth,
+    }));
+    expect(dimensions.scrollWidth).toBeGreaterThan(dimensions.clientWidth);
+  });
+
   for (const viewport of [
     { name: "mobile", width: 375, height: 900 },
     { name: "tablet", width: 768, height: 900 },

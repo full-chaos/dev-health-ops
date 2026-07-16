@@ -1,8 +1,9 @@
 site_name: dev-health-ops
 site_description: Developer health and operations analytics platform
+site_url: https://docs.fullchaos.dev
 
 repo_name: dev-health-ops
-repo_url: https://github.com/chrisgeo/dev-health-ops
+repo_url: https://github.com/full-chaos/dev-health-ops
 edit_uri: ""
 
 theme:
@@ -131,15 +132,29 @@ nav:
       - Spend Observability: llm/spend-observability.md
       - User Flows: llm/user-flow.md
   - Task Trackers: task_trackers.md
-  - Roadmap: roadmap.md
-  - Project Plan: project.md
-  - Plans:
-      - Dead Code Cleanup: plans/dead-code-cleanup-plan.md
-      - Atlassian Client Integration: plans/atlassian-client-integration.md
-      - GitHub App Marketplace + Install: plans/github-app-marketplace.md
   - Appendix:
       - Legacy: appendix/legacy/index.md
       - Export Schema Usage Audit: appendix/legacy/export-schema-usage-audit.md
+
+# Kept in lockstep with the excluded_internal patterns in docs/publication.yml
+# (tests/docs/test_publication_manifest.py::test_exclude_docs_matches_publication_manifest
+# fails the build if they drift). Gitignore-pattern format per MkDocs docs.
+exclude_docs: |
+  superpowers/
+  plans/
+  implementation/
+  screenshots/
+  product/ai-assisted/
+  decisions/chaos-105-fixture-validation-revisit.md
+  security/credential-encryption-audit-*.md
+  architecture/chaos-2600-implementation-plan.md
+  architecture/team-realignment.md
+  product/dev-health-product-market-simplification.md
+  ops/testops-demo-pack.md
+  ops/testops-rollout-plan.md
+  roadmap.md
+  project.md
+  contributing/workspace-AGENTS.golden.md
 
 plugins:
   - search

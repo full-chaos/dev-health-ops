@@ -3,7 +3,7 @@
 This guide creates the **Dev Health GitHub App** that powers one‑click "Connect
 GitHub" (install the App instead of pasting a PAT) and unified GitHub sign‑in.
 It is the operator counterpart to [GitHub App auth](github-app-auth.md) and the
-plan in [`docs/plans/github-app-marketplace.md`](../plans/github-app-marketplace.md).
+plan in [`docs/plans/github-app-marketplace.md`](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/github-app-marketplace.md).
 
 > Replace `YOUR_HOST` with your public base URL. In the Docker stack, web and the
 > ops API sit behind the same host via Traefik. For purely local testing you do

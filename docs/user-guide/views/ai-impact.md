@@ -59,8 +59,8 @@ Use the leverage breakdown as an investigation path, not a verdict:
 | Unknown attribution            | Detection coverage is incomplete and should remain visible.   | Improve labels, trailers, bot identity mapping, or CI annotations. |
 | Governance coverage            | Controls may be missing for AI-attributed workflows.          | Review policy violations and coverage gaps.                        |
 
-For demo talk tracks and buyer-facing copy, see
-[AI Operating Leverage demo narrative](../../product/ai-assisted/AI%20Operating%20Leverage%20Demo%20Narrative.md).
+For demo talk tracks and buyer-facing copy, see the
+[AI Operating Leverage demo narrative](https://github.com/full-chaos/dev-health-ops/blob/main/docs/product/ai-assisted/AI%20Operating%20Leverage%20Demo%20Narrative.md).
 
 ---
 

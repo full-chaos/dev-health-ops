@@ -1215,7 +1215,7 @@ above. GitHub `git` and `commit_stats` REST-core traffic is instrumented as of
   only the credential shell needed by processor bridges, while
   `connectors/utils/rest.py` is intentionally retained in the tree for a future
   consumer. No new code may be added under `connectors/` (see
-  [`AGENTS.md`](../../AGENTS.md)); rate-limit/actuals instrumentation for those
+  [the platform contract](../contributing/platform-contract.md)); rate-limit/actuals instrumentation for those
   datasets lands as the fetch moves to `providers/github/` / `providers/gitlab/`
   — tracked as its own canonical-provider-migration effort in
   [CHAOS-2773](https://linear.app/fullchaos/issue/CHAOS-2773), since it is a

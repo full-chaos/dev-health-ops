@@ -37,6 +37,24 @@ test.describe("primitive showcase", () => {
     expect(focus).toEqual({ hasFocus: true, visibleFocus: true });
   });
 
+  test("gives action CTAs animated motion and an explicit keyboard focus ring", async ({ page }) => {
+    await page.goto(showcasePath);
+
+    const action = page.locator(".fc-action").first();
+    await expect(action).toBeVisible();
+    await expect(action).toHaveCSS("transition-property", /transform/);
+
+    const restTransform = await action.evaluate((element) => getComputedStyle(element).transform);
+    await action.hover();
+    await expect(action).not.toHaveCSS("transform", restTransform);
+
+    await action.focus();
+    await expect(action).toHaveCSS("box-shadow", /rgb/);
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(action).toHaveCSS("transition-duration", "0s");
+  });
+
   for (const viewport of [
     { name: "mobile", width: 375, height: 900 },
     { name: "tablet", width: 768, height: 900 },

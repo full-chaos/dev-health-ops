@@ -348,7 +348,7 @@ input {
   border-left-color: var(--fc-caution);
 }
 
-.fc-action {
+.md-typeset .fc-action {
   align-items: center;
   background: var(--fc-orange);
   border-radius: var(--fc-radius-sm);
@@ -361,14 +361,19 @@ input {
   transition: background-color 120ms ease-out, transform 120ms ease-out;
 }
 
-.fc-action:hover {
+.md-typeset .fc-action:hover {
   background: var(--fc-orange-dark);
   color: var(--fc-paper-raised) !important;
   transform: translateY(-1px);
 }
 
-.fc-action:active {
-  transform: translateY(0);
+.md-typeset .fc-action:active {
+  transform: translateY(1px);
+}
+
+.md-typeset .fc-action:focus-visible {
+  box-shadow: var(--fc-focus-ring);
+  outline: none;
 }
 
 .fc-flow-diagram {
@@ -445,6 +450,6 @@ input {
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0ms !important;
   }
 }

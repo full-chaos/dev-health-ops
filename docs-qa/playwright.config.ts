@@ -1,9 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
-import { previewHeaders } from "./tests/support/accessHeaders";
+import { previewTransport } from "./tests/support/previewTransport";
 
 const docsBaseUrl = process.env["DOCS_BASE_URL"] ?? "http://127.0.0.1:8008";
-const usesProtectedPreview = process.env["DOCS_BASE_URL"] !== undefined;
+const preview = previewTransport();
+const usesRemotePreview = process.env["DOCS_BASE_URL"] !== undefined;
 
 export default defineConfig({
   testDir: "./tests",
@@ -12,9 +13,9 @@ export default defineConfig({
   outputDir: "./test-results",
   use: {
     baseURL: docsBaseUrl,
-    extraHTTPHeaders: previewHeaders(),
+    extraHTTPHeaders: preview.headers,
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    trace: preview.trace,
   },
   projects: [
     {
@@ -28,7 +29,7 @@ export default defineConfig({
       testMatch: "**/*.a11y.spec.ts",
     },
   ],
-  ...(usesProtectedPreview
+  ...(usesRemotePreview
     ? {}
     : {
         webServer: {

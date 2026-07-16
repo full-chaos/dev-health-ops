@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlsplit
 
 ID_RE = re.compile(r'\bid="([^"]+)"')
 INTERNAL_REF_RE = re.compile(r'\b(?:href|src)="([^"]+)"')
+UNRENDERED_JINJA_RE = re.compile(r"{[{%#]")
 
 
 def anchors_for(html_path: Path) -> set[str]:
@@ -28,6 +29,8 @@ def should_skip(target: str) -> bool:
     if not target or target.startswith(
         ("http://", "https://", "mailto:", "tel:", "javascript:")
     ):
+        return True
+    if UNRENDERED_JINJA_RE.search(target):
         return True
     parsed = urlsplit(target)
     return bool(parsed.scheme or parsed.netloc)

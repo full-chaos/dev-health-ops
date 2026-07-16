@@ -14,7 +14,7 @@
       <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">02</span><span>Read the caveat.</span></li>
       <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">03</span><span>Choose the next step.</span></li>
     </ol>
-    <a class="fc-evidence-rail__link" href="../product/concepts/">Read the evidence standard</a>
+    <a class="fc-evidence-rail__link" href="../../product/concepts/">Read the evidence standard</a>
   </aside>
 </div>
 
@@ -26,9 +26,9 @@ not a repository filename.
 
 <nav class="fc-primitive" aria-label="Manual paths">
   <p class="fc-eyebrow">Manual paths</p>
-  <p><a href="../getting-started/">Start with the operating model</a></p>
-  <p><a href="../product/concepts/">Read the evidence standard</a></p>
-  <p><a href="../ops/workers/">Run an operational task</a></p>
+  <p><a href="../../getting-started/">Start with the operating model</a></p>
+  <p><a href="../../product/concepts/">Read the evidence standard</a></p>
+  <p><a href="../../ops/workers/">Run an operational task</a></p>
 </nav>
 
 ## Evidence trail
@@ -37,7 +37,7 @@ not a repository filename.
   <p class="fc-eyebrow">Evidence before inference</p>
   <p>A claim names its source, its caveat, and the next responsible action. The rail
   on wide pages repeats this compact sequence without competing with the article.</p>
-  <a href="../product/concepts/">Inspect product concepts and guardrails</a>
+  <a href="../../product/concepts/">Inspect product concepts and guardrails</a>
 </aside>
 
 ## Callouts and states
@@ -91,11 +91,11 @@ CLICKHOUSE_URI="clickhouse://analytics.example/dev-health" \
   <section class="fc-primitive">
     <p class="fc-eyebrow">Primary action</p>
     <p>Use the orange action only to advance a clear, accountable task.</p>
-    <a class="fc-action" href="../getting-started/">Open the quickstart</a>
+    <a class="fc-action" href="../../getting-started/">Open the quickstart</a>
   </section>
   <section class="fc-primitive">
     <p class="fc-eyebrow">Evidence link</p>
     <p>Use underlined links to inspect supporting material without implying a workflow transition.</p>
-    <a href="../product/investment-taxonomy/">Read the Investment taxonomy</a>
+    <a href="../../product/investment-taxonomy/">Read the Investment taxonomy</a>
   </section>
 </div>

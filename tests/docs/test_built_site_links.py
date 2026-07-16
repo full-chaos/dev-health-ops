@@ -1,6 +1,20 @@
+import subprocess
+import sys
 from pathlib import Path
 
 from scripts.check_built_site_links import check_built_site
+from scripts.docs_publication import classify_all
+
+ROOT = Path(__file__).resolve().parents[2]
+DOCS_DIR = ROOT / "docs"
+MKDOCS_PATH = ROOT / "mkdocs.yml"
+MANIFEST_PATH = DOCS_DIR / "publication.yml"
+SHOWCASE_TARGETS = (
+    "product/concepts.md",
+    "getting-started.md",
+    "ops/workers.md",
+    "product/investment-taxonomy.md",
+)
 
 
 def _write(path: Path, content: str) -> None:
@@ -58,4 +72,55 @@ def test_check_built_site_ignores_external_and_mailto_links(tmp_path: Path) -> N
         '<a href="mailto:team@example.com">email</a></body></html>',
     )
 
+    assert check_built_site(site_dir) == []
+
+
+def test_check_built_site_ignores_unrendered_jinja_but_rejects_real_assets(
+    tmp_path: Path,
+) -> None:
+    site_dir = tmp_path / "site"
+    _write(
+        site_dir / "overrides" / "main.html",
+        "<a href=\"{{ metadata.get('next').get('url') | url }}\">next</a>"
+        '<link rel="stylesheet" href="assets/missing.css">',
+    )
+
+    errors = check_built_site(site_dir)
+
+    assert len(errors) == 1
+    assert "assets/missing.css" in errors[0]
+
+
+def test_showcase_links_resolve_to_publicly_built_targets(tmp_path: Path) -> None:
+    classification = classify_all(DOCS_DIR, MKDOCS_PATH, MANIFEST_PATH)
+
+    assert all(classification[target] == "public-nav" for target in SHOWCASE_TARGETS)
+
+    site_dir = tmp_path / "site"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mkdocs",
+            "build",
+            "--strict",
+            "--site-dir",
+            str(site_dir),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert all(
+        target.is_file()
+        for target in (
+            site_dir / "product" / "concepts" / "index.html",
+            site_dir / "getting-started" / "index.html",
+            site_dir / "ops" / "workers" / "index.html",
+            site_dir / "product" / "investment-taxonomy" / "index.html",
+        )
+    )
     assert check_built_site(site_dir) == []

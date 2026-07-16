@@ -8,6 +8,7 @@ edit_uri: ""
 
 theme:
   name: material
+  custom_dir: docs/overrides
   features:
     - navigation.instant
     - navigation.sections
@@ -158,6 +159,9 @@ exclude_docs: |
 
 plugins:
   - search
+
+extra_css:
+  - overrides/extra.css
 
 markdown_extensions:
   - admonition

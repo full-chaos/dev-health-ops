@@ -9,14 +9,11 @@ these tests are the automated proof required before reconciliation.
 from __future__ import annotations
 
 import importlib.util
-import json
 import re
 import subprocess
 import sys
 import types
 from pathlib import Path
-
-from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 
 ROOT = Path(__file__).resolve().parents[2]
 DRIFT_SCRIPT = ROOT / "scripts" / "check_investment_docs_drift.py"
@@ -27,11 +24,17 @@ ADR_002 = ROOT / "docs" / "architecture" / "adr" / "002-investment-period-compon
 MATERIALIZE_MODULE = (
     ROOT / "src" / "dev_health_ops" / "work_graph" / "investment" / "materialize.py"
 )
-INVESTMENT_MIX_DOC = ROOT / "docs" / "user-guide" / "views" / "investment-mix.md"
+STALE_TAXONOMY_FIXTURE = (
+    ROOT
+    / "tests"
+    / "docs"
+    / "fixtures"
+    / "investment_taxonomy"
+    / "operational-external.md"
+)
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"
-JSON_BLOCK_RE = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
 
 
 def _load_gen_module() -> types.ModuleType:
@@ -162,17 +165,24 @@ def test_investment_taxonomy_all_linked_docs_exist() -> None:
         assert target.is_file(), f"investment-taxonomy.md has a broken link: {rel_link}"
 
 
-def test_investment_view_examples_use_only_canonical_taxonomy_keys() -> None:
-    content = INVESTMENT_MIX_DOC.read_text(encoding="utf-8")
-    payloads = [json.loads(raw) for raw in JSON_BLOCK_RE.findall(content)]
+def test_investment_taxonomy_fixture_reports_operational_external() -> None:
+    drift = _load_drift_module()
+    errors = drift._unknown_taxonomy_example_keys(
+        STALE_TAXONOMY_FIXTURE.read_text(encoding="utf-8"),
+        STALE_TAXONOMY_FIXTURE.name,
+    )
 
-    for payload in payloads:
-        investment = payload.get("investment")
-        if not isinstance(investment, dict):
-            continue
-        themes = investment.get("themes", {})
-        subcategories = investment.get("subcategories", {})
-        assert isinstance(themes, dict)
-        assert isinstance(subcategories, dict)
-        assert set(themes) <= THEMES
-        assert set(subcategories) <= SUBCATEGORIES
+    assert errors == [
+        "operational-external.md JSON example #1 unknown subcategories keys: "
+        "['operational.external']"
+    ]
+
+
+def _load_drift_module() -> types.ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "check_investment_docs_drift", DRIFT_SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module

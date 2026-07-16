@@ -52,45 +52,11 @@ This is:
 
 ---
 
-## Canonical Investment Categories
+## Canonical Investment Taxonomy
 
-### Themes (Fixed, Leadership-Facing)
-
-| Theme | Description |
-|-------|-------------|
-| **Feature Delivery** | New value, customer-requested, roadmap items |
-| **Operational / Support** | External support, internal support, incident response |
-| **Maintenance / Tech Debt** | Refactoring, upgrades, cleanup |
-| **Quality / Reliability** | Testing, observability, stability work |
-| **Risk / Security** | Security fixes, compliance, vulnerability remediation |
-
-**Rules:**
-- No synonyms
-- No overrides
-- No per-team customization
-
-### Subcategories (Fixed Per Theme)
-
-Each theme has a curated subcategory set providing resolution without fragmenting language.
-
-Example structure:
-```
-Operational
- ├── External-facing
- ├── Internal support
- ├── Incident response
- └── On-call / reactive
-
-Feature Delivery
- ├── Customer-requested
- ├── Strategic / roadmap
- └── Enablement / platform
-```
-
-**Rules:**
-- Subcategories are **not user-defined**
-- Subcategories are **comparable across orgs**
-- Subcategories roll up cleanly into themes
+The fixed themes, subcategory keys, and definitions are maintained in the
+[Investment Taxonomy](../../product/investment-taxonomy.md). This page uses that
+vocabulary and does not define an alternate taxonomy.
 
 ---
 

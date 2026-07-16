@@ -20,6 +20,9 @@ GEN_SCRIPT = ROOT / "scripts" / "gen_taxonomy_docs.py"
 TAXONOMY_DOC = ROOT / "docs" / "product" / "investment-taxonomy.md"
 TAXONOMY_SRC = ROOT / "src" / "dev_health_ops" / "investment_taxonomy.py"
 ADR_002 = ROOT / "docs" / "architecture" / "adr" / "002-investment-period-components.md"
+MATERIALIZE_MODULE = (
+    ROOT / "src" / "dev_health_ops" / "work_graph" / "investment" / "materialize.py"
+)
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"
@@ -127,7 +130,15 @@ def test_adr_002_is_accepted_option_a_with_no_code_changes() -> None:
     )
     # Must reference parent CHAOS-2326
     assert "CHAOS-2326" in content, "ADR-002 must reference parent issue CHAOS-2326"
-    # Must NOT add period-bounding implementation (Option A = no code changes)
+    assert MATERIALIZE_MODULE.is_file(), f"missing materializer: {MATERIALIZE_MODULE}"
+    materialize = MATERIALIZE_MODULE.read_text(encoding="utf-8")
+    build_components_index = materialize.index("components = _build_components(")
+    period_filter_index = materialize.index(
+        "if bounds.end < config.from_ts or bounds.start >= config.to_ts:"
+    )
+    assert build_components_index < period_filter_index, (
+        "period filtering must remain after component construction for ADR-002 Option A"
+    )
 
 
 def test_investment_taxonomy_all_linked_docs_exist() -> None:

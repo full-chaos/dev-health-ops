@@ -132,10 +132,10 @@ Where:
       "risk": 0.0
     },
     "subcategories": {
-      "operational.external": 0.29,
-      "operational.internal": 0.18,
+      "operational.support": 0.29,
+      "operational.on_call": 0.18,
       "feature_delivery.customer": 0.21,
-      "feature_delivery.platform": 0.12,
+      "feature_delivery.enablement": 0.12,
       "maintenance.refactor": 0.15,
       "quality.testing": 0.05
     }

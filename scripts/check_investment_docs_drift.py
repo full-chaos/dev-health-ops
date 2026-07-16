@@ -15,6 +15,7 @@ LLM_SCHEMA_PATH = (
 )
 TAXONOMY_DOC = ROOT / "docs" / "product" / "investment-taxonomy.md"
 LLM_CONTRACT_DOC = ROOT / "docs" / "llm" / "categorization-contract.md"
+INVESTMENT_MIX_DOC = ROOT / "docs" / "user-guide" / "views" / "investment-mix.md"
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"
@@ -163,8 +164,46 @@ def check_llm_schema_examples() -> list[str]:
     return errors
 
 
+def check_investment_view_examples() -> list[str]:
+    errors: list[str] = []
+    canonical_themes = _literal_set(TAXONOMY_PATH, "THEMES")
+    canonical_subcategories = _literal_set(TAXONOMY_PATH, "SUBCATEGORIES")
+    doc = INVESTMENT_MIX_DOC.read_text(encoding="utf-8")
+    for index, raw_json in enumerate(JSON_BLOCK_RE.findall(doc), start=1):
+        try:
+            payload = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            errors.append(
+                f"Investment View JSON example #{index} is invalid JSON: {exc}"
+            )
+            continue
+        if not isinstance(payload, dict):
+            continue
+        investment = payload.get("investment")
+        if not isinstance(investment, dict):
+            continue
+        for field, canonical in (
+            ("themes", canonical_themes),
+            ("subcategories", canonical_subcategories),
+        ):
+            values = investment.get(field)
+            if not isinstance(values, dict):
+                continue
+            unknown_keys = set(values) - canonical
+            if unknown_keys:
+                errors.append(
+                    f"Investment View JSON example #{index} unknown {field} keys: "
+                    f"{sorted(unknown_keys)}"
+                )
+    return errors
+
+
 def main() -> int:
-    errors = [*check_taxonomy_doc(), *check_llm_schema_examples()]
+    errors = [
+        *check_taxonomy_doc(),
+        *check_llm_schema_examples(),
+        *check_investment_view_examples(),
+    ]
     if errors:
         for error in errors:
             print(f"ERROR: {error}")

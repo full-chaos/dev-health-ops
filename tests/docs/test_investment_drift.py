@@ -9,10 +9,14 @@ these tests are the automated proof required before reconciliation.
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 import subprocess
 import sys
 import types
 from pathlib import Path
+
+from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 
 ROOT = Path(__file__).resolve().parents[2]
 DRIFT_SCRIPT = ROOT / "scripts" / "check_investment_docs_drift.py"
@@ -23,9 +27,11 @@ ADR_002 = ROOT / "docs" / "architecture" / "adr" / "002-investment-period-compon
 MATERIALIZE_MODULE = (
     ROOT / "src" / "dev_health_ops" / "work_graph" / "investment" / "materialize.py"
 )
+INVESTMENT_MIX_DOC = ROOT / "docs" / "user-guide" / "views" / "investment-mix.md"
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"
+JSON_BLOCK_RE = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
 
 
 def _load_gen_module() -> types.ModuleType:
@@ -146,8 +152,6 @@ def test_investment_taxonomy_all_linked_docs_exist() -> None:
     assert TAXONOMY_DOC.is_file(), f"missing taxonomy doc: {TAXONOMY_DOC}"
     taxonomy_dir = TAXONOMY_DOC.parent
 
-    import re
-
     link_re = re.compile(r"\[.*?\]\((\.\./[^\)]+\.md)\)")
     content = TAXONOMY_DOC.read_text(encoding="utf-8")
     links = link_re.findall(content)
@@ -156,3 +160,19 @@ def test_investment_taxonomy_all_linked_docs_exist() -> None:
     for rel_link in links:
         target = (taxonomy_dir / rel_link).resolve()
         assert target.is_file(), f"investment-taxonomy.md has a broken link: {rel_link}"
+
+
+def test_investment_view_examples_use_only_canonical_taxonomy_keys() -> None:
+    content = INVESTMENT_MIX_DOC.read_text(encoding="utf-8")
+    payloads = [json.loads(raw) for raw in JSON_BLOCK_RE.findall(content)]
+
+    for payload in payloads:
+        investment = payload.get("investment")
+        if not isinstance(investment, dict):
+            continue
+        themes = investment.get("themes", {})
+        subcategories = investment.get("subcategories", {})
+        assert isinstance(themes, dict)
+        assert isinstance(subcategories, dict)
+        assert set(themes) <= THEMES
+        assert set(subcategories) <= SUBCATEGORIES

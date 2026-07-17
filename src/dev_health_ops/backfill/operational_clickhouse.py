@@ -178,24 +178,32 @@ def _recover_provider_instance_id(
     )
     for candidate in candidates:
         if candidate:
-            return normalized_operational_provider_instance(provider, candidate)
+            normalized = normalized_operational_provider_instance(provider, candidate)
+            if normalized is not None:
+                return normalized
     return None
 
 
 def _repo_settings(value: object) -> dict[str, str]:
     if isinstance(value, dict):
-        return {str(key): str(item) for key, item in value.items()}
+        return {
+            str(key): item.strip()
+            for key, item in value.items()
+            if isinstance(item, str) and item.strip()
+        }
     if not isinstance(value, str) or not value:
         return {}
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError:
         return {}
-    return (
-        {str(key): str(item) for key, item in parsed.items()}
-        if isinstance(parsed, dict)
-        else {}
-    )
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        str(key): item.strip()
+        for key, item in parsed.items()
+        if isinstance(item, str) and item.strip()
+    }
 
 
 async def _load_atlassian_ops_batch(

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import Mock
 from uuid import UUID
+
+import pytest
 
 from dev_health_ops.backfill.operational import (
     LegacyIncidentRepositoryRow,
     map_legacy_issue_incident_batches,
+)
+from dev_health_ops.backfill.operational_clickhouse import (
+    _load_legacy_incident_repository_rows,
+    _recover_provider_instance_id,
 )
 
 _AT = datetime(2026, 7, 17, tzinfo=timezone.utc)
@@ -97,3 +104,87 @@ def test_legacy_incident_backfill_separates_organizations_and_provider_instances
         "gitlab.example.com",
     }
     assert len({batch.incidents[0].id for batch in batches}) == 2
+
+
+def test_backfill_recovery_skips_path_only_github_host() -> None:
+    # Given: a legacy repository whose only host recovery value is path-only.
+    settings = {"github_instance_url": "acme/api"}
+
+    # When: the ClickHouse backfill recovers its provider instance.
+    provider_instance_id = _recover_provider_instance_id("github", settings, None)
+
+    # Then: no bogus canonical identity can be fabricated for the repository.
+    assert provider_instance_id is None
+
+
+@pytest.mark.asyncio
+async def test_clickhouse_backfill_skips_repo_with_path_only_github_host() -> None:
+    # Given: a legacy incident repository row with no recoverable GitHub host.
+    store = Mock()
+    store.client.query.return_value = Mock(
+        result_rows=(
+            (
+                "00000000-0000-0000-0000-000000000101",
+                "incident-1",
+                "open",
+                _AT,
+                None,
+                "acme/api",
+                "github",
+                '{"github_instance_url": "acme/api"}',
+            ),
+        )
+    )
+
+    # When: canonical backfill reads the legacy repository row.
+    rows = await _load_legacy_incident_repository_rows(
+        store,
+        org_id="org-a",
+        github_provider_instance_id=None,
+        gitlab_provider_instance_id=None,
+    )
+
+    # Then: the malformed repository is skipped instead of receiving a bogus identity.
+    assert rows == ()
+
+
+@pytest.mark.asyncio
+async def test_clickhouse_backfill_uses_configured_host_after_null_url() -> None:
+    # Given: legacy settings with a null URL and a valid configured GitHub host.
+    store = Mock()
+    store.client.query.return_value = Mock(
+        result_rows=(
+            (
+                "00000000-0000-0000-0000-000000000101",
+                "incident-1",
+                "open",
+                _AT,
+                None,
+                "acme/api",
+                "github",
+                '{"url": null}',
+            ),
+        )
+    )
+
+    # When: canonical backfill reads the legacy repository row.
+    rows = await _load_legacy_incident_repository_rows(
+        store,
+        org_id="org-a",
+        github_provider_instance_id="https://ghe.acme.test:8443/api/v3",
+        gitlab_provider_instance_id=None,
+    )
+
+    # Then: it uses the configured host rather than fabricating a null identity.
+    assert rows[0].provider_instance_id == "ghe.acme.test:8443"
+
+
+def test_backfill_recovery_normalizes_enterprise_github_host_like_native_path() -> None:
+    # Given: an enterprise API URL persisted by the native GitHub path.
+    settings = {"github_instance_url": "https://GHE.Acme.test:8443/api/v3"}
+
+    # When: the legacy ClickHouse backfill recovers the provider instance.
+    provider_instance_id = _recover_provider_instance_id("github", settings, None)
+
+    # Then: it is the same canonical host emitted by the native mapper.
+    assert provider_instance_id == "ghe.acme.test:8443"

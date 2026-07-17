@@ -26,6 +26,9 @@ from typing import Any, Literal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.configuration.integration_credentials import (
+    IntegrationCredentialsService,
+)
 from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
 from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.models.operational import OperationalIncident
@@ -76,6 +79,7 @@ def matches_instance(
     *,
     entity_family: str = "legacy",
     integration_config: Mapping[str, Any] | None = None,
+    credential_base_url: str | None = None,
 ) -> bool:
     """CC5 per-provider matching (see docs/architecture/customer-push-authz.md).
 
@@ -99,8 +103,13 @@ def matches_instance(
             f"{system}_url"
         )
         default_host = "github.com" if system == "github" else "gitlab.com"
+        managed_host = (
+            configured_host
+            if isinstance(configured_host, str) and configured_host.strip()
+            else credential_base_url or default_host
+        )
         return _operational_host(system, instance) == _operational_host(
-            system, str(configured_host or default_host)
+            system, managed_host
         )
     if system in ("github", "jira"):
         return inst in _candidate_set(source.external_id, source.full_name)
@@ -114,6 +123,31 @@ def matches_instance(
             return True
         return inst in _candidate_set(source.external_id, source.full_name, source.name)
     return False
+
+
+async def _credential_base_url(
+    session: AsyncSession, *, org_id: str, system: str, integration: Integration
+) -> str | None:
+    credential_id = integration.credential_id
+    if credential_id is None:
+        return None
+    credentials, credential = await IntegrationCredentialsService(
+        session, org_id
+    ).get_decrypted_credentials_by_id(str(credential_id))
+    if credential is None or credential.provider.casefold() != system:
+        return None
+    credential_config = credential.config or {}
+    for candidate in (
+        (credentials or {}).get(f"{system}_url"),
+        (credentials or {}).get("url"),
+        (credentials or {}).get("base_url"),
+        credential_config.get(f"{system}_url"),
+        credential_config.get("url"),
+        credential_config.get("base_url"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate
+    return None
 
 
 async def find_matching_managed_sources(
@@ -147,17 +181,37 @@ async def find_matching_managed_sources(
             )
         )
     ).all()
-    return [
-        (source, bool(integration.is_active))
-        for source, integration in candidate_rows
+    credential_hosts: dict[str, str | None] = {}
+    matches: list[tuple[IntegrationSource, bool]] = []
+    for source, integration in candidate_rows:
+        credential_base_url: str | None = None
+        config = integration.config or {}
+        configured_host = config.get(f"{system}_instance_url") or config.get(
+            f"{system}_url"
+        )
+        credential_id = integration.credential_id
+        if (
+            entity_family in {"operational", "operational_incident"}
+            and system in {"github", "gitlab"}
+            and not (isinstance(configured_host, str) and configured_host.strip())
+            and credential_id is not None
+        ):
+            credential_key = str(credential_id)
+            if credential_key not in credential_hosts:
+                credential_hosts[credential_key] = await _credential_base_url(
+                    session, org_id=org_id, system=system, integration=integration
+                )
+            credential_base_url = credential_hosts[credential_key]
         if matches_instance(
             system,
             instance,
             source,
             entity_family=entity_family,
             integration_config=integration.config,
-        )
-    ]
+            credential_base_url=credential_base_url,
+        ):
+            matches.append((source, bool(integration.is_active)))
+    return matches
 
 
 async def find_active_managed_owner(

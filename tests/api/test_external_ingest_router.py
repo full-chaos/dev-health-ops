@@ -14,6 +14,7 @@ dependencies for every test below.
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import uuid as uuid_mod
 from pathlib import Path
@@ -31,6 +32,7 @@ from dev_health_ops.api.external_ingest.schemas import (
 )
 from dev_health_ops.api.external_ingest.streams import StreamUnavailableError
 from dev_health_ops.api.main import app
+from dev_health_ops.core.encryption import encrypt_value
 from dev_health_ops.external_ingest.payload_store import payload_exists
 from dev_health_ops.models.external_ingest import (
     ExternalIngestBatch,
@@ -41,6 +43,7 @@ from dev_health_ops.models.external_ingest import (
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
 from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.models.settings import IntegrationCredential
 from tests._helpers import tables_of
 
 # __init__.py exports the APIRouter as "router", shadowing the module name —
@@ -78,6 +81,7 @@ _TABLES = tables_of(
     IngestSource,
     Integration,
     IntegrationSource,
+    IntegrationCredential,
 )
 
 
@@ -662,6 +666,94 @@ async def test_accept_rejected_when_fullchaos_actively_owns_instance(
 
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "source_owned_by_fullchaos_sync"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4"),
+    ),
+)
+async def test_operational_accept_rejects_linked_credential_host(
+    client, session_maker, monkeypatch, provider: str, instance: str
+):
+    # Given: a registered operational source and managed integration sharing only a credential host.
+    source = IngestSource(
+        org_id="test-org",
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+        mode=IngestSourceMode.CUSTOMER_PUSH.value,
+        enabled=True,
+    )
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+    async with session_maker() as session:
+        credential = IntegrationCredential(
+            org_id="test-org",
+            provider=provider,
+            name=f"{provider}-credential",
+            credentials_encrypted=encrypt_value(
+                json.dumps({"token": "test-token", "base_url": instance})
+            ),
+        )
+        session.add(credential)
+        await session.flush()
+        integration = Integration(
+            org_id="test-org",
+            provider=provider,
+            credential_id=credential.id,
+            name=f"managed-{provider}",
+        )
+        session.add_all((source, integration))
+        await session.flush()
+        session.add(
+            IntegrationSource(
+                org_id="test-org",
+                integration_id=integration.id,
+                provider=provider,
+                source_type="repository",
+                external_id="acme/api",
+                name="api",
+                full_name="acme/api",
+            )
+        )
+        await session.commit()
+    operational_context = IngestAuthContext(
+        org_id="test-org",
+        scopes=frozenset({"ingest:write"}),
+        source=source,
+    )
+    app.dependency_overrides[router_mod._require_ingest_write] = lambda: (
+        operational_context
+    )
+    envelope = _envelope(
+        [
+            _record(
+                "operational_incident.v1",
+                "incident-1",
+                {
+                    "externalId": "incident-1",
+                    "sourceVersionAt": "2026-07-17T00:00:00Z",
+                    "title": "Database unavailable",
+                },
+            )
+        ]
+    )
+    envelope["source"] = {
+        "type": "customer_push",
+        "system": provider,
+        "instance": instance,
+        "entityFamily": "operational",
+    }
+
+    # When: the credential-host source submits an operational incident.
+    response = await client.post(f"{BASE}/batches", json=envelope)
+
+    # Then: accept-time ownership prevents a duplicate operational writer.
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "source_owned_by_fullchaos_sync"
 
 
 @pytest.mark.asyncio

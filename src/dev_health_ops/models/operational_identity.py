@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from dev_health_ops.models.operational import CanonicalOperationalEntity
@@ -18,23 +19,42 @@ class OperationalSourceCoordinates:
     external_id: str
 
 
+class InvalidOperationalProviderInstanceError(ValueError):
+    pass
+
+
 def normalized_operational_provider_instance(
     provider: str, provider_instance_id: str
-) -> str:
+) -> str | None:
     """Normalize an operational provider host without repository scope."""
     raw_instance = provider_instance_id.strip()
-    if provider not in {"github", "gitlab", "atlassian"}:
+    if provider not in {"github", "gitlab"}:
         return raw_instance.casefold()
     try:
-        parsed = urlsplit(
-            raw_instance if "://" in raw_instance else f"//{raw_instance}"
-        )
+        has_scheme = "://" in raw_instance
+        parsed = urlsplit(raw_instance if has_scheme else f"//{raw_instance}")
         port = parsed.port
     except ValueError:
-        return raw_instance.casefold().rstrip("/")
+        return None
     host = parsed.hostname
-    if host is None:
-        return raw_instance.casefold().rstrip("/")
+    if (
+        host is None
+        or host.casefold() in {"none", "null"}
+        or (not has_scheme and parsed.path)
+    ):
+        return None
+    try:
+        ip_address(host)
+    except ValueError:
+        labels = host.split(".")
+        if not all(
+            label
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(character.isalnum() or character == "-" for character in label)
+            for label in labels
+        ):
+            return None
     normalized_host = host.casefold()
     if provider == "github" and normalized_host in {"api.github.com", "github.com"}:
         return "github.com"
@@ -61,11 +81,16 @@ def operational_source_coordinates(
     """
     normalized_provider = provider.strip().casefold()
     normalized_external_id = external_id.strip()
+    normalized_instance = normalized_operational_provider_instance(
+        normalized_provider, provider_instance_id
+    )
+    if normalized_instance is None:
+        raise InvalidOperationalProviderInstanceError(
+            f"Invalid {normalized_provider} provider instance"
+        )
     return OperationalSourceCoordinates(
         provider=normalized_provider,
-        provider_instance_id=normalized_operational_provider_instance(
-            normalized_provider, provider_instance_id
-        ),
+        provider_instance_id=normalized_instance,
         entity_family=entity_type.entity_family,
         external_id=normalized_external_id,
     )

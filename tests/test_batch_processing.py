@@ -383,6 +383,7 @@ async def test_process_gitlab_projects_batch_persists_instance_discriminator(
 async def test_process_github_repos_batch_upserts_during_async_processing(monkeypatch):
     """Ensure async batch mode upserts as repos complete."""
     _enable_connector_stubs(monkeypatch)
+    inserted_repos = []
 
     monkeypatch.setattr(
         processors.github,
@@ -400,6 +401,7 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
 
     class DummyStore:
         async def insert_repo(self, repo):
+            inserted_repos.append(repo)
             inserted_event.set()
 
         async def insert_git_commit_data(self, commit_data):
@@ -458,6 +460,9 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
         def get_rate_limit(self):
             return {"remaining": 0, "limit": 0}
 
+        def _rest_base_url(self):
+            return "https://ghe.acme.test:8443/api/v3"
+
         def close(self):
             return
 
@@ -484,6 +489,8 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
         rate_limit_delay=0,
         use_async=True,
     )
+
+    assert inserted_repos[0].settings["github_instance_url"] == "ghe.acme.test:8443"
 
 
 @pytest.mark.asyncio

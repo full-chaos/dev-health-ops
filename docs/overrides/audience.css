@@ -85,6 +85,11 @@
   color: var(--fc-paper-raised);
 }
 
+.fc-page-paths__link:focus-visible {
+  box-shadow: var(--fc-focus-ring);
+  outline: none;
+}
+
 @media screen and (max-width: 48rem) {
   .fc-page-paths,
   .fc-metadata-list {

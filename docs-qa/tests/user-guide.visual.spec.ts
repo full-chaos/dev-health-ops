@@ -16,6 +16,21 @@ const reportsAndMetricsGuides = [
     { path: "/user-guide/reports/", continuation: "Next step: Interpret shared metrics" },
     { path: "/user-guide/metrics-interpretation/", continuation: "Next step: Review reports" },
 ] as const;
+const responsiveEvidenceGuides = [
+    onboardingPath,
+    "/user-guide/views/quadrants/",
+    "/user-guide/views/flame-diagrams/",
+    "/user-guide/views/code-hotspots/",
+    "/user-guide/views/pr-flow/",
+    "/user-guide/views/capacity-planning/",
+    "/user-guide/views/work-graph/",
+    "/user-guide/views/ai-impact/",
+    "/user-guide/views/ai-review-load/",
+    "/user-guide/views/ai-risk/",
+    "/user-guide/views/ai-attribution/",
+    "/user-guide/reports/",
+    "/user-guide/metrics-interpretation/",
+] as const;
 
 test.describe("user-guide onboarding", () => {
     for (const viewport of [
@@ -193,4 +208,32 @@ test.describe("reports and metrics guides", () => {
             .first();
         await expect(collapsedRoute).toBeHidden();
     });
+});
+
+test.describe("responsive Evidence Trail contract", () => {
+    for (const viewport of [
+        { name: "mobile", width: 375, height: 900, variant: "in-flow" },
+        { name: "tablet", width: 768, height: 900, variant: "in-flow" },
+        { name: "desktop", width: 1280, height: 900, variant: "rail" },
+    ] as const) {
+        for (const path of responsiveEvidenceGuides) {
+            test(`renders one visible ${viewport.variant} Evidence Trail for ${path} at ${viewport.name}`, async ({ page }) => {
+                await page.setViewportSize({ width: viewport.width, height: viewport.height });
+                await page.goto(path);
+
+                const evidenceTrail = page.getByRole("complementary", {
+                    name: "Evidence trail",
+                });
+                await expect(evidenceTrail).toHaveCount(1);
+                await expect(evidenceTrail).toHaveClass(
+                    new RegExp(`fc-evidence-rail--${viewport.variant}`),
+                );
+                const dimensions = await page.evaluate(() => ({
+                    clientWidth: document.documentElement.clientWidth,
+                    scrollWidth: document.documentElement.scrollWidth,
+                }));
+                expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+            });
+        }
+    }
 });

@@ -16,6 +16,35 @@ test.describe("user-guide onboarding accessibility", () => {
     });
 });
 
+test.describe("shared guide navigation accessibility", () => {
+    test("shows skip and continuation links above surrounding surfaces when focused", async ({ page }) => {
+        await page.goto("/user-guide/views/pr-flow/");
+
+        await page.keyboard.press("Tab");
+        const skipLink = page.getByRole("link", { name: "Skip to content" });
+        await expect(skipLink).toBeFocused();
+        const skipLinkIsOnTop = await skipLink.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const topElement = document.elementFromPoint(
+                bounds.left + bounds.width / 2,
+                bounds.top + bounds.height / 2,
+            );
+            return element.contains(topElement);
+        });
+        expect(skipLinkIsOnTop).toBe(true);
+
+        const continuationLink = page
+            .getByRole("navigation", { name: "Continue this documentation path" })
+            .getByRole("link", { name: "Next step: Plan capacity" });
+        await continuationLink.focus();
+        await expect(continuationLink).toBeFocused();
+        const focusRing = await continuationLink.evaluate(
+            (element) => getComputedStyle(element).boxShadow,
+        );
+        expect(focusRing).not.toBe("none");
+    });
+});
+
 test.describe("diagnostic guides accessibility", () => {
     test("has no serious or critical violations on Quadrants", async ({ page }) => {
         await page.goto("/user-guide/views/quadrants/");

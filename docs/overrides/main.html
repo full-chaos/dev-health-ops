@@ -2,6 +2,8 @@
 
 {% block content %}
   {% set metadata = page.meta if page and page.meta else {} %}
+  {% set content = page.content if page and page.content else "" %}
+  {% set has_in_flow_evidence_trail = "fc-evidence-rail--in-flow" in content %}
   {% if metadata %}
     <aside class="fc-page-metadata" aria-label="Page information" data-template="{{ metadata.get('template', 'reference') }}">
       {% if metadata.get('audience') %}<p class="fc-eyebrow">For {{ metadata.get('audience') }}</p>{% endif %}
@@ -13,6 +15,10 @@
     </aside>
   {% endif %}
   {{ super() }}
+  {% if metadata.get('template') == 'guide.html' and not has_in_flow_evidence_trail %}
+    {% set evidence_variant = "in-flow" %}
+    {% include "partials/evidence-trail.html" %}
+  {% endif %}
   <nav class="fc-page-paths" aria-label="Continue this documentation path">
     {% if metadata.get('next') %}
       <a class="fc-page-paths__link fc-page-paths__link--primary" href="{{ metadata.get('next').get('url') | url }}">Next step: {{ metadata.get('next').get('label') }}</a>

@@ -107,7 +107,7 @@ input {
   box-shadow: var(--fc-focus-ring);
 }
 
-.md-skip:focus {
+.md-skip:focus-visible {
   background: var(--fc-paper-raised);
   border-radius: var(--fc-radius-sm);
   box-shadow: var(--fc-focus-ring);
@@ -116,6 +116,8 @@ input {
   clip-path: none;
   height: auto;
   margin: var(--fc-space-2);
+  inset-block-start: var(--fc-space-2);
+  inset-inline-start: var(--fc-space-2);
   opacity: 1 !important;
   padding: var(--fc-space-3) var(--fc-space-4);
   position: fixed;
@@ -229,6 +231,14 @@ input {
   border-left: var(--fc-space-1) solid var(--fc-evidence);
   margin: var(--fc-space-8) 0;
   padding: var(--fc-space-4) 0 var(--fc-space-4) var(--fc-space-4);
+}
+
+.md-sidebar--secondary .fc-evidence-rail--rail {
+  display: none;
+}
+
+.md-content .fc-evidence-rail--in-flow {
+  max-inline-size: 100%;
 }
 
 .fc-showcase-brief {

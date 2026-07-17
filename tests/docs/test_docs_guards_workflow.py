@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "docs-guards.yml"
+DOCS_QA_PACKAGE_PATH = ROOT / "docs-qa" / "package.json"
 
 
 def _load_workflow() -> dict[str, object]:
@@ -96,6 +98,17 @@ def test_docs_search_step_uses_the_docs_qa_working_directory() -> None:
 
     assert search_step["working-directory"] == "docs-qa"
     assert search_step["run"].strip() == "pnpm run typecheck\npnpm run test:search"
+
+
+def test_docs_qa_build_uses_the_ci_python_interpreter() -> None:
+    package = json.loads(DOCS_QA_PACKAGE_PATH.read_text(encoding="utf-8"))
+    scripts = package["scripts"]
+    assert isinstance(scripts, dict)
+
+    assert (
+        scripts["build:docs"]
+        == "cd .. && python -m mkdocs build --strict --site-dir .build/site"
+    )
 
 
 @pytest.mark.parametrize(

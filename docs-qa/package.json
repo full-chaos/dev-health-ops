@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.1.1",
   "scripts": {
-    "build:docs": "cd .. && .venv/bin/python -m mkdocs build --strict --site-dir .build/site",
+    "build:docs": "cd .. && python -m mkdocs build --strict --site-dir .build/site",
     "test:visual": "playwright test --project=chrome-visual",
     "test:a11y": "playwright test --project=chrome-a11y",
     "test:search": "pnpm run build:docs && node tests/run-search.mjs",

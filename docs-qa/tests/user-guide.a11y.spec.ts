@@ -14,6 +14,20 @@ test.describe("user-guide onboarding accessibility", () => {
 
         expect(blocking).toEqual([]);
     });
+
+    test("keeps the narrow common-measures table keyboard reachable", async ({ page }) => {
+        // Given the common-measures table overflows on a narrow reader viewport.
+        await page.setViewportSize({ width: 375, height: 900 });
+
+        // When the guide is rendered with instant navigation enabled.
+        await page.goto("/user-guide/how-to-read-dev-health/");
+
+        // Then keyboard users can focus the table's horizontal scroll region.
+        const table = page.locator(".md-typeset__table");
+        await expect(table).toHaveAttribute("tabindex", "0");
+        await table.focus();
+        await expect(table).toBeFocused();
+    });
 });
 
 test.describe("shared guide navigation accessibility", () => {

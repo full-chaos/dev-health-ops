@@ -87,6 +87,9 @@ extra_css:
   - overrides/extra.css
   - overrides/audience.css
 
+extra_javascript:
+  - overrides/table-scroll-accessibility.js
+
 markdown_extensions:
   - admonition
   - attr_list

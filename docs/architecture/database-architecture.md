@@ -1,6 +1,6 @@
 # Database Architecture
 
-Dev Health Ops uses a dual-database architecture separating **semantic** (operational) data from **analytics** data.
+Dev Health Ops uses a dual-database architecture separating **semantic** control-plane data from **analytics** data. Provider-neutral operational analytics entities are ClickHouse data, not PostgreSQL models.
 
 ## Overview
 
@@ -117,6 +117,7 @@ Stores time-series and event data optimized for:
 | `commit_stats` | Per-file commit statistics |
 | `pull_requests` | PR lifecycle data |
 | `work_items` | Jira/GitHub/GitLab issues |
+| `operational_*` | Provider-neutral services, incidents, alerts, on-call data, and repository mappings |
 | `repo_metrics_daily` | Daily repository metrics |
 | `user_metrics_daily` | Daily per-user metrics |
 | `team_metrics_daily` | Daily team aggregates |

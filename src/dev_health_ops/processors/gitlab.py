@@ -55,6 +55,11 @@ from dev_health_ops.processors.testops_ingest import (
 )
 from dev_health_ops.processors.testops_tests import process_gitlab_test_report
 from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
+from dev_health_ops.providers.operational_migration import (
+    IssueIncidentSource,
+    map_issue_incidents,
+    operational_dual_write_enabled,
+)
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
@@ -1102,7 +1107,17 @@ def _fetch_gitlab_deployments_sync(
     return deployments
 
 
-def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, since):
+def _fetch_gitlab_incidents_sync(
+    connector,
+    project_id,
+    repo_id,
+    max_issues,
+    since,
+    canonical_sources: list[IssueIncidentSource] | None = None,
+    canonical_org_id: str | None = None,
+    canonical_provider_instance_id: str | None = None,
+    repo_full_name: str | None = None,
+):
     """Sync helper to fetch GitLab incidents (configurable incident labels)."""
     incidents: list[Incident] = []
     labels = resolve_incident_labels()
@@ -1150,15 +1165,49 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
         if closed_at_str:
             resolved_at = safe_parse_datetime(closed_at_str)
 
+        issue_id = str(issue.get("id", ""))
         incidents.append(
             Incident(
                 repo_id=repo_id,
-                incident_id=str(issue.get("id", "")),
+                incident_id=issue_id,
                 status=issue.get("state", None),
                 started_at=created_at,
                 resolved_at=resolved_at,
             )
         )
+        if (
+            canonical_sources is not None
+            and canonical_org_id
+            and canonical_provider_instance_id
+            and repo_full_name
+            and issue_id
+        ):
+            raw_labels = issue.get("labels")
+            canonical_labels = (
+                tuple(str(label) for label in raw_labels)
+                if isinstance(raw_labels, list)
+                else ()
+            )
+            updated_at = safe_parse_datetime(issue.get("updated_at"))
+            canonical_sources.append(
+                IssueIncidentSource(
+                    org_id=canonical_org_id,
+                    provider="gitlab",
+                    provider_instance_id=canonical_provider_instance_id,
+                    repo_id=repo_id,
+                    repo_full_name=repo_full_name,
+                    external_id=issue_id,
+                    issue_number=str(issue.get("iid", "")) or None,
+                    source_url=issue.get("web_url") or issue.get("url"),
+                    labels=canonical_labels,
+                    raw_status=issue.get("state"),
+                    title=issue.get("title") or "",
+                    description=issue.get("description"),
+                    created_at=created_at,
+                    resolved_at=resolved_at,
+                    source_version_at=updated_at or created_at,
+                )
+            )
 
     return incidents
 
@@ -2375,6 +2424,9 @@ async def process_gitlab_project(
 
         if sync_incidents:
             logging.info("Fetching incidents from GitLab...")
+            canonical_sources: list[IssueIncidentSource] | None = (
+                [] if operational_dual_write_enabled() else None
+            )
             incidents = await loop.run_in_executor(
                 None,
                 _fetch_gitlab_incidents_sync,
@@ -2383,10 +2435,18 @@ async def process_gitlab_project(
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                canonical_sources,
+                getattr(store, "org_id", "") or None,
+                normalize_gitlab_instance(gitlab_url) or "https://gitlab.com",
+                full_name,
             )
             incidents = _filter_after(incidents, until, "started_at")
             if incidents:
                 await ingestion_sink.insert_incidents(incidents)
+                if canonical_sources:
+                    await ingestion_sink.insert_operational_batch(
+                        map_issue_incidents(canonical_sources)
+                    )
                 logging.info(f"Stored {len(incidents)} incidents from GitLab")
 
         if sync_security:
@@ -2756,6 +2816,9 @@ async def process_gitlab_projects_batch(
 
         if sync_incidents:
             try:
+                canonical_sources: list[IssueIncidentSource] | None = (
+                    [] if operational_dual_write_enabled() else None
+                )
                 incidents = await loop.run_in_executor(
                     None,
                     _fetch_gitlab_incidents_sync,
@@ -2764,9 +2827,17 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    canonical_sources,
+                    getattr(store, "org_id", "") or None,
+                    normalize_gitlab_instance(gitlab_url) or "https://gitlab.com",
+                    project_info.full_name,
                 )
                 if incidents:
                     await ingestion_sink.insert_incidents(incidents)
+                    if canonical_sources:
+                        await ingestion_sink.insert_operational_batch(
+                            map_issue_incidents(canonical_sources)
+                        )
             except Exception as e:
                 logging.warning(
                     "Failed to fetch incidents for GitLab project %s: %s",

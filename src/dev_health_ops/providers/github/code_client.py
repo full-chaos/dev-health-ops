@@ -157,6 +157,11 @@ class GitHubIssueData:
     state: str | None
     created_at: datetime | None
     closed_at: datetime | None
+    updated_at: datetime | None = None
+    source_url: str | None = None
+    title: str | None = None
+    description: str | None = None
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -492,12 +497,27 @@ def _pull_from_item(item: Mapping[str, Any]) -> GitHubPullData:
 
 
 def _issue_from_item(item: Mapping[str, Any]) -> GitHubIssueData:
+    raw_labels = item.get("labels")
+    labels = (
+        tuple(
+            str(label["name"])
+            for label in raw_labels
+            if isinstance(label, Mapping) and label.get("name") is not None
+        )
+        if isinstance(raw_labels, list)
+        else ()
+    )
     return GitHubIssueData(
         issue_id=str(item.get("id") or ""),
         number=_int_or_zero(item.get("number")),
         state=str(item["state"]) if item.get("state") is not None else None,
         created_at=_parse_alert_datetime(item.get("created_at")),
         closed_at=_parse_alert_datetime(item.get("closed_at")),
+        updated_at=_parse_alert_datetime(item.get("updated_at")),
+        source_url=str(item.get("html_url") or item.get("url") or "") or None,
+        title=str(item["title"]) if item.get("title") is not None else None,
+        description=str(item["body"]) if item.get("body") is not None else None,
+        labels=labels,
     )
 
 

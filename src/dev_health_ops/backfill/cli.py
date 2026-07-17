@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 from datetime import timedelta
 
@@ -12,6 +13,7 @@ from dev_health_ops.utils.cli import (
     validate_sink,
 )
 
+from .operational_clickhouse import run_canonical_operational_backfill
 from .runner import run_backfill_for_config
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,27 @@ def register_backfill_commands(subparsers: argparse._SubParsersAction) -> None:
     add_date_range_args(run_parser)
     add_sink_arg(run_parser)
     run_parser.set_defaults(func=_cmd_backfill_run)
+
+    operational_parser = backfill_subparsers.add_parser(
+        "operational",
+        help="Migrate legacy incident producers into canonical operational tables.",
+    )
+    operational_parser.add_argument("--org", required=True, help="Organization id")
+    operational_parser.add_argument(
+        "--github-provider-instance-id", default="github.com", help="GitHub instance"
+    )
+    operational_parser.add_argument(
+        "--gitlab-provider-instance-id",
+        default="https://gitlab.com",
+        help="GitLab instance",
+    )
+    operational_parser.add_argument(
+        "--atlassian-provider-instance-id",
+        default="atlassian-ops",
+        help="Atlassian Ops instance",
+    )
+    add_sink_arg(operational_parser)
+    operational_parser.set_defaults(func=_cmd_backfill_operational)
 
 
 def _cmd_backfill_run(ns: argparse.Namespace) -> int:
@@ -64,4 +87,28 @@ def _cmd_backfill_run(ns: argparse.Namespace) -> int:
         return 0
     except Exception as exc:
         logger.error("Backfill failed: %s", exc)
+        return 1
+
+
+def _cmd_backfill_operational(ns: argparse.Namespace) -> int:
+    try:
+        validate_sink(ns)
+        result = asyncio.run(
+            run_canonical_operational_backfill(
+                clickhouse_uri=resolve_sink_uri(ns),
+                org_id=ns.org,
+                github_provider_instance_id=ns.github_provider_instance_id,
+                gitlab_provider_instance_id=ns.gitlab_provider_instance_id,
+                atlassian_provider_instance_id=ns.atlassian_provider_instance_id,
+            )
+        )
+        print(
+            "Migrated canonical operational rows: "
+            f"services={result.services}, incidents={result.incidents}, "
+            f"alerts={result.alerts}, schedules={result.schedules}, "
+            f"service_repository_mappings={result.service_repository_mappings}"
+        )
+        return 0
+    except Exception as exc:
+        logger.error("Canonical operational backfill failed: %s", exc)
         return 1

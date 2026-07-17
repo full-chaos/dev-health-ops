@@ -757,6 +757,95 @@ async def test_operational_accept_rejects_linked_credential_host(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4"),
+    ),
+)
+async def test_operational_accept_rejects_undecryptable_linked_credential_host(
+    client, session_maker, monkeypatch, provider: str, instance: str
+):
+    # Given: a registered operational source and an active managed integration with no readable host.
+    source = IngestSource(
+        org_id="test-org",
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+        mode=IngestSourceMode.CUSTOMER_PUSH.value,
+        enabled=True,
+    )
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+    async with session_maker() as session:
+        credential = IntegrationCredential(
+            org_id="test-org",
+            provider=provider,
+            name=f"{provider}-credential",
+            credentials_encrypted="undecryptable",
+        )
+        session.add(credential)
+        await session.flush()
+        integration = Integration(
+            org_id="test-org",
+            provider=provider,
+            credential_id=credential.id,
+            name=f"managed-{provider}",
+        )
+        session.add_all((source, integration))
+        await session.flush()
+        session.add(
+            IntegrationSource(
+                org_id="test-org",
+                integration_id=integration.id,
+                provider=provider,
+                source_type="repository",
+                external_id="acme/api",
+                name="api",
+                full_name="acme/api",
+            )
+        )
+        await session.commit()
+    operational_context = IngestAuthContext(
+        org_id="test-org",
+        scopes=frozenset({"ingest:write"}),
+        source=source,
+    )
+    app.dependency_overrides[router_mod._require_ingest_write] = lambda: (
+        operational_context
+    )
+    envelope = _envelope(
+        [
+            _record(
+                "operational_incident.v1",
+                "incident-1",
+                {
+                    "externalId": "incident-1",
+                    "sourceVersionAt": "2026-07-17T00:00:00Z",
+                    "title": "Database unavailable",
+                },
+            )
+        ]
+    )
+    envelope["source"] = {
+        "type": "customer_push",
+        "system": provider,
+        "instance": instance,
+        "entityFamily": "operational",
+    }
+
+    # When: the customer source submits an operational incident.
+    response = await client.post(f"{BASE}/batches", json=envelope)
+
+    # Then: accept fails closed while ownership cannot be resolved.
+    assert response.status_code != 202
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ownership_resolution_unavailable"
+    assert "linked managed credential" in response.json()["error"]["message"]
+    assert "undecryptable" not in response.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_unexpected_exception_falls_through_to_generic_handler(
     client, monkeypatch
 ):

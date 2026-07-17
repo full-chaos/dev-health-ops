@@ -47,7 +47,11 @@ from dev_health_ops.api.external_ingest.schemas import (
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.licensing import feature_flag_state, resolve_org_tier
 from dev_health_ops.api.utils.audit import emit_audit_log
-from dev_health_ops.external_ingest.ownership import find_matching_managed_sources
+from dev_health_ops.external_ingest.ownership import (
+    OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE,
+    OperationalOwnershipResolutionUnavailableError,
+    find_matching_managed_sources,
+)
 from dev_health_ops.external_ingest.validate import validate_records
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
@@ -301,13 +305,22 @@ async def _resolve_ownership(
     if system == "custom":
         return matched_id, warnings
 
-    matches = await find_matching_managed_sources(
-        session,
-        org_id=org_id,
-        system=system,
-        instance=instance,
-        entity_family=entity_family,
-    )
+    try:
+        matches = await find_matching_managed_sources(
+            session,
+            org_id=org_id,
+            system=system,
+            instance=instance,
+            entity_family=entity_family,
+        )
+    except OperationalOwnershipResolutionUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ownership_resolution_unavailable",
+                "message": OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE,
+            },
+        ) from exc
     enabled_match = next(
         (
             source

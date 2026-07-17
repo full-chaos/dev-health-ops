@@ -37,7 +37,9 @@ from dev_health_ops.api.middleware.rate_limit import (
     limiter,
 )
 from dev_health_ops.external_ingest.ownership import (
+    OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE,
     EffectiveMode,
+    OperationalOwnershipResolutionUnavailableError,
     resolve_effective_mode,
 )
 from dev_health_ops.external_ingest.payload_store import upsert_payload
@@ -369,13 +371,20 @@ async def accept_batch(
     # write-eligible source row -- it cannot see a managed sync source that
     # was connected to the SAME instance AFTER registration (nothing on the
     # api/admin/routers/sync.py side knows about external_ingest_sources).
-    mode = await resolve_effective_mode(
-        session,
-        org_id=ctx.org_id,
-        system=envelope.source.system,
-        instance=envelope.source.instance,
-        entity_family=envelope.source.entity_family,
-    )
+    try:
+        mode = await resolve_effective_mode(
+            session,
+            org_id=ctx.org_id,
+            system=envelope.source.system,
+            instance=envelope.source.instance,
+            entity_family=envelope.source.entity_family,
+        )
+    except OperationalOwnershipResolutionUnavailableError as exc:
+        raise ExternalIngestError(
+            403,
+            "ownership_resolution_unavailable",
+            OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE,
+        ) from exc
     if mode != "customer_push":
         raise _ownership_error(mode, envelope.source.system, envelope.source.instance)
 

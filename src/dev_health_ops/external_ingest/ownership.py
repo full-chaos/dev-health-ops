@@ -21,7 +21,9 @@ See docs/architecture/external-ingest-idempotency-ownership.md.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Final, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,12 +34,44 @@ from dev_health_ops.api.services.configuration.integration_credentials import (
 from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
 from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.models.operational import OperationalIncident
-from dev_health_ops.models.operational_identity import operational_source_coordinates
+from dev_health_ops.models.operational_identity import (
+    normalized_operational_provider_instance,
+    operational_source_coordinates,
+)
 
 EffectiveMode = Literal["fullchaos_sync", "customer_push", "disabled", "unclaimed"]
 
+OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE: Final = (
+    "Ownership could not be determined because a linked managed credential is "
+    "unreadable or does not declare an instance host. Repair the managed "
+    "integration before enabling customer push."
+)
+
+
+class _CredentialHostState(StrEnum):
+    RESOLVED = "resolved"
+    UNREADABLE = "unreadable"
+    MISSING_BASE_URL = "missing_base_url"
+
+
+@dataclass(frozen=True, slots=True)
+class _CredentialHostResolution:
+    state: _CredentialHostState
+    base_url: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalOwnershipResolutionUnavailableError(Exception):
+    provider: str
+
+    def __str__(self) -> str:
+        return "Operational ownership resolution is unavailable"
+
+
 __all__ = [
     "EffectiveMode",
+    "OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE",
+    "OperationalOwnershipResolutionUnavailableError",
     "find_active_managed_owner",
     "find_matching_managed_sources",
     "linear_is_org_wide_placeholder",
@@ -125,29 +159,40 @@ def matches_instance(
     return False
 
 
-async def _credential_base_url(
+async def _credential_host_resolution(
     session: AsyncSession, *, org_id: str, system: str, integration: Integration
-) -> str | None:
+) -> _CredentialHostResolution:
+    """Resolve a linked credential host without conflating unreadable and absent hosts."""
     credential_id = integration.credential_id
     if credential_id is None:
-        return None
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
     credentials, credential = await IntegrationCredentialsService(
         session, org_id
     ).get_decrypted_credentials_by_id(str(credential_id))
     if credential is None or credential.provider.casefold() != system:
-        return None
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    if credentials is not None and not isinstance(credentials, Mapping):
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    credential_values: Mapping[str, Any] = credentials or {}
     credential_config = credential.config or {}
+    invalid_host = False
     for candidate in (
-        (credentials or {}).get(f"{system}_url"),
-        (credentials or {}).get("url"),
-        (credentials or {}).get("base_url"),
+        credential_values.get(f"{system}_url"),
+        credential_values.get("url"),
+        credential_values.get("base_url"),
         credential_config.get(f"{system}_url"),
         credential_config.get("url"),
         credential_config.get("base_url"),
     ):
         if isinstance(candidate, str) and candidate.strip():
-            return candidate
-    return None
+            if normalized_operational_provider_instance(system, candidate) is not None:
+                return _CredentialHostResolution(
+                    _CredentialHostState.RESOLVED, candidate
+                )
+            invalid_host = True
+    if credentials is None or invalid_host:
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    return _CredentialHostResolution(_CredentialHostState.MISSING_BASE_URL, None)
 
 
 async def find_matching_managed_sources(
@@ -181,7 +226,7 @@ async def find_matching_managed_sources(
             )
         )
     ).all()
-    credential_hosts: dict[str, str | None] = {}
+    credential_hosts: dict[str, _CredentialHostResolution] = {}
     matches: list[tuple[IntegrationSource, bool]] = []
     for source, integration in candidate_rows:
         credential_base_url: str | None = None
@@ -189,6 +234,7 @@ async def find_matching_managed_sources(
         configured_host = config.get(f"{system}_instance_url") or config.get(
             f"{system}_url"
         )
+        default_host = "github.com" if system == "github" else "gitlab.com"
         credential_id = integration.credential_id
         if (
             entity_family in {"operational", "operational_incident"}
@@ -198,10 +244,19 @@ async def find_matching_managed_sources(
         ):
             credential_key = str(credential_id)
             if credential_key not in credential_hosts:
-                credential_hosts[credential_key] = await _credential_base_url(
+                credential_hosts[credential_key] = await _credential_host_resolution(
                     session, org_id=org_id, system=system, integration=integration
                 )
-            credential_base_url = credential_hosts[credential_key]
+            credential_host = credential_hosts[credential_key]
+            credential_base_url = credential_host.base_url
+            if (
+                credential_host.state is not _CredentialHostState.RESOLVED
+                and _operational_host(system, instance)
+                != _operational_host(system, default_host)
+                and source.is_enabled
+                and integration.is_active
+            ):
+                raise OperationalOwnershipResolutionUnavailableError(system)
         if matches_instance(
             system,
             instance,

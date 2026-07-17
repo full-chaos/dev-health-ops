@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -34,6 +34,7 @@ def _source_revision() -> SourceRevision:
     return SourceRevision(
         head_sha=head_sha,
         committed_at=datetime.fromisoformat(committed_at.replace("Z", "+00:00")),
+        validated_at=datetime.now(UTC),
     )
 
 

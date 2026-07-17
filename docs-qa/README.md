@@ -17,11 +17,15 @@ The five canonical workspace evidence manifests and their 48 screenshots are loc
 evidence, not committed source. After capturing a fresh packet for the current commit, run:
 
 ```bash
-EVIDENCE_ROOT="$HOME/projects/full-chaos/dev-health/.omo/evidence"
+EVIDENCE_ROOT="/path/to/user-guide-coverage-evidence"
 ../.venv/bin/python ../scripts/validate_user_guide_evidence.py --evidence-root "$EVIDENCE_ROOT"
 ```
 
-The validator requires the five task-7 through task-11 manifests to enumerate exactly 48
-sanitized `375×900`, `768×900`, and `1280×900` Chrome artifacts with source-head, freshness,
-digest, route/state/browser/timestamp, console, network, accessibility, and sanitization receipts.
-CI deliberately does not run this local-evidence command.
+The validator recursively inventories PNGs only inside the five canonical task-7 through task-11
+directories, where it requires exactly 48 sanitized `375×900`, `768×900`, and `1280×900` Chrome
+artifacts. Historical evidence elsewhere under the explicit root is ignored, except the known
+noncanonical `task-3-final` orphan, which this wave rejects and the capture operator must remove.
+Every manifest records the final source HEAD and a capture start after that commit; every artifact
+records a post-start capture timestamp, matching post-start file mtime, actual SHA-256,
+route/state/browser, console, network, accessibility, and sanitization receipts. CI deliberately
+does not run this local-evidence command.

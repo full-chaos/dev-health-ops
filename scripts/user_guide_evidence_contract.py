@@ -111,6 +111,7 @@ class Artifact(EvidenceModel):
 
 class Source(EvidenceModel):
     head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    capture_started_at: datetime
 
 
 class Manifest(EvidenceModel):
@@ -123,3 +124,4 @@ class Manifest(EvidenceModel):
 class SourceRevision:
     head_sha: str
     committed_at: datetime
+    validated_at: datetime

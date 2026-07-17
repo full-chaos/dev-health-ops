@@ -8,6 +8,7 @@ established by tests/api/admin/test_integrations.py.
 from __future__ import annotations
 
 import importlib
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,11 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.external_ingest.schemas import SCHEMA_VERSION
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.core.encryption import encrypt_value
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.ingest_auth import IngestSource, IngestToken
 from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
+from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -37,6 +40,7 @@ _TABLES = tables_of(
     Organization,
     Integration,
     IntegrationSource,
+    IntegrationCredential,
     IngestSource,
     IngestToken,
     FeatureFlag,
@@ -132,16 +136,33 @@ async def _seed_integration_source(
     full_name: str,
     name: str | None = None,
     metadata_: dict | None = None,
+    credential_base_url: str | None = None,
+    credential_encrypted_override: str | None = None,
     is_enabled: bool = True,
     integration_is_active: bool = True,
 ) -> None:
     integration_id = uuid.uuid4()
     async with session_maker() as session:
+        credential_id = None
+        if credential_base_url is not None or credential_encrypted_override is not None:
+            credential = IntegrationCredential(
+                org_id=org_id,
+                provider=provider,
+                name=f"{provider}-credential",
+                credentials_encrypted=credential_encrypted_override
+                or encrypt_value(
+                    json.dumps({"token": "test-token", "base_url": credential_base_url})
+                ),
+            )
+            session.add(credential)
+            await session.flush()
+            credential_id = credential.id
         session.add(
             Integration(
                 id=integration_id,
                 org_id=org_id,
                 provider=provider,
+                credential_id=credential_id,
                 name=f"{provider}-integration",
                 is_active=integration_is_active,
             )
@@ -360,6 +381,396 @@ async def test_github_enabled_managed_match_by_external_id_409(session_maker, cl
     resp = await _create_source(ac, system="github", instance="acme/api")
     assert resp.status_code == 409
     assert resp.json()["detail"]["code"] == "source_owned_by_fullchaos_sync"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4"),
+    ),
+)
+async def test_operational_registration_rejects_linked_credential_host(
+    session_maker, client, monkeypatch, provider: str, instance: str
+):
+    # Given: a managed self-hosted provider with its host only on its credential.
+    ac, state = client
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+        credential_base_url=instance,
+    )
+
+    # When: a customer push registers the operational family for that host.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: the managed integration remains the only owner.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "source_owned_by_fullchaos_sync"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance", "environment_url"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3", "GITHUB_URL"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4", "GITLAB_URL"),
+    ),
+)
+async def test_operational_registration_rejects_environment_auth_host(
+    session_maker,
+    client,
+    monkeypatch,
+    provider: str,
+    instance: str,
+    environment_url: str,
+):
+    # Given: a credentialless managed integration authenticated from its environment.
+    ac, state = client
+    monkeypatch.setenv(f"{provider.upper()}_TOKEN", "test-token")
+    monkeypatch.setenv(environment_url, instance)
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: a customer push registers the operational family for that host.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: environment-auth ownership prevents a second owner.
+    assert response.status_code != 201
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "source_owned_by_fullchaos_sync"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance", "environment_url"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3", "GITHUB_URL"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4", "GITLAB_URL"),
+    ),
+)
+async def test_operational_registration_rejects_invalid_environment_auth_host(
+    session_maker,
+    client,
+    monkeypatch,
+    provider: str,
+    instance: str,
+    environment_url: str,
+):
+    # Given: an active credentialless integration with an invalid declared environment host.
+    ac, state = client
+    monkeypatch.setenv(f"{provider.upper()}_TOKEN", "test-token")
+    monkeypatch.setenv(environment_url, "not a valid host")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: a customer push registers an operational source for the same provider and org.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: ownership fails closed instead of defaulting the bad declaration to public.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ownership_resolution_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance", "environment_url"),
+    (
+        ("github", "https://ghe.other.test:8443/api/v3", "GITHUB_URL"),
+        ("gitlab", "https://gitlab.other.test:8443/api/v4", "GITLAB_URL"),
+    ),
+)
+async def test_operational_registration_allows_unrelated_host_without_environment_url(
+    session_maker,
+    client,
+    monkeypatch,
+    provider: str,
+    instance: str,
+    environment_url: str,
+):
+    # Given: a credentialless public managed integration with no declared environment host.
+    ac, state = client
+    monkeypatch.delenv(environment_url, raising=False)
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: a customer push registers an unrelated self-hosted operational source.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: no declared environment host preserves the public default without over-blocking.
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "environment_url"),
+    (("github", "GITHUB_URL"), ("gitlab", "GITLAB_URL")),
+)
+async def test_invalid_environment_auth_host_does_not_block_another_org(
+    session_maker, client, monkeypatch, provider: str, environment_url: str
+):
+    # Given: an invalid environment host belonging only to another organization.
+    ac, _ = client
+    monkeypatch.setenv(environment_url, "not a valid host")
+    await _seed_integration_source(
+        session_maker,
+        str(uuid.uuid4()),
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: this organization registers the same provider for a self-hosted instance.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance="https://ghe.other.test:8443/api/v3",
+        entity_family="operational",
+    )
+
+    # Then: another organization's unavailable resolution does not block this source.
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("managed_provider", "requested_provider", "environment_url"),
+    (
+        ("github", "gitlab", "GITHUB_URL"),
+        ("gitlab", "github", "GITLAB_URL"),
+    ),
+)
+async def test_invalid_environment_auth_host_does_not_block_another_provider(
+    session_maker,
+    client,
+    monkeypatch,
+    managed_provider: str,
+    requested_provider: str,
+    environment_url: str,
+):
+    # Given: this organization has an invalid environment host for a different provider.
+    ac, state = client
+    monkeypatch.setenv(environment_url, "not a valid host")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=managed_provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: the other provider registers its operational source.
+    response = await _create_source(
+        ac,
+        system=requested_provider,
+        instance="https://ghe.other.test:8443/api/v3",
+        entity_family="operational",
+    )
+
+    # Then: provider-scoped resolution does not over-block.
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4"),
+    ),
+)
+async def test_operational_registration_rejects_undecryptable_linked_credential_host(
+    session_maker, client, monkeypatch, provider: str, instance: str
+):
+    # Given: an active managed self-hosted provider whose linked credential is unreadable.
+    ac, state = client
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+        credential_encrypted_override="undecryptable",
+    )
+
+    # When: a customer push registers the operational family for a self-hosted host.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: registration fails closed instead of assuming the public default host.
+    assert response.status_code != 201
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ownership_resolution_unavailable"
+    assert "linked managed credential" in response.json()["detail"]["message"]
+    assert "undecryptable" not in response.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4"),
+    ),
+)
+async def test_operational_registration_rejects_linked_credential_without_base_url(
+    session_maker, client, monkeypatch, provider: str, instance: str
+):
+    # Given: an active managed self-hosted provider with a readable credential lacking a host.
+    ac, state = client
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+        credential_encrypted_override=encrypt_value(
+            json.dumps({"token": "test-token"})
+        ),
+    )
+
+    # When: a customer push registers the operational family for a self-hosted host.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: the incomplete credential is also conservative for self-hosted ownership.
+    assert response.status_code != 201
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ownership_resolution_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_operational_registration_rejects_non_mapping_linked_credential(
+    session_maker, client, monkeypatch
+):
+    # Given: an active managed GitHub integration with a decryptable but invalid credential shape.
+    ac, state = client
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider="github",
+        external_id="acme/api",
+        full_name="acme/api",
+        credential_encrypted_override=encrypt_value(json.dumps("not-a-mapping")),
+    )
+
+    # When: a customer push registers a self-hosted operational source.
+    response = await _create_source(
+        ac,
+        system="github",
+        instance="https://ghe.acme.test:8443/api/v3",
+        entity_family="operational",
+    )
+
+    # Then: malformed credential content returns the controlled ownership error.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ownership_resolution_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance"),
+    (
+        ("github", "https://github.com"),
+        ("gitlab", "https://gitlab.com"),
+    ),
+)
+async def test_operational_registration_rejects_public_default_host(
+    session_maker, client, provider: str, instance: str
+):
+    ac, state = client
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_operational_registration_allows_unrelated_credential_host(
+    session_maker, client, monkeypatch
+):
+    ac, state = client
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider="github",
+        external_id="acme/api",
+        full_name="acme/api",
+        credential_base_url="https://ghe.acme.test:8443/api/v3",
+    )
+
+    response = await _create_source(
+        ac,
+        system="github",
+        instance="https://ghe.other.test:8443/api/v3",
+        entity_family="operational",
+    )
+
+    assert response.status_code == 201
 
 
 @pytest.mark.asyncio

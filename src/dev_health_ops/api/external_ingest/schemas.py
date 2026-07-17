@@ -12,13 +12,15 @@ REST-boundary/ownership-model rationale.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SCHEMA_VERSION = "external-ingest.v1"
 MAX_RECORDS_DEFAULT = 1000
 MAX_BODY_BYTES_DEFAULT = 10_000_000
+LEGACY_ENTITY_FAMILY: Final = "legacy"
+OPERATIONAL_ENTITY_FAMILY: Final = "operational"
 
 _WORK_ITEM_STATUS = Literal[
     "backlog",
@@ -37,8 +39,13 @@ class SourceDescriptor(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     type: Literal["customer_push"] = "customer_push"
-    system: Literal["github", "gitlab", "jira", "linear", "custom"]
+    system: Literal[
+        "github", "gitlab", "jira", "linear", "pagerduty", "atlassian", "custom"
+    ]
     instance: str = Field(..., min_length=1, max_length=255)
+    entity_family: Literal["legacy", "operational"] = Field(
+        default=LEGACY_ENTITY_FAMILY, alias="entityFamily"
+    )
     producer: str | None = None
     producer_version: str | None = Field(default=None, alias="producerVersion")
 
@@ -121,7 +128,6 @@ class BatchAcceptedResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# The 9 record-kind payload schemas
 #
 # All models: extra="forbid" — this is a versioned, external, customer-SDK
 # contract, not an internal analytics event. A customer typo should be a
@@ -331,6 +337,188 @@ class CommitV1(BaseModel):
     parents: int = Field(default=1, ge=0)
 
 
+_OPERATIONAL_STATUS = Literal[
+    "active", "open", "acknowledged", "resolved", "closed", "suppressed"
+]
+_OPERATIONAL_SEVERITY = Literal["critical", "high", "medium", "low", "info"]
+_OPERATIONAL_PRIORITY = Literal["critical", "high", "medium", "low"]
+
+
+class OperationalRecordV1(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    external_id: str = Field(..., alias="externalId", min_length=1, max_length=512)
+    source_version_at: datetime = Field(..., alias="sourceVersionAt")
+    source_url: str | None = Field(default=None, alias="sourceUrl", max_length=2048)
+    source_event_at: datetime | None = Field(default=None, alias="sourceEventAt")
+    source_event_id: str | None = Field(
+        default=None, alias="sourceEventId", max_length=512
+    )
+    raw_status: str | None = Field(default=None, alias="rawStatus", max_length=255)
+    raw_severity: str | None = Field(default=None, alias="rawSeverity", max_length=255)
+    raw_priority: str | None = Field(default=None, alias="rawPriority", max_length=255)
+    normalized_status: _OPERATIONAL_STATUS | None = Field(
+        default=None, alias="normalizedStatus"
+    )
+    normalized_severity: _OPERATIONAL_SEVERITY | None = Field(
+        default=None, alias="normalizedSeverity"
+    )
+    normalized_priority: _OPERATIONAL_PRIORITY | None = Field(
+        default=None, alias="normalizedPriority"
+    )
+    relationship_provenance: str | None = Field(
+        default=None, alias="relationshipProvenance", max_length=255
+    )
+    relationship_confidence: float | None = Field(
+        default=None, alias="relationshipConfidence", ge=0, le=1
+    )
+
+
+class OperationalServiceV1(OperationalRecordV1):
+    name: str = Field(..., min_length=1, max_length=512)
+    description: str | None = Field(default=None, max_length=20_000)
+    service_type: str | None = Field(default=None, alias="serviceType", max_length=255)
+    owning_team_external_id: str | None = Field(
+        default=None, alias="owningTeamExternalId", max_length=512
+    )
+    escalation_policy_external_id: str | None = Field(
+        default=None, alias="escalationPolicyExternalId", max_length=512
+    )
+    is_deleted: bool = Field(default=False, alias="isDeleted")
+    deleted_at: datetime | None = Field(default=None, alias="deletedAt")
+
+
+class OperationalIncidentV1(OperationalRecordV1):
+    title: str = Field(..., min_length=1, max_length=1024)
+    description: str | None = Field(default=None, max_length=20_000)
+    service_external_id: str | None = Field(
+        default=None, alias="serviceExternalId", max_length=512
+    )
+    escalation_policy_external_id: str | None = Field(
+        default=None, alias="escalationPolicyExternalId", max_length=512
+    )
+    started_at: datetime | None = Field(default=None, alias="startedAt")
+    resolved_at: datetime | None = Field(default=None, alias="resolvedAt")
+    is_deleted: bool = Field(default=False, alias="isDeleted")
+    deleted_at: datetime | None = Field(default=None, alias="deletedAt")
+
+
+class OperationalAlertV1(OperationalRecordV1):
+    title: str = Field(..., min_length=1, max_length=1024)
+    description: str | None = Field(default=None, max_length=20_000)
+    service_external_id: str | None = Field(
+        default=None, alias="serviceExternalId", max_length=512
+    )
+    incident_external_id: str | None = Field(
+        default=None, alias="incidentExternalId", max_length=512
+    )
+    triggered_at: datetime | None = Field(default=None, alias="triggeredAt")
+    acknowledged_at: datetime | None = Field(default=None, alias="acknowledgedAt")
+    resolved_at: datetime | None = Field(default=None, alias="resolvedAt")
+    is_deleted: bool = Field(default=False, alias="isDeleted")
+    deleted_at: datetime | None = Field(default=None, alias="deletedAt")
+
+
+class IncidentTimelineEventV1(OperationalRecordV1):
+    incident_external_id: str = Field(
+        ..., alias="incidentExternalId", min_length=1, max_length=512
+    )
+    event_type: str = Field(..., alias="eventType", min_length=1, max_length=255)
+    body: str | None = Field(default=None, max_length=20_000)
+    actor_type: str | None = Field(default=None, alias="actorType", max_length=255)
+    actor_external_id: str | None = Field(
+        default=None, alias="actorExternalId", max_length=512
+    )
+    occurred_at: datetime | None = Field(default=None, alias="occurredAt")
+
+
+class IncidentNoteV1(OperationalRecordV1):
+    incident_external_id: str = Field(
+        ..., alias="incidentExternalId", min_length=1, max_length=512
+    )
+    body: str = Field(..., min_length=1, max_length=20_000)
+    author_user_external_id: str | None = Field(
+        default=None, alias="authorUserExternalId", max_length=512
+    )
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+
+
+class IncidentResponderV1(OperationalRecordV1):
+    incident_external_id: str = Field(
+        ..., alias="incidentExternalId", min_length=1, max_length=512
+    )
+    user_external_id: str | None = Field(
+        default=None, alias="userExternalId", max_length=512
+    )
+    responder_name: str | None = Field(
+        default=None, alias="responderName", max_length=512
+    )
+    role: str | None = Field(default=None, max_length=255)
+    responder_assignment_id: str | None = Field(
+        default=None, alias="responderAssignmentId", max_length=512
+    )
+    requested_at: datetime | None = Field(default=None, alias="requestedAt")
+    assigned_at: datetime | None = Field(default=None, alias="assignedAt")
+    acknowledged_at: datetime | None = Field(default=None, alias="acknowledgedAt")
+    completed_at: datetime | None = Field(default=None, alias="completedAt")
+
+
+class EscalationPolicyV1(OperationalRecordV1):
+    name: str = Field(..., min_length=1, max_length=512)
+    description: str | None = Field(default=None, max_length=20_000)
+    is_deleted: bool = Field(default=False, alias="isDeleted")
+    deleted_at: datetime | None = Field(default=None, alias="deletedAt")
+
+
+class OnCallScheduleV1(EscalationPolicyV1):
+    timezone: str | None = Field(default=None, max_length=255)
+
+
+class OnCallAssignmentV1(OperationalRecordV1):
+    schedule_external_id: str | None = Field(
+        default=None, alias="scheduleExternalId", max_length=512
+    )
+    user_external_id: str | None = Field(
+        default=None, alias="userExternalId", max_length=512
+    )
+    escalation_policy_external_id: str | None = Field(
+        default=None, alias="escalationPolicyExternalId", max_length=512
+    )
+    escalation_level: int | None = Field(
+        default=None, alias="escalationLevel", ge=0, le=100
+    )
+    starts_at: datetime | None = Field(default=None, alias="startsAt")
+    ends_at: datetime | None = Field(default=None, alias="endsAt")
+
+
+class OperationalTeamV1(EscalationPolicyV1):
+    pass
+
+
+class OperationalUserV1(OperationalRecordV1):
+    display_name: str = Field(..., alias="displayName", min_length=1, max_length=512)
+    email: str | None = Field(default=None, max_length=512)
+    is_deleted: bool = Field(default=False, alias="isDeleted")
+    deleted_at: datetime | None = Field(default=None, alias="deletedAt")
+
+
+class ServiceRepositoryMappingV1(OperationalRecordV1):
+    service_external_id: str = Field(
+        ..., alias="serviceExternalId", min_length=1, max_length=512
+    )
+    repo_full_name: str | None = Field(
+        default=None, alias="repoFullName", max_length=1024
+    )
+    repo_provider: Literal["github", "gitlab", "custom"] | None = Field(
+        default=None, alias="repoProvider"
+    )
+    mapping_kind: str | None = Field(default=None, alias="mappingKind", max_length=255)
+    rule_id: str | None = Field(default=None, alias="ruleId", max_length=512)
+    valid_from: datetime | None = Field(default=None, alias="validFrom")
+    valid_to: datetime | None = Field(default=None, alias="validTo")
+    is_active: bool = Field(default=True, alias="isActive")
+
+
 RECORD_KIND_MODELS: dict[str, type[BaseModel]] = {
     "repository.v1": RepositoryV1,
     "identity.v1": IdentityV1,
@@ -341,7 +529,47 @@ RECORD_KIND_MODELS: dict[str, type[BaseModel]] = {
     "pull_request.v1": PullRequestV1,
     "review.v1": ReviewV1,
     "commit.v1": CommitV1,
+    "operational_service.v1": OperationalServiceV1,
+    "operational_incident.v1": OperationalIncidentV1,
+    "operational_alert.v1": OperationalAlertV1,
+    "incident_timeline_event.v1": IncidentTimelineEventV1,
+    "incident_note.v1": IncidentNoteV1,
+    "incident_responder.v1": IncidentResponderV1,
+    "escalation_policy.v1": EscalationPolicyV1,
+    "on_call_schedule.v1": OnCallScheduleV1,
+    "on_call_assignment.v1": OnCallAssignmentV1,
+    "operational_team.v1": OperationalTeamV1,
+    "operational_user.v1": OperationalUserV1,
+    "service_repository_mapping.v1": ServiceRepositoryMappingV1,
 }
+
+OPERATIONAL_RECORD_KINDS: Final[frozenset[str]] = frozenset(
+    {
+        "operational_service.v1",
+        "operational_incident.v1",
+        "operational_alert.v1",
+        "incident_timeline_event.v1",
+        "incident_note.v1",
+        "incident_responder.v1",
+        "escalation_policy.v1",
+        "on_call_schedule.v1",
+        "on_call_assignment.v1",
+        "operational_team.v1",
+        "operational_user.v1",
+        "service_repository_mapping.v1",
+    }
+)
+
+
+def entity_family_for_record_kinds(record_kinds: list[str]) -> str | None:
+    """Return the single family required by the submitted record kinds."""
+    families = {
+        OPERATIONAL_ENTITY_FAMILY
+        if kind in OPERATIONAL_RECORD_KINDS
+        else LEGACY_ENTITY_FAMILY
+        for kind in record_kinds
+    }
+    return families.pop() if len(families) == 1 else None
 
 
 __all__ = [
@@ -364,5 +592,22 @@ __all__ = [
     "PullRequestV1",
     "ReviewV1",
     "CommitV1",
+    "OperationalRecordV1",
+    "OperationalServiceV1",
+    "OperationalIncidentV1",
+    "OperationalAlertV1",
+    "IncidentTimelineEventV1",
+    "IncidentNoteV1",
+    "IncidentResponderV1",
+    "EscalationPolicyV1",
+    "OnCallScheduleV1",
+    "OnCallAssignmentV1",
+    "OperationalTeamV1",
+    "OperationalUserV1",
+    "ServiceRepositoryMappingV1",
     "RECORD_KIND_MODELS",
+    "OPERATIONAL_RECORD_KINDS",
+    "LEGACY_ENTITY_FAMILY",
+    "OPERATIONAL_ENTITY_FAMILY",
+    "entity_family_for_record_kinds",
 ]

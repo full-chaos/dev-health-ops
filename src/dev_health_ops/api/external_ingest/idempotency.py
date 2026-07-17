@@ -134,8 +134,12 @@ def compute_payload_hash(envelope: BaseModel) -> str:
     envelope is hashed, ``records`` in given order — record order is
     position-significant by design (brief decisions 3-4).
     """
+    payload = envelope.model_dump(mode="json")
+    source = payload.get("source")
+    if isinstance(source, dict) and source.get("entity_family") == "legacy":
+        source.pop("entity_family")
     canonical = json.dumps(
-        envelope.model_dump(mode="json"),
+        payload,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
@@ -171,6 +175,7 @@ async def resolve_batch_idempotency(
     window_started_at: datetime | None,
     window_ended_at: datetime | None,
     items_received: int,
+    entity_family: str = "legacy",
 ) -> IdempotencyOutcome:
     """Resolve NEW / REPLAY / CONFLICT / RETRY for a batch identity.
 
@@ -190,6 +195,7 @@ async def resolve_batch_idempotency(
         org_id=org_id,
         source_system=source_system,
         source_instance=source_instance,
+        entity_family=entity_family,
         idempotency_key=idempotency_key,
     )
     if existing is not None:
@@ -204,6 +210,7 @@ async def resolve_batch_idempotency(
             payload_hash=payload_hash,
             source_system=source_system,
             source_instance=source_instance,
+            entity_family=entity_family,
             producer=producer,
             producer_version=producer_version,
             schema_version=schema_version,
@@ -217,6 +224,7 @@ async def resolve_batch_idempotency(
             org_id=org_id,
             source_system=source_system,
             source_instance=source_instance,
+            entity_family=entity_family,
             idempotency_key=idempotency_key,
         )
         if raced is None:

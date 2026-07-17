@@ -38,6 +38,22 @@ _WORK_ITEM_KINDS = frozenset(
     {"work_item.v1", "work_item_transition.v1", "work_item_dependency.v1"}
 )
 _TEAM_KINDS = frozenset({"identity.v1", "team.v1"})
+_OPERATIONAL_KINDS = frozenset(
+    {
+        "operational_service.v1",
+        "operational_incident.v1",
+        "operational_alert.v1",
+        "incident_timeline_event.v1",
+        "incident_note.v1",
+        "incident_responder.v1",
+        "escalation_policy.v1",
+        "on_call_schedule.v1",
+        "on_call_assignment.v1",
+        "operational_team.v1",
+        "operational_user.v1",
+        "service_repository_mapping.v1",
+    }
+)
 _REPO_ONLY_KINDS = frozenset({"repository.v1"})
 _RECOMPUTE_TRIGGER_KINDS = _GIT_KINDS | _WORK_ITEM_KINDS
 
@@ -189,8 +205,9 @@ def plan_recompute(scope: RecomputeScope) -> RecomputePlan:
     has_git = bool(scope.record_kinds & _GIT_KINDS)
     has_work_items = bool(scope.record_kinds & _WORK_ITEM_KINDS)
     has_team = bool(scope.record_kinds & _TEAM_KINDS)
+    has_operational = bool(scope.record_kinds & _OPERATIONAL_KINDS)
 
-    if not (has_git or has_work_items or has_team):
+    if not (has_git or has_work_items or has_team or has_operational):
         return RecomputePlan(
             org_id=scope.org_id,
             trigger=False,

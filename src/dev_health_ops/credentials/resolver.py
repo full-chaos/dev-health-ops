@@ -67,6 +67,16 @@ PROVIDER_CREDENTIAL_TYPES: dict[str, type[ProviderCredentials]] = {
 }
 
 
+def environment_base_url(provider: str) -> str | None:
+    """Return the provider base URL declared in the environment, if any."""
+    environment_variable = PROVIDER_ENV_VARS.get(provider.casefold(), {}).get(
+        "base_url"
+    )
+    if environment_variable is None:
+        return None
+    return os.getenv(environment_variable)
+
+
 class CredentialResolutionError(Exception):
     def __init__(
         self,

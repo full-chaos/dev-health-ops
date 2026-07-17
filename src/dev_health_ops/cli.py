@@ -510,6 +510,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("service-credentials", "rotate"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "revoke"): frozenset({_REQ_POSTGRES}),
     ("backfill", "run"): frozenset({_REQ_POSTGRES}),
+    ("backfill", "operational"): frozenset({_REQ_CLICKHOUSE}),
     ("maintenance", "scrub-error-text"): frozenset({_REQ_POSTGRES}),
     # --- migrations that connect to a live database ---
     ("migrate", "clickhouse", "upgrade"): frozenset({_REQ_CLICKHOUSE}),

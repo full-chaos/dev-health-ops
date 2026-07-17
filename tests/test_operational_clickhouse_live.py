@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import asdict, fields, replace
 from datetime import datetime, timedelta, timezone
@@ -26,11 +27,12 @@ pytestmark = [
 def sink():
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-    assert CLICKHOUSE_URI is not None
-    database = (urlparse(CLICKHOUSE_URI).path or "").lstrip("/")
+    clickhouse_uri = CLICKHOUSE_URI
+    assert clickhouse_uri is not None
+    database = (urlparse(clickhouse_uri).path or "").lstrip("/")
     if database in ("", "default"):
         pytest.skip("refusing to run ClickHouse schema setup against default")
-    result = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    result = ClickHouseMetricsSink(clickhouse_uri)
     result.ensure_schema(force=True)
     yield result
     result.close()
@@ -118,3 +120,186 @@ def test_operational_incident_columns_match_the_live_schema(sink) -> None:
 
     # Then: live writes use the complete current contract.
     assert columns == expected
+
+
+def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None:
+    # Given: live and legacy incident sources scoped to an isolated organization.
+    from dev_health_ops.backfill.operational_clickhouse import (
+        run_canonical_operational_backfill,
+    )
+    from dev_health_ops.metrics.sinks.ingestion import IngestionSink
+    from dev_health_ops.models.atlassian_ops import (
+        AtlassianOpsAlert,
+        AtlassianOpsIncident,
+        AtlassianOpsSchedule,
+    )
+    from dev_health_ops.models.git import Incident, Repo
+    from dev_health_ops.providers.operational_migration import (
+        AtlassianOpsRows,
+        AtlassianOpsSource,
+        IssueIncidentSource,
+        map_atlassian_ops_batch,
+        map_issue_incidents,
+    )
+    from dev_health_ops.storage.clickhouse import ClickHouseStore
+
+    clickhouse_uri = CLICKHOUSE_URI
+    assert clickhouse_uri is not None
+    org_id = f"test-chaos-2963-{uuid4()}"
+    repo_id = uuid4()
+    source_version = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+
+    async def seed_dual_write() -> None:
+        async with ClickHouseStore(clickhouse_uri) as store:
+            store.org_id = org_id
+            ingestion_sink = IngestionSink(store)
+            repo = Repo(
+                id=repo_id,
+                repo="acme/api",
+                provider="github",
+                settings={"source": "github", "github_instance_url": "github.com"},
+                tags=["github"],
+            )
+            legacy_incident = Incident(
+                repo_id=repo_id,
+                incident_id="17",
+                status="closed",
+                started_at=source_version,
+                resolved_at=source_version,
+            )
+            atlassian_incident = AtlassianOpsIncident(
+                id="atlassian-incident-1",
+                url="https://acme.atlassian.net/ops/incident-1",
+                summary="Pager incident",
+                description=None,
+                status="closed",
+                severity="high",
+                created_at=source_version,
+                provider_id="acme-atlassian",
+                last_synced=source_version,
+            )
+            atlassian_alert = AtlassianOpsAlert(
+                id="atlassian-alert-1",
+                status="closed",
+                priority="high",
+                created_at=source_version,
+                closed_at=source_version,
+                last_synced=source_version,
+            )
+            atlassian_schedule = AtlassianOpsSchedule(
+                id="atlassian-schedule-1",
+                name="Primary response",
+                timezone="UTC",
+                last_synced=source_version,
+            )
+            await store.insert_repo(repo)
+            await store.insert_incidents([legacy_incident])
+            await store.insert_atlassian_ops_incidents([atlassian_incident])
+            await store.insert_atlassian_ops_alerts([atlassian_alert])
+            await store.insert_atlassian_ops_schedules([atlassian_schedule])
+            await ingestion_sink.insert_operational_batch(
+                map_issue_incidents(
+                    (
+                        IssueIncidentSource(
+                            org_id=org_id,
+                            provider="github",
+                            provider_instance_id="github.com",
+                            repo_id=repo_id,
+                            repo_full_name="acme/api",
+                            external_id="17",
+                            issue_number="17",
+                            source_url="https://github.com/acme/api/issues/17",
+                            labels=("incident",),
+                            raw_status="closed",
+                            title="Database unavailable",
+                            description=None,
+                            created_at=source_version,
+                            resolved_at=source_version,
+                            source_version_at=source_version,
+                        ),
+                    )
+                )
+            )
+            await ingestion_sink.insert_operational_batch(
+                map_atlassian_ops_batch(
+                    AtlassianOpsSource(
+                        org_id=org_id,
+                        provider_instance_id="atlassian-ops",
+                        rows=AtlassianOpsRows(
+                            incidents=(atlassian_incident,),
+                            alerts=(atlassian_alert,),
+                            schedules=(atlassian_schedule,),
+                        ),
+                    )
+                )
+            )
+
+    try:
+        # When: dual-write and repeated legacy backfills populate canonical tables.
+        asyncio.run(seed_dual_write())
+        asyncio.run(
+            run_canonical_operational_backfill(
+                clickhouse_uri=clickhouse_uri,
+                org_id=org_id,
+            )
+        )
+        asyncio.run(
+            run_canonical_operational_backfill(
+                clickhouse_uri=clickhouse_uri,
+                org_id=org_id,
+            )
+        )
+        for table in (
+            "operational_services",
+            "operational_incidents",
+            "operational_alerts",
+            "operational_on_call_schedules",
+            "operational_service_repository_mappings",
+        ):
+            sink.client.command(f"OPTIMIZE TABLE {table} FINAL")
+
+        # Then: native content wins even when the legacy backfill has the same source time.
+        counts = {
+            table: sink.client.query(
+                f"SELECT count() FROM {table} FINAL WHERE org_id = {{org_id:String}}",
+                parameters={"org_id": org_id},
+            ).result_rows[0][0]
+            for table in (
+                "operational_services",
+                "operational_incidents",
+                "operational_alerts",
+                "operational_on_call_schedules",
+                "operational_service_repository_mappings",
+            )
+        }
+        assert counts == {
+            "operational_services": 1,
+            "operational_incidents": 2,
+            "operational_alerts": 1,
+            "operational_on_call_schedules": 1,
+            "operational_service_repository_mappings": 1,
+        }
+        incident = sink.client.query(
+            "SELECT title FROM operational_incidents FINAL "
+            "WHERE org_id = {org_id:String} AND provider = 'github'",
+            parameters={"org_id": org_id},
+        ).result_rows
+        assert incident == [("Database unavailable",)]
+    finally:
+        for table in (
+            "operational_services",
+            "operational_incidents",
+            "operational_alerts",
+            "operational_on_call_schedules",
+            "operational_service_repository_mappings",
+            "atlassian_ops_incidents",
+            "atlassian_ops_alerts",
+            "atlassian_ops_schedules",
+            "incidents",
+            "repos",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{org_id:String}} "
+                "SETTINGS mutations_sync=2",
+                parameters={"org_id": org_id},
+            )

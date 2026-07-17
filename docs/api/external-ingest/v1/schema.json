@@ -152,6 +152,228 @@
       "title": "CommitV1",
       "type": "object"
     },
+    "EscalationPolicyV1": {
+      "additionalProperties": false,
+      "properties": {
+        "deletedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletedat"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "isDeleted": {
+          "default": false,
+          "title": "Isdeleted",
+          "type": "boolean"
+        },
+        "name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "name"
+      ],
+      "title": "EscalationPolicyV1",
+      "type": "object"
+    },
     "IdentityV1": {
       "additionalProperties": false,
       "properties": {
@@ -220,6 +442,775 @@
       "title": "IdentityV1",
       "type": "object"
     },
+    "IncidentNoteV1": {
+      "additionalProperties": false,
+      "properties": {
+        "authorUserExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authoruserexternalid"
+        },
+        "body": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "createdAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Createdat"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "incidentExternalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Incidentexternalid",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "incidentExternalId",
+        "body"
+      ],
+      "title": "IncidentNoteV1",
+      "type": "object"
+    },
+    "IncidentResponderV1": {
+      "additionalProperties": false,
+      "properties": {
+        "acknowledgedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acknowledgedat"
+        },
+        "assignedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assignedat"
+        },
+        "completedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completedat"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "incidentExternalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Incidentexternalid",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "requestedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requestedat"
+        },
+        "responderAssignmentId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Responderassignmentid"
+        },
+        "responderName": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Respondername"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        },
+        "userExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Userexternalid"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "incidentExternalId"
+      ],
+      "title": "IncidentResponderV1",
+      "type": "object"
+    },
+    "IncidentTimelineEventV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actorExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actorexternalid"
+        },
+        "actorType": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actortype"
+        },
+        "body": {
+          "anyOf": [
+            {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body"
+        },
+        "eventType": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Eventtype",
+          "type": "string"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "incidentExternalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Incidentexternalid",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "occurredAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurredat"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "incidentExternalId",
+        "eventType"
+      ],
+      "title": "IncidentTimelineEventV1",
+      "type": "object"
+    },
     "IngestWindow": {
       "additionalProperties": false,
       "properties": {
@@ -239,6 +1230,1770 @@
         "endedAt"
       ],
       "title": "IngestWindow",
+      "type": "object"
+    },
+    "OnCallAssignmentV1": {
+      "additionalProperties": false,
+      "properties": {
+        "endsAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endsat"
+        },
+        "escalationLevel": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Escalationlevel"
+        },
+        "escalationPolicyExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Escalationpolicyexternalid"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "scheduleExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scheduleexternalid"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        },
+        "startsAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Startsat"
+        },
+        "userExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Userexternalid"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt"
+      ],
+      "title": "OnCallAssignmentV1",
+      "type": "object"
+    },
+    "OnCallScheduleV1": {
+      "additionalProperties": false,
+      "properties": {
+        "deletedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletedat"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "isDeleted": {
+          "default": false,
+          "title": "Isdeleted",
+          "type": "boolean"
+        },
+        "name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "name"
+      ],
+      "title": "OnCallScheduleV1",
+      "type": "object"
+    },
+    "OperationalAlertV1": {
+      "additionalProperties": false,
+      "properties": {
+        "acknowledgedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acknowledgedat"
+        },
+        "deletedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletedat"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "incidentExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Incidentexternalid"
+        },
+        "isDeleted": {
+          "default": false,
+          "title": "Isdeleted",
+          "type": "boolean"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "resolvedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolvedat"
+        },
+        "serviceExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Serviceexternalid"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "triggeredAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Triggeredat"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "title"
+      ],
+      "title": "OperationalAlertV1",
+      "type": "object"
+    },
+    "OperationalIncidentV1": {
+      "additionalProperties": false,
+      "properties": {
+        "deletedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletedat"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "escalationPolicyExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Escalationpolicyexternalid"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "isDeleted": {
+          "default": false,
+          "title": "Isdeleted",
+          "type": "boolean"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "resolvedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolvedat"
+        },
+        "serviceExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Serviceexternalid"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Startedat"
+        },
+        "title": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "title"
+      ],
+      "title": "OperationalIncidentV1",
+      "type": "object"
+    },
+    "OperationalServiceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "deletedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletedat"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "escalationPolicyExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Escalationpolicyexternalid"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "isDeleted": {
+          "default": false,
+          "title": "Isdeleted",
+          "type": "boolean"
+        },
+        "name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "owningTeamExternalId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owningteamexternalid"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "serviceType": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Servicetype"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "name"
+      ],
+      "title": "OperationalServiceV1",
+      "type": "object"
+    },
+    "OperationalTeamV1": {
+      "additionalProperties": false,
+      "properties": {
+        "deletedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletedat"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 20000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "isDeleted": {
+          "default": false,
+          "title": "Isdeleted",
+          "type": "boolean"
+        },
+        "name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "name"
+      ],
+      "title": "OperationalTeamV1",
+      "type": "object"
+    },
+    "OperationalUserV1": {
+      "additionalProperties": false,
+      "properties": {
+        "deletedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletedat"
+        },
+        "displayName": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Displayname",
+          "type": "string"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Email"
+        },
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "isDeleted": {
+          "default": false,
+          "title": "Isdeleted",
+          "type": "boolean"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "displayName"
+      ],
+      "title": "OperationalUserV1",
       "type": "object"
     },
     "PullRequestV1": {
@@ -504,10 +3259,22 @@
         "kind": {
           "enum": [
             "commit.v1",
+            "escalation_policy.v1",
             "identity.v1",
+            "incident_note.v1",
+            "incident_responder.v1",
+            "incident_timeline_event.v1",
+            "on_call_assignment.v1",
+            "on_call_schedule.v1",
+            "operational_alert.v1",
+            "operational_incident.v1",
+            "operational_service.v1",
+            "operational_team.v1",
+            "operational_user.v1",
             "pull_request.v1",
             "repository.v1",
             "review.v1",
+            "service_repository_mapping.v1",
             "team.v1",
             "work_item.v1",
             "work_item_dependency.v1",
@@ -645,9 +3412,296 @@
       "title": "ReviewV1",
       "type": "object"
     },
+    "ServiceRepositoryMappingV1": {
+      "additionalProperties": false,
+      "properties": {
+        "externalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Externalid",
+          "type": "string"
+        },
+        "isActive": {
+          "default": true,
+          "title": "Isactive",
+          "type": "boolean"
+        },
+        "mappingKind": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mappingkind"
+        },
+        "normalizedPriority": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedpriority"
+        },
+        "normalizedSeverity": {
+          "anyOf": [
+            {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "info"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedseverity"
+        },
+        "normalizedStatus": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "open",
+                "acknowledged",
+                "resolved",
+                "closed",
+                "suppressed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizedstatus"
+        },
+        "rawPriority": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawpriority"
+        },
+        "rawSeverity": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawseverity"
+        },
+        "rawStatus": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rawstatus"
+        },
+        "relationshipConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipconfidence"
+        },
+        "relationshipProvenance": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationshipprovenance"
+        },
+        "repoFullName": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repofullname"
+        },
+        "repoProvider": {
+          "anyOf": [
+            {
+              "enum": [
+                "github",
+                "gitlab",
+                "custom"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repoprovider"
+        },
+        "ruleId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ruleid"
+        },
+        "serviceExternalId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Serviceexternalid",
+          "type": "string"
+        },
+        "sourceEventAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventat"
+        },
+        "sourceEventId": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceeventid"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourceurl"
+        },
+        "sourceVersionAt": {
+          "format": "date-time",
+          "title": "Sourceversionat",
+          "type": "string"
+        },
+        "validFrom": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validfrom"
+        },
+        "validTo": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validto"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceVersionAt",
+        "serviceExternalId"
+      ],
+      "title": "ServiceRepositoryMappingV1",
+      "type": "object"
+    },
     "SourceDescriptor": {
       "additionalProperties": false,
       "properties": {
+        "entityFamily": {
+          "default": "legacy",
+          "enum": [
+            "legacy",
+            "operational"
+          ],
+          "title": "Entityfamily",
+          "type": "string"
+        },
         "instance": {
           "maxLength": 255,
           "minLength": 1,
@@ -684,6 +3738,8 @@
             "gitlab",
             "jira",
             "linear",
+            "pagerduty",
+            "atlassian",
             "custom"
           ],
           "title": "System",
@@ -1358,6 +4414,16 @@
         }
       ]
     },
+    "escalation_policy.v1": {
+      "$ref": "#/$defs/EscalationPolicyV1",
+      "examples": [
+        {
+          "externalId": "policy-1",
+          "name": "Payments escalation",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
     "identity.v1": {
       "$ref": "#/$defs/IdentityV1",
       "examples": [
@@ -1378,6 +4444,126 @@
             "team-platform"
           ],
           "updatedAt": "2026-06-25T00:00:00Z"
+        }
+      ]
+    },
+    "incident_note.v1": {
+      "$ref": "#/$defs/IncidentNoteV1",
+      "examples": [
+        {
+          "body": "Investigating latency.",
+          "createdAt": "2026-07-17T00:02:00Z",
+          "externalId": "note-1",
+          "incidentExternalId": "inc-1",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
+    "incident_responder.v1": {
+      "$ref": "#/$defs/IncidentResponderV1",
+      "examples": [
+        {
+          "assignedAt": "2026-07-17T00:02:00Z",
+          "externalId": "responder-1",
+          "incidentExternalId": "inc-1",
+          "responderName": "On-call",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
+    "incident_timeline_event.v1": {
+      "$ref": "#/$defs/IncidentTimelineEventV1",
+      "examples": [
+        {
+          "eventType": "acknowledged",
+          "externalId": "event-1",
+          "incidentExternalId": "inc-1",
+          "normalizedStatus": "acknowledged",
+          "occurredAt": "2026-07-17T00:01:00Z",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
+    "on_call_assignment.v1": {
+      "$ref": "#/$defs/OnCallAssignmentV1",
+      "examples": [
+        {
+          "endsAt": "2026-07-18T00:00:00Z",
+          "externalId": "assignment-1",
+          "scheduleExternalId": "schedule-1",
+          "sourceVersionAt": "2026-07-17T00:00:00Z",
+          "startsAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
+    "on_call_schedule.v1": {
+      "$ref": "#/$defs/OnCallScheduleV1",
+      "examples": [
+        {
+          "externalId": "schedule-1",
+          "name": "Payments on-call",
+          "sourceVersionAt": "2026-07-17T00:00:00Z",
+          "timezone": "UTC"
+        }
+      ]
+    },
+    "operational_alert.v1": {
+      "$ref": "#/$defs/OperationalAlertV1",
+      "examples": [
+        {
+          "externalId": "alert-1",
+          "incidentExternalId": "inc-1",
+          "normalizedStatus": "active",
+          "serviceExternalId": "payments",
+          "sourceVersionAt": "2026-07-17T00:00:00Z",
+          "title": "Latency alert",
+          "triggeredAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
+    "operational_incident.v1": {
+      "$ref": "#/$defs/OperationalIncidentV1",
+      "examples": [
+        {
+          "externalId": "inc-1",
+          "normalizedSeverity": "high",
+          "normalizedStatus": "open",
+          "serviceExternalId": "payments",
+          "sourceVersionAt": "2026-07-17T00:00:00Z",
+          "startedAt": "2026-07-17T00:00:00Z",
+          "title": "Payments latency"
+        }
+      ]
+    },
+    "operational_service.v1": {
+      "$ref": "#/$defs/OperationalServiceV1",
+      "examples": [
+        {
+          "externalId": "payments",
+          "name": "Payments",
+          "normalizedStatus": "active",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
+    "operational_team.v1": {
+      "$ref": "#/$defs/OperationalTeamV1",
+      "examples": [
+        {
+          "externalId": "team-ops",
+          "name": "Operations",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
+        }
+      ]
+    },
+    "operational_user.v1": {
+      "$ref": "#/$defs/OperationalUserV1",
+      "examples": [
+        {
+          "displayName": "Alex Operator",
+          "email": "alex@example.test",
+          "externalId": "user-1",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
         }
       ]
     },
@@ -1431,6 +4617,19 @@
           "reviewer": "bob@acme.example",
           "state": "APPROVED",
           "submittedAt": "2026-06-22T14:00:00Z"
+        }
+      ]
+    },
+    "service_repository_mapping.v1": {
+      "$ref": "#/$defs/ServiceRepositoryMappingV1",
+      "examples": [
+        {
+          "externalId": "payments-repository",
+          "mappingKind": "primary",
+          "repoFullName": "acme/payments",
+          "repoProvider": "github",
+          "serviceExternalId": "payments",
+          "sourceVersionAt": "2026-07-17T00:00:00Z"
         }
       ]
     },

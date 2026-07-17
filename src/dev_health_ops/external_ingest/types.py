@@ -16,6 +16,21 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from dev_health_ops.models.operational import (
+    EscalationPolicy,
+    IncidentNote,
+    IncidentResponder,
+    IncidentTimelineEvent,
+    OnCallAssignment,
+    OnCallSchedule,
+    OperationalAlert,
+    OperationalIncident,
+    OperationalService,
+    OperationalTeam,
+    OperationalUser,
+    ServiceRepositoryMapping,
+)
+
 __all__ = [
     "NormalizedBatch",
     "SinkWriteError",
@@ -54,6 +69,20 @@ class NormalizedBatch:
     pull_requests: list[dict[str, Any]] = field(default_factory=list)
     reviews: list[dict[str, Any]] = field(default_factory=list)
     commits: list[dict[str, Any]] = field(default_factory=list)
+    operational_services: list[OperationalService] = field(default_factory=list)
+    operational_incidents: list[OperationalIncident] = field(default_factory=list)
+    operational_alerts: list[OperationalAlert] = field(default_factory=list)
+    incident_timeline_events: list[IncidentTimelineEvent] = field(default_factory=list)
+    incident_notes: list[IncidentNote] = field(default_factory=list)
+    incident_responders: list[IncidentResponder] = field(default_factory=list)
+    escalation_policies: list[EscalationPolicy] = field(default_factory=list)
+    on_call_schedules: list[OnCallSchedule] = field(default_factory=list)
+    on_call_assignments: list[OnCallAssignment] = field(default_factory=list)
+    operational_teams: list[OperationalTeam] = field(default_factory=list)
+    operational_users: list[OperationalUser] = field(default_factory=list)
+    service_repository_mappings: list[ServiceRepositoryMapping] = field(
+        default_factory=list
+    )
     # Per-kind list of the record's original index in the accepted envelope's
     # `records` array, for error/warning correlation back to CHAOS-2694's
     # rejection diagnostics. Falls back to in-batch position when absent or
@@ -89,6 +118,8 @@ class AffectedScope:
     repo_ids: set[uuid.UUID] = field(default_factory=set)
     team_ids: set[str] = field(default_factory=set)
     work_item_ids: set[str] = field(default_factory=set)
+    incident_ids: set[str] = field(default_factory=set)
+    service_ids: set[str] = field(default_factory=set)
     min_timestamp: datetime | None = None
     max_timestamp: datetime | None = None
     record_kinds: set[str] = field(default_factory=set)

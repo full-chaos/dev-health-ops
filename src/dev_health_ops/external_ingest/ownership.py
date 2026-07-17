@@ -20,18 +20,59 @@ See docs/architecture/external-ingest-idempotency-ownership.md.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Final, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.configuration.integration_credentials import (
+    IntegrationCredentialsService,
+)
+from dev_health_ops.credentials.resolver import environment_base_url
 from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
 from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.models.operational import OperationalIncident
+from dev_health_ops.models.operational_identity import (
+    normalized_operational_provider_instance,
+    operational_source_coordinates,
+)
 
 EffectiveMode = Literal["fullchaos_sync", "customer_push", "disabled", "unclaimed"]
 
+OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE: Final = (
+    "Ownership could not be determined because a linked managed credential is "
+    "unreadable or does not declare an instance host. Repair the managed "
+    "integration before enabling customer push."
+)
+
+
+class _CredentialHostState(StrEnum):
+    RESOLVED = "resolved"
+    UNREADABLE = "unreadable"
+    MISSING_BASE_URL = "missing_base_url"
+
+
+@dataclass(frozen=True, slots=True)
+class _CredentialHostResolution:
+    state: _CredentialHostState
+    base_url: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalOwnershipResolutionUnavailableError(Exception):
+    provider: str
+
+    def __str__(self) -> str:
+        return "Operational ownership resolution is unavailable"
+
+
 __all__ = [
     "EffectiveMode",
+    "OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE",
+    "OperationalOwnershipResolutionUnavailableError",
     "find_active_managed_owner",
     "find_matching_managed_sources",
     "linear_is_org_wide_placeholder",
@@ -57,7 +98,24 @@ def _candidate_set(*values: object) -> set[str]:
     return {v.strip().lower() for v in values if isinstance(v, str) and v.strip()}
 
 
-def matches_instance(system: str, instance: str, source: IntegrationSource) -> bool:
+def _operational_host(system: str, instance: str) -> str:
+    return operational_source_coordinates(
+        OperationalIncident,
+        provider=system,
+        provider_instance_id=instance,
+        external_id="ownership",
+    ).provider_instance_id
+
+
+def matches_instance(
+    system: str,
+    instance: str,
+    source: IntegrationSource,
+    *,
+    entity_family: str = "legacy",
+    integration_config: Mapping[str, Any] | None = None,
+    credential_base_url: str | None = None,
+) -> bool:
     """CC5 per-provider matching (see docs/architecture/customer-push-authz.md).
 
     Comparisons are case-insensitive on BOTH sides (adversarial-review
@@ -71,6 +129,23 @@ def matches_instance(system: str, instance: str, source: IntegrationSource) -> b
     inst = instance.strip().lower()
     if not inst:
         return False
+    if entity_family in {"operational", "operational_incident"} and system in {
+        "github",
+        "gitlab",
+    }:
+        config = integration_config or {}
+        configured_host = config.get(f"{system}_instance_url") or config.get(
+            f"{system}_url"
+        )
+        default_host = "github.com" if system == "github" else "gitlab.com"
+        managed_host = (
+            configured_host
+            if isinstance(configured_host, str) and configured_host.strip()
+            else credential_base_url or default_host
+        )
+        return _operational_host(system, instance) == _operational_host(
+            system, managed_host
+        )
     if system in ("github", "jira"):
         return inst in _candidate_set(source.external_id, source.full_name)
     if system == "gitlab":
@@ -85,8 +160,59 @@ def matches_instance(system: str, instance: str, source: IntegrationSource) -> b
     return False
 
 
+async def _credential_host_resolution(
+    session: AsyncSession, *, org_id: str, system: str, integration: Integration
+) -> _CredentialHostResolution:
+    """Resolve a linked credential host without conflating unreadable and absent hosts."""
+    credential_id = integration.credential_id
+    if credential_id is None:
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    credentials, credential = await IntegrationCredentialsService(
+        session, org_id
+    ).get_decrypted_credentials_by_id(str(credential_id))
+    if credential is None or credential.provider.casefold() != system:
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    if credentials is not None and not isinstance(credentials, Mapping):
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    credential_values: Mapping[str, Any] = credentials or {}
+    credential_config = credential.config or {}
+    invalid_host = False
+    for candidate in (
+        credential_values.get(f"{system}_url"),
+        credential_values.get("url"),
+        credential_values.get("base_url"),
+        credential_config.get(f"{system}_url"),
+        credential_config.get("url"),
+        credential_config.get("base_url"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            if normalized_operational_provider_instance(system, candidate) is not None:
+                return _CredentialHostResolution(
+                    _CredentialHostState.RESOLVED, candidate
+                )
+            invalid_host = True
+    if credentials is None or invalid_host:
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    return _CredentialHostResolution(_CredentialHostState.MISSING_BASE_URL, None)
+
+
+def _environment_host_resolution(system: str) -> _CredentialHostResolution:
+    """Resolve a credentialless managed integration host from runtime environment."""
+    base_url = environment_base_url(system)
+    if base_url is None or not base_url.strip():
+        return _CredentialHostResolution(_CredentialHostState.MISSING_BASE_URL, None)
+    if normalized_operational_provider_instance(system, base_url) is None:
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    return _CredentialHostResolution(_CredentialHostState.RESOLVED, base_url)
+
+
 async def find_matching_managed_sources(
-    session: AsyncSession, *, org_id: str, system: str, instance: str
+    session: AsyncSession,
+    *,
+    org_id: str,
+    system: str,
+    instance: str,
+    entity_family: str = "legacy",
 ) -> list[tuple[IntegrationSource, bool]]:
     """All managed ``integration_sources`` rows matching (org, system, instance).
 
@@ -101,10 +227,9 @@ async def find_matching_managed_sources(
     """
     if system == "custom":
         return []
-
     candidate_rows = (
         await session.execute(
-            select(IntegrationSource, Integration.is_active)
+            select(IntegrationSource, Integration)
             .join(Integration, IntegrationSource.integration_id == Integration.id)
             .where(
                 IntegrationSource.org_id == org_id,
@@ -112,15 +237,70 @@ async def find_matching_managed_sources(
             )
         )
     ).all()
-    return [
-        (source, bool(integration_is_active))
-        for source, integration_is_active in candidate_rows
-        if matches_instance(system, instance, source)
-    ]
+    credential_hosts: dict[str, _CredentialHostResolution] = {}
+    matches: list[tuple[IntegrationSource, bool]] = []
+    for source, integration in candidate_rows:
+        credential_base_url: str | None = None
+        config = integration.config or {}
+        configured_host = config.get(f"{system}_instance_url") or config.get(
+            f"{system}_url"
+        )
+        default_host = "github.com" if system == "github" else "gitlab.com"
+        credential_id = integration.credential_id
+        if (
+            entity_family in {"operational", "operational_incident"}
+            and system in {"github", "gitlab"}
+            and not (isinstance(configured_host, str) and configured_host.strip())
+            and credential_id is not None
+        ):
+            credential_key = str(credential_id)
+            if credential_key not in credential_hosts:
+                credential_hosts[credential_key] = await _credential_host_resolution(
+                    session, org_id=org_id, system=system, integration=integration
+                )
+            credential_host = credential_hosts[credential_key]
+            credential_base_url = credential_host.base_url
+            if (
+                credential_host.state is not _CredentialHostState.RESOLVED
+                and _operational_host(system, instance)
+                != _operational_host(system, default_host)
+                and source.is_enabled
+                and integration.is_active
+            ):
+                raise OperationalOwnershipResolutionUnavailableError(system)
+        elif (
+            entity_family in {"operational", "operational_incident"}
+            and system in {"github", "gitlab"}
+            and not (isinstance(configured_host, str) and configured_host.strip())
+            and credential_id is None
+        ):
+            environment_host = _environment_host_resolution(system)
+            credential_base_url = environment_host.base_url
+            if (
+                environment_host.state is _CredentialHostState.UNREADABLE
+                and source.is_enabled
+                and integration.is_active
+            ):
+                raise OperationalOwnershipResolutionUnavailableError(system)
+        if matches_instance(
+            system,
+            instance,
+            source,
+            entity_family=entity_family,
+            integration_config=integration.config,
+            credential_base_url=credential_base_url,
+        ):
+            matches.append((source, bool(integration.is_active)))
+    return matches
 
 
 async def find_active_managed_owner(
-    session: AsyncSession, *, org_id: str, system: str, instance: str
+    session: AsyncSession,
+    *,
+    org_id: str,
+    system: str,
+    instance: str,
+    entity_family: str = "legacy",
 ) -> IntegrationSource | None:
     """The managed source that ACTIVELY owns this instance, if any.
 
@@ -129,7 +309,11 @@ async def find_active_managed_owner(
     left enabled under a since-deactivated integration no longer counts.
     """
     matches = await find_matching_managed_sources(
-        session, org_id=org_id, system=system, instance=instance
+        session,
+        org_id=org_id,
+        system=system,
+        instance=instance,
+        entity_family=entity_family,
     )
     return next(
         (
@@ -142,7 +326,12 @@ async def find_active_managed_owner(
 
 
 async def resolve_effective_mode(
-    session: AsyncSession, *, org_id: str, system: str, instance: str
+    session: AsyncSession,
+    *,
+    org_id: str,
+    system: str,
+    instance: str,
+    entity_family: str = "legacy",
 ) -> EffectiveMode:
     """Resolve the single active ingestion owner for (org, system, instance).
 
@@ -171,6 +360,7 @@ async def resolve_effective_mode(
                 IngestSource.org_id == org_id,
                 IngestSource.system == system,
                 IngestSource.instance == instance,
+                IngestSource.entity_family == entity_family,
             )
         )
     ).scalar_one_or_none()
@@ -181,14 +371,22 @@ async def resolve_effective_mode(
         if explicit.mode == IngestSourceMode.FULLCHAOS_SYNC.value:
             return "fullchaos_sync"
         owner = await find_active_managed_owner(
-            session, org_id=org_id, system=system, instance=instance
+            session,
+            org_id=org_id,
+            system=system,
+            instance=instance,
+            entity_family=entity_family,
         )
         if owner is not None:
             return "fullchaos_sync"
         return "customer_push"
 
     owner = await find_active_managed_owner(
-        session, org_id=org_id, system=system, instance=instance
+        session,
+        org_id=org_id,
+        system=system,
+        instance=instance,
+        entity_family=entity_family,
     )
     if owner is not None:
         return "fullchaos_sync"

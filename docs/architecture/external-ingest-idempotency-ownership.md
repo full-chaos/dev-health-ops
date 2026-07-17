@@ -154,6 +154,18 @@ Instance matching is per-provider (master-spec CC5) because
 | linear | org-wide placeholder (`external_id == "linear"` or `metadata.org_wide_placeholder`) matches **any** instance; else `external_id`/`full_name`/`name` |
 | custom | never conflicts |
 
+For operational GitHub/GitLab ownership, an instance host in `Integration.config`
+is authoritative and avoids credential reads. When no configured host is present,
+the resolver may read the linked credential. A missing credential link still uses
+the provider public default (`github.com` / `gitlab.com`). In contrast, an active
+managed source with a linked credential that is unreadable, invalid, missing, or
+decrypts without an instance host makes **self-hosted** ownership indeterminate.
+Registration fails with **409** `ownership_resolution_unavailable`; accept fails
+with **403** `ownership_resolution_unavailable`. Public-default hosts retain normal
+default-host matching. This conservative rejection is scoped to the same org and
+provider with an active managed source, so configured unrelated hosts continue to
+coexist.
+
 Provider comparison is `func.lower()`d on both sides (managed rows may
 carry `"GitHub"`), and instance comparison is case-insensitive on both
 sides (adversarial-review finding): GitHub full names, GitLab paths, and
@@ -189,6 +201,7 @@ unreachable at accept time; the load-bearing outcome is the
 | 403 | `source_not_registered` | resolved mode `unclaimed` |
 | 403 | `source_disabled` | resolved mode `disabled` |
 | 403 | `source_owned_by_fullchaos_sync` | resolved mode `fullchaos_sync` |
+| 403 | `ownership_resolution_unavailable` | a linked active managed credential leaves a self-hosted GitHub/GitLab host indeterminate |
 
 All via `ExternalIngestError` (`{"error": {code, message}}`), not
 HTTPException detail-dicts (brief D13 overruled by reconciliation).

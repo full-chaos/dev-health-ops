@@ -37,7 +37,9 @@ from dev_health_ops.api.middleware.rate_limit import (
     limiter,
 )
 from dev_health_ops.external_ingest.ownership import (
+    OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE,
     EffectiveMode,
+    OperationalOwnershipResolutionUnavailableError,
     resolve_effective_mode,
 )
 from dev_health_ops.external_ingest.payload_store import upsert_payload
@@ -61,6 +63,7 @@ from .schemas import (
     BatchAcceptedResponse,
     BatchEnvelope,
     ValidationResponse,
+    entity_family_for_record_kinds,
 )
 from .status import (
     BatchRow,
@@ -97,6 +100,18 @@ def _max_body_bytes() -> int:
 
 def _limits_payload() -> dict[str, int]:
     return {"maxRecordsPerBatch": _max_records(), "maxBodyBytes": _max_body_bytes()}
+
+
+def _check_entity_family_or_400(envelope: BatchEnvelope) -> None:
+    expected_family = entity_family_for_record_kinds(
+        [record.kind for record in envelope.records]
+    )
+    if expected_family != envelope.source.entity_family:
+        raise ExternalIngestError(
+            400,
+            "entity_family_mismatch",
+            "source.entityFamily must match the submitted record kinds",
+        )
 
 
 async def _read_body_enforcing_size_limit(request: Request) -> bytes:
@@ -337,25 +352,39 @@ async def accept_batch(
     _check_idempotency_header_matches_body(envelope, idempotency_key_header)
     _check_schema_version_or_400(envelope)
     _check_all_kinds_known_or_400(envelope)
+    _check_entity_family_or_400(envelope)
     _check_batch_size_or_400(envelope)
     # Adversarial-review fix: require_ingest_scope resolves before the body
     # is parsed, so it can't check payload source vs. token-bound source
     # itself -- a source-bound ingest:write token must not be able to push
     # data for a different source instance in the same org (CC16
     # source_mismatch / source_disabled).
-    require_matching_source(ctx, envelope.source.system, envelope.source.instance)
+    require_matching_source(
+        ctx,
+        envelope.source.system,
+        envelope.source.instance,
+        envelope.source.entity_family,
+    )
 
     # One-active-owner re-check at accept time (CC5/CC14 defense in depth):
     # require_matching_source only proves the token binds to a registered,
     # write-eligible source row -- it cannot see a managed sync source that
     # was connected to the SAME instance AFTER registration (nothing on the
     # api/admin/routers/sync.py side knows about external_ingest_sources).
-    mode = await resolve_effective_mode(
-        session,
-        org_id=ctx.org_id,
-        system=envelope.source.system,
-        instance=envelope.source.instance,
-    )
+    try:
+        mode = await resolve_effective_mode(
+            session,
+            org_id=ctx.org_id,
+            system=envelope.source.system,
+            instance=envelope.source.instance,
+            entity_family=envelope.source.entity_family,
+        )
+    except OperationalOwnershipResolutionUnavailableError as exc:
+        raise ExternalIngestError(
+            403,
+            "ownership_resolution_unavailable",
+            OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE,
+        ) from exc
     if mode != "customer_push":
         raise _ownership_error(mode, envelope.source.system, envelope.source.instance)
 
@@ -372,6 +401,7 @@ async def accept_batch(
             source_instance=envelope.source.instance,
             idempotency_key=envelope.idempotency_key,
             payload_hash=payload_hash,
+            entity_family=envelope.source.entity_family,
             schema_version=envelope.schema_version,
             producer=envelope.source.producer,
             producer_version=envelope.source.producer_version,

@@ -19,6 +19,10 @@ from dev_health_ops.external_ingest.normalize import (
     ALLOWED_KINDS_BY_SYSTEM,
     normalize_batch,
 )
+from dev_health_ops.models.operational import (
+    OperationalIncident,
+    canonical_operational_id,
+)
 
 ORG = "org-1"
 SOURCE_ID = uuid.uuid4()
@@ -141,6 +145,54 @@ class TestHappyPath:
         assert result.batch.source_system == "github"
         assert result.batch.source_instance == INSTANCE
 
+    def test_operational_incident_uses_canonical_identity_and_source_provenance(
+        self,
+    ) -> None:
+        result = _normalize(
+            [
+                RecordEnvelope(
+                    kind="operational_incident.v1",
+                    external_id="inc-1",
+                    payload={
+                        "externalId": "inc-1",
+                        "sourceVersionAt": "2026-07-01T00:00:00Z",
+                        "title": "Payments latency",
+                        "serviceExternalId": "payments",
+                    },
+                )
+            ],
+            source_system="pagerduty",
+            source_instance="pd-example",
+        )
+
+        assert result.items_rejected == 0
+        (incident,) = result.batch.operational_incidents
+        assert isinstance(incident, OperationalIncident)
+        assert incident.source_id == SOURCE_ID
+        assert incident.id == canonical_operational_id(
+            ORG, "pagerduty", "pd-example", "operational_incident", "inc-1"
+        )
+
+    def test_mapping_without_repository_identity_is_rejected(self) -> None:
+        result = _normalize(
+            [
+                RecordEnvelope(
+                    kind="service_repository_mapping.v1",
+                    external_id="mapping-1",
+                    payload={
+                        "externalId": "mapping-1",
+                        "sourceVersionAt": "2026-07-01T00:00:00Z",
+                        "serviceExternalId": "payments",
+                    },
+                )
+            ],
+            source_system="pagerduty",
+            source_instance="pd-example",
+        )
+
+        assert result.items_accepted == 0
+        assert result.rejections[0].code == "repository_identity_required"
+
 
 class TestShapeRejections:
     def test_invalid_payload_rejected_with_validate_py_code(self) -> None:
@@ -214,11 +266,27 @@ class TestKindSystemMatrix:
         git = {"repository.v1", "pull_request.v1", "review.v1", "commit.v1"}
         wi = {"work_item.v1", "work_item_transition.v1", "work_item_dependency.v1"}
         org = {"team.v1", "identity.v1"}
-        assert ALLOWED_KINDS_BY_SYSTEM["github"] == git | wi | org
-        assert ALLOWED_KINDS_BY_SYSTEM["gitlab"] == git | wi | org
+        operational = {
+            "operational_service.v1",
+            "operational_incident.v1",
+            "operational_alert.v1",
+            "incident_timeline_event.v1",
+            "incident_note.v1",
+            "incident_responder.v1",
+            "escalation_policy.v1",
+            "on_call_schedule.v1",
+            "on_call_assignment.v1",
+            "operational_team.v1",
+            "operational_user.v1",
+            "service_repository_mapping.v1",
+        }
+        assert ALLOWED_KINDS_BY_SYSTEM["github"] == git | wi | org | operational
+        assert ALLOWED_KINDS_BY_SYSTEM["gitlab"] == git | wi | org | operational
         assert ALLOWED_KINDS_BY_SYSTEM["jira"] == wi | org
         assert ALLOWED_KINDS_BY_SYSTEM["linear"] == wi | org
-        assert ALLOWED_KINDS_BY_SYSTEM["custom"] == git | org
+        assert ALLOWED_KINDS_BY_SYSTEM["custom"] == git | org | operational
+        assert ALLOWED_KINDS_BY_SYSTEM["pagerduty"] == org | operational
+        assert ALLOWED_KINDS_BY_SYSTEM["atlassian"] == org | operational
         # Every kind the wire schema knows is reachable through some system.
         reachable = frozenset().union(*ALLOWED_KINDS_BY_SYSTEM.values())
         assert reachable == set(RECORD_KIND_MODELS)

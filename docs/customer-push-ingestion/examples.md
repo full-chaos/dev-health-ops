@@ -147,3 +147,23 @@ A `completed` (or `partial`) status with `itemsAccepted >= 1` means the records 
 persisted and will surface in the product once the debounced metric recompute runs. The
 same validate → push → poll sequence is what you wire into a GitHub Actions / GitLab CI /
 generic runner job to push on a schedule.
+
+## Operational record examples
+
+Operational batches declare `source.entityFamily` as `operational` and contain only one
+operational record family.
+
+```json
+--8<-- "operational_service.v1.json"
+--8<-- "operational_incident.v1.json"
+--8<-- "operational_alert.v1.json"
+--8<-- "incident_timeline_event.v1.json"
+--8<-- "incident_note.v1.json"
+--8<-- "incident_responder.v1.json"
+--8<-- "escalation_policy.v1.json"
+--8<-- "on_call_schedule.v1.json"
+--8<-- "on_call_assignment.v1.json"
+--8<-- "operational_team.v1.json"
+--8<-- "operational_user.v1.json"
+--8<-- "service_repository_mapping.v1.json"
+```

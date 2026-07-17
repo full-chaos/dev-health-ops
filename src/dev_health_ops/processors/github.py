@@ -52,6 +52,11 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
+from dev_health_ops.providers.operational_migration import (
+    IssueIncidentSource,
+    map_issue_incidents,
+    operational_dual_write_enabled,
+)
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.providers.usage import drain_provider_usage
 from dev_health_ops.utils import (
@@ -447,6 +452,9 @@ async def _fetch_github_incidents_async(
     max_issues: int,
     since: datetime | None,
     usage_sink: list[dict[str, Any]] | None = None,
+    canonical_sources: list[IssueIncidentSource] | None = None,
+    canonical_org_id: str | None = None,
+    canonical_provider_instance_id: str | None = None,
 ) -> list[Incident]:
     incidents: list[Incident] = []
     labels = resolve_incident_labels()
@@ -488,15 +496,52 @@ async def _fetch_github_incidents_async(
                 continue
             if since is not None and created_at.astimezone(timezone.utc) < since:
                 continue
+            issue_id = str(getattr(issue, "issue_id", ""))
             incidents.append(
                 Incident(
                     repo_id=repo_id,
-                    incident_id=str(getattr(issue, "issue_id", "")),
+                    incident_id=issue_id,
                     status=getattr(issue, "state", None),
                     started_at=created_at,
                     resolved_at=getattr(issue, "closed_at", None),
                 )
             )
+            if (
+                canonical_sources is not None
+                and canonical_org_id
+                and canonical_provider_instance_id
+                and issue_id
+            ):
+                labels_value = getattr(issue, "labels", ())
+                canonical_labels = (
+                    tuple(str(label) for label in labels_value)
+                    if isinstance(labels_value, (list, tuple))
+                    else ()
+                )
+                updated_at = getattr(issue, "updated_at", None)
+                canonical_sources.append(
+                    IssueIncidentSource(
+                        org_id=canonical_org_id,
+                        provider="github",
+                        provider_instance_id=canonical_provider_instance_id,
+                        repo_id=repo_id,
+                        repo_full_name=f"{owner}/{repo_name}",
+                        external_id=issue_id,
+                        issue_number=str(getattr(issue, "number", "")) or None,
+                        source_url=getattr(issue, "source_url", None),
+                        labels=canonical_labels,
+                        raw_status=getattr(issue, "state", None),
+                        title=getattr(issue, "title", None) or "",
+                        description=getattr(issue, "description", None),
+                        created_at=created_at,
+                        resolved_at=getattr(issue, "closed_at", None),
+                        source_version_at=(
+                            updated_at
+                            if isinstance(updated_at, datetime)
+                            else created_at
+                        ),
+                    )
+                )
         return incidents
     finally:
         observations = client.drain_usage_observations()
@@ -526,6 +571,25 @@ def _github_code_client_from_connector(connector) -> "GitHubCodeClient":
     from dev_health_ops.providers.github.code_client import GitHubCodeClient
 
     return GitHubCodeClient(auth=GitHubAuth(token=token, base_url=base_url))
+
+
+def _github_provider_instance_id(connector) -> str:
+    """Return a stable public or enterprise GitHub instance identifier."""
+    from dev_health_ops.models.operational_identity import (
+        InvalidOperationalProviderInstanceError,
+        normalized_operational_provider_instance,
+    )
+
+    rest_base_url = getattr(connector, "_rest_base_url", None)
+    raw_base_url = rest_base_url() if callable(rest_base_url) else None
+    provider_instance_id = normalized_operational_provider_instance(
+        "github", str(raw_base_url or "https://api.github.com")
+    )
+    if provider_instance_id is None:
+        raise InvalidOperationalProviderInstanceError(
+            "Invalid GitHub provider instance"
+        )
+    return provider_instance_id
 
 
 async def _list_github_repositories_for_batch(
@@ -1878,6 +1942,7 @@ async def process_github_repo(
                 provider="github",
                 settings={
                     "source": "github",
+                    "github_instance_url": _github_provider_instance_id(connector),
                     "repo_id": repo_info.id,
                     "url": repo_info.url,
                     "default_branch": repo_info.default_branch,
@@ -2015,6 +2080,9 @@ async def process_github_repo(
 
             if sync_incidents:
                 logging.info("Fetching incident issues from GitHub...")
+                canonical_sources: list[IssueIncidentSource] | None = (
+                    [] if operational_dual_write_enabled() else None
+                )
                 incidents = await _fetch_github_incidents_async(
                     connector,
                     owner,
@@ -2023,10 +2091,19 @@ async def process_github_repo(
                     BATCH_SIZE,
                     since,
                     usage_sink=usage_sink,
+                    canonical_sources=canonical_sources,
+                    canonical_org_id=getattr(store, "org_id", "") or None,
+                    canonical_provider_instance_id=_github_provider_instance_id(
+                        connector
+                    ),
                 )
                 incidents = _filter_after(incidents, until, "started_at")
                 if incidents:
                     await ingestion_sink.insert_incidents(incidents)
+                    if canonical_sources:
+                        await ingestion_sink.insert_operational_batch(
+                            map_issue_incidents(canonical_sources)
+                        )
                     logging.info("Stored %d incidents", len(incidents))
 
             if sync_security:
@@ -2169,6 +2246,7 @@ async def process_github_repos_batch(
             provider="github",
             settings={
                 "source": "github",
+                "github_instance_url": _github_provider_instance_id(connector),
                 "repo_id": repo_info.id,
                 "url": repo_info.url,
                 "default_branch": repo_info.default_branch,
@@ -2365,6 +2443,9 @@ async def process_github_repos_batch(
         if sync_incidents:
             try:
                 batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                canonical_sources: list[IssueIncidentSource] | None = (
+                    [] if operational_dual_write_enabled() else None
+                )
                 incidents = await _fetch_github_incidents_async(
                     connector,
                     batch_owner,
@@ -2373,9 +2454,18 @@ async def process_github_repos_batch(
                     BATCH_SIZE,
                     since,
                     usage_sink=usage_sink,
+                    canonical_sources=canonical_sources,
+                    canonical_org_id=getattr(store, "org_id", "") or None,
+                    canonical_provider_instance_id=_github_provider_instance_id(
+                        connector
+                    ),
                 )
                 if incidents:
                     await ingestion_sink.insert_incidents(incidents)
+                    if canonical_sources:
+                        await ingestion_sink.insert_operational_batch(
+                            map_issue_incidents(canonical_sources)
+                        )
             except (RateLimitException, RateLimitExceededException):
                 raise
             except Exception as e:

@@ -35,6 +35,27 @@ def test_aggregate_job_depends_on_both_changes_and_docs_guards_job() -> None:
     assert set(aggregate_job["needs"]) == {"changes", "docs-guards-job"}
 
 
+def test_docs_guards_pins_setup_node_to_the_v4_0_4_commit() -> None:
+    workflow = _load_workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    docs_guards_job = jobs["docs-guards-job"]
+    assert isinstance(docs_guards_job, dict)
+    steps = docs_guards_job["steps"]
+    assert isinstance(steps, list)
+
+    setup_node_uses = [
+        step["uses"]
+        for step in steps
+        if isinstance(step, dict)
+        and step.get("uses", "").startswith("actions/setup-node@")
+    ]
+
+    assert setup_node_uses == [
+        "actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6"
+    ]
+
+
 @pytest.mark.parametrize(
     ("changes_result", "docs_guards_result", "expected_exit_code"),
     [

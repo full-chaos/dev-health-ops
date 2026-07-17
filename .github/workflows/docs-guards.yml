@@ -94,9 +94,11 @@ jobs:
           node-version: "22"
 
       - name: Install docs browser QA dependencies
+        working-directory: docs-qa
         run: |
           corepack enable
-          pnpm --dir docs-qa install --frozen-lockfile
+          corepack install
+          pnpm install --frozen-lockfile
 
       - name: Run docs search acceptance
         run: |

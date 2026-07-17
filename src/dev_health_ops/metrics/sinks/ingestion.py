@@ -22,6 +22,8 @@ from dev_health_ops.models.git import (
     Repo,
     SecurityAlert,
 )
+from dev_health_ops.models.operational import OperationalBatch
+from dev_health_ops.providers.operational_migration import write_operational_batch
 
 
 class IngestionSink:
@@ -92,6 +94,9 @@ class IngestionSink:
 
     async def insert_incidents(self, incidents: list[Incident]) -> None:
         await self._store.insert_incidents(incidents)
+
+    async def insert_operational_batch(self, batch: OperationalBatch) -> None:
+        await write_operational_batch(self._store, batch)
 
     async def insert_security_alerts(self, alerts: list[SecurityAlert]) -> None:
         await self._store.insert_security_alerts(alerts)

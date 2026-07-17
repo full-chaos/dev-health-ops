@@ -107,4 +107,31 @@ tombstones. Resolved windows are for MTTR and DORA. Started windows are for inci
 creation analysis. Overlap windows are for lifecycle and active-incident analysis.
 `load_operational_incidents()` remains a resolved-window compatibility alias. These
 reads intentionally coexist with legacy `incidents` and `atlassian_ops_*` readers.
-CHAOS-2963 migrates producers and metric consumers without changing these guarantees.
+## Producer migration rollout
+
+CHAOS-2963 adds an opt-in, additive producer seam for GitHub and GitLab
+issue-derived incidents and for historical Atlassian Ops rows. Set
+`OPERATIONAL_INCIDENT_DUAL_WRITE=true` to write canonical rows alongside the
+legacy `incidents` write; this flag never suppresses the legacy write.
+
+`providers.operational_migration` maps GitHub and GitLab records with
+`source_entity_type="issue"`, a repository-derived `OperationalService`, and a
+`ServiceRepositoryMapping`. The incident has no `repo_id`; repository linkage is
+the explicit mapping edge. Atlassian Ops backfill maps its legacy incidents,
+alerts, and schedules with `provider="atlassian"` and their native source entity
+types. Deterministic canonical ids make repeated source snapshots idempotent.
+
+The migration does not change incident-correlation, Sankey, DORA, MTTR, or
+deployment-edge consumers. Those consumers continue reading legacy tables until
+their explicit cutover gate. Historical migration runs through
+`dev-health-ops backfill operational --org <org-id>` and joins `incidents` to
+`repos` on `repo_id` before mapping GitHub/GitLab issue incidents. The CLI accepts
+explicit provider-instance ids because the legacy incident row does not carry
+instance provenance. Atlassian Ops incidents, alerts, and schedules are read from
+their legacy tables and mapped through the same canonical writer.
+
+Historical GitHub/GitLab rows retain status and lifecycle timestamps, but legacy
+`incidents` has no labels, issue URL, number, title, or description; those canonical
+fields are null or empty after backfill. Enabled live dual-write supplies that richer
+issue metadata going forward. The backfill's deterministic canonical ids make
+repeated runs idempotent under ClickHouse `FINAL` reads.

@@ -1,0 +1,23 @@
+import { expect, test } from "@playwright/test";
+
+const onboardingPath = "/user-guide/first-10-minutes/";
+
+test.describe("user-guide onboarding", () => {
+    for (const viewport of [
+        { name: "mobile", width: 375, height: 900 },
+        { name: "tablet", width: 768, height: 900 },
+        { name: "desktop", width: 1280, height: 900 },
+    ] as const) {
+        test(`keeps the first 10 minutes guide readable at ${viewport.name}`, async ({ page }) => {
+            await page.setViewportSize({ width: viewport.width, height: viewport.height });
+            await page.goto(onboardingPath);
+
+            await expect(page.getByRole("heading", { name: "Your first 10 minutes" })).toBeVisible();
+            const dimensions = await page.evaluate(() => ({
+                clientWidth: document.documentElement.clientWidth,
+                scrollWidth: document.documentElement.scrollWidth,
+            }));
+            expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+        });
+    }
+});

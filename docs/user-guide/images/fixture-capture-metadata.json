@@ -1,0 +1,27 @@
+{
+  "captured_at": "2026-07-16T23:56:48.752Z",
+  "captures": [
+    {
+      "route": "/dashboard",
+      "fixture_source": "fixture-backed web e2e mock server",
+      "capture_method": "Chrome via Playwright against DEV_HEALTH_TEST_MODE and MSW fixture server",
+      "redaction": "Sanitized main-content crop with fixture account and organization labels replaced by [redacted fixture label]. Fixture values are not production data.",
+      "screenshot": "user-guide/images/cockpit-fixture.png",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "route": "/investment",
+      "fixture_source": "fixture-backed web e2e mock server",
+      "capture_method": "Chrome via Playwright against DEV_HEALTH_TEST_MODE and MSW fixture server",
+      "redaction": "Sanitized main-content crop with fixture account and organization labels replaced by [redacted fixture label]. Fixture values are not production data.",
+      "screenshot": "user-guide/images/investment-fixture.png",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    }
+  ]
+}

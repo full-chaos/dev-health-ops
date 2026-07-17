@@ -33,6 +33,11 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], channel: "chrome" },
       testMatch: "**/*.search.spec.ts",
     },
+    {
+      name: "chrome-journeys",
+      use: { ...devices["Desktop Chrome"], channel: "chrome" },
+      testMatch: "**/*.journey.spec.ts",
+    },
   ],
   ...(usesRemotePreview
     ? {}

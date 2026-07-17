@@ -68,9 +68,10 @@ def test_expired_allowlist_fails(tmp_path: Path) -> None:
         site_dir, allowlist_path, always_ok, date(2026, 7, 16)
     )
 
-    assert len(errors) == 1
-    assert "https://expired.example.com/" in errors[0]
-    assert "expired on 2026-01-01" in errors[0]
+    assert errors == [
+        "index.html: allowlist entry for https://expired.example.com/ expired on "
+        "2026-01-01 (owner: docs-content, reason: temporary vendor outage)"
+    ]
 
 
 def test_stale_review_date_fails(tmp_path: Path) -> None:

@@ -1,0 +1,4218 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../connector-inventory/">
+      
+      
+        <link rel="next" href="../testing-governance/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Stripe Billing Runbook - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#stripe-billing-runbook" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Stripe Billing Runbook
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/team-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#deployment-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deployment Paths
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#billing-api-contract-current" class="md-nav__link">
+    <span class="md-ellipsis">
+      Billing API Contract (Current)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-environment-variables-saas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required Environment Variables (SaaS)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local-workflow-saas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local Workflow (SaaS)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Local Workflow (SaaS)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-start-api-with-billing-env" class="md-nav__link">
+    <span class="md-ellipsis">
+      1) Start API with billing env
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-install-and-authenticate-stripe-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      2) Install and authenticate Stripe CLI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-forward-stripe-events-to-local-webhook-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      3) Forward Stripe events to local webhook endpoint
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-trigger-local-event-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      4) Trigger local event flows
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-validate-api-level-outcomes" class="md-nav__link">
+    <span class="md-ellipsis">
+      5) Validate API-level outcomes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook-replay-retry-and-idempotency" class="md-nav__link">
+    <span class="md-ellipsis">
+      Webhook Replay, Retry, and Idempotency
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook Replay, Retry, and Idempotency">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stripe-retry-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stripe retry model
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-idempotency-behavior-in-dev-health-ops" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current idempotency behavior in dev-health-ops
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#safe-replay-playbook" class="md-nav__link">
+    <span class="md-ellipsis">
+      Safe replay playbook
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ops-workflow-saas-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ops Workflow (SaaS Production)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ops Workflow (SaaS Production)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#incident-triage-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      Incident triage checklist
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reconciliation-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reconciliation commands
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolving-mismatches" class="md-nav__link">
+    <span class="md-ellipsis">
+      Resolving mismatches
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#free-trial-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Free Trial Configuration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Free Trial Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-flow-end-to-end" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Flow (End-to-End)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-behavior-by-tier" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Behavior by Tier
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-abuse-prevention" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Abuse Prevention
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-emails" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Emails
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compose-setup-local-dev" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compose Setup (Local Dev)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#email-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      Email Notifications
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Email Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#emails-sent" class="md-nav__link">
+    <span class="md-ellipsis">
+      Emails Sent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#email-delivery-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      Email Delivery Guarantees
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#email-provider-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Email Provider Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verifying-email-delivery-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verifying Email Delivery Locally
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      CI Workflow
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CI Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#secret-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Secret handling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ci-guardrails" class="md-nav__link">
+    <span class="md-ellipsis">
+      CI guardrails
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stripe-test-card-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stripe Test Card Matrix
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-hosted-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Hosted Note
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/rate-limit-policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#deployment-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deployment Paths
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#billing-api-contract-current" class="md-nav__link">
+    <span class="md-ellipsis">
+      Billing API Contract (Current)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-environment-variables-saas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required Environment Variables (SaaS)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local-workflow-saas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local Workflow (SaaS)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Local Workflow (SaaS)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-start-api-with-billing-env" class="md-nav__link">
+    <span class="md-ellipsis">
+      1) Start API with billing env
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-install-and-authenticate-stripe-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      2) Install and authenticate Stripe CLI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-forward-stripe-events-to-local-webhook-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      3) Forward Stripe events to local webhook endpoint
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-trigger-local-event-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      4) Trigger local event flows
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-validate-api-level-outcomes" class="md-nav__link">
+    <span class="md-ellipsis">
+      5) Validate API-level outcomes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook-replay-retry-and-idempotency" class="md-nav__link">
+    <span class="md-ellipsis">
+      Webhook Replay, Retry, and Idempotency
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook Replay, Retry, and Idempotency">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stripe-retry-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stripe retry model
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-idempotency-behavior-in-dev-health-ops" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current idempotency behavior in dev-health-ops
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#safe-replay-playbook" class="md-nav__link">
+    <span class="md-ellipsis">
+      Safe replay playbook
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ops-workflow-saas-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ops Workflow (SaaS Production)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ops Workflow (SaaS Production)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#incident-triage-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      Incident triage checklist
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reconciliation-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reconciliation commands
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resolving-mismatches" class="md-nav__link">
+    <span class="md-ellipsis">
+      Resolving mismatches
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#free-trial-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Free Trial Configuration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Free Trial Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-flow-end-to-end" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Flow (End-to-End)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-behavior-by-tier" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Behavior by Tier
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-abuse-prevention" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Abuse Prevention
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trial-emails" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trial Emails
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compose-setup-local-dev" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compose Setup (Local Dev)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#email-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      Email Notifications
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Email Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#emails-sent" class="md-nav__link">
+    <span class="md-ellipsis">
+      Emails Sent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#email-delivery-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      Email Delivery Guarantees
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#email-provider-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Email Provider Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verifying-email-delivery-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verifying Email Delivery Locally
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      CI Workflow
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CI Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#secret-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Secret handling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ci-guardrails" class="md-nav__link">
+    <span class="md-ellipsis">
+      CI guardrails
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stripe-test-card-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stripe Test Card Matrix
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-hosted-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Hosted Note
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="stripe-billing-runbook">Stripe Billing Runbook<a class="headerlink" href="#stripe-billing-runbook" title="Permanent link">&para;</a></h1>
+<p>This runbook covers how to operate Stripe-backed billing in <code>dev-health-ops</code> across local development, CI, and production operations.</p>
+<h2 id="deployment-paths">Deployment Paths<a class="headerlink" href="#deployment-paths" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Stripe required</th>
+<th>Core mechanism</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SaaS</td>
+<td>Yes</td>
+<td>Stripe checkout, portal, and webhook flow</td>
+</tr>
+<tr>
+<td>Self-hosted</td>
+<td>No</td>
+<td>Offline license flow (<code>DEV_HEALTH_LICENSE</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>If you are self-hosting only, skip Stripe setup and use <code>DEV_HEALTH_LICENSE</code> as documented in the self-hosted guides.</p>
+<h2 id="billing-api-contract-current">Billing API Contract (Current)<a class="headerlink" href="#billing-api-contract-current" title="Permanent link">&para;</a></h2>
+<p>The runbook assumes the current billing endpoints in <code>dev_health_ops.api.billing.router</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/api/v1/billing/webhooks/stripe</code></td>
+<td><code>POST</code></td>
+<td>Receives Stripe webhook events</td>
+</tr>
+<tr>
+<td><code>/api/v1/billing/checkout</code></td>
+<td><code>POST</code></td>
+<td>Creates Stripe Checkout sessions</td>
+</tr>
+<tr>
+<td><code>/api/v1/billing/portal</code></td>
+<td><code>POST</code></td>
+<td>Creates Stripe Billing Portal sessions</td>
+</tr>
+<tr>
+<td><code>/api/v1/billing/entitlements/{org_id}</code></td>
+<td><code>GET</code></td>
+<td>Returns org entitlements</td>
+</tr>
+<tr>
+<td><code>/api/v1/billing/audit</code></td>
+<td><code>GET</code></td>
+<td>Lists billing audit and reconciliation entries (superadmin)</td>
+</tr>
+<tr>
+<td><code>/api/v1/billing/audit/{audit_id}</code></td>
+<td><code>GET</code></td>
+<td>Gets one billing audit entry (superadmin)</td>
+</tr>
+<tr>
+<td><code>/api/v1/billing/audit/{audit_id}/resolve</code></td>
+<td><code>POST</code></td>
+<td>Marks mismatch resolution (superadmin)</td>
+</tr>
+<tr>
+<td><code>/api/v1/billing/reconcile</code></td>
+<td><code>POST</code></td>
+<td>Triggers reconciliation run (superadmin)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="required-environment-variables-saas">Required Environment Variables (SaaS)<a class="headerlink" href="#required-environment-variables-saas" title="Permanent link">&para;</a></h2>
+<p>Set these before running API billing flows:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_SECRET_KEY</span><span class="o">=</span><span class="s2">&quot;sk_test_...&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_WEBHOOK_SECRET</span><span class="o">=</span><span class="s2">&quot;whsec_...&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_PRICE_ID_TEAM</span><span class="o">=</span><span class="s2">&quot;price_...&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_PRICE_ID_ENTERPRISE</span><span class="o">=</span><span class="s2">&quot;price_...&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_PRIVATE_KEY</span><span class="o">=</span><span class="s2">&quot;&lt;base64-ed25519-private-key&gt;&quot;</span>
+</code></pre></div>
+<p>Optional but recommended for checkout URL validation:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">APP_BASE_URL</span><span class="o">=</span><span class="s2">&quot;http://localhost:3000&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">ALLOWED_CHECKOUT_DOMAINS</span><span class="o">=</span><span class="s2">&quot;http://localhost:3000,https://staging.example.com&quot;</span>
+</code></pre></div>
+<h2 id="local-workflow-saas">Local Workflow (SaaS)<a class="headerlink" href="#local-workflow-saas" title="Permanent link">&para;</a></h2>
+<h3 id="1-start-api-with-billing-env">1) Start API with billing env<a class="headerlink" href="#1-start-api-with-billing-env" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Example local API startup</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">CLICKHOUSE_URI</span><span class="o">=</span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">POSTGRES_URI</span><span class="o">=</span><span class="s2">&quot;postgresql+asyncpg://postgres:postgres@localhost:5432/devhealth&quot;</span>
+dev-hops<span class="w"> </span>api<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLICKHOUSE_URI</span><span class="s2">&quot;</span><span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
+</code></pre></div>
+<h3 id="2-install-and-authenticate-stripe-cli">2) Install and authenticate Stripe CLI<a class="headerlink" href="#2-install-and-authenticate-stripe-cli" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># macOS (Homebrew)</span>
+brew<span class="w"> </span>install<span class="w"> </span>stripe/stripe-cli/stripe
+
+<span class="c1"># Authenticate Stripe CLI for your Stripe account</span>
+stripe<span class="w"> </span>login
+</code></pre></div>
+<h3 id="3-forward-stripe-events-to-local-webhook-endpoint">3) Forward Stripe events to local webhook endpoint<a class="headerlink" href="#3-forward-stripe-events-to-local-webhook-endpoint" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>stripe<span class="w"> </span>listen<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--forward-to<span class="w"> </span>http://127.0.0.1:8000/api/v1/billing/webhooks/stripe<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--events<span class="w"> </span>checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,customer.subscription.trial_will_end,invoice.created,invoice.updated,invoice.finalized,invoice.paid,invoice.payment_failed,invoice.voided,charge.refunded,charge.refund.updated
+</code></pre></div>
+<p>Copy the emitted signing secret (<code>whsec_...</code>) and set it as <code>STRIPE_WEBHOOK_SECRET</code> in your shell where the API runs.</p>
+<h3 id="4-trigger-local-event-flows">4) Trigger local event flows<a class="headerlink" href="#4-trigger-local-event-flows" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Simulate checkout completion</span>
+stripe<span class="w"> </span>trigger<span class="w"> </span>checkout.session.completed
+
+<span class="c1"># Simulate recurring invoice events</span>
+stripe<span class="w"> </span>trigger<span class="w"> </span>invoice.paid
+stripe<span class="w"> </span>trigger<span class="w"> </span>invoice.payment_failed
+
+<span class="c1"># Simulate subscription updates</span>
+stripe<span class="w"> </span>trigger<span class="w"> </span>customer.subscription.updated
+</code></pre></div>
+<h3 id="5-validate-api-level-outcomes">5) Validate API-level outcomes<a class="headerlink" href="#5-validate-api-level-outcomes" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Health check</span>
+curl<span class="w"> </span>http://127.0.0.1:8000/health
+
+<span class="c1"># Trigger reconciliation (requires superadmin auth in real environments)</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/billing/reconcile&quot;</span>
+</code></pre></div>
+<h2 id="webhook-replay-retry-and-idempotency">Webhook Replay, Retry, and Idempotency<a class="headerlink" href="#webhook-replay-retry-and-idempotency" title="Permanent link">&para;</a></h2>
+<h3 id="stripe-retry-model">Stripe retry model<a class="headerlink" href="#stripe-retry-model" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Stripe retries failed deliveries automatically.</li>
+<li>Manual replays can come from Stripe Dashboard or Stripe CLI.</li>
+<li>Your API must tolerate at-least-once delivery.</li>
+</ul>
+<h3 id="current-idempotency-behavior-in-dev-health-ops">Current idempotency behavior in <code>dev-health-ops</code><a class="headerlink" href="#current-idempotency-behavior-in-dev-health-ops" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Invoice webhook handling checks duplicate Stripe event IDs before processing invoice writes.</li>
+<li>Duplicate invoice events are skipped and logged.</li>
+<li>For subscription/refund mismatches or replay uncertainty, use reconciliation and audit endpoints.</li>
+</ul>
+<h3 id="safe-replay-playbook">Safe replay playbook<a class="headerlink" href="#safe-replay-playbook" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Confirm the webhook endpoint returns non-2xx or missed state change.</li>
+<li>Replay specific events:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># List recent events</span>
+stripe<span class="w"> </span>events<span class="w"> </span>list<span class="w"> </span>--limit<span class="w"> </span><span class="m">20</span>
+
+<span class="c1"># Replay one event to the local endpoint</span>
+stripe<span class="w"> </span>events<span class="w"> </span>resend<span class="w"> </span>evt_123<span class="w"> </span>--webhook-endpoint<span class="w"> </span>we_123
+</code></pre></div>
+<ol>
+<li>Run reconciliation:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/billing/reconcile&quot;</span>
+</code></pre></div>
+<ol>
+<li>Inspect audit trail for unresolved mismatches:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span><span class="s2">&quot;http://127.0.0.1:8000/api/v1/billing/audit?org_id=&lt;org-uuid&gt;&quot;</span>
+</code></pre></div>
+<h2 id="ops-workflow-saas-production">Ops Workflow (SaaS Production)<a class="headerlink" href="#ops-workflow-saas-production" title="Permanent link">&para;</a></h2>
+<h3 id="incident-triage-checklist">Incident triage checklist<a class="headerlink" href="#incident-triage-checklist" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Verify env vars in runtime (<code>STRIPE_SECRET_KEY</code>, <code>STRIPE_WEBHOOK_SECRET</code>, price IDs, <code>LICENSE_PRIVATE_KEY</code>).</li>
+<li>Verify Stripe webhook endpoint URL exactly matches:</li>
+<li><code>https://&lt;your-domain&gt;/api/v1/billing/webhooks/stripe</code></li>
+<li>Verify Stripe endpoint event subscriptions include the billing lifecycle events listed in this runbook.</li>
+<li>Confirm webhook delivery status in Stripe Dashboard (response code + body).</li>
+<li>Trigger reconciliation and review mismatches via audit endpoints.</li>
+</ol>
+<h3 id="reconciliation-commands">Reconciliation commands<a class="headerlink" href="#reconciliation-commands" title="Permanent link">&para;</a></h3>
+<p>Use either API endpoint or CLI:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># API</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;https://&lt;your-domain&gt;/api/v1/billing/reconcile&quot;</span>
+
+<span class="c1"># CLI (from ops runtime with DB/env configured)</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>billing<span class="w"> </span>reconcile
+
+<span class="c1"># Scoped reconcile by org</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>billing<span class="w"> </span>reconcile<span class="w"> </span>--org-id<span class="w"> </span>&lt;org-uuid&gt;
+
+<span class="c1"># Reconcile invoices since timestamp</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>billing<span class="w"> </span>reconcile<span class="w"> </span>--org-id<span class="w"> </span>&lt;org-uuid&gt;<span class="w"> </span>--since<span class="w"> </span><span class="m">2026</span>-02-24T00:00:00
+</code></pre></div>
+<h3 id="resolving-mismatches">Resolving mismatches<a class="headerlink" href="#resolving-mismatches" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Pull mismatch entries from <code>/api/v1/billing/audit</code>.</li>
+<li>Investigate local vs Stripe state.</li>
+<li>Mark resolved when remediation completes:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;https://&lt;your-domain&gt;/api/v1/billing/audit/&lt;audit-id&gt;/resolve&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;resolution&quot;:&quot;manual correction applied after Stripe replay&quot;}&#39;</span>
+</code></pre></div>
+<h2 id="free-trial-configuration">Free Trial Configuration<a class="headerlink" href="#free-trial-configuration" title="Permanent link">&para;</a></h2>
+<p>The Team tier supports a self-serve free trial via Stripe Checkout. When a user clicks "Start free trial" on the pricing page, they go through signup → onboarding → Stripe Checkout with <code>subscription_data.trial_period_days</code> set.</p>
+<h3 id="required-setup">Required Setup<a class="headerlink" href="#required-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Set <code>TRIAL_DAYS</code></strong> (defaults to 14 if unset):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">TRIAL_DAYS</span><span class="o">=</span><span class="m">14</span>
+</code></pre></div>
+<ol>
+<li><strong>Set Stripe env vars</strong> (required for any billing flow):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_SECRET_KEY</span><span class="o">=</span><span class="s2">&quot;sk_test_...&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_WEBHOOK_SECRET</span><span class="o">=</span><span class="s2">&quot;whsec_...&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_PRICE_ID_TEAM</span><span class="o">=</span><span class="s2">&quot;price_...&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_PRICE_ID_ENTERPRISE</span><span class="o">=</span><span class="s2">&quot;price_...&quot;</span>
+</code></pre></div>
+<ol>
+<li><strong>Set <code>APP_BASE_URL</code></strong> to the <strong>frontend</strong> URL (used in trial emails):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">APP_BASE_URL</span><span class="o">=</span><span class="s2">&quot;http://localhost:3000&quot;</span>
+</code></pre></div>
+<ol>
+<li><strong>Configure email delivery</strong> (for trial notifications):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">EMAIL_PROVIDER</span><span class="o">=</span><span class="s2">&quot;smtp&quot;</span><span class="w">           </span><span class="c1"># smtp for local Mailpit, resend for prod</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SMTP_HOST</span><span class="o">=</span><span class="s2">&quot;localhost&quot;</span><span class="w">           </span><span class="c1"># or mailpit in compose</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SMTP_PORT</span><span class="o">=</span><span class="s2">&quot;1025&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">EMAIL_FROM_ADDRESS</span><span class="o">=</span><span class="s2">&quot;noreply@yourdomain.com&quot;</span>
+</code></pre></div>
+<ol>
+<li><strong>Subscribe to the <code>customer.subscription.trial_will_end</code> webhook event</strong> in Stripe (or via CLI):</li>
+</ol>
+<div class="highlight"><pre><span></span><code>stripe<span class="w"> </span>listen<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--forward-to<span class="w"> </span>http://127.0.0.1:8000/api/v1/billing/webhooks/stripe<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--events<span class="w"> </span>checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,customer.subscription.trial_will_end,invoice.created,invoice.updated,invoice.finalized,invoice.paid,invoice.payment_failed,invoice.voided,charge.refunded,charge.refund.updated
+</code></pre></div>
+<h3 id="trial-flow-end-to-end">Trial Flow (End-to-End)<a class="headerlink" href="#trial-flow-end-to-end" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>Pricing page (&quot;Start free trial&quot;)
+  → /auth/signup?plan=team&amp;trial=true
+  → Registration + email verification
+  → /auth/signin?plan=team&amp;trial=true
+  → /auth/onboard?plan=team&amp;trial=true
+  → /auth/trial-checkout (creates Stripe Checkout with trial_period_days)
+  → Stripe Checkout (trial subscription created)
+  → Webhook: customer.subscription.created (status=trialing)
+  → Org tier updated to Team
+  → trial_started email sent
+  → [3 days before expiry] Webhook: customer.subscription.trial_will_end
+  → trial_expiring email sent
+  → [Trial ends] Stripe converts to paid or cancels
+  → Webhook: customer.subscription.updated (status=active or canceled)
+</code></pre></div>
+<h3 id="trial-behavior-by-tier">Trial Behavior by Tier<a class="headerlink" href="#trial-behavior-by-tier" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Trial?</th>
+<th>Duration</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Community</td>
+<td>No</td>
+<td>—</td>
+<td>Free forever, no checkout</td>
+</tr>
+<tr>
+<td>Team</td>
+<td>Yes</td>
+<td><code>TRIAL_DAYS</code> (default 14)</td>
+<td>Self-serve via pricing page</td>
+</tr>
+<tr>
+<td>Enterprise</td>
+<td>No</td>
+<td>—</td>
+<td>Sales-led, no self-serve trial</td>
+</tr>
+</tbody>
+</table>
+<h3 id="trial-abuse-prevention">Trial Abuse Prevention<a class="headerlink" href="#trial-abuse-prevention" title="Permanent link">&para;</a></h3>
+<p>Orgs that previously had a trial are automatically detected. Subsequent checkout sessions are created <strong>without</strong> <code>trial_period_days</code> — the org is charged immediately instead of receiving another trial. This is logged in the billing audit.</p>
+<h3 id="trial-emails">Trial Emails<a class="headerlink" href="#trial-emails" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Trigger</th>
+<th>Template</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Subscription created with trial</td>
+<td><code>trial_started</code></td>
+<td>Immediately</td>
+</tr>
+<tr>
+<td><code>customer.subscription.trial_will_end</code></td>
+<td><code>trial_expiring</code></td>
+<td>3 days before trial end</td>
+</tr>
+<tr>
+<td>Trial subscription canceled/expired</td>
+<td><code>trial_expired</code></td>
+<td>On expiry</td>
+</tr>
+</tbody>
+</table>
+<h3 id="compose-setup-local-dev">Compose Setup (Local Dev)<a class="headerlink" href="#compose-setup-local-dev" title="Permanent link">&para;</a></h3>
+<p>The <code>compose.yml</code> worker already subscribes to the <code>webhooks</code> queue where <code>send_billing_notification</code> runs. Ensure the API and worker services have the Stripe env vars uncommented:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># In compose.yml, uncomment these in both api and worker services:</span>
+<span class="nt">STRIPE_SECRET_KEY</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${STRIPE_SECRET_KEY:-}</span>
+<span class="nt">STRIPE_WEBHOOK_SECRET</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${STRIPE_WEBHOOK_SECRET:-}</span>
+<span class="nt">STRIPE_PRICE_ID_TEAM</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${STRIPE_PRICE_ID_TEAM:-}</span>
+<span class="nt">STRIPE_PRICE_ID_ENTERPRISE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${STRIPE_PRICE_ID_ENTERPRISE:-}</span>
+<span class="nt">APP_BASE_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${APP_BASE_URL:-http://localhost:3000}</span>
+<span class="nt">TRIAL_DAYS</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${TRIAL_DAYS:-14}</span>
+</code></pre></div>
+<p>Then set the values in <code>dev-health-ops/.env</code> (copy from <code>.env.example</code> and fill in your Stripe test keys).</p>
+<h2 id="email-notifications">Email Notifications<a class="headerlink" href="#email-notifications" title="Permanent link">&para;</a></h2>
+<p>When billing webhook events are processed, the system automatically sends email notifications to the organization owner. This happens after all database operations complete successfully.</p>
+<h3 id="emails-sent">Emails Sent<a class="headerlink" href="#emails-sent" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Email</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>invoice.paid</code></td>
+<td>Invoice receipt</td>
+<td>Amount, currency, link to hosted invoice</td>
+</tr>
+<tr>
+<td><code>invoice.payment_failed</code></td>
+<td>Payment failed alert</td>
+<td>Amount, currency, retry attempt count</td>
+</tr>
+<tr>
+<td><code>customer.subscription.updated</code></td>
+<td>Subscription changed</td>
+<td>Old tier → new tier (only sent when tier actually changes)</td>
+</tr>
+<tr>
+<td><code>customer.subscription.deleted</code></td>
+<td>Subscription cancelled</td>
+<td>Current tier name</td>
+</tr>
+</tbody>
+</table>
+<h3 id="email-delivery-guarantees">Email Delivery Guarantees<a class="headerlink" href="#email-delivery-guarantees" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Emails are dispatched <strong>asynchronously via Celery</strong> on the <code>webhooks</code> queue — the webhook handler returns immediately after enqueuing.</li>
+<li>Failed email deliveries are <strong>retried up to 3 times</strong> with exponential backoff (30s, 60s, 120s).</li>
+<li>Database state is never affected by email failures — DB commits happen before email dispatch.</li>
+<li>If the Celery broker (Redis) is unavailable, email dispatch is silently skipped — the webhook still succeeds.</li>
+<li>If no organization owner is found (missing <code>org_id</code> in metadata or no owner-role member), the email is silently skipped with a warning log.</li>
+</ul>
+<h3 id="email-provider-configuration">Email Provider Configuration<a class="headerlink" href="#email-provider-configuration" title="Permanent link">&para;</a></h3>
+<p>Billing emails use the same email service as account emails (invites, verification, password reset). Configure via:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">EMAIL_PROVIDER</span><span class="o">=</span><span class="s2">&quot;resend&quot;</span><span class="w">        </span><span class="c1"># or &quot;console&quot; for dev/test</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">EMAIL_API_KEY</span><span class="o">=</span><span class="s2">&quot;re_...&quot;</span><span class="w">         </span><span class="c1"># Resend API key</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">EMAIL_FROM_ADDRESS</span><span class="o">=</span><span class="s2">&quot;noreply@yourdomain.com&quot;</span>
+</code></pre></div>
+<p>See <a href="../../email-setup/">Email Setup</a> for full provider configuration, troubleshooting, and template details.</p>
+<h3 id="verifying-email-delivery-locally">Verifying Email Delivery Locally<a class="headerlink" href="#verifying-email-delivery-locally" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Start the API with <code>EMAIL_PROVIDER=console</code> (default) to log emails to stdout.</li>
+<li>Forward Stripe events as described in the <a href="#local-workflow-saas">Local Workflow</a> section.</li>
+<li>Trigger an event: <code>stripe trigger invoice.paid</code></li>
+<li>Check API logs for the rendered email content.</li>
+</ol>
+<p>To test with real email delivery, set <code>EMAIL_PROVIDER=resend</code> with a valid API key and from address.</p>
+<h2 id="ci-workflow">CI Workflow<a class="headerlink" href="#ci-workflow" title="Permanent link">&para;</a></h2>
+<h3 id="secret-handling">Secret handling<a class="headerlink" href="#secret-handling" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Store Stripe values in CI secret manager, never in repo files:</li>
+<li><code>STRIPE_SECRET_KEY</code></li>
+<li><code>STRIPE_WEBHOOK_SECRET</code></li>
+<li><code>STRIPE_PRICE_ID_TEAM</code></li>
+<li><code>STRIPE_PRICE_ID_ENTERPRISE</code></li>
+<li><code>LICENSE_PRIVATE_KEY</code></li>
+<li>Inject them as environment variables at job runtime.</li>
+</ul>
+<p>Example (generic CI shell step):</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_SECRET_KEY</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CI_STRIPE_SECRET_KEY</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_WEBHOOK_SECRET</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CI_STRIPE_WEBHOOK_SECRET</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_PRICE_ID_TEAM</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CI_STRIPE_PRICE_ID_TEAM</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">STRIPE_PRICE_ID_ENTERPRISE</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CI_STRIPE_PRICE_ID_ENTERPRISE</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LICENSE_PRIVATE_KEY</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CI_LICENSE_PRIVATE_KEY</span><span class="s2">&quot;</span>
+pytest<span class="w"> </span>-q<span class="w"> </span>tests/test_billing.py<span class="w"> </span>tests/test_subscriptions.py<span class="w"> </span>tests/test_invoices.py<span class="w"> </span>tests/test_refunds.py
+</code></pre></div>
+<h3 id="ci-guardrails">CI guardrails<a class="headerlink" href="#ci-guardrails" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Use Stripe test-mode keys only (<code>sk_test_...</code>).</li>
+<li>Avoid printing secret values in logs.</li>
+<li>Keep webhook-signature tests deterministic by stubbing payload/signature where possible.</li>
+</ul>
+<h2 id="stripe-test-card-matrix">Stripe Test Card Matrix<a class="headerlink" href="#stripe-test-card-matrix" title="Permanent link">&para;</a></h2>
+<p>Use Stripe test mode and these cards during checkout/billing validation:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Card number</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Successful payment</td>
+<td><code>4242 4242 4242 4242</code></td>
+<td>Baseline success path</td>
+</tr>
+<tr>
+<td>Generic decline</td>
+<td><code>4000 0000 0000 0002</code></td>
+<td>Payment declined</td>
+</tr>
+<tr>
+<td>Insufficient funds</td>
+<td><code>4000 0000 0000 9995</code></td>
+<td>Insufficient funds path</td>
+</tr>
+<tr>
+<td>3DS required</td>
+<td><code>4000 0025 0000 3155</code></td>
+<td>Authentication flow required</td>
+</tr>
+<tr>
+<td>Expired card</td>
+<td><code>4000 0000 0000 0069</code></td>
+<td>Expiration failure path</td>
+</tr>
+<tr>
+<td>Incorrect CVC</td>
+<td><code>4000 0000 0000 0127</code></td>
+<td>CVC validation failure</td>
+</tr>
+</tbody>
+</table>
+<p>For all test cards, use any future expiry date, any 3-digit CVC, and any postal code.</p>
+<h2 id="self-hosted-note">Self-Hosted Note<a class="headerlink" href="#self-hosted-note" title="Permanent link">&para;</a></h2>
+<p>Self-hosted deployments do not require Stripe endpoint configuration. Use offline license keys and set:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">DEV_HEALTH_LICENSE</span><span class="o">=</span><span class="s2">&quot;&lt;signed-license-token&gt;&quot;</span>
+</code></pre></div>
+<p>Reference: <a href="../../self-hosted-quickstart/"><code>self-hosted-quickstart.md</code></a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

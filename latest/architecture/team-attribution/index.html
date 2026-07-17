@@ -1,0 +1,4247 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../sync-unit-model/">
+      
+      
+        <link rel="next" href="../investment-categorization-pipeline/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Team Attribution - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#architecture-work-item-team-attribution-linked-issue-inheritance" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Team Attribution
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why this exists
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0-target-state-chaos-2600-clickhouse-only-team-attribution" class="md-nav__link">
+    <span class="md-ellipsis">
+      0. Target state (CHAOS-2600) — ClickHouse-only team attribution
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. Target state (CHAOS-2600) — ClickHouse-only team attribution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#01-resolution-decision-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.1 Resolution decision tree
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#02-source-reference-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.2 Source reference matrix
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#03-off-the-rails-matrix-symptom-diagnosis-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.3 Off-the-rails matrix (symptom → diagnosis → fix)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#04-provider-coverage-contract-attribution-is-provider-agnostic" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.4 Provider coverage contract (attribution is provider-agnostic)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4 Provider coverage contract (attribution is provider-agnostic)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#04a-provider-entity-consumption-functional-what-run_team_autoimport-actually-pulls" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.4a Provider × entity consumption (functional — what run_team_autoimport actually pulls)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#05-drift-review-reconciliation-chaos-2622-rebuilt-on-clickhouse" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.5 Drift-review reconciliation (CHAOS-2622) — rebuilt on ClickHouse
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-attribution-cascade-decision-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Attribution cascade (decision flow)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-cross-provider-link-capture-inheritance-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Cross-provider link capture &amp; inheritance (sequence)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Cross-provider link capture & inheritance (sequence)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#link-capture-sources-precedence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Link capture sources &amp; precedence
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/rate-limit-policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why this exists
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0-target-state-chaos-2600-clickhouse-only-team-attribution" class="md-nav__link">
+    <span class="md-ellipsis">
+      0. Target state (CHAOS-2600) — ClickHouse-only team attribution
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. Target state (CHAOS-2600) — ClickHouse-only team attribution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#01-resolution-decision-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.1 Resolution decision tree
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#02-source-reference-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.2 Source reference matrix
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#03-off-the-rails-matrix-symptom-diagnosis-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.3 Off-the-rails matrix (symptom → diagnosis → fix)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#04-provider-coverage-contract-attribution-is-provider-agnostic" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.4 Provider coverage contract (attribution is provider-agnostic)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4 Provider coverage contract (attribution is provider-agnostic)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#04a-provider-entity-consumption-functional-what-run_team_autoimport-actually-pulls" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.4a Provider × entity consumption (functional — what run_team_autoimport actually pulls)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#05-drift-review-reconciliation-chaos-2622-rebuilt-on-clickhouse" class="md-nav__link">
+    <span class="md-ellipsis">
+      0.5 Drift-review reconciliation (CHAOS-2622) — rebuilt on ClickHouse
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-attribution-cascade-decision-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Attribution cascade (decision flow)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-cross-provider-link-capture-inheritance-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Cross-provider link capture &amp; inheritance (sequence)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Cross-provider link capture & inheritance (sequence)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#link-capture-sources-precedence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Link capture sources &amp; precedence
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="architecture-work-item-team-attribution-linked-issue-inheritance">Architecture: Work-Item Team Attribution &amp; Linked-Issue Inheritance<a class="headerlink" href="#architecture-work-item-team-attribution-linked-issue-inheritance" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Authoritative
+<strong>Scope:</strong> dev-health-ops (metrics/compute, sync, loaders, providers)
+<strong>Related:</strong> <a href="../data-pipeline/">data-pipeline.md</a> (§4 Metrics → Work-item team attribution),
+<a href="../investment-data-model/">investment-data-model.md</a>,
+<a href="../../api/team-catalog-source-of-truth/">team-catalog-source-of-truth.md</a></p>
+<blockquote>
+<p>First slice of the system-wide architecture-documentation epic. Documents how
+every work item (issue, PR, MR) is stamped with a <code>team_id</code>, why PRs used to
+land as <code>unassigned</code>, and how cross-provider linked-issue inheritance recovers
+team attribution for the investment <strong>allocation-coverage</strong> and
+<strong>team-exchange chord</strong> views.</p>
+</blockquote>
+<h2 id="why-this-exists">Why this exists<a class="headerlink" href="#why-this-exists" title="Permanent link">&para;</a></h2>
+<p>Team resolution historically used three signals — the provider work scope
+(repo / project key), the Linear/Jira project key, and assignee membership.
+<strong>A GitHub/GitLab PR matches none of them</strong>: its repo rarely maps 1:1 to a
+team, it has no project key, and its author often isn't a team member. So PRs
+were stamped <code>team_id = 'unassigned'</code> and never shared a team dimension with
+the issue trackers — leaving TEAM COVERAGE at 0% and the team-exchange chord
+empty (no two teams ever co-occur on a work scope).</p>
+<p>The fix adds a fourth, <strong>provider-agnostic</strong> tier: a work item with no team of
+its own inherits the team of an issue it links to via <code>work_item_dependencies</code>.
+A GitHub PR closing Linear <code>CHAOS-2400</code> borrows that issue's <code>CHAOS</code> team.</p>
+<hr />
+<h2 id="0-target-state-chaos-2600-clickhouse-only-team-attribution">0. Target state (CHAOS-2600) — ClickHouse-only team attribution<a class="headerlink" href="#0-target-state-chaos-2600-clickhouse-only-team-attribution" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Governing target contract.</strong> This §0 is the source of truth for the intended model and the
+debugging navigation aid; <strong>new code must follow it.</strong> It is implemented across CHAOS-2600
+CS1–CS7 — the ClickHouse enum widening lands in <strong>CS1</strong> (see <em>Schema prerequisite</em> below), the
+precedence tests are inverted in <strong>CS2</strong>, and the legacy Postgres bridge path is removed in
+<strong>CS5/CS6</strong>. Until then, §1 below still describes the live (pre-CHAOS-2600) cascade and the
+existing tests still encode the old precedence.</p>
+<p><strong>CS6 reality (CHAOS-2607).</strong> ClickHouse is the system of record for <strong>both</strong> the team
+catalog <strong>and</strong> identity→team membership. As of CS6 the Postgres <code>team_mappings</code> / <code>identity_mappings</code>
+tables and models are <strong>deleted</strong> (Alembic <code>0020</code>), along with the <code>TeamMappingService</code> /
+<code>IdentityMappingService</code> / <code>TeamDriftSyncService</code> classes, the <code>sync-team-drift</code> /
+<code>reconcile-team-members</code> tasks, and the Postgres-backed drift engine. (The four admin drift-review
+endpoints currently stand as HTTP 501 stubs and are being <strong>rebuilt natively on ClickHouse — not
+deleted — under CHAOS-2622</strong>; see §0.5. The earlier "removed in CS7 with the web caller —
+CHAOS-2608" intent is superseded — CHAOS-2608 is an unrelated Done web ticket.) (CS5 had already deleted the
+Postgres→ClickHouse team bridge <code>providers/team_bridge.py</code> and <code>providers/team_reconcile.py</code>.) Admin
+team/identity CRUD goes through <code>ClickHouseTeamAdminService</code> + <code>ClickHouseIdentityStore</code>, writing the
+ClickHouse <code>teams</code> and <code>identities</code> tables directly. Identity membership uses <strong>surgical replacement</strong>
+semantics: updating an identity removes its facets from teams it left and replaces changed facets in
+teams it stayed in, editing <code>teams.members</code> add/remove-by-facet (never a full recompute) so Auto
+Import / catalog members are preserved. See <em>CS6 status (CHAOS-2607)</em> at the end of §4.</p>
+</blockquote>
+<p><strong>ClickHouse is the only source used for analytics attribution. Postgres does not store or resolve
+team attribution mappings.</strong> Manual mappings are ClickHouse fallback records only — never overrides,
+never outranking WTI-native facts. PR/MR attribution comes from an <strong>actual linked issue donor</strong>; an
+external issue-key <em>prefix</em> alone is not linked-issue inheritance.</p>
+<p>Every final attribution carries provenance: <code>org_id, work_item_id, provider, team_id, team_name,
+source, confidence, evidence, is_primary, computed_at</code>.
+<code>source ∈ {native_team, issue_project, project_ownership, repo_ownership, assignee_membership,
+linked_issue, manual_fallback, unassigned}</code>; <code>confidence ∈ {high, medium, low, manual, none}</code>.</p>
+<blockquote>
+<p><strong>Schema prerequisite (CS1).</strong> The <code>issue_project</code> / <code>manual_fallback</code> sources and the <code>manual</code> /
+<code>none</code> confidence values require the ClickHouse <code>Enum8</code> widening on <code>work_item_team_attributions</code>
+(migration 053) to land <strong>before</strong> any resolver emits them — emitting an unknown enum value fails
+the insert. This is CHAOS-2600 ordering rule §4.1: migrate enums (CS1) → then emit (CS2/CS3).</p>
+</blockquote>
+<h3 id="01-resolution-decision-tree">0.1 Resolution decision tree<a class="headerlink" href="#01-resolution-decision-tree" title="Permanent link">&para;</a></h3>
+<p>Resolution is <strong>staged by precedence</strong>. The resolver evaluates the applicable sources and persists
+<strong>all</strong> matching ones as candidates; the <em>winner</em> (<code>is_primary</code>) is the highest-precedence source
+present. "Wins" means <em>primary selection</em> — it does not mean lower-precedence sources go
+unevaluated or unrecorded. <strong>To debug:</strong> read <code>team_attribution_source</code> (the winner) from
+provenance, jump to that node, and verify no higher-precedence stage matched.</p>
+<pre class="mermaid"><code>flowchart TD
+    Start(["Work item"]) --&gt; COLLECT["Evaluate EVERY applicable source → persist a candidate row per match (provenance).&lt;br/&gt;The linked_issue candidate requires a real work_item_dependencies donor row resolving to a team;&lt;br/&gt;a bare issue-key prefix produces NO linked_issue candidate (it may match a manual_fallback instead)."]
+    COLLECT --&gt; SEL{{"Select winner: is_primary = the highest-precedence candidate present"}}
+    SEL --&gt; NT{"0 · native_team candidate?"}
+    NT --&gt;|"yes"| Win["is_primary = matched source"]
+    NT --&gt;|"no"| IP{"1 · issue_project candidate?"}
+    IP --&gt;|"yes"| Win
+    IP --&gt;|"no"| PO{"2 · project_ownership candidate?"}
+    PO --&gt;|"yes"| Win
+    PO --&gt;|"no"| RO{"3 · repo_ownership candidate?"}
+    RO --&gt;|"yes"| Win
+    RO --&gt;|"no"| AM{"4 · assignee_membership candidate?"}
+    AM --&gt;|"yes"| Win
+    AM --&gt;|"no"| LK{"5 · linked_issue candidate?&lt;br/&gt;(real donor row resolving to a team)"}
+    LK --&gt;|"yes"| Win
+    LK --&gt;|"no"| MF{"6 · manual_fallback candidate?&lt;br/&gt;repo / project / member / issue_key_prefix"}
+    MF --&gt;|"yes"| Win
+    MF --&gt;|"no"| UN["is_primary = unassigned (7)"]
+    Win --&gt; P["Persist work_item_team_attributions:&lt;br/&gt;ALL candidate rows; is_primary on the winner"]
+    UN --&gt; P
+    P --&gt; API["Expose source / confidence / evidence via GraphQL"]
+    API --&gt; UI["Frontend renders only — no recompute"]</code></pre>
+<p><strong>Invariants:</strong> the <strong>winner is the highest-precedence matching source</strong> (all matching sources are
+still persisted as candidates — precedence decides <code>is_primary</code>, not which sources are computed);
+<code>linked_issue</code> (5) requires a real <code>work_item_dependencies</code> donor row resolving to a <code>work_items</code>
+row whose <strong>own team came from a first-class fact (sources 0–4)</strong> — a donor resolved only by
+<code>manual_fallback</code> is NOT a valid donor, so a bare prefix can never be laundered into rank-5
+inheritance (it falls through to 6); <code>manual_fallback</code> (6) can only beat <code>unassigned</code>; a whole org
+at <code>unassigned</code> usually means the ClickHouse <code>teams</code> dimension is empty.</p>
+<h3 id="02-source-reference-matrix">0.2 Source reference matrix<a class="headerlink" href="#02-source-reference-matrix" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th><code>source</code></th>
+<th>Resolves from (ClickHouse)</th>
+<th>Confidence</th>
+<th>Beats</th>
+<th>Never overrides</th>
+<th>Evidence keys</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td><code>native_team</code></td>
+<td><code>WorkItem.native_team_key</code> → <code>teams</code></td>
+<td>high</td>
+<td>all below</td>
+<td>— (top)</td>
+<td><code>native_team_key</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td><code>issue_project</code></td>
+<td>native issue project → owning team</td>
+<td>high</td>
+<td>2–7</td>
+<td>0</td>
+<td><code>project_id, owner_team</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td><code>project_ownership</code></td>
+<td><code>team_project_ownership</code></td>
+<td>high</td>
+<td>3–7</td>
+<td>0–1</td>
+<td><code>project_id, provider</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td><code>repo_ownership</code></td>
+<td><code>team_repo_ownership</code></td>
+<td>medium</td>
+<td>4–7</td>
+<td>0–2</td>
+<td><code>repo_full_name</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td><code>assignee_membership</code></td>
+<td><code>team_memberships</code> (assignee identity)</td>
+<td>medium</td>
+<td>5–7</td>
+<td>0–3</td>
+<td><code>member_id, identity</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td><code>linked_issue</code></td>
+<td><code>work_item_dependencies</code> donor → donor's team</td>
+<td>medium</td>
+<td>6–7</td>
+<td>0–4</td>
+<td><code>dependency_type, donor_work_item_id, donor_provider</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td><code>manual_fallback</code></td>
+<td><code>manual_attribution_fallbacks</code> (repo/project/member/issue_key_prefix)</td>
+<td>manual|low</td>
+<td>7 only</td>
+<td>0–5</td>
+<td><code>scope_type, scope_id, reason</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td><code>unassigned</code></td>
+<td>— (nothing matched)</td>
+<td>none</td>
+<td>— (floor)</td>
+<td>—</td>
+<td><code>reason</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="03-off-the-rails-matrix-symptom-diagnosis-fix">0.3 Off-the-rails matrix (symptom → diagnosis → fix)<a class="headerlink" href="#03-off-the-rails-matrix-symptom-diagnosis-fix" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely stage</th>
+<th>Diagnose</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A whole org is <code>unassigned</code></td>
+<td>7 (floor)</td>
+<td><code>get_all_teams()</code> empty? CH <code>teams</code> populated for <code>org_id</code>?</td>
+<td>re-home teams population; verify daily-chain order</td>
+</tr>
+<tr>
+<td>PR attributed to a surprising team via <code>linked_issue</code></td>
+<td>5</td>
+<td>which <code>work_item_dependencies</code> edge? donor's own team? extkey ambiguous?</td>
+<td>confirm donor row + <code>_canonical_target</code>; check <code>_INHERITABLE_RELATIONSHIP_TYPES</code></td>
+</tr>
+<tr>
+<td><code>manual_fallback</code> beats a real team</td>
+<td>precedence</td>
+<td><code>_SOURCE_ORDER</code> has <code>manual_fallback=6</code>? loader merging manual at the wrong rank?</td>
+<td>restore rank — manual is the lowest non-unassigned tier</td>
+</tr>
+<tr>
+<td>A bare prefix (e.g. <code>CHAOS</code>) attributes as <code>linked_issue</code></td>
+<td>5 vs 6</td>
+<td>did a full key resolve to a real <code>work_items</code> row, or did a prefix shortcut leak in?</td>
+<td>no prefix→team in <code>linked_issue</code>; route to manual <code>issue_key_prefix</code></td>
+</tr>
+<tr>
+<td>A PR inherits via <code>linked_issue</code> from a donor that only has a <code>manual_fallback</code> (e.g. <code>issue_key_prefix</code>) rule</td>
+<td>5 (donor)</td>
+<td>is the donor's <em>primary</em> source in 0–4? a rank-6 fallback must never be relabeled rank-5</td>
+<td>donors gated to <code>_DONOR_SOURCES</code> (0–4) in <code>build_linked_issue_team_resolver</code>; a manual-only donor is never a linked_issue donor (done CS3)</td>
+</tr>
+<tr>
+<td>Same scope shows duplicate ownership candidates / bloats over time</td>
+<td>RMT read</td>
+<td><code>valid_from</code> is in the ownership tables' <code>ORDER BY</code>, so <code>FINAL</code> cannot collapse re-imports (each daily run is a new sort key)</td>
+<td>reads dedup per <em>logical</em> scope via <code>argMax((updated_at, valid_from))</code>, NOT <code>FINAL</code> (done CS3, <code>load_team_attribution_context</code>); manual-fallback read keeps <code>FINAL</code> (its sort key has no <code>valid_from</code>)</td>
+</tr>
+<tr>
+<td>Team flips / stale team lingers after a re-org</td>
+<td>write side</td>
+<td>ownership writers set <code>valid_from=now</code> but never <code>valid_to</code>, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership</td>
+<td>needs writer-side <code>valid_to</code> expiry on re-derivation — tracked <strong>CHAOS-2610</strong> (read-side <code>argMax</code> already makes the newest the primary by recency tiebreak)</td>
+</tr>
+<tr>
+<td><code>manual_fallback</code> resolves the wrong team</td>
+<td>scope match</td>
+<td>which <code>manual_attribution_fallbacks</code> row matched (repo/project/member/issue_key_prefix)?</td>
+<td>check <code>_manual_fallback_candidates</code> scope match + rule <code>priority</code>; manual is rank 6 (done CS3)</td>
+</tr>
+<tr>
+<td>Provenance absent in the API</td>
+<td>GraphQL</td>
+<td>resolver SELECTs the provenance columns? SDL has the fields?</td>
+<td>expose <code>source/confidence/evidence</code></td>
+</tr>
+<tr>
+<td>Web shows a different team than the backend</td>
+<td>client recompute</td>
+<td>any client-side mapping derived from <code>evidence</code>?</td>
+<td>render-only; delete client derivation</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Full data-flow and data-object-hierarchy diagrams: see the CHAOS-2600 plan §1.6–1.7 / <code>team-flow.md</code>.</p>
+</blockquote>
+<h3 id="04-provider-coverage-contract-attribution-is-provider-agnostic">0.4 Provider coverage contract (attribution is provider-agnostic)<a class="headerlink" href="#04-provider-coverage-contract-attribution-is-provider-agnostic" title="Permanent link">&para;</a></h3>
+<p>Attribution is <strong>provider-agnostic</strong> — the resolver and precedence (§0.1) never branch on provider.
+That is a <strong>testable contract</strong>: every WTI provider × every normalized entity must be covered, not
+just Linear. <strong>Attribution changes MUST keep this matrix green; never add Linear-only coverage.</strong></p>
+<table>
+<thead>
+<tr>
+<th>provider \ entity</th>
+<th>teams</th>
+<th>projects</th>
+<th>members</th>
+<th>issues</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>jira</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>gitlab</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>github</td>
+<td>yes</td>
+<td>n/a¹</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>linear</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p><code>yes</code> = normalized in src AND asserted in tests · <code>partial</code> = only sink/integration assertion (no
+unit test of the normalizer) · <code>no</code> = normalized but output never asserted · <code>n/a</code> = provider does
+not natively produce this entity. ¹ GitHub has no native Project entity (the repo is the scope).</p>
+<blockquote>
+<p><strong>The matrix above tracks TEST coverage, not whether the data is pulled.</strong> Functionally we ingest teams, projects, and members for <em>every</em> provider that supports them (auto-import, when the option is selected). Don't read a <code>partial</code>/<code>no</code> cell as "not consumed" — it means "not yet asserted."</p>
+</blockquote>
+<h4 id="04a-provider-entity-consumption-functional-what-run_team_autoimport-actually-pulls">0.4a Provider × entity <strong>consumption</strong> (functional — what <code>run_team_autoimport</code> actually pulls)<a class="headerlink" href="#04a-provider-entity-consumption-functional-what-run_team_autoimport-actually-pulls" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>provider</th>
+<th>teams</th>
+<th>projects</th>
+<th>members</th>
+<th>repo ownership</th>
+<th>member store written</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>linear</td>
+<td>✓ <code>discover_linear</code></td>
+<td>✓ <code>associations.project_keys</code></td>
+<td>✓ <code>discover_members_linear</code></td>
+<td>—</td>
+<td>edges <strong>+ roster</strong></td>
+</tr>
+<tr>
+<td>jira</td>
+<td>✓ <code>discover_jira</code></td>
+<td>✓ <code>associations.project_keys</code></td>
+<td>✓ <code>discover_members_jira_bulk</code></td>
+<td>—</td>
+<td>edges <strong>+ roster</strong></td>
+</tr>
+<tr>
+<td>github</td>
+<td>✓ <code>discover_github</code></td>
+<td>n/a (repo = scope)</td>
+<td>✓ <code>discover_members_github</code></td>
+<td>✓ <code>team_repo_ownership</code></td>
+<td>edges <strong>+ roster</strong> (this CS)</td>
+</tr>
+<tr>
+<td>gitlab</td>
+<td>✓ <code>discover_gitlab</code></td>
+<td>✓ (GitLab project paths)</td>
+<td>✓ <code>discover_members_gitlab</code></td>
+<td>—</td>
+<td>edges <strong>+ roster</strong> (this CS)</td>
+</tr>
+</tbody>
+</table>
+<p>One path: <code>run_team_autoimport</code> → <code>team_autoimport_&lt;provider&gt;.populate()</code> → <code>discover_*</code> → ClickHouse. (<code>LinearClient.iter_projects</code> is vestigial dead code, never a path.) <strong>Two member representations — do not conflate:</strong> <code>team_memberships</code> (edges) = canonical attribution source, read by the ladder, all 4 providers; <code>teams.members</code> (roster) = secondary resolver + admin/display, this CS populates it for github/gitlab too. <strong>Chain:</strong> members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).</p>
+<blockquote>
+<p><strong>Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).</strong>
+Both consumers key on the <em>resolver-consumed</em> identity. Auto-import resolves each member through the
+<strong>same</strong> <code>IdentityResolver</code> the assignee path uses — <code>load_identity_resolver()</code> (the global
+<code>identity_mapping.yaml</code> / <code>IDENTITY_MAPPING_PATH</code>) — via <code>IdentityResolver.membership_facets</code>, so an
+<strong>aliased</strong> member resolves to the <strong>same canonical identity</strong> an aliased assignee does (e.g.
+<code>github:lead</code> → <code>lead@example.com</code>), and a non-aliased member stays <code>github:&lt;login&gt;</code> /
+<code>gitlab:&lt;username&gt;</code> / <code>jira:accountid:&lt;account_id&gt;</code>. Deriving the identity directly (bypassing the
+alias map) is the bug that broke aliased orgs. <code>membership_facets</code> returns <em>every</em> identity an
+assignee for this member could resolve to — the no-email identity, the provider-qualified id, AND
+(when the member has an email) the resolver-mapped canonical + normalized <strong>email</strong>. ALL of them are
+persisted to the <code>team_memberships.identity_facets</code> <code>Array(String)</code> column (migration <strong>060</strong>); the
+loader <code>argMax</code>-reads it and fans <strong>every</strong> facet into the ladder's <code>member_by_identity</code> (alongside
+the legacy <code>raw_provider_user_id</code> = <code>facets[0]</code> + <code>raw_email</code> slots), <strong>and</strong> writes them to the
+<code>teams.members</code> roster (read by <code>TeamResolver</code>). This closes the deferred
+<strong>email-alias-distinct-canonical</strong> edge (<strong>CHAOS-2625</strong>): when an org maps a member's provider id and
+email to <em>different</em> canonicals (<code>github:lead</code> → canonicalA, <code>personal@…</code> → canonicalB), an assignee
+resolving to canonicalB now hits the canonical ladder directly with <code>assignee_membership</code> provenance
+instead of the weaker roster fallback. The <code>member_id</code> <strong>primary</strong> keeps its <code>gh:</code>/<code>gl:</code>/<code>jira:&lt;id&gt;</code>
+form (untouched — it is the ReplacingMergeTree dedup key). A <code>members</code> cell is <code>yes</code> only when this
+end-to-end resolution is <strong>proven</strong> (a no-email assignee — aliased AND non-aliased — resolves to the
+auto-imported team via <em>both</em> paths —
+<code>tests/workers/test_team_autoimport_e2e_sync_surface.py</code>), not when a row is merely written.</p>
+</blockquote>
+<ul>
+<li><strong>Resolver row (CS2):</strong> the precedence resolver (<code>resolve_team_attribution</code>) is exercised for all
+  four providers — Linear (<code>test_issue_project_wins_over_linked_issue</code>,
+  <code>test_assignee_membership_wins_over_linked_issue</code>), GitHub (<code>gh:</code> items in
+  <code>test_project_ownership_wins_over_linked_issue</code> / <code>test_repo_ownership_wins_over_linked_issue</code>),
+  GitLab (<code>test_gitlab_mr_resolver_precedence_with_gitlab_donor</code> — MR as item + GitLab issue as
+  same-provider donor), Jira (<code>test_jira_issue_project_wins_over_linked_issue</code>,
+  <code>test_assignee_membership_wins_over_jira_linked_donor</code>). (Provider <em>link-capture</em> — distinct from
+  the resolver — is also tested per provider, e.g. <code>test_gitlab_captures_external_key_*</code>.)</li>
+<li><strong>Chart and drilldown team attribution:</strong> Investment Sankey, GraphQL TEAM
+  flow-matrix/chord, GraphQL REPO flow-matrix's cross-repo team bridge, team
+  Cycle Time × Throughput quadrant axes, work-unit investment team evidence,
+  issue drilldowns, and flame issue details read the primary
+  <code>work_item_team_attributions</code> snapshot before rolling up or displaying team
+  identity. Cycle-time rows can still provide activity windows, durations,
+  work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
+  owning team identity. Person cohort selection reads ClickHouse <code>identities</code>
+  membership (<code>team_ids</code>) instead of metric rollup team snapshots so a person's
+  current team comparison does not lag behind admin/team-autoimport membership.</li>
+<li><strong>Why it matters:</strong> the team/project/member <strong>dimension</strong> is populated by the per-provider
+  team/project/member sync. <strong>"Auto Import" is a UX option</strong> (checkboxes to import teams, projects,
+  and members from an integration → <code>run_team_autoimport</code>, writing ClickHouse directly); manual
+  fallback is the separate explicit-override option. Because jira/github/gitlab work items carry
+  <code>native_team_key = None</code> (only Linear sets it real), non-Linear attribution depends <em>entirely</em> on
+  this dimension — so its coverage cells are the highest-risk. (CHAOS-2600 does not change these
+  sync ops; CS5 removes only the Postgres bridge.)</li>
+<li><strong>Open gaps → CLOSED by CHAOS-2609 (CS-COV):</strong> the dimension's test holes are now asserted —
+  gitlab/members (was normalized but never asserted), gitlab epics (<code>gitlab_epic_to_work_item</code>), jira
+  team/member coverage (403-skip + member de-dupe), linear <strong>and</strong> jira native <code>ProjectRecord</code> fields
+  (linear native projects ARE ingested via <code>team.associations.project_keys</code> — the prior "not ingested"
+  note was wrong; it was only a <em>test</em> gap, now closed), and gitlab nested-subgroup specificity.
+  <strong>Plus an attribution-correctness fix:</strong> github/gitlab/jira auto-import now write the
+  <em>resolver-consumed</em> member identity (see the §0.4a identity callout), so a no-email assignee actually
+  resolves to its team via both the canonical ladder and the roster — previously the roster stored a
+  bare login the resolver never matched, so member attribution silently missed for no-email
+  github/gitlab/jira assignees. The matrix above is the source of truth for what is/ isn't proven.</li>
+<li><strong>Email-alias-distinct-canonical edge → CLOSED by CHAOS-2625:</strong> the canonical ladder now indexes
+  <em>every</em> facet a member resolves to via the <code>team_memberships.identity_facets</code> <code>Array(String)</code> column
+  (migration 060) + loader fan-out, so a member mapped to <em>two different</em> canonicals (provider id →
+  canonicalA, email → canonicalB) attributes via the ladder on <strong>either</strong> canonical — previously only
+  <code>facets[0]</code> + <code>raw_email</code> were indexed, so an assignee resolving to canonicalB missed the ladder and
+  fell back to the weaker roster path. Proven in <code>tests/test_team_autoimport_executor.py</code> (canonicalB
+  ladder hit) + the provider×entity writer assertions in
+  <code>tests/workers/test_team_autoimport_{github_gitlab,jira,linear}.py</code>.</li>
+</ul>
+<h3 id="05-drift-review-reconciliation-chaos-2622-rebuilt-on-clickhouse">0.5 Drift-review reconciliation (CHAOS-2622) — rebuilt on ClickHouse<a class="headerlink" href="#05-drift-review-reconciliation-chaos-2622-rebuilt-on-clickhouse" title="Permanent link">&para;</a></h3>
+<p>The CHAOS-2600 migration dropped the Postgres-backed <strong>drift-review</strong> surface as collateral: the
+admin workflow that detects when provider discovery disagrees with the curated/manual config and
+lets an admin approve or dismiss each change. It was built on Postgres <code>TeamMapping</code> columns
+(<code>flagged_changes</code> / <code>sync_policy</code> / <code>managed_fields</code>) + <code>TeamDriftSyncService</code>, all deleted in CS6,
+leaving the four admin endpoints as HTTP 501 stubs. <strong>CHAOS-2622 rebuilds it natively on ClickHouse
+— the four endpoints and the web <code>PendingChangesPanel</code> are NOT deleted.</strong> (The earlier "removed in
+CS7 with the web caller — CHAOS-2608" intent is superseded; CHAOS-2608 is an unrelated Done web
+ticket that never touched these endpoints.)</p>
+<p><strong>Provider-observed vs curated split.</strong> A faithful rebuild re-separates the two layers that Postgres
+held in <code>TeamMapping</code> and that the CH <code>teams</code> <code>ReplacingMergeTree</code> collapsed into a single curated
+row. Three sidecar <code>ReplacingMergeTree</code> tables hold the review state, while <code>teams FINAL</code> stays the
+resolved catalog every reader (§0.1–0.2) keeps using:</p>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>team_sync_policies</code></td>
+<td>per-team drift policy sidecar (<code>sync_policy</code>, <code>managed_fields</code>); kept off <code>teams</code> because <code>ClickHouseTeamAdminService.create_or_update</code> rewrites the whole team row (<code>provider=""</code>, <code>native_team_key=None</code>) on every update and would clobber any policy stored there</td>
+</tr>
+<tr>
+<td><code>team_provider_observations</code></td>
+<td>provider-observed truth layer — what discovery last saw, keyed <code>(org_id, provider, native_team_key)</code></td>
+</tr>
+<tr>
+<td><code>team_drift_changes</code></td>
+<td>pending-review read model (decision table) keyed <code>(org_id, change_id)</code>; <code>status ∈ pending / approved / dismissed / resolved / superseded</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Policy (low-cardinality, default-safe).</strong> <code>sync_policy = 0</code> (auto-apply) is the default, so
+existing orgs see <strong>no behavior change</strong> — discovery writes straight to <code>teams</code>. Only <code>policy 1</code>
+(flag-for-review) routes managed-field changes (<code>name</code>, <code>description</code>, <code>project_keys</code>,
+<code>repo_patterns</code>; <code>members</code> is a display-only catalog field this slice and does <strong>not</strong> yet gate
+<code>team_memberships</code>) into the pending lane instead of clobbering the catalog. <code>policy 2</code> is
+manual/none. <code>status</code> / <code>change_type</code> are low-cardinality strings, not <code>Enum8</code>, to avoid
+enum-widening migration ordering before new values can be emitted.</p>
+<p><strong>Drift-aware projector.</strong> The final team write in the four auto-importers
+(<code>workers/team_autoimport_{github,gitlab,jira,linear}.py</code>) <strong>and</strong>
+<code>ClickHouseTeamAdminService.import_teams</code> route through one projector instead of scattering policy
+logic: it always records the latest <code>team_provider_observations</code> row, reads the team's policy, then
+either applies observed values into <code>teams</code> (policy 0, current behavior) or emits/refreshes a
+<code>team_drift_changes</code> pending row per changed managed field (policy 1).</p>
+<p><strong><code>change_id</code> value-fingerprint + lifecycle (correctness-critical).</strong> <code>change_id =
+hash(org_id, entity_type, entity_id, change_type, field, old_value_json, new_value_json)</code> —
+it fingerprints the <em>values</em>, not just <code>(team, field)</code>, so a dismissed <code>A→B</code> does not wrongly
+suppress a later <code>A→C</code>. The projector enforces:</p>
+<ul>
+<li><strong>No resurrection</strong> — if a <code>change_id</code> already exists as <code>dismissed</code> or <code>approved</code>, do NOT
+  re-insert a <code>pending</code> row for the same value pair; only a <em>different</em> fingerprint creates new
+  pending drift.</li>
+<li><strong>Supersede</strong> — a provider value change for the same <code>(team, field)</code> marks the prior <code>pending</code>
+  row <code>superseded</code> and inserts a new <code>pending</code> row.</li>
+<li><strong>Resolve</strong> — drift that disappears from discovery marks stale <code>pending</code> rows <code>resolved</code>.</li>
+</ul>
+<p><strong>Endpoints repointed by <code>change_id</code>.</strong> <code>ClickHouseTeamDriftService</code> backs the four endpoints over
+<code>team_drift_changes FINAL</code>: <code>GET /admin/teams/pending-changes</code> lists flagged drift; approve/dismiss
+act <strong>by <code>change_id</code></strong> (<code>{change_ids: [...], approve_all|dismiss_all}</code>, replacing the old racy
+index-based wire) — approve applies the observed value into <code>teams</code> via <code>create_or_update</code> and marks
+the change <code>approved</code>, dismiss marks it <code>dismissed</code> (catalog unchanged); <code>POST
+/admin/teams/trigger-drift-sync</code> dispatches the <code>sync_team_drift</code> Celery task on the <code>sync</code> queue
+(worker-supplied provider credentials). The web side adds <code>FlaggedChange.change_id</code> and sends
+<code>change_ids</code>. All three tables join the org-deletion purge path.</p>
+<blockquote>
+<p><strong>Identities/members slice (sequenced second).</strong> Member/identity drift +
+<code>manual_attribution_fallbacks(scope_type='member')</code> reconciliation reuses <code>team_drift_changes</code> via
+<code>entity_type='identity'</code> (or a parallel <code>identity_drift_changes</code> table if the shape diverges) and
+must gate the <code>team_memberships</code> attribution dimension — not just the <code>teams.members</code> roster —
+applying membership changes surgically by facet (never a full recompute). See the CHAOS-2622 plan §4.4.</p>
+</blockquote>
+<hr />
+<h2 id="1-attribution-cascade-decision-flow">1. Attribution cascade (decision flow)<a class="headerlink" href="#1-attribution-cascade-decision-flow" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Implemented model: see §0 (CHAOS-2600).</strong> As of CS2 the resolver applies the 8-source staged
+precedence in §0 (<code>native_team &gt; issue_project &gt; project_ownership &gt; repo_ownership &gt;
+assignee_membership &gt; linked_issue &gt; manual_fallback &gt; unassigned</code>) — <code>linked_issue</code> is now a true
+fallback below ownership/assignee, and the issue's own project key resolves as <code>issue_project</code>.
+The 4-tier cascade below predates that change and is kept for historical context; where they
+differ, <strong>§0 governs</strong>.</p>
+</blockquote>
+<p><code>resolve_base_team()</code> runs tiers 1–3; the linked-issue resolver is tier 4. The
+first match wins and nothing ever overrides a real team.</p>
+<pre class="mermaid"><code>flowchart TD
+    A["Work item"] --&gt; B{"Tier 1: ProjectKeyTeamResolver&lt;br/&gt;resolve(work_scope_id)"}
+    B -- match --&gt; T["team_id"]
+    B -- miss --&gt; C{"Tier 2: retry with project_key&lt;br/&gt;(Linear TEAM key)"}
+    C -- match --&gt; T
+    C -- miss --&gt; D{"Tier 3: assignee membership&lt;br/&gt;assignee in ClickHouse teams.members?"}
+    D -- match --&gt; T
+    D -- miss --&gt; E{"Tier 4: LinkedIssueTeamResolver&lt;br/&gt;linked donor issue has a team?"}
+    E -- match --&gt; T
+    E -- miss --&gt; U["normalize to 'unassigned'"]
+
+    T --&gt; N["normalize_team_id / normalize_team_name"]
+    U --&gt; N
+    N --&gt; R[("stamp team_id on the row")]</code></pre>
+<p><strong>Inheritance is gated</strong>, so it never imports a wrong team:
+- only <strong>inheritance-safe</strong> relationship types transfer a team
+  (<code>relates_to</code>, <code>relates</code>, <code>duplicates</code>, <code>external_issue_key</code>); blocking links
+  (<code>blocks</code> / <code>blocked_by</code>) routinely span teams and are ignored;
+- a cross-provider <code>extkey:KEY</code> that exists in <strong>both</strong> Linear and Jira is
+  ambiguous and dropped;
+- multiple donors → the lexicographically smallest canonical target wins
+  (stable, since ClickHouse rows are unordered);
+- per <code>(source,target)</code> the <strong>latest</strong> edge by <code>last_synced</code> wins, so a flip
+  from <code>relates_to</code> to <code>blocked_by</code> stops inheriting.</p>
+<hr />
+<h2 id="2-cross-provider-link-capture-inheritance-sequence">2. Cross-provider link capture &amp; inheritance (sequence)<a class="headerlink" href="#2-cross-provider-link-capture-inheritance-sequence" title="Permanent link">&para;</a></h2>
+<p>Edges are captured during sync; the resolver is built once per run and applied
+to every work-item metric family.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    autonumber
+    participant Prov as Provider API (GitHub/GitLab/Jira)
+    participant Norm as Normalizer (providers normalize)
+    participant Job as job_work_items (sync)
+    participant CH as ClickHouse
+    participant Build as build_linked_issue_team_resolver
+    participant Comp as compute_work_item_metrics_daily
+
+    Prov-&gt;&gt;Norm: issues / PRs / MRs
+    Norm-&gt;&gt;Norm: extract WorkItems + WorkItemDependency edges
+    Note over Norm: PR body magic-words + head branch to extkey:KEY;&lt;br/&gt;keyword sets relationship_type (blocking stays non-inheritable)
+    Norm--&gt;&gt;Job: work_items, dependencies
+    Job-&gt;&gt;Job: stamp org_id on items, transitions AND dependencies
+    Job-&gt;&gt;CH: write_work_items / write_work_item_dependencies
+    Job-&gt;&gt;CH: load donor items for fresh-edge targets (bounded, FINAL, org-scoped)
+    Job-&gt;&gt;Build: work_items (synced plus donors), fresh edges
+    Build-&gt;&gt;Build: resolve_base_team per item to donor_team map + key_index
+    Build-&gt;&gt;Build: collapse edges by source,target latest; apply relationship allowlist
+    Build--&gt;&gt;Job: LinkedIssueTeamResolver
+    loop each day in window
+        Job-&gt;&gt;Comp: work_items, transitions, linked_issue_resolver
+        Comp-&gt;&gt;CH: write work_item_cycle_times (team_id stamped)
+    end</code></pre>
+<p><code>job_daily</code> (the scheduled recompute) follows the same build → compute path but
+<strong>reads</strong> persisted edges instead of extracting them — see §4.</p>
+<h3 id="link-capture-sources-precedence">Link capture sources &amp; precedence<a class="headerlink" href="#link-capture-sources-precedence" title="Permanent link">&para;</a></h3>
+<p>A PR/MR only inherits a team if an edge to its issue exists. The link is
+captured from where it actually lives, in descending order of authority (PR</p>
+<h1 id="924-the-primarysecondary-sources-921-added-the-tertiary">924 — the primary/secondary sources; #921 added the tertiary):<a class="headerlink" href="#924-the-primarysecondary-sources-921-added-the-tertiary" title="Permanent link">&para;</a></h1>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Source</th>
+<th>Trust gate</th>
+<th>Edge</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Primary</td>
+<td><strong>Linear issue attachment</strong> (the integration's PR/MR link)</td>
+<td>integration <code>sourceType</code> <strong>AND</strong> allowlisted host (public SaaS + <code>LINEAR_TRUSTED_SCM_HOSTS</code>)</td>
+<td><code>ghpr:…</code>/<code>gitlab:… → linear:KEY</code> (direct id)</td>
+</tr>
+<tr>
+<td>Secondary</td>
+<td><strong>GitHub PR comment</strong> (the Linear bot's linkback)</td>
+<td>exact <code>linear[bot]</code> actor (<code>GITHUB_LINEAR_LINKBACK_BOTS</code>) + <code>linear.app</code> URL</td>
+<td><code>ghpr:… → extkey:KEY</code></td>
+</tr>
+<tr>
+<td>Tertiary</td>
+<td><strong>PR body / head branch</strong> (the author's own ref)</td>
+<td>magic-word / Linear branch convention</td>
+<td><code>ghpr:… → extkey:KEY</code></td>
+</tr>
+</tbody>
+</table>
+<p>The authoritative link runs <strong>Linear → source control</strong> (the issue's attachment
+points at the PR/MR), so the edge is emitted with the PR/MR as the <em>source</em> and
+the team-bearing issue as the <em>target</em> — fitting the source-inherits-from-target
+resolver unchanged. <strong>Accepted residual:</strong> a trusted org member linking a real
+PR to their own issue drives that PR's attribution — the feature working as
+intended on collaborative data, not a forgery (same-org analytics, not an authz
+boundary).</p>
+<hr />
+<h2 id="3-data-flow-relationships-er">3. Data flow &amp; relationships (ER)<a class="headerlink" href="#3-data-flow-relationships-er" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>erDiagram
+    work_items ||--o{ work_item_dependencies : "source of edges"
+    work_items ||--o{ work_item_cycle_times : "completed to cycle row"
+    work_items ||--o{ work_item_team_attributions : "primary attribution candidates"
+    work_item_dependencies }o--|| work_items : "target or extkey to donor issue"
+    teams ||--o{ work_item_team_attributions : "team_id"
+    work_item_team_attributions ||--o{ investment_coverage : "team/repo coverage %"
+    work_item_team_attributions ||--o{ team_exchange_chord : "team identity"
+    work_item_cycle_times ||--o{ team_exchange_chord : "activity/day/scope bridge"
+
+    work_items {
+        string work_item_id PK
+        string provider
+        string project_key
+        string project_id
+        uuid   repo_id
+        string org_id
+    }
+    work_item_dependencies {
+        string source_work_item_id
+        string target_work_item_id "id or extkey:KEY"
+        string relationship_type
+        datetime last_synced
+        string org_id
+    }
+    work_item_cycle_times {
+        string work_item_id
+        string work_scope_id
+        date   day
+        string org_id
+    }
+    work_item_team_attributions {
+        string work_item_id
+        string team_id "latest primary owner"
+        string source
+        uint8  is_primary
+        datetime computed_at
+        string org_id
+    }
+    teams {
+        string id PK
+        string org_id
+        string project_keys
+    }</code></pre>
+<p>Coverage and team-identity hydration read latest primary rows from
+<code>work_item_team_attributions</code>. Cycle-time rows can still provide activity dates,
+durations, and co-occurrence bridges, but they are not the owning team source.</p>
+<hr />
+<h2 id="4-component-job-map-who-readswrites-what">4. Component &amp; job map (who reads/writes what)<a class="headerlink" href="#4-component-job-map-who-readswrites-what" title="Permanent link">&para;</a></h2>
+<p>Two jobs build the resolver. Both are <strong>tenant-scoped</strong> (org-wide reads only
+under an explicit <code>org_id</code>) and <strong>bounded</strong> (never a full-history scan).</p>
+<pre class="mermaid"><code>flowchart LR
+    subgraph providers ["Providers"]
+        GH["github/normalize"]
+        GL["gitlab/normalize"]
+        JI["jira normalize"]
+    end
+
+    subgraph sync ["job_work_items — sync"]
+        S1["extract items + extkey edges"]
+        S2["stamp org_id + write"]
+        S3["load bounded donors&lt;br/&gt;(fresh edges authoritative)"]
+        S4["build resolver"]
+        S5["compute cycle_times + state_durations&lt;br/&gt;+ issue-type/investment via _get_team"]
+    end
+
+    subgraph daily ["job_daily — scheduled recompute"]
+        D1["load run-window work items"]
+        D2["load_work_item_dependencies(source_ids)&lt;br/&gt;bounded + FINAL"]
+        D3["load_work_item_dependencies_donors&lt;br/&gt;by referenced id/key"]
+        D4["build resolver"]
+        D5["compute cycle_times + state_durations"]
+    end
+
+    GH --&gt; S1
+    GL --&gt; S1
+    JI --&gt; S1
+    S1 --&gt; S2 --&gt; S3 --&gt; S4 --&gt; S5
+
+    D1 --&gt; D2 --&gt; D3 --&gt; D4 --&gt; D5
+
+    CH[("ClickHouse:&lt;br/&gt;work_items, work_item_dependencies,&lt;br/&gt;work_item_cycle_times,&lt;br/&gt;teams, identities")]
+
+    S2 --&gt;|write| CH
+    S3 --&gt;|read| CH
+    S5 --&gt;|write| CH
+    D1 --&gt;|read| CH
+    D2 --&gt;|read| CH
+    D3 --&gt;|read| CH
+    D5 --&gt;|write| CH
+    CH -. team resolvers .-&gt; S4
+    CH -. team resolvers .-&gt; D4</code></pre>
+<blockquote>
+<p><strong>No Postgres in the team/identity path (CHAOS-2600).</strong> The team resolvers read ClickHouse
+<code>teams</code> / <code>identities</code> (and the ownership dimensions). The Postgres <code>team_mappings</code> /
+<code>identity_mappings</code> tables and their models/services were dropped in CS6 (CHAOS-2607); the
+Postgres→ClickHouse bridge (<code>team_bridge.py</code>), <code>team_reconcile.py</code>, the <code>sync-team-drift</code> /
+<code>reconcile-team-members</code> tasks are all deleted; the four admin drift-review endpoints remain as HTTP
+501 stubs until CS7 (CHAOS-2608). Admin
+team/identity CRUD writes ClickHouse via <code>ClickHouseTeamAdminService</code> / <code>ClickHouseIdentityStore</code>;
+identity membership is edited surgically (add/remove-by-facet) so Auto Import members are preserved.</p>
+</blockquote>
+<p><strong>Key boundary differences</strong></p>
+<h3 id="manual-qa-auto-imported-ownership-coverage">Manual QA: auto-imported ownership coverage<a class="headerlink" href="#manual-qa-auto-imported-ownership-coverage" title="Permanent link">&para;</a></h3>
+<p>Use this check when validating CHAOS-2401/2547 against a real tenant. It proves
+the sync surface fills the ClickHouse ownership dimensions that the attribution
+resolver reads, then verifies the user-visible Investment → Allocation coverage
+does not collapse to <code>unassigned</code>.</p>
+<ol>
+<li>In Admin → Sync, create or edit a real Linear work-items sync and enable
+   <strong>Auto-import teams, projects &amp; members</strong> (<code>sync_options.auto_import_teams=true</code>).</li>
+<li>Trigger the sync through the sync-config UI or worker-backed trigger endpoint
+   so the configured worker credentials are used.</li>
+<li>After the sync succeeds, run daily metrics with the same analytics database:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nv">CLICKHOUSE_URI</span><span class="o">=</span>clickhouse://...<span class="w"> </span>dev-hops<span class="w"> </span>metrics<span class="w"> </span>daily
+</code></pre></div>
+<ol>
+<li>Open <code>dev-health-web</code> in a real browser (Playwright is preferred for evidence)
+   and navigate to <strong>Investment → Allocation</strong>.</li>
+<li>Verify team coverage is greater than 0% and the allocation view includes named
+   teams from the Linear import, not only <code>unassigned</code>.</li>
+<li>Optional SQL spot-checks against ClickHouse before opening the browser
+   (replace <code>&lt;org_id&gt;</code> with the tenant being verified):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">projects</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&lt;org_id&gt;&#39;</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;linear&#39;</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">members</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&lt;org_id&gt;&#39;</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">team_memberships</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&lt;org_id&gt;&#39;</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;linear&#39;</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">team_project_ownership</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&lt;org_id&gt;&#39;</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;linear&#39;</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">team_id</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">work_item_team_attributions</span><span class="w"> </span><span class="k">FINAL</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&lt;org_id&gt;&#39;</span>
+<span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">is_primary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+<span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="p">(</span><span class="n">work_item_id</span><span class="p">,</span><span class="w"> </span><span class="n">computed_at</span><span class="p">)</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">work_item_id</span><span class="p">,</span><span class="w"> </span><span class="k">max</span><span class="p">(</span><span class="n">computed_at</span><span class="p">)</span>
+<span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">work_item_team_attributions</span>
+<span class="w">    </span><span class="k">WHERE</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&lt;org_id&gt;&#39;</span>
+<span class="w">    </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">work_item_id</span>
+<span class="w">  </span><span class="p">)</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">team_id</span><span class="p">;</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th><code>job_work_items</code> (sync)</th>
+<th><code>job_daily</code> (recompute)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Edge source</td>
+<td>freshly extracted (authoritative)</td>
+<td>persisted, <code>FINAL</code>, bounded by run-window source ids</td>
+</tr>
+<tr>
+<td>Removed link</td>
+<td>absent on re-extract → stops inheriting</td>
+<td>persists until next sync re-stamps (see limitation)</td>
+</tr>
+<tr>
+<td>Donor items</td>
+<td>bounded to fresh-edge targets</td>
+<td>bounded to referenced targets</td>
+</tr>
+<tr>
+<td>Tenant scope</td>
+<td>reads only when <code>org_id</code> set</td>
+<td>reads only when <code>org_id</code> set</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Known limitation.</strong> <code>work_item_dependencies</code> is an append-only
+<code>ReplacingMergeTree</code> with no tombstone, so a <em>removed</em> link is not deleted. A
+standalone <code>job_daily</code> recompute between syncs can keep honoring it until the
+next sync re-extracts the source. A link-lifecycle/tombstone (which also
+affects the work-graph) is a tracked follow-up.</p>
+</blockquote>
+<h3 id="cs6-status-chaos-2607">CS6 status (CHAOS-2607)<a class="headerlink" href="#cs6-status-chaos-2607" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Drift-review implementation is removed; endpoints kept as 501 stubs.</strong> The Postgres-backed drift
+  engine (<code>TeamDriftSyncService</code> + the <code>TeamMapping</code> flagged-changes substrate) is <strong>deleted</strong> in CS6.
+  The four admin drift-review endpoints (<code>GET /teams/pending-changes</code>,
+  <code>POST /teams/{id}/approve-changes</code>, <code>/dismiss-changes</code>, <code>POST /teams/trigger-drift-sync</code>) <strong>remain as
+  HTTP 501 compatibility stubs</strong> so the web admin keeps getting a clean 501; they are removed together
+  with the web caller (<code>PendingChangesPanel</code>) in CS7 — see <strong>CHAOS-2608</strong>. A ClickHouse-backed
+  drift-review rebuild is tracked separately by <strong>CHAOS-2622</strong>.</li>
+<li><strong>Postgres mapping deletion is done.</strong> The <code>TeamMappingService</code> / <code>IdentityMappingService</code> /
+  <code>TeamDriftSyncService</code> classes, the dead <code>JiraActivityInferenceService.match_and_confirm</code> /
+  <code>TeamMembershipService.confirm_links</code> paths, the <code>sync-team-drift</code> / <code>reconcile-team-members</code> tasks,
+  and the Postgres <code>TeamMapping</code> / <code>IdentityMapping</code> models + tables are all <strong>deleted in CS6</strong> (Alembic
+  <code>0020</code> drops the tables).</li>
+<li><strong>Known limitations.</strong> (1) <code>ClickHouseTeamAdminService.add_members</code> has a read-modify-write
+  lost-update window under concurrent admin edits (deferred — admin surface is low-concurrency).
+  (2) The surgical facet remove can rarely over-remove a <strong>shared facet</strong> when two distinct
+  identities share a facet value and one is updated — for a shared <strong><code>email</code></strong> (the common case,
+  e.g. two records carrying the same address) or, for email-less identities, a shared
+  <strong><code>display_name</code></strong>; provider-ids (which are unique per identity, enforced by the confirm-path
+  409 check) are unaffected. Deferred — same low-concurrency bucket as the lost-update.
+  (3) Confirm-path membership writes are <strong>non-transactional across teams</strong>: ClickHouse has no
+  multi-statement transactions, so the two-pass design makes only the <strong>validation</strong> all-or-nothing
+  (a 409/404 leaves zero mutations). A ClickHouse error <em>mid-apply</em> (PASS 2) returns 500 with a
+  possible partial <code>team.members</code> / identity-record update; re-running the confirm is idempotent.</li>
+</ul>
+<hr />
+<h2 id="5-recovery-backfill-runbook">5. Recovery / backfill runbook<a class="headerlink" href="#5-recovery-backfill-runbook" title="Permanent link">&para;</a></h2>
+<p>After deploying the inheritance + capture changes, existing orgs need a
+<strong>recompute</strong> to populate <code>team_id</code> on historical rows — there is <strong>no schema
+migration</strong>, only a data replay.</p>
+<h3 id="why-a-plain-backfill-is-not-enough">Why a plain backfill is not enough<a class="headerlink" href="#why-a-plain-backfill-is-not-enough" title="Permanent link">&para;</a></h3>
+<p>The investment <strong>allocation</strong> views derive team at <em>query time</em>: the coverage %, 
+team-exchange chord, team Cycle Time × Throughput quadrant, and work-unit
+investment evidence read <code>work_unit_investments</code> / cycle-time activity and join
+latest primary <code>work_item_team_attributions</code> rows for team identity. So three
+things must be true, and the backfill <strong>runner only re-runs
+<code>run_work_items_sync_job</code> — it does NOT fan out</strong> to the work-graph or investment
+jobs (only the live sync path chains those). They must be triggered explicitly.</p>
+<pre class="mermaid"><code>flowchart TD
+    DEP["1. Merge + deploy (#921, #923, #924)"] --&gt; SYNC
+    subgraph SYNC ["2. Work-items sync/backfill — ALL providers"]
+        L["Linear (issues + attachment edges)"]
+        G["GitHub / GitLab (PRs/MRs + comment/body edges)"]
+    end
+    SYNC --&gt; CT["work_item_dependencies (extkey/attachment edges)&lt;br/&gt;+ work_item_team_attributions (latest primary owner)&lt;br/&gt;+ work_item_cycle_times (activity bridge)"]
+    CT --&gt; WG["3. work-graph build"]
+    WG --&gt; IM["4. investment materialize (--force)"]
+    IM --&gt; Q["5. allocation coverage % + chord&lt;br/&gt;recover via query-time join to primary attribution"]</code></pre>
+<h3 id="ordered-steps-per-affected-org">Ordered steps (per affected org)<a class="headerlink" href="#ordered-steps-per-affected-org" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Merge + deploy</strong> #921 (mechanism), #923 (backfill CLI), #924 (capture).</li>
+<li><strong>Backfill all providers</strong> — Linear <strong>and</strong> GitHub/GitLab. Linear-only does
+   nothing: the PR/MR rows and their edges come from the git providers, and the
+   donor issues come from Linear. A single <code>--provider all</code> run (or per-provider
+   with Linear synced so its issues are present) writes the edges and recomputes
+   <code>work_item_team_attributions</code>. The org is derived from the sync config
+   (#923), so <code>--org</code> is optional.</li>
+<li><strong>Work-graph build</strong>, then</li>
+<li><strong>Investment materialize (<code>--force</code>)</strong> — these rebuild <code>work_unit_investments</code></li>
+<li>its <code>structural_evidence_json.issues</code> (the coverage join keys); the backfill
+   does not trigger them.</li>
+<li><strong>Verify &amp; recover</strong> — the coverage %, chord, team Cycle Time × Throughput
+   quadrant, and work-unit investment evidence recover automatically via the
+   query-time join to primary attribution. Confirm the links were captured:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">relationship_type_raw</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">()</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">work_item_dependencies</span><span class="w"> </span><span class="k">FINAL</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">{</span><span class="n">org</span><span class="err">}</span>
+<span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">relationship_type_raw</span><span class="w"> </span><span class="k">IN</span>
+<span class="w">      </span><span class="p">(</span><span class="s1">&#39;linear_attachment&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;github_comment_linear_url&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;external_issue_key&#39;</span><span class="p">)</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">relationship_type_raw</span>
+</code></pre></div>
+<p>Zero <code>linear_attachment</code> rows after a Linear backfill means the org's issues
+   carry no integration PR/MR attachments — there is then no link to inherit
+   from, and an empty chord is <strong>correct</strong> (data-driven), not a bug.</p>
+<blockquote>
+<p>Exact CLI flags vary per command — confirm with <code>&lt;cmd&gt; --help</code>. The relevant
+entry points: <code>sync work-items</code> / <code>backfill run</code> → <code>run_work_items_sync_job</code>;
+<code>work-graph build</code> → <code>run_work_graph_build</code>; <code>investment materialize</code> →
+<code>run_investment_materialize</code>; <code>metrics daily</code> → <code>run_daily_metrics</code>.</p>
+</blockquote>
+<hr />
+<h2 id="source-map">Source map<a class="headerlink" href="#source-map" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Attribution cascade + resolver builder</td>
+<td><code>metrics/compute_work_items.py</code> (<code>resolve_base_team</code>, <code>build_linked_issue_team_resolver</code>)</td>
+</tr>
+<tr>
+<td>Resolver type</td>
+<td><code>providers/teams.py</code> (<code>LinkedIssueTeamResolver</code>, <code>ProjectKeyTeamResolver</code>, <code>TeamResolver</code>)</td>
+</tr>
+<tr>
+<td>State-duration parity</td>
+<td><code>metrics/compute_work_item_state_durations.py</code></td>
+</tr>
+<tr>
+<td>Sync wiring</td>
+<td><code>metrics/job_work_items.py</code></td>
+</tr>
+<tr>
+<td>Scheduled recompute wiring</td>
+<td><code>metrics/job_daily.py</code></td>
+</tr>
+<tr>
+<td>Bounded donor/edge loads</td>
+<td><code>metrics/loaders/clickhouse.py</code> (<code>load_work_item_dependencies</code>, <code>load_work_item_dependencies_donors</code>)</td>
+</tr>
+<tr>
+<td>Linear attachment capture (primary)</td>
+<td><code>providers/linear/normalize.py</code> (<code>extract_linear_dependencies</code>, <code>_is_scm_attachment</code>), <code>providers/linear/client.py</code> (<code>get_issue_attachments</code>)</td>
+</tr>
+<tr>
+<td>GitHub comment / body capture</td>
+<td><code>providers/github/normalize.py</code> (<code>extract_github_comment_dependencies</code>, <code>extract_github_dependencies</code>)</td>
+</tr>
+<tr>
+<td>GitLab capture</td>
+<td><code>providers/gitlab/normalize.py</code></td>
+</tr>
+<tr>
+<td>Recovery runbook</td>
+<td>§5 above; backfill <code>backfill/runner.py</code>, investment <code>workers/work_graph_tasks.py</code></td>
+</tr>
+<tr>
+<td>Tests</td>
+<td><code>tests/test_linked_issue_team_inheritance.py</code>, <code>tests/test_pr_issue_link_capture.py</code></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

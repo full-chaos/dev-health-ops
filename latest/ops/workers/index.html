@@ -1,0 +1,4582 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../enterprise-test-plan/">
+      
+      
+        <link rel="next" href="../../slos/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Workers - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#workers-celery" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Workers
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/team-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#triggering-operations-via-celery-jobs-interim-workaround-for-chaos-2475" class="md-nav__link">
+    <span class="md-ellipsis">
+      Triggering operations via Celery jobs (interim workaround for CHAOS-2475)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Triggering operations via Celery jobs (interim workaround for CHAOS-2475)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-this-workaround-is-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why this workaround is required
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on-demand-trigger-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      On-Demand Trigger Paths
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#affected-operations-quick-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Affected Operations Quick Reference
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#observability-caveat" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability Caveat
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#starting-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Starting Workers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Starting Workers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#via-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Via CLI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#via-celery-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      Via Celery directly
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#queues" class="md-nav__link">
+    <span class="md-ellipsis">
+      Queues
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Queues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#routing-and-budget-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Routing and budget environment
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#planned-launchdarkly-bucket-examples-for-dry-run-rollout-launchdarklyrest_core-launchdarklyrest_coreflags-launchdarklyrest_coreprojects-launchdarklysecondary_abuse_riskaudit_log-and-launchdarklysecondary_abuse_riskcode_refs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Planned LaunchDarkly bucket examples for dry-run rollout: launchdarkly:rest_core, launchdarkly:rest_core:flags, launchdarkly:rest_core:projects, launchdarkly:secondary_abuse_risk:audit_log, and launchdarkly:secondary_abuse_risk:code_refs.
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task Registry
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#periodic-schedule-beat" class="md-nav__link">
+    <span class="md-ellipsis">
+      Periodic Schedule (Beat)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#removed-in-chaos-2600-cs5-the-sync-team-drift-and-reconcile-team-members-beat-schedules-are-no-longer-registered-they-wrote-postgres-team_mappings-replaced-clickhouse-teamsmembers-from-postgres-their-celery-tasks-and-workerssync_teampy-were-deleted-in-cs6-chaos-2607-they-were-fail-closed-no-ops-in-cs5-the-sync_teams_to_analytics-task-is-deleted-clickhouse-is-the-teamidentity-system-of-record-the-admin-surface-and-sync-teams-write-it-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      &gt; Removed in CHAOS-2600 CS5: the sync-team-drift and reconcile-team-members beat schedules are no longer registered (they wrote Postgres team_mappings / replaced ClickHouse teams.members from Postgres). Their Celery tasks and workers/sync_team.py were deleted in CS6 (CHAOS-2607) (they were fail-closed no-ops in CS5); the sync_teams_to_analytics task is deleted. ClickHouse is the team/identity system of record; the admin surface and sync teams write it directly.
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Variables
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task Limits
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#linear-backfill-timeout-lease-retry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Linear Backfill Timeout &amp; Lease Retry
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Linear Backfill Timeout & Lease Retry">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interpreting-retrying-vs-failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interpreting retrying vs failed
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitoring
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prometheus-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prometheus Metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logging-tracing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Logging &amp; Tracing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      Health Check
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deploying-with-active-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deploying with Active Workers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deploying with Active Workers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#safe-rollout-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Safe rollout sequence
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#queue-cleanup-and-stale-jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Queue Cleanup and Stale Jobs
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Queue Cleanup and Stale Jobs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#queue-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      Queue names
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clear-queued-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clear queued messages
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clear-stale-reserved-jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clear stale reserved jobs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clear-failed-result-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clear failed result metadata
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/rate-limit-policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#triggering-operations-via-celery-jobs-interim-workaround-for-chaos-2475" class="md-nav__link">
+    <span class="md-ellipsis">
+      Triggering operations via Celery jobs (interim workaround for CHAOS-2475)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Triggering operations via Celery jobs (interim workaround for CHAOS-2475)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-this-workaround-is-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why this workaround is required
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on-demand-trigger-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      On-Demand Trigger Paths
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#affected-operations-quick-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Affected Operations Quick Reference
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#observability-caveat" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability Caveat
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#starting-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Starting Workers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Starting Workers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#via-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Via CLI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#via-celery-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      Via Celery directly
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#queues" class="md-nav__link">
+    <span class="md-ellipsis">
+      Queues
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Queues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#routing-and-budget-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Routing and budget environment
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#planned-launchdarkly-bucket-examples-for-dry-run-rollout-launchdarklyrest_core-launchdarklyrest_coreflags-launchdarklyrest_coreprojects-launchdarklysecondary_abuse_riskaudit_log-and-launchdarklysecondary_abuse_riskcode_refs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Planned LaunchDarkly bucket examples for dry-run rollout: launchdarkly:rest_core, launchdarkly:rest_core:flags, launchdarkly:rest_core:projects, launchdarkly:secondary_abuse_risk:audit_log, and launchdarkly:secondary_abuse_risk:code_refs.
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task Registry
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#periodic-schedule-beat" class="md-nav__link">
+    <span class="md-ellipsis">
+      Periodic Schedule (Beat)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#removed-in-chaos-2600-cs5-the-sync-team-drift-and-reconcile-team-members-beat-schedules-are-no-longer-registered-they-wrote-postgres-team_mappings-replaced-clickhouse-teamsmembers-from-postgres-their-celery-tasks-and-workerssync_teampy-were-deleted-in-cs6-chaos-2607-they-were-fail-closed-no-ops-in-cs5-the-sync_teams_to_analytics-task-is-deleted-clickhouse-is-the-teamidentity-system-of-record-the-admin-surface-and-sync-teams-write-it-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      &gt; Removed in CHAOS-2600 CS5: the sync-team-drift and reconcile-team-members beat schedules are no longer registered (they wrote Postgres team_mappings / replaced ClickHouse teams.members from Postgres). Their Celery tasks and workers/sync_team.py were deleted in CS6 (CHAOS-2607) (they were fail-closed no-ops in CS5); the sync_teams_to_analytics task is deleted. ClickHouse is the team/identity system of record; the admin surface and sync teams write it directly.
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Variables
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task Limits
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#linear-backfill-timeout-lease-retry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Linear Backfill Timeout &amp; Lease Retry
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Linear Backfill Timeout & Lease Retry">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interpreting-retrying-vs-failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interpreting retrying vs failed
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitoring
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prometheus-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prometheus Metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logging-tracing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Logging &amp; Tracing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      Health Check
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deploying-with-active-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deploying with Active Workers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deploying with Active Workers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#safe-rollout-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Safe rollout sequence
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#queue-cleanup-and-stale-jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Queue Cleanup and Stale Jobs
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Queue Cleanup and Stale Jobs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#queue-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      Queue names
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clear-queued-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clear queued messages
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clear-stale-reserved-jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clear stale reserved jobs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clear-failed-result-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clear failed result metadata
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="workers-celery">Workers &amp; Celery<a class="headerlink" href="#workers-celery" title="Permanent link">&para;</a></h1>
+<p>Background job processing for dev-health-ops, powered by Celery with Redis as broker and result backend.</p>
+<hr />
+<h2 id="triggering-operations-via-celery-jobs-interim-workaround-for-chaos-2475">Triggering operations via Celery jobs (interim workaround for CHAOS-2475)<a class="headerlink" href="#triggering-operations-via-celery-jobs-interim-workaround-for-chaos-2475" title="Permanent link">&para;</a></h2>
+<p>Until the CLI argument-enforcement gaps tracked in Linear CHAOS-2475 are fixed, operators must trigger affected operations through the Celery worker and job system rather than running the bare <code>dev-hops</code> CLI directly.</p>
+<h3 id="why-this-workaround-is-required">Why this workaround is required<a class="headerlink" href="#why-this-workaround-is-required" title="Permanent link">&para;</a></h3>
+<p>The bare CLI runs jobs inline within the caller's process. Preflight checks in the CLI only model database URIs and organization parameters, failing to enforce required credentials or inputs like provider tokens, LLM API keys, or Stripe keys. Because of this, inline CLI commands often fail deep in the execution path or fail silently.</p>
+<p>In contrast, Celery-triggered jobs run inside the worker process, which is started via <code>dev-hops workers start-worker</code> or <code>dev-hops workers start-scheduler</code>. The worker process is fully configured with the message broker and the worker-side environment and credentials. Routing operations through a Celery job request ensures the task runs with the worker's configured credentials.</p>
+<p>Key implementation details:
+- <strong>Broker and Result Backend</strong>: Configured in <code>workers/config.py:8-64</code> and initialized in <code>workers/celery_app.py:66-84</code>. The default broker and result backend URL is <code>redis://localhost:6379/0</code> (controlled by <code>CELERY_BROKER_URL</code> and <code>CELERY_RESULT_BACKEND</code>).
+- <strong>Queue Routing</strong>: Defined in <code>workers/queues.py:7-62</code>. The <code>PROVIDER_SYNC_QUEUES_ENABLED</code> flag gates provider-specific queues; <code>SYNC_COST_CLASS_QUEUES</code> further routes eligible units to light/medium/heavy sub-queues.
+- <strong>Sync Budget Guard</strong>: Defined in <code>sync/budget_guard.py</code>. <code>SYNC_BUDGET_BUCKET_LIMITS</code> enables enforced provider budget deferrals; dry-run limits record observations without deferring work.</p>
+<h3 id="on-demand-trigger-paths">On-Demand Trigger Paths<a class="headerlink" href="#on-demand-trigger-paths" title="Permanent link">&para;</a></h3>
+<p>Operators can trigger background operations on-demand through three primary API paths. These paths bypass the periodic scheduler and enqueue tasks directly onto the Celery broker. For detailed API specifications, refer to the <a href="../../api/graphql-overview/">GraphQL API Overview</a> and the <a href="../../architecture/ai-reports-architecture/">AI Reports Architecture</a>.</p>
+<ol>
+<li><strong>Data Sync Trigger</strong></li>
+<li><strong>Endpoint</strong>: <code>POST /api/v1/admin/sync-configs/{config_id}/trigger</code> (defined in <code>api/admin/routers/sync.py:997-1164</code>)</li>
+<li>
+<p><strong>Flow</strong>: Creates a canonical <code>JobRun</code> activity row, builds a <code>SyncPlanRequest</code> from the config's migrated integration, plans a <code>SyncRun</code> (one <code>SyncRunUnit</code> per source/dataset/window), stores <code>sync_run_id</code> in <code>JobRun.result</code>, and enqueues <code>dispatch_sync_run</code> onto the <code>sync</code> queue. The integration planner is the only routing path — the legacy <code>run_sync_config</code> / <code>dispatch_batch_sync</code> in-process workers were removed in CHAOS-2647.</p>
+<ul>
+<li>The <code>source × dataset × window</code> decomposition and why <strong>reference data</strong> (teams/cycles/sprints) belongs on a once-per-run axis is documented in <a href="../../architecture/sync-unit-model/">Sync Unit Model</a>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Historical Backfill Trigger</strong></p>
+</li>
+<li><strong>Endpoint</strong>: <code>POST /api/v1/admin/sync-configs/{config_id}/backfill</code> (defined in <code>api/admin/routers/sync.py:1167-1233</code>)</li>
+<li>
+<p><strong>Flow</strong>: Creates a <code>BackfillJob</code> domain record plus the same canonical <code>JobRun</code> activity row used by manual and scheduled sync, plans a backfill-mode <code>SyncRun</code>, stores <code>sync_run_id</code> in <code>JobRun.result</code>, and enqueues <code>dispatch_sync_run</code> onto the <code>sync</code> queue (fan-out). The <code>BackfillJob</code> is linked to its run via a <code>sync_run:&lt;id&gt;</code> marker on <code>celery_task_id</code>, so <code>finalize_sync_run</code> updates its status and chunk counts.</p>
+</li>
+<li>
+<p><strong>Report Execution Trigger</strong></p>
+</li>
+<li><strong>Trigger</strong>: GraphQL <code>triggerReport</code> mutation or the "Run Now" button in the Report Center UI.</li>
+<li><strong>Flow</strong>: Creates a <code>ReportRun</code> record and enqueues <code>execute_saved_report</code> onto the <code>reports</code> queue.</li>
+</ol>
+<h3 id="affected-operations-quick-reference">Affected Operations Quick Reference<a class="headerlink" href="#affected-operations-quick-reference" title="Permanent link">&para;</a></h3>
+<p>The following table maps bare CLI commands to their Celery task equivalents, trigger paths, and required worker environment variables.</p>
+<table>
+<thead>
+<tr>
+<th>CLI Command (Inline, May Fail)</th>
+<th>Celery Task Equivalent</th>
+<th>Trigger Path</th>
+<th>Required Worker Env</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dev-hops sync git/prs/cicd/deployments/incidents/security/tests</code></td>
+<td><code>dispatch_sync_run</code> → <code>run_sync_unit</code> → <code>finalize_sync_run</code></td>
+<td><code>POST /api/v1/admin/sync-configs/{config_id}/trigger</code></td>
+<td><code>GITHUB_TOKEN</code>, <code>GITLAB_TOKEN</code>, <code>JIRA_API_TOKEN</code>, <code>JIRA_EMAIL</code></td>
+</tr>
+<tr>
+<td><code>dev-hops sync work-items</code></td>
+<td><code>dispatch_sync_run</code> → <code>run_sync_unit</code> → <code>finalize_sync_run</code></td>
+<td><code>POST /api/v1/admin/sync-configs/{config_id}/trigger</code></td>
+<td><code>GITHUB_TOKEN</code>, <code>GITLAB_TOKEN</code>, <code>JIRA_API_TOKEN</code>, <code>JIRA_EMAIL</code></td>
+</tr>
+<tr>
+<td><code>dev-hops metrics daily</code></td>
+<td><code>run_daily_metrics</code> / <code>dispatch_daily_metrics_partitioned</code></td>
+<td>Periodic Beat Schedule</td>
+<td><code>CLICKHOUSE_URI</code>, <code>DATABASE_URI</code></td>
+</tr>
+<tr>
+<td><code>dev-hops recommendations compute</code></td>
+<td><code>run_recommendations_job</code></td>
+<td>Periodic Beat Schedule</td>
+<td><code>CLICKHOUSE_URI</code>, <code>DATABASE_URI</code></td>
+</tr>
+<tr>
+<td><code>dev-hops work-graph build</code></td>
+<td><code>run_work_graph_build</code></td>
+<td>Periodic Beat Schedule</td>
+<td><code>CLICKHOUSE_URI</code>, <code>DATABASE_URI</code></td>
+</tr>
+<tr>
+<td><code>dev-hops investment materialize</code></td>
+<td><code>run_investment_materialize</code></td>
+<td>Periodic Beat Schedule</td>
+<td><code>CLICKHOUSE_URI</code>, <code>DATABASE_URI</code>, <code>OPENAI_API_KEY</code> (or other LLM keys)</td>
+</tr>
+<tr>
+<td><code>dev-hops backfill run</code></td>
+<td><code>dispatch_sync_run</code> → <code>run_sync_unit</code> → <code>finalize_sync_run</code> (backfill-mode <code>SyncRun</code>)</td>
+<td><code>POST /api/v1/admin/sync-configs/{config_id}/backfill</code></td>
+<td><code>CLICKHOUSE_URI</code>, <code>DATABASE_URI</code>, provider tokens</td>
+</tr>
+</tbody>
+</table>
+<p>Triggering <code>run_investment_materialize</code> via the worker ensures the worker-side LLM API key applies. This avoids the silent <code>MockProvider</code> fallback that the bare CLI hits when no key is present in the caller's environment (tracked in Linear CHAOS-2476).</p>
+<h3 id="observability-caveat">Observability Caveat<a class="headerlink" href="#observability-caveat" title="Permanent link">&para;</a></h3>
+<p>Manual sync, scheduled sync, and sync-config backfill all persist a <code>JobRun</code> row as the admin-visible activity index and link it to the execution-truth <code>SyncRun</code> via <code>JobRun.result.sync_run_id</code>. The only difference between manual and scheduled sync is timing: the manual endpoint enqueues immediately, while <code>dispatch_scheduled_syncs</code> enqueues when the cron marker is due. Tasks like <code>run_work_graph_build</code> and <code>run_investment_materialize</code> don't persist a <code>JobRun</code> row in the database. Their execution status and progress can only be tracked through worker logs and distributed traces. For more details on sync observability, see the <a href="../../architecture/platform-sync-observability/">Platform Sync Observability</a> documentation.</p>
+<hr />
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<p>Workers execute long-running tasks (syncs, metrics computation, webhooks) asynchronously. The system consists of:</p>
+<ul>
+<li><strong>Celery workers</strong>: consume tasks from Redis queues</li>
+<li><strong>Celery beat</strong>: scheduler that dispatches periodic tasks on cron/interval schedules</li>
+<li><strong>Redis</strong>: message broker and result backend</li>
+</ul>
+<p>On startup, workers automatically apply pending Alembic migrations and initialize logging, Sentry, and OpenTelemetry tracing.
+See also: <a href="../../architecture/worker-scaling-readiness/">Worker horizontal-scaling readiness</a></p>
+<hr />
+<h2 id="starting-workers">Starting Workers<a class="headerlink" href="#starting-workers" title="Permanent link">&para;</a></h2>
+<h3 id="via-cli">Via CLI<a class="headerlink" href="#via-cli" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start a worker (default queues: default, metrics, sync)</span>
+dev-hops<span class="w"> </span>workers<span class="w"> </span>start-worker
+
+<span class="c1"># Specify queues and concurrency</span>
+dev-hops<span class="w"> </span>workers<span class="w"> </span>start-worker<span class="w"> </span>--queues<span class="w"> </span>default<span class="w"> </span>metrics<span class="w"> </span>sync<span class="w"> </span>webhooks<span class="w"> </span>ingest<span class="w"> </span>--concurrency<span class="w"> </span><span class="m">4</span>
+
+<span class="c1"># Start the beat scheduler (periodic tasks)</span>
+dev-hops<span class="w"> </span>workers<span class="w"> </span>start-scheduler
+</code></pre></div>
+<h3 id="via-celery-directly">Via Celery directly<a class="headerlink" href="#via-celery-directly" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>celery<span class="w"> </span>-A<span class="w"> </span>dev_health_ops.workers.celery_app<span class="w"> </span>worker<span class="w"> </span>--loglevel<span class="o">=</span>INFO<span class="w"> </span>--queues<span class="o">=</span>default,metrics,sync
+celery<span class="w"> </span>-A<span class="w"> </span>dev_health_ops.workers.celery_app<span class="w"> </span>beat<span class="w"> </span>--loglevel<span class="o">=</span>INFO
+</code></pre></div>
+<hr />
+<h2 id="queues">Queues<a class="headerlink" href="#queues" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Queue</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>default</code></td>
+<td>Scheduling dispatchers, health checks, heartbeat</td>
+</tr>
+<tr>
+<td><code>metrics</code></td>
+<td>Daily metrics, complexity, DORA, capacity forecast, investment</td>
+</tr>
+<tr>
+<td><code>sync</code></td>
+<td>Unitized sync dispatch/execution/post-sync relay (git, PR, work-item) + team auto-import</td>
+</tr>
+<tr>
+<td><code>sync.&lt;provider&gt;</code></td>
+<td>Provider-specific sync queues (e.g., <code>sync.github</code>, <code>sync.gitlab</code>, <code>sync.linear</code>, <code>sync.jira</code>, <code>sync.launchdarkly</code>)</td>
+</tr>
+<tr>
+<td><code>sync.&lt;provider&gt;.&lt;class&gt;</code></td>
+<td>Cost-class sub-queues (CHAOS-2517): <code>light</code>/<code>medium</code> on <code>worker</code>, <code>heavy</code> on <code>worker-heavy</code>. Always declared in <code>task_queues</code>; routing gated by <code>SYNC_COST_CLASS_QUEUES</code>. <strong>Two-phase rollout: expand consumer <code>-Q</code> lists first, then flip the flag on producers.</strong></td>
+</tr>
+<tr>
+<td><code>backfill</code></td>
+<td>Legacy/reserved — unused after CHAOS-2647 (API backfill now plans a backfill-mode <code>SyncRun</code> and dispatches on <code>sync</code>)</td>
+</tr>
+<tr>
+<td><code>reports</code></td>
+<td>AI report execution (SavedReport to ReportRun)</td>
+</tr>
+<tr>
+<td><code>webhooks</code></td>
+<td>Webhook event processing, billing notifications</td>
+</tr>
+<tr>
+<td><code>ingest</code></td>
+<td>Stream ingestion consumer</td>
+</tr>
+<tr>
+<td><code>monitoring</code></td>
+<td>Telemetry and queue depth monitoring</td>
+</tr>
+</tbody>
+</table>
+<h3 id="routing-and-budget-environment">Routing and budget environment<a class="headerlink" href="#routing-and-budget-environment" title="Permanent link">&para;</a></h3>
+<p>The bundled Docker Compose, Kubernetes, and Helm deployments already declare the provider and cost-class queues in their worker <code>-Q</code> lists, so they can enable routing by default. Custom deployments must update worker consumers before enabling producer-side routing; otherwise, routed messages can sit on unconsumed queues.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th style="text-align: right;">Default in deploy templates</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PROVIDER_SYNC_QUEUES_ENABLED</code></td>
+<td style="text-align: right;"><code>true</code></td>
+<td>Routes known providers from <code>sync</code> to <code>sync.&lt;provider&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>SYNC_COST_CLASS_QUEUES</code></td>
+<td style="text-align: right;"><code>true</code></td>
+<td>Routes eligible GitHub/GitLab/Jira/Linear units to cost-class sub-queues after provider routing is enabled.</td>
+</tr>
+<tr>
+<td><code>HIDE_MIGRATED_CHILD_CONFIGS</code></td>
+<td style="text-align: right;"><code>true</code></td>
+<td>Hides migrated child sync configs from operator-facing config lists.</td>
+</tr>
+<tr>
+<td><code>SYNC_RUN_MAX_UNITS</code></td>
+<td style="text-align: right;"><code>1000</code></td>
+<td>Caps unit count for one planned sync run.</td>
+</tr>
+<tr>
+<td><code>SYNC_UNIT_CONCURRENCY_PER_BUCKET</code></td>
+<td style="text-align: right;"><code>8</code></td>
+<td>Caps concurrently dispatchable units per org/provider/cost-class bucket.</td>
+</tr>
+<tr>
+<td><code>SYNC_UNIT_DISPATCH_STALE_SECONDS</code></td>
+<td style="text-align: right;"><code>900</code></td>
+<td>Reclaims stale <code>DISPATCHING</code> units after this age.</td>
+</tr>
+<tr>
+<td><code>SYNC_UNIT_RUNNING_STALE_SECONDS</code></td>
+<td style="text-align: right;"><code>3600</code></td>
+<td>Treats long-running units as stale for reconciliation/reporting.</td>
+</tr>
+<tr>
+<td><code>LINEAR_BACKFILL_MAX_WINDOW_DAYS</code></td>
+<td style="text-align: right;"><code>14</code></td>
+<td>Caps the window size (days) of a Linear work-item-family backfill chunk. CHAOS-2717 bounds each window's issue crawl to its own slice (<code>updatedAt</code> gte/lte), so the size balances a single unit's lease/soft-timeout budget against per-hour request volume; smaller windows re-multiply per-window teams/cycles fetches toward Linear's rate limit. Non-Linear backfills use the 7-day default.</td>
+</tr>
+<tr>
+<td><code>SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES</code></td>
+<td style="text-align: right;"><code>1</code></td>
+<td>Max expired-lease (or soft-timeout) retries for an eligible Linear work-item backfill unit before terminal <code>FAILED</code> (<code>worker_lost_retry_exhausted</code>). Retry is DISABLED on all other surfaces.</td>
+</tr>
+<tr>
+<td><code>SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS</code></td>
+<td style="text-align: right;"><code>60</code></td>
+<td>Backoff added to <code>available_at</code> when an eligible expired-lease unit is flipped to <code>RETRYING</code> before redispatch.</td>
+</tr>
+<tr>
+<td><code>SYNC_DISPATCH_REDISPATCH_COUNTDOWN</code></td>
+<td style="text-align: right;"><code>60</code></td>
+<td>Delay used when redispatching sync-run work.</td>
+</tr>
+<tr>
+<td><code>SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS</code></td>
+<td style="text-align: right;"><code>300</code></td>
+<td>Dispatch outbox claim lease duration.</td>
+</tr>
+<tr>
+<td><code>SYNC_WATERMARK_OVERLAP</code></td>
+<td style="text-align: right;"><code>0</code></td>
+<td>Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin.</td>
+</tr>
+</tbody>
+</table>
+<p>Provider budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not the provider's raw request or GraphQL cost counters. Jira emits separate route-family buckets for REST/JQL listing (<code>jira:search:jira_jql</code>), REST issue enrichment (<code>jira:rest_core:jira_issue_enrichment</code>), optional worklog fetching (<code>jira:rest_core:jira_worklogs</code> when <code>JIRA_FETCH_WORKLOGS=true</code>), and Atlassian GraphQL enrichment (<code>jira:graphql_cost:jira_gql_enrichment</code> when <code>ATLASSIAN_GQL_ENABLED=true</code>). LaunchDarkly feature-flag sync emits <code>launchdarkly:*</code> buckets for the <code>flags</code>, <code>audit_log</code>, and <code>code_refs</code> route families (see <a href="../../architecture/launchdarkly-sync-budgeting/">LaunchDarkly sync budgeting</a>). Leaving <code>SYNC_BUDGET_BUCKET_LIMITS</code> unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th style="text-align: right;">Default in deploy templates</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SYNC_BUDGET_BUCKET_LIMITS</code></td>
+<td style="text-align: right;"><code>{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"jira:search:jira_jql":250,"jira:rest_core:jira_issue_enrichment":250,"jira:rest_core:jira_worklogs":100,"jira:graphql_cost:jira_gql_enrichment":250,"linear:graphql_cost":500}</code></td>
+<td>Enforced per-bucket reservation limits.</td>
+</tr>
+<tr>
+<td><code>SYNC_BUDGET_DEFAULT_LIMIT</code></td>
+<td style="text-align: right;"><code>1000000</code></td>
+<td>Fallback enforced limit for buckets not named in the JSON map.</td>
+</tr>
+<tr>
+<td><code>SYNC_BUDGET_DEFERRAL_SECONDS</code></td>
+<td style="text-align: right;"><code>60</code></td>
+<td>Base countdown when enforcement defers a unit.</td>
+</tr>
+<tr>
+<td><code>SYNC_BUDGET_DEFERRAL_JITTER_SECONDS</code></td>
+<td style="text-align: right;"><code>5</code></td>
+<td>Random jitter added to enforced deferrals.</td>
+</tr>
+<tr>
+<td><code>SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS</code></td>
+<td style="text-align: right;">unset</td>
+<td>Observation-only limits; records estimates without deferring work.</td>
+</tr>
+<tr>
+<td><code>SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT</code></td>
+<td style="text-align: right;"><code>1000000</code></td>
+<td>Fallback dry-run limit.</td>
+</tr>
+<tr>
+<td><code>SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS</code></td>
+<td style="text-align: right;"><code>60</code></td>
+<td>Observation-only deferral estimate.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="planned-launchdarkly-bucket-examples-for-dry-run-rollout-launchdarklyrest_core-launchdarklyrest_coreflags-launchdarklyrest_coreprojects-launchdarklysecondary_abuse_riskaudit_log-and-launchdarklysecondary_abuse_riskcode_refs">Planned LaunchDarkly bucket examples for dry-run rollout: <code>launchdarkly:rest_core</code>, <code>launchdarkly:rest_core:flags</code>, <code>launchdarkly:rest_core:projects</code>, <code>launchdarkly:secondary_abuse_risk:audit_log</code>, and <code>launchdarkly:secondary_abuse_risk:code_refs</code>.<a class="headerlink" href="#planned-launchdarkly-bucket-examples-for-dry-run-rollout-launchdarklyrest_core-launchdarklyrest_coreflags-launchdarklyrest_coreprojects-launchdarklysecondary_abuse_riskaudit_log-and-launchdarklysecondary_abuse_riskcode_refs" title="Permanent link">&para;</a></h2>
+<h2 id="task-registry">Task Registry<a class="headerlink" href="#task-registry" title="Permanent link">&para;</a></h2>
+<p>The system registers Celery tasks under the <code>workers/</code> directory. The primary registered tasks, their wrapped CLI-equivalent operations, and their target queues are listed in the table below.</p>
+<table>
+<thead>
+<tr>
+<th>Task Name</th>
+<th>Wrapped CLI Operation</th>
+<th>Queue</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dispatch_sync_run</code></td>
+<td>None</td>
+<td><code>sync</code></td>
+<td>Authorizes a planned <code>SyncRun</code>, routes each pending unit, and fans out <code>run_sync_unit</code> tasks. Source: <code>sync_units.py:113-190</code>.</td>
+</tr>
+<tr>
+<td><code>run_sync_unit</code></td>
+<td>None</td>
+<td><code>sync</code> (or <code>sync.&lt;provider&gt;</code> / cost-class queue)</td>
+<td>Executes exactly one planned source/dataset/window unit and updates its status. Source: <code>sync_units.py:193-293</code>.</td>
+</tr>
+<tr>
+<td><code>finalize_sync_run</code></td>
+<td>None</td>
+<td><code>sync</code></td>
+<td>Aggregates unit statuses and dispatches post-sync work once all units are terminal. Source: <code>sync_units.py:295-513</code>.</td>
+</tr>
+<tr>
+<td><code>reconcile_sync_dispatch</code></td>
+<td>None</td>
+<td><code>sync</code> (beat, 60s)</td>
+<td>Sole durable relay for the dispatch outbox: expires dead-lease RUNNING units, then materializes + relays <code>dispatch_sync_run</code>/<code>finalize_sync_run</code>/<code>post_sync</code> wakeups for stranded runs. See <a href="../../architecture/dispatch-outbox/">Dispatch Outbox</a> (CHAOS-2581). Source: <code>sync_reconciler.py</code>.</td>
+</tr>
+<tr>
+<td>~~<code>run_sync_config</code> / <code>dispatch_batch_sync</code> / <code>_batch_sync_callback</code> / <code>_run_sync_for_repo</code> / <code>run_work_items_sync</code>~~</td>
+<td>—</td>
+<td>—</td>
+<td><strong>Removed in CHAOS-2647.</strong> The legacy in-process sync workers (<code>sync_runtime.py</code>, <code>sync_batch.py</code>, <code>sync_misc.py</code>) are deleted; all sync now flows through the unitized <code>dispatch_sync_run</code> → <code>run_sync_unit</code> → <code>finalize_sync_run</code> planner path.</td>
+</tr>
+<tr>
+<td><code>run_post_sync_team_autoimport</code></td>
+<td>None</td>
+<td><code>sync</code></td>
+<td>Refreshes team/project/member attribution after a successful <code>SyncRun</code> whose canonical config has <code>auto_import_teams</code> enabled. Dispatched once per terminal run by the post-sync relay; resolves credentials from the run's <code>Integration.credential_id</code>. Source: <code>team_autoimport.py</code>.</td>
+</tr>
+<tr>
+<td>~~<code>sync_team_drift</code> / <code>reconcile_team_members</code>~~</td>
+<td>—</td>
+<td>—</td>
+<td><strong>Deleted in CHAOS-2600 CS6 (CHAOS-2607).</strong> Both Celery tasks and <code>workers/sync_team.py</code> are removed (they were fail-closed no-ops in CS5). ClickHouse is the team/identity system of record; the Postgres drift engine + member-reconcile no longer exist.</td>
+</tr>
+<tr>
+<td><code>run_daily_metrics</code></td>
+<td><code>metrics daily</code></td>
+<td><code>metrics</code></td>
+<td>Computes daily repository and user metrics. Source: <code>metrics_daily.py</code>.</td>
+</tr>
+<tr>
+<td><code>dispatch_daily_metrics_partitioned</code></td>
+<td><code>metrics daily</code> (partitioned)</td>
+<td><code>default</code></td>
+<td>Partitions daily metrics across organizations and fans out. Source: <code>metrics_partitioned.py</code>.</td>
+</tr>
+<tr>
+<td><code>dispatch_daily_metrics_for_all_orgs</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Fans out <code>dispatch_daily_metrics_partitioned</code> per active organization (CHAOS-2849) so <code>repo_metrics_daily</code> is populated for real (UUID-scoped) tenants, not just the blank-org default. Source: <code>metrics_partitioned.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_daily_metrics_batch</code></td>
+<td>None</td>
+<td><code>metrics</code></td>
+<td>Processes a batch of repositories for daily metrics. Source: <code>metrics_partitioned.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_daily_metrics_finalize_task</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Finalizes daily metrics computation. Source: <code>metrics_partitioned.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_complexity_job</code></td>
+<td>None</td>
+<td><code>metrics</code></td>
+<td>Analyzes code complexity for repositories. Source: <code>metrics_extra.py:16-319</code>.</td>
+</tr>
+<tr>
+<td><code>dispatch_complexity_job</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Fans out <code>run_complexity_job</code> per active organization on an independent daily cadence (CHAOS-2850), so complexity refreshes even for orgs with infrequent syncs. Source: <code>metrics_extra.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_dora_metrics</code></td>
+<td>None</td>
+<td><code>metrics</code></td>
+<td>Computes DORA metrics. Source: <code>metrics_extra.py:16-319</code>.</td>
+</tr>
+<tr>
+<td><code>run_release_impact_job</code></td>
+<td>None</td>
+<td><code>metrics</code></td>
+<td>Computes release impact metrics. Source: <code>metrics_extra.py:16-319</code>.</td>
+</tr>
+<tr>
+<td><code>dispatch_release_impact</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Fans out release impact computation. Source: <code>metrics_extra.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_work_graph_build</code></td>
+<td><code>work-graph build</code></td>
+<td><code>metrics</code></td>
+<td>Builds work graph edges linking issues, PRs, and commits. Source: <code>work_graph_tasks.py:17-334</code>.</td>
+</tr>
+<tr>
+<td><code>run_investment_materialize</code></td>
+<td><code>investment materialize</code></td>
+<td><code>metrics</code></td>
+<td>Classifies work units into investment categories via LLM. Source: <code>work_graph_tasks.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_membership_backfill</code></td>
+<td>None</td>
+<td><code>metrics</code></td>
+<td>Backfills work unit membership. Source: <code>work_graph_tasks.py</code>.</td>
+</tr>
+<tr>
+<td><code>dispatch_membership_backfill</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Fans out membership backfill. Source: <code>work_graph_tasks.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_capacity_forecast_job</code></td>
+<td>None</td>
+<td><code>metrics</code></td>
+<td>Computes weekly capacity forecasting. Source: <code>product_tasks.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_recommendations_job</code></td>
+<td><code>recommendations compute</code></td>
+<td><code>metrics</code></td>
+<td>Computes recommendations for organizations. Source: <code>recommendations_tasks.py:249-333</code>.</td>
+</tr>
+<tr>
+<td><code>process_webhook_event</code></td>
+<td>None</td>
+<td><code>webhooks</code></td>
+<td>Processes inbound webhook events. Source: <code>system_webhooks.py</code>.</td>
+</tr>
+<tr>
+<td><code>send_billing_notification</code></td>
+<td>None</td>
+<td><code>webhooks</code></td>
+<td>Sends billing-related email notifications. Source: <code>system_ops.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_ingest_consumer</code></td>
+<td>None</td>
+<td><code>ingest</code></td>
+<td>Consumes from ingest streams. Source: <code>system_ops.py</code>.</td>
+</tr>
+<tr>
+<td><code>run_product_telemetry_consumer</code></td>
+<td>None</td>
+<td><code>ingest</code></td>
+<td>Consumes product telemetry streams. Source: <code>system_ops.py</code>.</td>
+</tr>
+<tr>
+<td><code>health_check</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Worker health check. Source: <code>system_ops.py</code>.</td>
+</tr>
+<tr>
+<td><code>phone_home_heartbeat</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Daily heartbeat for deployment telemetry. Source: <code>system_ops.py</code>.</td>
+</tr>
+<tr>
+<td><code>execute_saved_report</code></td>
+<td>None</td>
+<td><code>reports</code></td>
+<td>Executes a SavedReport plan and persists markdown. Source: <code>report_task.py</code>.</td>
+</tr>
+<tr>
+<td><code>dispatch_scheduled_reports</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Fans out scheduled report executions. Source: <code>report_scheduler.py</code>.</td>
+</tr>
+<tr>
+<td>~~<code>run_backfill</code>~~</td>
+<td><code>backfill run</code></td>
+<td>—</td>
+<td><strong>Removed in CHAOS-2647.</strong> The API backfill path now plans a backfill-mode <code>SyncRun</code> and fans out through <code>dispatch_sync_run</code> → <code>run_sync_unit</code> → <code>finalize_sync_run</code>; the standalone <code>backfill</code>-queue task and <code>sync_backfill.py</code> are deleted.</td>
+</tr>
+<tr>
+<td><code>dispatch_scheduled_syncs</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Fans out organization sync configurations. Source: <code>sync_scheduler.py</code>.</td>
+</tr>
+<tr>
+<td><code>dispatch_scheduled_metrics</code></td>
+<td>None</td>
+<td><code>default</code></td>
+<td>Fans out scheduled metrics. Source: <code>metrics_daily.py</code>.</td>
+</tr>
+<tr>
+<td><code>monitor_queue_depths</code></td>
+<td>None</td>
+<td><code>monitoring</code></td>
+<td>Monitors queue depths. Source: <code>queue_monitor.py</code>.</td>
+</tr>
+<tr>
+<td>---</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="periodic-schedule-beat">Periodic Schedule (Beat)<a class="headerlink" href="#periodic-schedule-beat" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Schedule</th>
+<th>Task</th>
+<th>Interval</th>
+<th>Queue</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dispatch-scheduled-syncs</code></td>
+<td><code>dispatch_scheduled_syncs</code></td>
+<td>Every 300 seconds (5 minutes)</td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>dispatch-scheduled-metrics</code></td>
+<td><code>dispatch_scheduled_metrics</code></td>
+<td>Every 300 seconds (5 minutes)</td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>run-complexity-daily</code></td>
+<td><code>dispatch_complexity_job</code></td>
+<td>Daily at 00:45 UTC</td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>run-daily-metrics</code></td>
+<td><code>dispatch_daily_metrics_for_all_orgs</code></td>
+<td>Daily at 01:00 UTC</td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>run-recommendations</code></td>
+<td><code>run_recommendations_job</code></td>
+<td>Daily at 02:00 UTC</td>
+<td><code>metrics</code></td>
+</tr>
+<tr>
+<td><code>run-release-impact-daily</code></td>
+<td><code>dispatch_release_impact</code></td>
+<td>Daily at 01:30 UTC</td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>run-capacity-forecast</code></td>
+<td><code>run_capacity_forecast_job</code></td>
+<td>Mondays at 04:00 UTC</td>
+<td><code>metrics</code></td>
+</tr>
+<tr>
+<td><code>process-ingest-streams</code></td>
+<td><code>run_ingest_consumer</code></td>
+<td>Every 30 seconds</td>
+<td><code>ingest</code></td>
+</tr>
+<tr>
+<td><code>process-product-telemetry-streams</code></td>
+<td><code>run_product_telemetry_consumer</code></td>
+<td>Every 30 seconds</td>
+<td><code>ingest</code></td>
+</tr>
+<tr>
+<td><code>phone-home-heartbeat</code></td>
+<td><code>phone_home_heartbeat</code></td>
+<td>Daily at 00:00 UTC</td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>dispatch-scheduled-reports</code></td>
+<td><code>dispatch_scheduled_reports</code></td>
+<td>Every 300 seconds (5 minutes)</td>
+<td><code>default</code></td>
+</tr>
+<tr>
+<td><code>monitor-queue-depths</code></td>
+<td><code>monitor_queue_depths</code></td>
+<td>Every 60 seconds</td>
+<td><code>monitoring</code></td>
+</tr>
+<tr>
+<td><code>run-membership-backfill-daily</code></td>
+<td><code>dispatch_membership_backfill</code></td>
+<td>Daily at 03:30 UTC</td>
+<td><code>default</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="removed-in-chaos-2600-cs5-the-sync-team-drift-and-reconcile-team-members-beat-schedules-are-no-longer-registered-they-wrote-postgres-team_mappings-replaced-clickhouse-teamsmembers-from-postgres-their-celery-tasks-and-workerssync_teampy-were-deleted-in-cs6-chaos-2607-they-were-fail-closed-no-ops-in-cs5-the-sync_teams_to_analytics-task-is-deleted-clickhouse-is-the-teamidentity-system-of-record-the-admin-surface-and-sync-teams-write-it-directly">&gt; <strong>Removed in CHAOS-2600 CS5:</strong> the <code>sync-team-drift</code> and <code>reconcile-team-members</code> beat schedules are no longer registered (they wrote Postgres <code>team_mappings</code> / replaced ClickHouse <code>teams.members</code> from Postgres). Their Celery tasks and <code>workers/sync_team.py</code> were <strong>deleted in CS6 (CHAOS-2607)</strong> (they were fail-closed no-ops in CS5); the <code>sync_teams_to_analytics</code> task is deleted. ClickHouse is the team/identity system of record; the admin surface and <code>sync teams</code> write it directly.<a class="headerlink" href="#removed-in-chaos-2600-cs5-the-sync-team-drift-and-reconcile-team-members-beat-schedules-are-no-longer-registered-they-wrote-postgres-team_mappings-replaced-clickhouse-teamsmembers-from-postgres-their-celery-tasks-and-workerssync_teampy-were-deleted-in-cs6-chaos-2607-they-were-fail-closed-no-ops-in-cs5-the-sync_teams_to_analytics-task-is-deleted-clickhouse-is-the-teamidentity-system-of-record-the-admin-surface-and-sync-teams-write-it-directly" title="Permanent link">&para;</a></h2>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<h3 id="environment-variables">Environment Variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CELERY_BROKER_URL</code></td>
+<td><code>redis://localhost:6379/0</code></td>
+<td>Redis broker URL</td>
+</tr>
+<tr>
+<td><code>CELERY_RESULT_BACKEND</code></td>
+<td><code>redis://localhost:6379/0</code></td>
+<td>Redis result backend URL</td>
+</tr>
+<tr>
+<td><code>CLICKHOUSE_URI</code></td>
+<td>--</td>
+<td>ClickHouse connection for analytics tasks</td>
+</tr>
+<tr>
+<td><code>DATABASE_URI</code></td>
+<td>--</td>
+<td>PostgreSQL connection (fallback)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="task-limits">Task Limits<a class="headerlink" href="#task-limits" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hard time limit</td>
+<td>3600s (1 hour)</td>
+</tr>
+<tr>
+<td>Soft time limit</td>
+<td>3300s (55 minutes)</td>
+</tr>
+<tr>
+<td>Default retry delay</td>
+<td>60s</td>
+</tr>
+<tr>
+<td>Max retries (default)</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Result expiry</td>
+<td>86400s (24 hours)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="linear-backfill-timeout-lease-retry">Linear Backfill Timeout &amp; Lease Retry<a class="headerlink" href="#linear-backfill-timeout-lease-retry" title="Permanent link">&para;</a></h2>
+<p>Linear work-item backfills run long, provider-paced chunks. CHAOS-2717 bounds each window's issue crawl to its own slice (<code>updatedAt</code> gte/lte) instead of re-scanning from the window start to now, so the planner caps Linear work-item-family backfill windows at <code>LINEAR_BACKFILL_MAX_WINDOW_DAYS</code> (default <code>14</code>) to balance two budgets: smaller windows re-multiply the per-window fixed overhead (teams + cycles are re-fetched per unit) and push the per-hour request count toward Linear's rate limit, while larger windows lengthen a single unit's crawl toward the lease/soft-timeout budget. Non-Linear backfills keep the default 7-day window. When a worker still loses its lease mid-chunk (crash, <code>SIGKILL</code>, or a soft-timeout), the <code>reconcile_sync_dispatch</code> relay can <strong>retry</strong> the unit instead of failing it. The retry knobs (<code>SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES</code>, <code>SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS</code>) are listed under <a href="#routing-and-budget-environment">Routing and budget environment</a>; the full lifecycle is in <a href="../../architecture/dispatch-outbox/">Dispatch Outbox</a> and <a href="../../architecture/data-pipeline/#retry-lifecycle-expired-lease-recovery">Data Pipeline → Retry Lifecycle</a>.</p>
+<p>These unit-level expired-lease retries are <strong>distinct</strong> from Celery's generic per-task <code>Max retries (default) 3</code> autoretry in the table above.</p>
+<p>Retry is <strong>eligible only</strong> when ALL hold: <code>provider == linear</code>, <code>mode == backfill</code>, a work-item-family dataset, the parent run is non-terminal, the unit's <code>expired_lease_retry_count</code> is below <code>SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES</code>, and <strong>every</strong> ClickHouse surface the chunk writes is in the proven retry-SAFE set (see the <a href="../../architecture/data-pipeline/#clickhouse-retry-idempotency-matrix">ClickHouse retry idempotency matrix</a> — currently every Linear work-item backfill surface is SAFE, so no surface disables retry). Retry stays <strong>DISABLED</strong> for everything outside this eligibility gate — a non-eligible expired lease is terminal <code>FAILED</code> (<code>worker_lost</code>), exactly as before.</p>
+<h3 id="interpreting-retrying-vs-failed">Interpreting <code>retrying</code> vs <code>failed</code><a class="headerlink" href="#interpreting-retrying-vs-failed" title="Permanent link">&para;</a></h3>
+<p>Operator states surface in the admin sync-run unit projection (<code>SyncRunUnitResponse</code>, <code>SyncRunUnitSummary</code>) and the backfill/job-run views:</p>
+<table>
+<thead>
+<tr>
+<th>State / signal</th>
+<th>Where</th>
+<th>Meaning</th>
+<th>Operator action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>retrying</code></td>
+<td>unit <code>status</code></td>
+<td>An eligible Linear backfill unit lost its lease (or hit a soft-timeout) and is waiting on its <code>available_at</code> / <code>next_retry_at</code> backoff to be redispatched.</td>
+<td>None — recovery is automatic. Watch <code>retry_count</code> / <code>next_retry_at</code>.</td>
+</tr>
+<tr>
+<td><code>soft_timeout</code></td>
+<td>unit <code>error_category</code></td>
+<td>The unit hit the Celery soft time limit. If eligible it is now <code>retrying</code>; otherwise terminal <code>FAILED</code>.</td>
+<td>None if <code>retrying</code>; otherwise treat like <code>worker_lost</code>.</td>
+</tr>
+<tr>
+<td><code>worker_lost</code></td>
+<td>unit <code>error_category</code> (terminal <code>FAILED</code>)</td>
+<td>The lease expired and the unit was NOT retry-eligible (wrong provider/mode/dataset, or a surface without proven dedupe).</td>
+<td>Investigate; backfill never advances watermarks, so re-triggering the window is safe.</td>
+</tr>
+<tr>
+<td><code>worker_lost_retry_exhausted</code></td>
+<td>unit <code>error_category</code> (terminal <code>FAILED</code>)</td>
+<td>An eligible unit exhausted <code>SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES</code>.</td>
+<td>Investigate the persistent cause (provider throttling, oversized window) before re-triggering.</td>
+</tr>
+<tr>
+<td><code>partial_failed</code></td>
+<td>run <code>SyncRunStatus</code> (<code>PARTIAL_FAILED</code>)</td>
+<td>The run finished with a mix of <code>SUCCESS</code> and <code>FAILED</code> units.</td>
+<td>Inspect the failed units; re-trigger the affected window if needed.</td>
+</tr>
+</tbody>
+</table>
+<p>A <code>retrying</code> unit is <strong>not</strong> a failure — it is in-flight recovery. Only <code>FAILED</code> units with a terminal <code>error_category</code> (<code>worker_lost</code>, <code>worker_lost_retry_exhausted</code>, or a provider/processor error) represent work that did not complete.</p>
+<h2 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h2>
+<h3 id="prometheus-metrics">Prometheus Metrics<a class="headerlink" href="#prometheus-metrics" title="Permanent link">&para;</a></h3>
+<p>Every task execution records Prometheus metrics via <code>record_celery_task()</code>:
+- Task name
+- Completion state (success/failure)
+- Duration in seconds</p>
+<h3 id="logging-tracing">Logging &amp; Tracing<a class="headerlink" href="#logging-tracing" title="Permanent link">&para;</a></h3>
+<p>Workers initialize on startup:
+- Structured logging via <code>configure_logging()</code>
+- Sentry error tracking via <code>init_sentry()</code>
+- OpenTelemetry distributed tracing via <code>init_tracing()</code> + <code>instrument_celery()</code></p>
+<h3 id="health-check">Health Check<a class="headerlink" href="#health-check" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Via Celery</span>
+celery<span class="w"> </span>-A<span class="w"> </span>dev_health_ops.workers.celery_app<span class="w"> </span>inspect<span class="w"> </span>ping
+</code></pre></div>
+<p>The <code>health_check</code> task can also be invoked to verify worker responsiveness.</p>
+<h2 id="deploying-with-active-workers">Deploying with Active Workers<a class="headerlink" href="#deploying-with-active-workers" title="Permanent link">&para;</a></h2>
+<p>Worker deploys must assume a rollout can overlap with active sync, metrics,
+report, ingest, or webhook tasks. The production Compose stack and Kubernetes
+manifests give workers a 3700 second graceful termination window, which exceeds
+the current 3600 second Celery hard task time limit. Keep that budget intact in
+environment-specific overlays unless task limits are reduced first.
+Kubernetes worker Deployments also set a 7600 second progress deadline. Helm,
+Argo CD, Flux, and other rollout controllers must use timeouts above the same
+window or they can mark a healthy drain as failed before old workers finish.</p>
+<h3 id="safe-rollout-sequence">Safe rollout sequence<a class="headerlink" href="#safe-rollout-sequence" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Confirm the migration job has completed before restarting workers.</li>
+<li>Inspect active and reserved work without printing task args or kwargs:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>workers<span class="w"> </span>inspect<span class="w"> </span>--state<span class="w"> </span>active<span class="w"> </span>--output<span class="w"> </span>json
+dev-hops<span class="w"> </span>workers<span class="w"> </span>inspect<span class="w"> </span>--state<span class="w"> </span>reserved<span class="w"> </span>--output<span class="w"> </span>json
+dev-hops<span class="w"> </span>workers<span class="w"> </span>inspect<span class="w"> </span>--state<span class="w"> </span>scheduled<span class="w"> </span>--output<span class="w"> </span>json
+</code></pre></div>
+<ol>
+<li>If active tasks are present, start the rollout but keep the worker graceful
+   shutdown budget above the hard task time limit so Celery can finish in-flight
+   work after receiving <code>SIGTERM</code>.</li>
+<li>Watch the same sanitized inspect commands until old workers report no active
+   tasks, then allow the deployment to complete.</li>
+<li>Do not enable global <code>task_acks_late</code> or <code>task_reject_on_worker_lost</code> during
+   rollout. Dispatchers, heartbeat, billing email, and stream-consumer tasks are
+   explicitly annotated as late-ack excluded until their child replay-safety
+   issues are complete.</li>
+</ol>
+<p>The inspect command intentionally omits task args, kwargs, headers, and request
+properties. It returns only task identity, worker metadata, timing, and routing
+keys so operators can drain workers without exposing provider tokens or other
+credentials.</p>
+<h2 id="queue-cleanup-and-stale-jobs">Queue Cleanup and Stale Jobs<a class="headerlink" href="#queue-cleanup-and-stale-jobs" title="Permanent link">&para;</a></h2>
+<p>Celery uses Valkey as both broker and result backend on database 0 by default:
+<code>CELERY_BROKER_URL=redis://.../0</code> and <code>CELERY_RESULT_BACKEND=redis://.../0</code>.
+The app's separate <code>REDIS_URL</code> cache/streams connection uses database 1, so do
+not flush that database when clearing Celery.</p>
+<h3 id="queue-names">Queue names<a class="headerlink" href="#queue-names" title="Permanent link">&para;</a></h3>
+<p>The broker queues are:</p>
+<ul>
+<li><code>default</code></li>
+<li><code>metrics</code></li>
+<li><code>sync</code></li>
+<li><code>sync.github</code></li>
+<li><code>sync.gitlab</code></li>
+<li><code>sync.linear</code></li>
+<li><code>sync.jira</code></li>
+<li><code>sync.launchdarkly</code></li>
+<li><code>backfill</code></li>
+<li><code>webhooks</code></li>
+<li><code>ingest</code></li>
+<li><code>reports</code></li>
+<li><code>monitoring</code></li>
+</ul>
+<p>When <code>PROVIDER_SYNC_QUEUES_ENABLED=false</code>, provider sync tasks stay on the
+shared <code>sync</code> queue. When the flag is enabled, known providers route to their
+<code>sync.&lt;provider&gt;</code> queues.</p>
+<p>Manual Sync Now dispatch and finalization tasks are still published to the
+shared <code>sync</code> queue. Any deployment that splits provider units into a dedicated
+worker pool must keep that provider pool on <code>sync</code> too, or Linear/Jira/
+LaunchDarkly unit queues can sit idle while dispatch waits behind saturated
+generic sync work.</p>
+<h3 id="clear-queued-messages">Clear queued messages<a class="headerlink" href="#clear-queued-messages" title="Permanent link">&para;</a></h3>
+<p>Use Celery to purge one queue or everything on the broker. Run the
+<code>valkey-cli</code> commands on a host that has the CLI installed, or prefix them
+with <code>docker compose exec valkey</code> inside the compose stack.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Inspect queue depth first</span>
+valkey-cli<span class="w"> </span>-n<span class="w"> </span><span class="m">0</span><span class="w"> </span>LLEN<span class="w"> </span>sync.linear
+
+<span class="c1"># Remove one queue&#39;s pending messages</span>
+celery<span class="w"> </span>-A<span class="w"> </span>dev_health_ops.workers.celery_app<span class="w"> </span>purge<span class="w"> </span>-Q<span class="w"> </span>sync.linear<span class="w"> </span>-f
+
+<span class="c1"># Remove all pending broker messages</span>
+celery<span class="w"> </span>-A<span class="w"> </span>dev_health_ops.workers.celery_app<span class="w"> </span>purge<span class="w"> </span>-f
+</code></pre></div>
+<h3 id="clear-stale-reserved-jobs">Clear stale reserved jobs<a class="headerlink" href="#clear-stale-reserved-jobs" title="Permanent link">&para;</a></h3>
+<p>If a worker dies while holding reservations, remove the broker's unacked state
+after stopping workers:</p>
+<div class="highlight"><pre><span></span><code>valkey-cli<span class="w"> </span>-n<span class="w"> </span><span class="m">0</span><span class="w"> </span>DEL<span class="w"> </span>unacked<span class="w"> </span>unacked_index
+</code></pre></div>
+<h3 id="clear-failed-result-metadata">Clear failed result metadata<a class="headerlink" href="#clear-failed-result-metadata" title="Permanent link">&para;</a></h3>
+<p>Failed jobs usually live in the result backend rather than the queue. Celery's
+result keys use the default naming convention, so they can be removed directly
+if you need to clear task history from Valkey:</p>
+<div class="highlight"><pre><span></span><code>valkey-cli<span class="w"> </span>-n<span class="w"> </span><span class="m">0</span><span class="w"> </span>--scan<span class="w"> </span>--pattern<span class="w"> </span><span class="s1">&#39;celery-task-meta-*&#39;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="k">for</span><span class="w"> </span>key<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>valkey-cli<span class="w"> </span>-n<span class="w"> </span><span class="m">0</span><span class="w"> </span>--scan<span class="w"> </span>--pattern<span class="w"> </span><span class="s1">&#39;celery-task-meta-*&#39;</span><span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">  </span>valkey-cli<span class="w"> </span>-n<span class="w"> </span><span class="m">0</span><span class="w"> </span>DEL<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$key</span><span class="s2">&quot;</span>
+<span class="k">done</span>
+</code></pre></div>
+<p>Results auto-expire after 24 hours, so manual cleanup is usually only needed
+for stale test runs, failed-job triage, or a dedicated broker reset.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

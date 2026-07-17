@@ -1,0 +1,4454 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>CHAOS-2600 — Implementation Plan: ClickHouse-Only Team Attribution - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#chaos-2600-implementation-plan-clickhouse-only-team-attribution" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              CHAOS-2600 — Implementation Plan: ClickHouse-Only Team Attribution
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../team-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/rate-limit-policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-what-the-grounding-sweep-changed-about-the-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      0. What the grounding sweep changed about the plan
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. What the grounding sweep changed about the plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-current-buggy-state-anchored" class="md-nav__link">
+    <span class="md-ellipsis">
+      The current (buggy) state, anchored
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-target-invariant-contract-the-north-star" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Target invariant contract (the north star)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Target invariant contract (the north star)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-source-of-truth" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.1 Source of truth
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-precedence-deterministic-staged-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.2 Precedence (deterministic staged resolution)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-linked-issue-prefix-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.3 Linked-issue &amp; prefix rules
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-provenance-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.4 Provenance everywhere
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-resolution-decision-tree-navigation-off-the-rails-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.5 Resolution decision tree (navigation + off-the-rails fallback)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#16-attribution-data-flow-wti-clickhouse-resolver-consumers" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.6 Attribution data flow (WTI → ClickHouse → resolver → consumers)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#17-data-object-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.7 Data object hierarchy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#18-source-reference-matrix-forward-navigation" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.8 Source reference matrix (forward navigation)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#19-off-the-rails-matrix-symptom-diagnosis-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.9 Off-the-rails matrix (symptom → diagnosis → fix)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#110-provider-entity-test-coverage-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.10 Provider × entity test-coverage contract
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-decision-gates-resolve-before-writing-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Decision gates (resolve BEFORE writing code)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Decision gates (resolve BEFORE writing code)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#d1-external_issue_key-re-routing-resolved-r1-verified-in-code-2026-06-22" class="md-nav__link">
+    <span class="md-ellipsis">
+      D1 — external_issue_key re-routing — RESOLVED: R1 (verified in code 2026-06-22)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#d2-staged-functions-vs-re-ranked-dict-decided" class="md-nav__link">
+    <span class="md-ellipsis">
+      D2 — staged functions vs. re-ranked dict — DECIDED
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-changeset-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Changeset sequence
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Changeset sequence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cs0-contract-guardrails-ops-web-root-agents-low-risk-lands-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS0 — Contract &amp; guardrails (ops + web + root AGENTS) · low risk, lands first
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cs1-clickhouse-schema-foundations-ops-additive-no-behavior-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS1 — ClickHouse schema foundations (ops) · additive, no behavior change
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cs2-precedence-rewrite-issue_project-linked_issue-demotion-ops-core-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS2 — Precedence rewrite + issue_project + linked_issue demotion (ops) · core fix
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cs3-manual-fallback-resolver-ops-net-new-resolution-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS3 — Manual-fallback resolver (ops) · net-new resolution path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cs4-provenance-in-graphql-ops-must-reach-ops-main-before-cs7" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS4 — Provenance in GraphQL (ops) · must reach ops main before CS7
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cs5-re-home-team-population-remove-the-bridge-ops-highest-structural-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS5 — Re-home team population, remove the bridge (ops) · highest structural risk
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cs6-delete-postgres-mapping-models-admin-surface-ops" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS6 — Delete Postgres mapping models &amp; admin surface (ops)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cs7-web-provenance-render-boundary-dead-code-deletion-web-after-cs4-on-ops-main" class="md-nav__link">
+    <span class="md-ellipsis">
+      CS7 — Web: provenance render + boundary + dead-code deletion (web) · after CS4 on ops main
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-cross-cutting-ordering-rules-must-not-be-reordered" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Cross-cutting ordering rules (must not be reordered)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-standing-alignment-checklist-run-on-every-pr-before-its-codex-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Standing alignment checklist (run on EVERY PR before its codex gate)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-final-acceptance-gate-maps-phase-13-acceptance-criteria-proof" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Final acceptance gate (maps Phase-13 acceptance criteria → proof)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-risk-register" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Risk register
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-suggested-commitpr-titles-per-the-docs-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Suggested commit/PR titles (per the doc's sequence)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appendix-a-webdocsarchitectureteam-attribution-boundarymd-cs7-ready-to-drop-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      Appendix A — web/docs/architecture/team-attribution-boundary.md (CS7, ready to drop in)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="chaos-2600-implementation-plan-clickhouse-only-team-attribution">CHAOS-2600 — Implementation Plan: ClickHouse-Only Team Attribution<a class="headerlink" href="#chaos-2600-implementation-plan-clickhouse-only-team-attribution" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Source of intent: <code>team-realignment.md</code> (the CHAOS-2600 corrective plan).
+This document converts that 12-phase corrective plan into a <strong>gated changeset sequence</strong>,
+grounded in the <em>actual</em> current code (verified by a 10-agent parallel codebase sweep, all
+findings <code>high</code> confidence). Every changeset has a <code>/codex:adversarial-review</code> gate and an
+alignment check so we cannot drift from the invariants.</p>
+</blockquote>
+<hr />
+<h2 id="0-what-the-grounding-sweep-changed-about-the-plan">0. What the grounding sweep changed about the plan<a class="headerlink" href="#0-what-the-grounding-sweep-changed-about-the-plan" title="Permanent link">&para;</a></h2>
+<p>The corrective doc hedges ("models <em>similar to</em>", "<em>likely</em> target areas"). The sweep replaced
+those guesses with anchored facts. Three of them reshape the plan:</p>
+<ol>
+<li>
+<p><strong>Query-time attribution already reads only ClickHouse.</strong> The runtime resolvers
+   (<code>ops/src/dev_health_ops/providers/teams.py:61-142</code>) are built from <code>store.get_all_teams()</code> —
+   they have <strong>no Postgres import</strong>. Postgres <code>TeamMapping</code>/<code>IdentityMapping</code>
+   (<code>models/settings.py:571-730</code>) is an <em>upstream config layer</em> bridged into the ClickHouse
+   <code>teams</code> dimension by <code>bridge_teams_to_clickhouse</code> (<code>providers/team_bridge.py:49-111</code>).
+   → The work is "delete the bridge + make CH the system of record", <strong>not</strong> "rewrite the resolvers".</p>
+</li>
+<li>
+<p><strong>The CH ownership tables already exist.</strong> Migration <code>051_team_attribution_dimensions.sql</code>
+   created <code>team_memberships</code>, <code>team_project_ownership</code>, <code>team_repo_ownership</code>,
+   <code>work_item_team_attributions</code>; <code>team_autoimport_{github,gitlab,jira,linear}.py</code> already write
+   them CH-native (no Postgres). → Phase 3 is mostly built; what remains is <strong>re-homing the
+   <code>teams</code>-dimension population</strong> (<code>members</code>, <code>project_keys</code>, <code>repo_patterns</code>) off the bridge.</p>
+</li>
+<li>
+<p><strong>The precedence fix is bigger than a one-dict edit.</strong> The doc's target <code>_SOURCE_ORDER</code>
+   adds <strong>two new sources</strong> (<code>issue_project</code>, <code>manual_fallback</code>) that do not exist today, and the
+   ClickHouse <code>work_item_team_attributions.source</code> <strong>and</strong> <code>confidence</code> <code>Enum8</code>s must be ALTERed
+   (current <code>confidence</code> is <code>Enum8('high'=1,'medium'=2,'low'=3)</code> — a <code>manual</code>/<code>none</code> insert throws).</p>
+</li>
+</ol>
+<h3 id="the-current-buggy-state-anchored">The current (buggy) state, anchored<a class="headerlink" href="#the-current-buggy-state-anchored" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Truth on disk</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Precedence dict</td>
+<td><code>{native_team:0, linked_issue:1, project_ownership:2, repo_ownership:3, assignee_membership:4, unassigned:5}</code> — <code>linked_issue</code> outranks ownership+assignee (the bug)</td>
+<td><code>metrics/compute_work_items.py:105-112</code></td>
+</tr>
+<tr>
+<td>Winner selection</td>
+<td>iterate sources sorted by <code>_SOURCE_ORDER</code>; first non-empty source wins; <strong>full candidate set still emitted</strong> with <code>is_primary</code></td>
+<td><code>compute_work_items.py:307-340</code></td>
+</tr>
+<tr>
+<td>Postgres→CH bridge</td>
+<td>single fn, 4 lazy import sites + admin/sync_runtime dispatchers; sits <strong>first</strong> in the daily Celery chain</td>
+<td><code>providers/team_bridge.py:49</code>; <code>sync_runtime.py:392-408</code></td>
+</tr>
+<tr>
+<td>Manual fallback</td>
+<td><strong>does not exist</strong> — zero hits for <code>manual_attribution_fallback*</code> anywhere in ops</td>
+<td>(grep, verified)</td>
+</tr>
+<tr>
+<td><code>issue_project</code> source</td>
+<td><strong>does not exist</strong> — <code>TeamAttributionSource</code> has only 6 values</td>
+<td><code>compute_work_items.py:61-68</code></td>
+</tr>
+<tr>
+<td>Donor-row enforcement</td>
+<td>already enforced: extkey must resolve to a real <code>work_items</code> row; missing/ambiguous → no inheritance</td>
+<td><code>compute_work_items.py:380-496</code></td>
+</tr>
+<tr>
+<td>Provenance in GraphQL</td>
+<td>provenance exists on the CH record but is <strong>never</strong> SELECTed or in the Strawberry SDL</td>
+<td><code>metrics/schemas.py:384-395</code>; <code>api/graphql/resolvers/analytics.py:640-712</code></td>
+</tr>
+<tr>
+<td>Web client-side attribution</td>
+<td>orphaned dead code derives teams from <code>evidence</code> JSON — a latent boundary violation, <strong>no live caller</strong></td>
+<td><code>web/src/lib/investment/transforms.ts:374-523</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1-target-invariant-contract-the-north-star">1. Target invariant contract (the north star)<a class="headerlink" href="#1-target-invariant-contract-the-north-star" title="Permanent link">&para;</a></h2>
+<p>Every changeset is judged against this. Do not let any PR weaken it.</p>
+<h3 id="11-source-of-truth">1.1 Source of truth<a class="headerlink" href="#11-source-of-truth" title="Permanent link">&para;</a></h3>
+<ul>
+<li>ClickHouse is the <strong>only</strong> persistence layer read <em>or written</em> for team/project/member/repo/manual attribution.</li>
+<li>Postgres stores auth/org/config only. <strong>No attribution code reads Postgres.</strong></li>
+</ul>
+<h3 id="12-precedence-deterministic-staged-resolution">1.2 Precedence (deterministic staged resolution)<a class="headerlink" href="#12-precedence-deterministic-staged-resolution" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code>0 native_team          (native issue team)
+1 issue_project        (native issue project ownership)   ← NEW
+2 project_ownership    (imported provider project ownership)
+3 repo_ownership       (imported provider repo ownership)
+4 assignee_membership  (imported team membership)
+5 linked_issue         (actual linked donor issue row)    ← DEMOTED (was 1)
+6 manual_fallback      (explicit ClickHouse fallback)      ← NEW
+7 unassigned
+</code></pre></div>
+- <code>linked_issue</code> must <strong>lose</strong> to every native/imported fact and <strong>beat only</strong> <code>manual_fallback</code>/<code>unassigned</code>.
+- <code>manual_fallback</code> must <strong>never</strong> override any native/imported/linked fact.
+- Selection still emits the <strong>full candidate set</strong> (provenance rows); only the <em>winner</em> changes.</p>
+<h3 id="13-linked-issue-prefix-rules">1.3 Linked-issue &amp; prefix rules<a class="headerlink" href="#13-linked-issue-prefix-rules" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>linked_issue</code> requires an <strong>actual donor <code>work_items</code> row</strong> (already enforced — preserve it).</li>
+<li>An external issue-key <em>prefix</em> with <strong>no</strong> resolved donor row is <strong>not</strong> linked-issue inheritance.
+  It may only match an explicit <code>manual_fallback</code> record with <code>scope_type = issue_key_prefix</code>,
+  emitting <code>source = manual_fallback</code>, low/manual confidence.</li>
+</ul>
+<h3 id="14-provenance-everywhere">1.4 Provenance everywhere<a class="headerlink" href="#14-provenance-everywhere" title="Permanent link">&para;</a></h3>
+<p>Every final attribution carries: <code>org_id, work_item_id, provider, team_id, team_name, source,
+confidence, evidence, is_primary, computed_at</code>.
+<code>source ∈ {native_team, issue_project, project_ownership, repo_ownership, assignee_membership,
+linked_issue, manual_fallback, unassigned}</code>; <code>confidence ∈ {high, medium, low, manual, none}</code>.</p>
+<h3 id="15-resolution-decision-tree-navigation-off-the-rails-fallback">1.5 Resolution decision tree (navigation + off-the-rails fallback)<a class="headerlink" href="#15-resolution-decision-tree-navigation-off-the-rails-fallback" title="Permanent link">&para;</a></h3>
+<p>This is the single canonical picture of <em>how a work item gets a team</em>. <strong>To debug a surprising
+attribution:</strong> read <code>team_attribution_source</code> from the persisted provenance, jump to that node, and
+verify every stage <strong>above</strong> it correctly returned "no". The first stage that returns "yes" wins
+and the walk stops — nothing below can override it.</p>
+<pre class="mermaid"><code>flowchart TD
+    Start(["Work item needs a team"]) --&gt; NT{"0 · native_team?&lt;br/&gt;WorkItem.native_team_key → teams"}
+    NT --&gt;|"yes"| NTout["native_team · high"]
+    NT --&gt;|"no"| IP{"1 · issue_project?&lt;br/&gt;native issue project → owning team"}
+    IP --&gt;|"yes"| IPout["issue_project · high"]
+    IP --&gt;|"no"| PO{"2 · project_ownership?&lt;br/&gt;team_project_ownership"}
+    PO --&gt;|"yes"| POout["project_ownership · high"]
+    PO --&gt;|"no"| RO{"3 · repo_ownership?&lt;br/&gt;team_repo_ownership"}
+    RO --&gt;|"yes"| ROout["repo_ownership · medium"]
+    RO --&gt;|"no"| AM{"4 · assignee_membership?&lt;br/&gt;team_memberships"}
+    AM --&gt;|"yes"| AMout["assignee_membership · medium"]
+    AM --&gt;|"no"| LK{"5 · linked to an ACTUAL donor issue row?&lt;br/&gt;work_item_dependencies"}
+    LK --&gt;|"yes"| DR{"donor issue resolves to a team?"}
+    LK --&gt;|"no donor row"| PFX{"only issue-key prefix text exists?"}
+    DR --&gt;|"yes"| LKout["linked_issue · high&lt;br/&gt;evidence: donor_work_item_id"]
+    DR --&gt;|"no"| MF{"6 · manual fallback matches?&lt;br/&gt;repo / project / member / issue_key_prefix"}
+    PFX --&gt;|"yes"| PFXout["NOT linked_issue —&lt;br/&gt;a bare prefix is not donor evidence (R1)"]
+    PFX --&gt;|"no"| MF
+    PFXout --&gt; MF
+    MF --&gt;|"yes"| MFout["manual_fallback · manual/low&lt;br/&gt;evidence: matched record"]
+    MF --&gt;|"no"| UN["7 · unassigned · none"]
+
+    NTout --&gt; P["Persist work_item_team_attributions&lt;br/&gt;full candidate set; is_primary on winner"]
+    IPout --&gt; P
+    POout --&gt; P
+    ROout --&gt; P
+    AMout --&gt; P
+    LKout --&gt; P
+    MFout --&gt; P
+    UN --&gt; P
+    P --&gt; API["Expose source / confidence / evidence via GraphQL"]
+    API --&gt; UI["Frontend renders only — no recompute"]</code></pre>
+<p><strong>Invariants encoded in the tree (do not let any PR break these):</strong>
+- The walk is <strong>top-down and short-circuits</strong> — stage <em>N</em> only runs if stages <code>0..N-1</code> all returned "no".
+- <strong><code>linked_issue</code> (5)</strong> requires a real <code>work_item_dependencies</code> donor row whose target resolves to
+  an actual <code>work_items</code> row <em>that itself has a team</em>. A bare issue-key prefix with no donor falls
+  through to stage 6 (verified: <code>compute_work_items.py:412-496</code>; D1/R1).
+- <strong><code>manual_fallback</code> (6)</strong> can only beat <code>unassigned</code>. If it ever beats a native/imported/linked
+  team, that is a precedence <strong>bug</strong> — check <code>_SOURCE_ORDER</code>.
+- <strong><code>unassigned</code> (7)</strong> is the floor. A <em>whole org</em> landing here usually means the ClickHouse <code>teams</code>
+  dimension is empty (a CS5 regression), not a resolver bug.</p>
+<h3 id="16-attribution-data-flow-wti-clickhouse-resolver-consumers">1.6 Attribution data flow (WTI → ClickHouse → resolver → consumers)<a class="headerlink" href="#16-attribution-data-flow-wti-clickhouse-resolver-consumers" title="Permanent link">&para;</a></h3>
+<p>Shows <em>where the data comes from</em> and the one hard boundary: <strong>Postgres must not feed attribution.</strong></p>
+<pre class="mermaid"><code>flowchart LR
+    subgraph WTI["Work Tracking Integrations"]
+        GH["GitHub"]
+        GL["GitLab"]
+        LI["Linear"]
+        JI["Jira"]
+    end
+
+    subgraph SourceObjects["Provider objects"]
+        Issue["Issue&lt;br/&gt;canonical work unit"]
+        PRMR["PR / MR&lt;br/&gt;code-change evidence"]
+        Commit["Commit&lt;br/&gt;lower-level evidence"]
+        Team["Team"]
+        Project["Project"]
+        Member["Member"]
+    end
+
+    subgraph Normalize["Normalization (WTI → CH)"]
+        WorkItem["normalize → work_items"]
+        Dependency["normalize → work_item_dependencies"]
+        Ownership["normalize ownership facts"]
+    end
+
+    subgraph CH["ClickHouse — single attribution store"]
+        Teams["teams"]
+        Memberships["team_memberships"]
+        ProjectOwnership["team_project_ownership"]
+        RepoOwnership["team_repo_ownership"]
+        WorkItems["work_items"]
+        Dependencies["work_item_dependencies"]
+        ManualFallbacks["manual_attribution_fallbacks"]
+        Attributions["work_item_team_attributions"]
+    end
+
+    subgraph Resolver["Attribution resolver (staged, short-circuit)"]
+        R0["1 · WTI-native facts&lt;br/&gt;native_team, issue_project"]
+        R1["2 · imported ownership&lt;br/&gt;project, repo, assignee"]
+        R2["3 · actual linked donor issue"]
+        R3["4 · manual fallback"]
+        R4["5 · unassigned"]
+    end
+
+    subgraph Consumers["Consumers"]
+        API["Backend GraphQL"]
+        Web["dev-health-web"]
+        Reports["Investment / Flow / Confidence views"]
+    end
+
+    Admin["Manual admin/config input"] --&gt; ManualFallbacks
+
+    GH --&gt; SourceObjects
+    GL --&gt; SourceObjects
+    LI --&gt; SourceObjects
+    JI --&gt; SourceObjects
+
+    Issue --&gt; WorkItem
+    PRMR --&gt; WorkItem
+    Commit -. "linked through PR/MR" .-&gt; PRMR
+    PRMR --&gt; Dependency
+    Team --&gt; Ownership
+    Project --&gt; Ownership
+    Member --&gt; Ownership
+
+    WorkItem --&gt; WorkItems
+    Dependency --&gt; Dependencies
+    Ownership --&gt; Teams
+    Ownership --&gt; Memberships
+    Ownership --&gt; ProjectOwnership
+    Ownership --&gt; RepoOwnership
+
+    WorkItems --&gt; R0
+    Teams --&gt; R0
+    ProjectOwnership --&gt; R1
+    RepoOwnership --&gt; R1
+    Memberships --&gt; R1
+    Dependencies --&gt; R2
+    WorkItems --&gt; R2
+    ManualFallbacks --&gt; R3
+
+    R0 --&gt; Attributions
+    R1 --&gt; Attributions
+    R2 --&gt; Attributions
+    R3 --&gt; Attributions
+    R4 --&gt; Attributions
+
+    Attributions --&gt; API
+    API --&gt; Web
+    Web --&gt; Reports
+
+    PG["Postgres&lt;br/&gt;auth / org / config only"] -. "must NOT feed attribution" .-&gt; Resolver</code></pre>
+<h3 id="17-data-object-hierarchy">1.7 Data object hierarchy<a class="headerlink" href="#17-data-object-hierarchy" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+    Org["Organization"]
+
+    Org --&gt; Providers["WTI providers"]
+    Providers --&gt; GitHub["GitHub"]
+    Providers --&gt; GitLab["GitLab"]
+    Providers --&gt; Linear["Linear"]
+    Providers --&gt; Jira["Jira"]
+
+    Org --&gt; Identity["Identity &amp; ownership facts (ClickHouse)"]
+    Identity --&gt; Teams["teams"]
+    Identity --&gt; Members["members"]
+    Identity --&gt; Projects["projects"]
+    Identity --&gt; Repos["repos"]
+
+    Teams --&gt; TeamMemberships["team_memberships"]
+    Projects --&gt; ProjectOwnership["team_project_ownership"]
+    Repos --&gt; RepoOwnership["team_repo_ownership"]
+
+    Org --&gt; WorkGraph["Work graph"]
+    WorkGraph --&gt; Issues["issues&lt;br/&gt;canonical work units"]
+    WorkGraph --&gt; PRMR["pull / merge requests&lt;br/&gt;code-change evidence"]
+    WorkGraph --&gt; Commits["commits&lt;br/&gt;lower-level evidence"]
+
+    Issues --&gt; IssueFacts["native issue facts&lt;br/&gt;team / project / member"]
+    PRMR --&gt; PRFacts["PR/MR facts&lt;br/&gt;repo / author / linked issue refs"]
+    Commits --&gt; CommitFacts["commit facts&lt;br/&gt;author / repo / parent PR when available"]
+
+    PRMR --&gt; DependsOnIssue["work_item_dependencies&lt;br/&gt;PR/MR → issue (actual donor row)"]
+    Commits --&gt; DependsOnPR["work_item_dependencies&lt;br/&gt;commit → PR/MR"]
+
+    Org --&gt; Manual["manual_attribution_fallbacks"]
+    Manual --&gt; ManualScopes["scope&lt;br/&gt;repo / project / member / issue_key_prefix"]
+
+    Org --&gt; Attribution["work_item_team_attributions"]
+    Attribution --&gt; AttributionSource["source (8-level precedence)"]
+    Attribution --&gt; AttributionConfidence["confidence"]
+    Attribution --&gt; AttributionEvidence["evidence"]
+    Attribution --&gt; PrimaryTeam["is_primary winner"]
+
+    IssueFacts --&gt; Attribution
+    ProjectOwnership --&gt; Attribution
+    RepoOwnership --&gt; Attribution
+    TeamMemberships --&gt; Attribution
+    DependsOnIssue --&gt; Attribution
+    Manual --&gt; Attribution</code></pre>
+<h3 id="18-source-reference-matrix-forward-navigation">1.8 Source reference matrix (forward navigation)<a class="headerlink" href="#18-source-reference-matrix-forward-navigation" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th><code>source</code></th>
+<th>Resolves from (ClickHouse)</th>
+<th>Confidence</th>
+<th>Beats</th>
+<th>Never overrides</th>
+<th>Evidence keys</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td><code>native_team</code></td>
+<td><code>WorkItem.native_team_key</code> → <code>teams</code></td>
+<td>high</td>
+<td>all below</td>
+<td>— (top)</td>
+<td><code>native_team_key</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td><code>issue_project</code></td>
+<td>native issue project → owning team</td>
+<td>high</td>
+<td>2–7</td>
+<td>0</td>
+<td><code>project_id, owner_team</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td><code>project_ownership</code></td>
+<td><code>team_project_ownership</code></td>
+<td>high</td>
+<td>3–7</td>
+<td>0–1</td>
+<td><code>project_id, provider</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td><code>repo_ownership</code></td>
+<td><code>team_repo_ownership</code></td>
+<td>medium</td>
+<td>4–7</td>
+<td>0–2</td>
+<td><code>repo_full_name</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td><code>assignee_membership</code></td>
+<td><code>team_memberships</code> (assignee identity)</td>
+<td>medium</td>
+<td>5–7</td>
+<td>0–3</td>
+<td><code>member_id, identity</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td><code>linked_issue</code></td>
+<td><code>work_item_dependencies</code> donor → donor's team</td>
+<td>high (donor's)</td>
+<td>6–7</td>
+<td>0–4</td>
+<td><code>dependency_type, donor_work_item_id, donor_provider</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td><code>manual_fallback</code></td>
+<td><code>manual_attribution_fallbacks</code> (repo/project/member/issue_key_prefix)</td>
+<td>manual|low</td>
+<td>7 only</td>
+<td>0–5</td>
+<td><code>scope_type, scope_id, reason</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td><code>unassigned</code></td>
+<td>— (nothing matched)</td>
+<td>none</td>
+<td>— (floor)</td>
+<td>—</td>
+<td><code>reason</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="19-off-the-rails-matrix-symptom-diagnosis-fix">1.9 Off-the-rails matrix (symptom → diagnosis → fix)<a class="headerlink" href="#19-off-the-rails-matrix-symptom-diagnosis-fix" title="Permanent link">&para;</a></h3>
+<p>When attribution looks wrong, find the symptom, jump to the stage, apply the fix.</p>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely stage</th>
+<th>Diagnose</th>
+<th>Fix / owning CS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A whole org is <code>unassigned</code></td>
+<td>7 (floor)</td>
+<td><code>get_all_teams()</code> empty? CH <code>teams</code> populated for <code>org_id</code>?</td>
+<td>CS5 regression — re-home teams population; verify daily-chain order</td>
+</tr>
+<tr>
+<td>PR attributed to a surprising team via <code>linked_issue</code></td>
+<td>5</td>
+<td>which <code>work_item_dependencies</code> edge? donor's own team? extkey ambiguous?</td>
+<td>confirm donor row + <code>_canonical_target</code>; check <code>_INHERITABLE_RELATIONSHIP_TYPES</code></td>
+</tr>
+<tr>
+<td><code>manual_fallback</code> beats a real team</td>
+<td>precedence</td>
+<td><code>_SOURCE_ORDER</code> has <code>manual_fallback=6</code>? loader merging manual at the wrong rank?</td>
+<td>restore rank — manual is the lowest non-unassigned tier (CS2/CS3)</td>
+</tr>
+<tr>
+<td>A bare prefix (e.g. <code>CHAOS</code>) attributes as <code>linked_issue</code></td>
+<td>5 vs 6</td>
+<td>did a full key resolve to a real <code>work_items</code> row, or did a prefix shortcut leak in?</td>
+<td><strong>R1 invariant</strong> — no prefix→team in <code>linked_issue</code>; route to manual <code>issue_key_prefix</code> (CS3)</td>
+</tr>
+<tr>
+<td>Team flips back and forth after a re-org</td>
+<td>RMT dedup</td>
+<td>duplicate ownership rows; read lacks <code>FINAL</code>/<code>argMax</code></td>
+<td>add <code>FINAL</code>/<code>argMax</code> to ownership + manual reads (CS3 §4.6)</td>
+</tr>
+<tr>
+<td>Provenance absent in the API</td>
+<td>GraphQL</td>
+<td>resolver SELECTs the provenance columns? SDL has the fields?</td>
+<td>CS4 — expose <code>source/confidence/evidence</code></td>
+</tr>
+<tr>
+<td>Web shows a different team than the backend</td>
+<td>client recompute</td>
+<td>any client-side mapping derived from <code>evidence</code>?</td>
+<td>CS7 — delete <code>buildRepoTeamSankey</code>; render-only</td>
+</tr>
+</tbody>
+</table>
+<h3 id="110-provider-entity-test-coverage-contract">1.10 Provider × entity test-coverage contract<a class="headerlink" href="#110-provider-entity-test-coverage-contract" title="Permanent link">&para;</a></h3>
+<p>Attribution is <strong>provider-agnostic</strong> (the resolver never branches on provider) — so it must be
+<strong>tested</strong> that way. Every WTI provider × normalized entity must be covered; <strong>no Linear-only
+coverage.</strong> Current state (5-agent audit, 2026-06-22):</p>
+<table>
+<thead>
+<tr>
+<th>provider \ entity</th>
+<th>teams</th>
+<th>projects</th>
+<th>members</th>
+<th>issues</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>jira</td>
+<td>partial</td>
+<td>partial</td>
+<td>partial</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>gitlab</td>
+<td>partial</td>
+<td>yes</td>
+<td><strong>no</strong></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>github</td>
+<td>yes</td>
+<td>n/a¹</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>linear</td>
+<td>yes</td>
+<td>partial</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p><code>yes</code> = normalized + asserted · <code>partial</code> = sink/integration only (no normalizer unit test) · <code>no</code> =
+normalized but never asserted · <code>n/a</code> = provider lacks the entity. ¹ GitHub has no native Project.</p>
+<blockquote>
+<p><strong>This matrix tracks TEST coverage, not consumption.</strong> We functionally pull teams, projects, and
+members for every provider that supports them (auto-import). A <code>partial</code>/<code>no</code> cell = "not yet
+asserted," NOT "not consumed." (Conflating the two produced a false "Linear projects not ingested"
+reading 2026-06-22.)</p>
+</blockquote>
+<p><strong>Consumption matrix (functional — what <code>run_team_autoimport</code> pulls):</strong></p>
+<table>
+<thead>
+<tr>
+<th>provider</th>
+<th>teams</th>
+<th>projects</th>
+<th>members</th>
+<th>repo ownership</th>
+<th>member store</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>linear</td>
+<td>✓ <code>discover_linear</code></td>
+<td>✓ <code>assoc.project_keys</code></td>
+<td>✓ <code>discover_members_linear</code></td>
+<td>—</td>
+<td>edges + roster</td>
+</tr>
+<tr>
+<td>jira</td>
+<td>✓ <code>discover_jira</code></td>
+<td>✓ <code>assoc.project_keys</code></td>
+<td>✓ <code>discover_members_jira_bulk</code></td>
+<td>—</td>
+<td>edges + roster</td>
+</tr>
+<tr>
+<td>github</td>
+<td>✓ <code>discover_github</code></td>
+<td>n/a (repo = scope)</td>
+<td>✓ <code>discover_members_github</code></td>
+<td>✓ <code>team_repo_ownership</code></td>
+<td>edges (+ roster, CS-COV)</td>
+</tr>
+<tr>
+<td>gitlab</td>
+<td>✓ <code>discover_gitlab</code></td>
+<td>✓ (project paths)</td>
+<td>✓ <code>discover_members_gitlab</code></td>
+<td>—</td>
+<td>edges (+ roster, CS-COV)</td>
+</tr>
+</tbody>
+</table>
+<p>Two member stores: <strong><code>team_memberships</code> (edges)</strong> — written by all 4, read by the ladder
+(<code>loaders/clickhouse.py:449-485</code> → <code>member_by_identity</code> → <code>assignee_membership</code>,
+<code>compute_work_items.py:415-422</code>); this is the canonical attribution source, all 4 consume here.
+<strong><code>teams.members</code> (roster)</strong> — linear/jira auto-import + admin surgical-replacement (CS5); read by the
+secondary <code>TeamResolver</code> + admin/display. <strong>CS-COV adds github/gitlab roster population</strong> ("pull
+members of orgs and teams from github and gitlab", user decision 2026-06-22). Chain: members →
+assignee → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source,
+member↔author reconciliation deferred.</p>
+<ul>
+<li>The <strong>resolver row</strong> is multi-provider (CS2: <code>test_jira_issue_project_wins_over_linked_issue</code>,
+  <code>test_assignee_membership_wins_over_jira_linked_donor</code>, plus GitHub/GitLab/Linear donor + ownership
+  tests). The <strong>dimension</strong> (team/project/member autoimport) is the gap — and because jira/github/
+  gitlab carry <code>native_team_key=None</code>, it is the single point of failure for non-Linear attribution.</li>
+<li><strong>Gaps → CHAOS-2609 (CS-COV):</strong> gitlab/members normalized-but-never-asserted (high), gitlab epics
+  untested (high), jira team/project/member sink-only (medium), linear native projects not ingested
+  (medium). The matrix must reach all-<code>yes</code>/<code>n/a</code> (acceptance §6).</li>
+<li>Canonical, ships-in-repo copy: <code>team-attribution.md §0.4</code>; guardrail in root + ops <code>AGENTS.md</code>.</li>
+</ul>
+<hr />
+<h2 id="2-decision-gates-resolve-before-writing-code">2. Decision gates (resolve BEFORE writing code)<a class="headerlink" href="#2-decision-gates-resolve-before-writing-code" title="Permanent link">&para;</a></h2>
+<h3 id="d1-external_issue_key-re-routing-resolved-r1-verified-in-code-2026-06-22">D1 — <code>external_issue_key</code> re-routing — <strong>RESOLVED: R1 (verified in code 2026-06-22)</strong><a class="headerlink" href="#d1-external_issue_key-re-routing-resolved-r1-verified-in-code-2026-06-22" title="Permanent link">&para;</a></h3>
+<p>Phase 5 forbids <code>PR text "CHAOS-123" → prefix "CHAOS" → team</code> as <code>linked_issue</code>. The concern was
+that <code>external_issue_key</code> text-parsed edges are <strong>today the only</strong> cross-provider PR→issue donor
+mechanism for GitHub PRs and GitLab MRs (only Linear has a native-attachment donor row;
+<code>linear/normalize.py:152-187</code>), so dropping them would silently zero non-Linear PR→issue
+inheritance.</p>
+<p><strong>Code verification (<code>build_linked_issue_team_resolver</code>, <code>compute_work_items.py:412-496</code>):</strong>
+- <code>key_index</code> is built <strong>only</strong> from real Linear/Jira <code>work_items</code> rows (<code>:425-434</code>).
+- <code>_canonical_target("extkey:CHAOS-2400")</code> → <code>key_index.get("CHAOS-2400")</code> → <strong>None</strong> when no such
+  work item exists (<code>:436-440</code>).
+- The candidate loop <strong>skips</strong> any falsy target (<code>:486 if not target_id: continue</code>) <strong>and</strong> any
+  target whose donor work item did not itself resolve to a real team (<code>:488-489</code>).
+- Therefore a <code>linked_issue</code> attribution is <strong>impossible</strong> without (a) an inheritable edge, (b) the
+  bare key resolving to an actual <code>work_items</code> row, and (c) that row having its own resolved team.
+- The forbidden <code>"CHAOS" prefix → team</code> shortcut <strong>does not exist</strong> in the <code>linked_issue</code> path.
+  Prefix→team only lives in <code>ProjectKeyTeamResolver</code> (<code>providers/teams.py:76-93</code>), which feeds
+  <code>native_team</code>/<code>issue_project</code>/<code>project_ownership</code> — never <code>linked_issue</code>.</p>
+<p><strong>Conclusion (R1).</strong> Phase 5's "linked issue requires an actual donor row" and "issue-key prefix is
+not linked-issue inheritance" are <strong>already satisfied</strong> by the existing donor-row enforcement. So:
+- <strong>No extraction-layer change.</strong> <code>external_issue_key</code> stays in <code>_INHERITABLE_RELATIONSHIP_TYPES</code>
+  (<code>:375-377</code>); it already demands a real donor → emits <code>linked_issue</code> (now demoted to rank 5).
+- The <strong>only</strong> net-new prefix work is CS3's <code>manual_fallback</code> <code>issue_key_prefix</code> scope, used only
+  when <strong>no</strong> donor row resolves (the case that today falls to <code>unassigned</code>).
+- R2 (drop all text-parsed edges) was rejected: it would <em>remove</em> a satisfied-and-intended
+  capability (the Linear branch-convention recovery, <code>github/normalize.py:860</code>) and reduce
+  attribution coverage for <strong>no</strong> correctness gain.</p>
+<h3 id="d2-staged-functions-vs-re-ranked-dict-decided">D2 — staged functions vs. re-ranked dict — <strong>DECIDED</strong><a class="headerlink" href="#d2-staged-functions-vs-re-ranked-dict-decided" title="Permanent link">&para;</a></h3>
+<p>The doc prefers explicit staged resolution; the current code uses a numeric <code>_SOURCE_ORDER</code> loop
+that <strong>emits all candidates</strong> (the schema persists the full set). A naive staged short-circuit
+would regress provenance rows (<code>test_team_attribution_schema.py</code>). <strong>Decision:</strong> keep full
+candidate emission; express precedence as staged winner-selection backed by the (re-ranked,
+8-value) <code>_SOURCE_ORDER</code>. Best of both; no provenance regression.</p>
+<hr />
+<h2 id="3-changeset-sequence">3. Changeset sequence<a class="headerlink" href="#3-changeset-sequence" title="Permanent link">&para;</a></h2>
+<p>Eight changesets (= eight PRs), ordered to respect the migration/runtime ordering risks in §4.
+<code>ops</code> and <code>web</code> are separate repos; ops changes (CS4) must reach <strong>ops main</strong> before the web
+changeset (CS7) can pass the schema exact-diff. Each CS lists: <strong>Goal · Files · Validation ·
+Codex gate · Alignment check.</strong></p>
+<blockquote>
+<p><strong>Branch strategy.</strong> Cut an integration branch per repo
+(<code>fix/clickhouse-only-team-attribution</code>) off <code>origin/main</code>; stack each CS as its own PR onto the
+integration branch (squash), merge integration → main at the end. Never push to <code>main</code>
+(project rule). Push the branch <em>then</em> <code>gh pr create --head &lt;branch&gt; --base &lt;integration&gt;</code>.</p>
+</blockquote>
+<hr />
+<h3 id="cs0-contract-guardrails-ops-web-root-agents-low-risk-lands-first">CS0 — Contract &amp; guardrails (ops + web + root AGENTS)  ·  <em>low risk, lands first</em><a class="headerlink" href="#cs0-contract-guardrails-ops-web-root-agents-low-risk-lands-first" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Establish the north-star contract and the doc-freshness gate that holds every later PR.
+<strong>Files.</strong>
+- <code>AGENTS.md</code> (root), <code>ops/AGENTS.md</code>, <code>web/AGENTS.md</code>: add the <strong>"Team attribution source of
+  truth"</strong> invariant (§1.1/1.3) and the <strong>"Documentation freshness requirement"</strong> guardrail +
+  PR-checklist items (Phase 9/11 text).
+- <code>ops/docs/architecture/team-attribution.md</code>: add the <strong>target</strong> precedence + provenance contract
+  (§1.2/1.4), clearly marked <em>"target state — implemented across CHAOS-2600 CS1–CS7"</em> so it does
+  not claim not-yet-shipped behavior as done.</p>
+<p><strong>Validation.</strong> Markdown only; <code>ci/run_tests.sh format</code> (web) / docs lint if present. No code.
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Challenge whether this contract is internally consistent and complete: precedence order,
+   provenance enum, source-of-truth statement, and whether the doc-freshness guardrail is
+   enforceable. Find any invariant that later code cannot actually satisfy.&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> Contract text == §1 of this plan, verbatim where possible.</p>
+<hr />
+<h3 id="cs1-clickhouse-schema-foundations-ops-additive-no-behavior-change">CS1 — ClickHouse schema foundations (ops)  ·  <em>additive, no behavior change</em><a class="headerlink" href="#cs1-clickhouse-schema-foundations-ops-additive-no-behavior-change" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Land the storage the later resolver needs, with <strong>zero</strong> behavior change (table empty,
+enums merely widened).
+<strong>Files.</strong>
+- <code>ops/src/dev_health_ops/migrations/clickhouse/053_manual_attribution_fallbacks.sql</code> (next free
+  number; lexicographic order). <code>CREATE TABLE IF NOT EXISTS manual_attribution_fallbacks</code> per
+  Phase 2 DDL, <code>ReplacingMergeTree(updated_at)</code>, <strong><code>org_id</code> leading in <code>ORDER BY</code></strong>
+  (<code>PARTITION BY org_id</code>, <code>ORDER BY (org_id, provider, scope_type, scope_id, team_id)</code>).
+- Same migration: <code>ALTER TABLE work_item_team_attributions MODIFY COLUMN source Enum8(...)</code> to add
+  <code>issue_project</code> and <code>manual_fallback</code>; <code>MODIFY COLUMN confidence Enum8(...)</code> to add <code>manual</code>,
+  <code>none</code> (apply the same <code>confidence</code> widening to the three edge tables if they share the enum).
+- <code>ops/src/dev_health_ops/storage/clickhouse.py</code>: add <code>insert_manual_attribution_fallbacks</code>
+  (mirror <code>_insert_team_edge_rows</code> / <code>insert_work_item_team_attributions</code>, explicit column list,
+  <code>org_id</code> auto-injection).
+- <code>ops/src/dev_health_ops/metrics/sinks/base.py</code>: add <code>write_manual_attribution_fallbacks</code> to the
+  sink protocol + base impl.</p>
+<p><strong>Validation.</strong>
+- <code>cd ops &amp;&amp; dev-hops migrate clickhouse upgrade</code> (force path) then <code>... status --check</code> (the wait primitive).
+- Insert a fallback row; round-trip read; assert the new <code>source</code>/<code>confidence</code> enum values accept
+  inserts (an INSERT of <code>source='manual_fallback'</code> must <strong>not</strong> throw).
+- <strong>Rebuild the worker/beat image</strong> before any worker-path verification (<code>worker_stale_image</code> —
+  baked site-packages); <code>AUTO_RUN_MIGRATIONS=false</code> in workers, so the ALTER must be applied
+  explicitly.
+- <code>cd ops &amp;&amp; mypy --install-types --non-interactive .</code> + <code>ci/run_tests.sh ... unit</code> (CI-parity).
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Migration safety: is the Enum8 ALTER on work_item_team_attributions.source/confidence safe and
+   backward-compatible? Will any in-flight writer emit a value the pre-ALTER enum rejects? Does the
+   new manual_attribution_fallbacks table put org_id first in ORDER BY, dedup correctly under
+   ReplacingMergeTree, and avoid the empty top-level migrations/ decoy dir? Idempotency of
+   CREATE/ALTER on re-run.&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> <code>grep</code> confirms migration lives under
+<code>src/dev_health_ops/migrations/clickhouse/</code> (not the empty top-level decoy). Enum values match §1.4 exactly.</p>
+<hr />
+<h3 id="cs2-precedence-rewrite-issue_project-linked_issue-demotion-ops-core-fix">CS2 — Precedence rewrite + <code>issue_project</code> + <code>linked_issue</code> demotion (ops)  ·  <em>core fix</em><a class="headerlink" href="#cs2-precedence-rewrite-issue_project-linked_issue-demotion-ops-core-fix" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Make <code>linked_issue</code> a true low-precedence fallback; introduce <code>issue_project</code>; preserve
+full candidate emission.
+<strong>Files.</strong>
+- <code>ops/src/dev_health_ops/metrics/compute_work_items.py</code>:
+  - Extend <code>TeamAttributionSource</code> Literal (<code>:61-68</code>) with <code>issue_project</code>, <code>manual_fallback</code>.
+  - Re-rank <code>_SOURCE_ORDER</code> (<code>:105-112</code>) to the 8-value order in §1.2.
+  - Add an <code>issue_project</code> candidate constructor (native issue's project; distinct from imported
+    <code>project_ownership</code>). <code>WorkItem</code> already separates <code>native_team_key</code>/<code>project_key</code>
+    (<code>models/work_items.py:59-60</code>).
+  - Reconcile the misleading <code>specificity</code> values (<code>linked_issue=90</code>, <code>project=50</code>, <code>native=100</code>)
+    so within-source tiebreaks don't imply cross-source strength.
+  - Keep emitting <strong>all</strong> candidates; only winner selection changes (D2).
+- Tests (<code>ops/tests/test_linked_issue_team_inheritance.py</code>):
+  - <strong>Invert</strong> the three precedence tests that encode the bug:
+    <code>test_linked_issue_wins_over_assignee_membership</code> (<code>:378</code>),
+    <code>test_state_duration_linked_issue_wins_over_assignee_membership</code> (<code>:411</code>),
+    the <code>is_primary</code> assertions in <code>test_compute_emits_attribution_candidates_and_primary_cycle_team</code> (<code>:458-503</code>).
+  - <strong>Add</strong> new coverage the suite lacks: <code>project_ownership</code> beats <code>linked_issue</code>,
+    <code>repo_ownership</code> beats <code>linked_issue</code>, <code>assignee_membership</code> beats <code>linked_issue</code>,
+    <code>issue_project</code> beats <code>linked_issue</code>.
+  - Keep <code>test_inheritance_never_overrides_native_team</code> (<code>:112</code>) <strong>green</strong> (native stays rank 0).
+  - <strong>Do not touch</strong> <code>test_team_reconcile_guards.py</code> (unrelated — reconcile, not precedence) or
+    <code>test_team_attribution_schema.py</code> (sink shape).
+- Docs (same PR): <code>ops/docs/architecture/data-pipeline.md</code> §4 + <code>team-attribution.md</code> cascade —
+  reorder so <code>linked_issue</code> is below imported ownership; stop citing <code>IdentityMapping.team_ids</code> as
+  the membership source (it becomes CH ownership).</p>
+<p><strong>Validation.</strong> <code>mypy</code> + full <code>ci/run_tests.sh ... unit</code> incl. <code>@pytest.mark.clickhouse</code> where the
+resolver hits live CH; assert provenance candidate rows still emit (no regression vs schema test).
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Precedence correctness: does the new _SOURCE_ORDER make linked_issue lose to native/imported
+   AND still beat unassigned? Does any path still let linked_issue or a bare prefix win over
+   ownership? Did full candidate emission (is_primary on the full set) survive the winner-selection
+   rewrite, or did we silently drop provenance rows? Is issue_project distinct from project_ownership
+   and not double-counting? Tenant org_id scoping intact on every read?&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> Drift grep: <code>_SOURCE_ORDER</code> equals §1.2 byte-for-byte; no test asserts
+<code>linked_issue</code> winning over any imported/native source.</p>
+<hr />
+<h3 id="cs3-manual-fallback-resolver-ops-net-new-resolution-path">CS3 — Manual-fallback resolver (ops)  ·  <em>net-new resolution path</em><a class="headerlink" href="#cs3-manual-fallback-resolver-ops-net-new-resolution-path" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Read <code>manual_attribution_fallbacks</code>, match scopes, emit <code>source = manual_fallback</code> as the
+lowest non-unassigned tier — never an override.
+<strong>Files.</strong>
+- <code>ops/src/dev_health_ops/metrics/loaders/clickhouse.py</code>: extend <code>load_team_attribution_context</code>
+  (<code>:359-443</code>) to SELECT manual fallbacks <strong>with <code>FINAL</code>/<code>argMax(...) GROUP BY</code> dedup</strong> (the
+  existing ownership reads lack dedup — see §4; harden them in the same PR). Implement scope
+  matching for <code>repo</code>/<code>project</code>/<code>member</code> and the <strong>new</strong> <code>issue_key_prefix</code> matcher (match a work
+  item's <em>referenced</em> keys' prefix → team) — this is the most novel logic; it only fires when no
+  donor row resolved.
+- <code>ops/src/dev_health_ops/metrics/compute_work_items.py</code>: emit a <code>manual_fallback</code> candidate
+  (rank 6) with <code>confidence ∈ {manual, low}</code> and <code>evidence</code> showing the matched fallback record
+  (Phase 6 example shape).
+- Tests: <code>manual_fallback</code> does <strong>not</strong> override native/linked; manual applies only when nothing
+  stronger exists; <code>issue_key_prefix</code> <strong>without</strong> a donor does not inherit <code>linked_issue</code>;
+  <code>issue_key_prefix</code> <strong>can</strong> match <code>manual_fallback</code> only (Phase 7 replacement test names).</p>
+<p><strong>Validation.</strong> <code>mypy</code> + unit + clickhouse-marked; verify a seeded prefix fallback resolves to
+<code>manual_fallback</code> and a real donor still wins over it.
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Manual fallback must never override: prove no scope (repo/project/member/issue_key_prefix) can
+   beat native/imported/linked. Does the issue_key_prefix matcher match the right work items and
+   not over-match (e.g. CHAOS vs CHAOSX)? Is the new read FINAL/argMax-deduped so a stale RMT row
+   can&#39;t win? org_id in every predicate? Does a dangling extkey with no donor correctly fall to
+   manual_fallback rather than silently inheriting linked_issue?&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> Re-run §5 drift checklist; confirm <code>evidence</code> populated for every
+<code>manual_fallback</code>/<code>linked_issue</code>/<code>unassigned</code> per Phase 6 examples.</p>
+<hr />
+<h3 id="cs4-provenance-in-graphql-ops-must-reach-ops-main-before-cs7">CS4 — Provenance in GraphQL (ops)  ·  <em>must reach ops main before CS7</em><a class="headerlink" href="#cs4-provenance-in-graphql-ops-must-reach-ops-main-before-cs7" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Expose the persisted provenance the data layer already has.
+<strong>Files.</strong>
+- <code>ops/src/dev_health_ops/api/graphql/models/outputs.py</code>: new <code>@strawberry.type</code> provenance fields
+  (<code>team_attribution_source/confidence/evidence</code>, <code>is_primary</code>) — mirror the existing
+  <code>WorkGraphProvenance</code> pattern (<code>outputs.py:544</code>).
+- <code>ops/src/dev_health_ops/api/graphql/resolvers/analytics.py</code> (and/or <code>data_health.py</code>): SELECT the
+  provenance columns from <code>work_item_team_attributions</code> (persisted but never read today).
+- <code>ops/src/dev_health_ops/api/graphql/export_schema.py</code>: regenerate the SDL (driver for CS7).</p>
+<p><strong>Validation.</strong> <code>mypy</code> + GraphQL resolver tests; <code>python -m dev_health_ops...export_schema</code>
+produces the SDL the web side will diff against.
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Does exposing provenance leak cross-tenant data or over-expose internal evidence? Are the new
+   Strawberry fields nullable-correct and ordered so the SDL is deterministic? Does the resolver
+   SELECT keep org scoping and argMax-dedup on work_item_team_attributions?&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> SDL captured for CS7; provenance fields == §1.4.</p>
+<hr />
+<h3 id="cs5-re-home-team-population-remove-the-bridge-ops-highest-structural-risk">CS5 — Re-home team population, remove the bridge (ops)  ·  <em>highest structural risk</em><a class="headerlink" href="#cs5-re-home-team-population-remove-the-bridge-ops-highest-structural-risk" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Delete the Postgres→CH bridge (<code>sync_teams_to_analytics</code> / <code>bridge_teams_to_clickhouse</code>)
+and make org-scoped team population write the ClickHouse <code>teams</code> dimension <strong>directly</strong> — <strong>without</strong>
+emptying the dimension the resolvers read. <strong>Nothing else changes:</strong> the sync operations (<code>sync
+teams</code> and the per-entity team/project/member sync) and the <strong>"Auto Import" UX option</strong> (checkboxes
+that run <code>run_team_autoimport</code> to import teams/projects/members CH-native) stay as-is — they already
+write ClickHouse directly. This CS removes <em>only</em> the Postgres-bridge path. Manual fallback (CS3) is
+the separate explicit-override option.
+<strong>Files.</strong>
+- <code>ops/src/dev_health_ops/providers/teams.py</code>: rewrite the org-scoped path (<code>:635-720</code>) to write CH
+  <code>teams</code> directly via the existing CH-native write (the no-org direct path <code>:722-745</code> already does
+  this), dropping <code>_project_teams_to_postgres</code> + <code>bridge_teams_to_clickhouse</code>. Preserve the row shape
+  exactly (deterministic <code>team_uuid = uuid5("team:{org}:{team_id}")</code>, <code>members</code>, <code>project_keys</code>,
+  <code>repo_patterns</code>) or <code>get_all_teams()</code>-based resolvers break.
+- Neutralize the bridge's other callers <strong>first</strong>: <code>workers/product_tasks.py:sync_teams_to_analytics</code>
+  (in the daily chain <code>sync_runtime.py:392-408</code>) → repoint to a CH-native team refresh or remove
+  from the chain; admin enqueues in <code>api/admin/routers/teams.py</code> + <code>identities.py</code>.
+- Hard-deprecate <code>dev-hops teams reconcile</code> (<code>providers/team_reconcile.py</code>) → exit-non-zero stub
+  ("Team attribution is ClickHouse-only"); remove its <code>_COMMAND_REQUIREMENTS</code> entry (<code>cli.py:420</code>).
+- Triage <code>api/services/configuration/jira_activity_inference.py</code> (uses <code>IdentityMappingService</code>) —
+  it will ImportError when CS6 deletes the service; decide here (rewrite to CH or remove).
+- <strong>Delete <code>providers/team_bridge.py</code></strong> only after all four import sites are re-homed.
+- Docs (same PR): <code>ops/docs/ops/cli-reference.md</code> (<code>sync teams</code> is CH-only; drop <code>teams reconcile</code>)
+  + <code>ops/docs/architecture/database-architecture.md</code> (remove the "Postgres-first source of truth"
+  section + both Mermaid bridge diagrams <code>:140-211</code>).</p>
+<p><strong>Validation.</strong>
+- Live proof on a real org via host <code>dev-hops</code> (<code>.venv/bin/dev-hops</code>, explicit DSNs): run
+  <code>sync teams --org &lt;org&gt;</code>, assert ClickHouse <code>teams</code> is <strong>populated</strong> (members/project_keys/
+  repo_patterns non-empty), then run the daily metrics chain and assert team attribution is
+  <strong>non-empty</strong> (no silent degrade to unassigned). Use a control org with <code>org_id=''</code> checks.
+- Rebuild worker/beat/web images before verifying the chain.
+- <code>mypy</code> + <code>ci/run_tests.sh ... unit</code>; update <code>test_team_members_bridge.py</code>,
+  <code>test_team_reconcile_guards.py</code>, <code>test_sync_teams_routing_invariants.py</code>.
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Data-loss hunt: after deleting the bridge, can the ClickHouse teams dimension end up empty or
+   stale for an org-scoped sync, silently zeroing attribution? Are ALL bridge import sites
+   (teams.py, team_reconcile.py, product_tasks.py, sync_team.py) and the daily Celery chain
+   re-homed, or does run_daily_metrics now run before teams are populated? Does the direct-CH write
+   reproduce the exact team_uuid/members/project_keys/repo_patterns shape the resolvers require?
+   Any dangling import or broken admin enqueue?&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> <code>grep -R "bridge_teams_to_clickhouse" ops/src</code> → no runtime callers;
+daily chain populates <code>teams</code> before metrics.</p>
+<hr />
+<h3 id="cs6-delete-postgres-mapping-models-admin-surface-ops">CS6 — Delete Postgres mapping models &amp; admin surface (ops)<a class="headerlink" href="#cs6-delete-postgres-mapping-models-admin-surface-ops" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Remove the now-unread Postgres attribution layer entirely.
+<strong>Files.</strong>
+- Delete <code>TeamMapping</code>/<code>IdentityMapping</code> (<code>models/settings.py:571-730</code>) + re-exports
+  (<code>models/__init__.py:53/64/112/159</code>).
+- Delete config-CRUD that exists only to feed them: <code>api/services/configuration/{team_mapping,
+  identity_mapping,team_drift_sync,team_discovery,team_member_resolver}.py</code> and the mapping
+  portions of <code>team_membership.py</code>; admin endpoints in <code>routers/teams.py</code> + <code>identities.py</code>;
+  schemas in <code>admin/schemas_flat.py:210-321</code> + re-exports.
+- Rewrite <code>api/graphql/resolvers/data_health.py</code> <code>IdentityMappingHealth</code> (<code>:157-219</code>) — drop or
+  re-source off CH.
+- Rewrite <code>api/services/org_deletion.py</code> — remove the <code>team_mappings</code>/<code>identity_mappings</code>
+  <code>PostgresDeletionTarget</code> entries (<code>:275-282</code>) + model imports (<code>:33/41</code>); keep the CH <code>teams</code>
+  purge.
+- <strong>New Alembic migration</strong> to <code>DROP TABLE team_mappings, identity_mappings</code> (created only in
+  <code>alembic/versions/0001_initial_schema.py:278-371</code>; do not edit that inert history). The DROP must
+  run after the ORM models leave metadata.
+- Docs (same PR): finalize <code>database-architecture.md</code> (tables removed from the Postgres list).</p>
+<p><strong>Validation.</strong> <code>grep -R "TeamMapping\|IdentityMapping" ops/src ops/tests</code> → no runtime/admin
+attribution usage (inert migration refs OK); <code>mypy</code> clean (no dangling imports);
+<code>alembic upgrade head</code> then <code>downgrade</code> round-trips; admin + org-deletion tests pass.
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Deletion safety: is there ANY remaining runtime/admin/worker importer of TeamMapping or
+   IdentityMapping (e.g. jira_activity_inference, data_health, _helpers re-exports)? Does the
+   Alembic DROP run after the models leave metadata, and is downgrade coherent? Does org_deletion
+   still purge correctly without the dropped tables/imports? Any admin route now 500s?&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> §5 drift checklist: the three <code>grep</code> acceptance commands return no runtime hits.</p>
+<hr />
+<h3 id="cs7-web-provenance-render-boundary-dead-code-deletion-web-after-cs4-on-ops-main">CS7 — Web: provenance render + boundary + dead-code deletion (web)  ·  <em>after CS4 on ops main</em><a class="headerlink" href="#cs7-web-provenance-render-boundary-dead-code-deletion-web-after-cs4-on-ops-main" title="Permanent link">&para;</a></h3>
+<p><strong>Goal.</strong> Render backend provenance; delete the client-side attribution; document the boundary.
+<strong>Files.</strong>
+- Regenerate <code>web/src/lib/graphql/schema.graphql</code> from <strong>ops <code>export_schema</code> on ops main</strong>
+  (never hand-edit — exact-diff incl. docstrings + ordering); regenerate <code>__generated__/*</code>.
+- Surface provenance (render-only) in the investment/data-health surfaces; show <code>manual_fallback</code>
+  as a distinct lower-confidence label (never as issue/team truth).
+- <strong>Delete</strong> <code>web/src/lib/investment/transforms.ts:buildRepoTeamSankey</code> (<code>:374-523</code>) + its
+  <code>repoTeamMap</code>/evidence-derivation block (orphaned boundary violation; verified no live caller).
+- <strong>Create</strong> <code>web/docs/architecture/team-attribution-boundary.md</code> — <strong>ready-to-drop content in
+  Appendix A</strong> (Phase 10 text + a frontend-facing compact decision tree so the boundary is visible
+  to web devs "for insurance"); link it from <code>web/AGENTS.md</code> and
+  <code>web/docs/user-journeys/investment-view.md</code>.</p>
+<p><strong>Validation.</strong> <code>web</code> gate = tsc + vitest + <strong>Playwright e2e</strong> (copy/label/nav changes break specs;
+self-contained harness) + design-lint + <strong>prettier-write before push</strong> (Format check). Confirm the
+schema exact-diff is green (only possible once CS4 is on ops main).
+<strong>Codex gate.</strong>
+<div class="highlight"><pre><span></span><code>/codex:adversarial-review --base fix/clickhouse-only-team-attribution --background \
+  &quot;Boundary enforcement: does ANY client path still recompute team attribution after deleting
+   buildRepoTeamSankey? Is web/schema.graphql byte-exact with ops main export_schema (docstrings +
+   ordering), or will the live-e2e exact-diff fail? Does manual_fallback render as fallback, not as
+   team truth? Any e2e spec asserting removed text?&quot;
+</code></pre></div>
+<strong>Alignment check.</strong> <code>grep</code> web for client-side team derivation → none; boundary doc linked.</p>
+<hr />
+<h2 id="4-cross-cutting-ordering-rules-must-not-be-reordered">4. Cross-cutting ordering rules (must not be reordered)<a class="headerlink" href="#4-cross-cutting-ordering-rules-must-not-be-reordered" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Enum ALTER before any new-value write</strong> (CS1 → CS2/CS3). Workers run
+   <code>AUTO_RUN_MIGRATIONS=false</code>; apply the ALTER explicitly and <strong>rebuild worker/beat</strong>. Emitting
+   <code>source='manual_fallback'</code>/<code>confidence='manual'</code> before the ALTER → CH INSERT throws.</li>
+<li><strong><code>manual_attribution_fallbacks</code> table before its reader</strong> (CS1 → CS3). A missing table → throw
+   or silent <code>[]</code> degrade.</li>
+<li><strong>Re-home bridge callers before deleting the bridge</strong> (CS5 internal order). The bridge sits
+   <em>first</em> in the daily chain; delete-before-rehome breaks per-org daily metrics at runtime.</li>
+<li><strong>Delete models only after they're unread</strong> (CS5 → CS6). CS5 makes Postgres mappings
+   written-but-unread; CS6 removes the write surface + models + Alembic DROP together.</li>
+<li><strong>ops schema → ops main before web SDL regen</strong> (CS4 → CS7). The live-e2e exact-diff fails if web
+   SDL is regenerated from an ops <em>branch</em>. → ops-first, web-second is mandatory (overrides any
+   naive "same-PR" reading of Phase 11; the two-repo split is the same-PR unit per repo).</li>
+<li><strong>Harden RMT dedup on ownership + manual reads.</strong> <code>load_team_attribution_context</code> reads
+   ownership with <strong>no <code>FINAL</code>/<code>argMax</code></strong> today; once ownership outranks <code>linked_issue</code>, a stale
+   duplicate wins <em>more often</em>. Add dedup to the manual read (CS3) and harden the three ownership
+   reads in the same PR.</li>
+</ol>
+<hr />
+<h2 id="5-standing-alignment-checklist-run-on-every-pr-before-its-codex-gate">5. Standing alignment checklist (run on EVERY PR before its codex gate)<a class="headerlink" href="#5-standing-alignment-checklist-run-on-every-pr-before-its-codex-gate" title="Permanent link">&para;</a></h2>
+<p>This is the "stay aligned" harness — a fast drift scan plus the doc-freshness rule.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Precedence is exactly the target (after CS2)</span>
+grep<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;_SOURCE_ORDER&quot;</span><span class="w"> </span>-A10<span class="w"> </span>ops/src/dev_health_ops/metrics/compute_work_items.py
+<span class="c1">#   → native_team0 issue_project1 project_ownership2 repo_ownership3</span>
+<span class="c1">#     assignee_membership4 linked_issue5 manual_fallback6 unassigned7</span>
+
+<span class="c1"># No runtime Postgres attribution (after CS6)</span>
+grep<span class="w"> </span>-RIn<span class="w"> </span><span class="s2">&quot;TeamMapping\|IdentityMapping&quot;</span><span class="w"> </span>ops/src<span class="w">        </span><span class="c1"># → no runtime/admin attribution hits</span>
+grep<span class="w"> </span>-RIn<span class="w"> </span><span class="s2">&quot;bridge_teams_to_clickhouse&quot;</span><span class="w"> </span>ops/src<span class="w">          </span><span class="c1"># → no callers (after CS5)</span>
+
+<span class="c1"># No client-side attribution (after CS7)</span>
+grep<span class="w"> </span>-RIn<span class="w"> </span><span class="s2">&quot;buildRepoTeamSankey\|repoTeamMap&quot;</span><span class="w"> </span>web/src<span class="w">     </span><span class="c1"># → none</span>
+
+<span class="c1"># Provider × entity coverage is multi-provider, not Linear-only (matrix: team-attribution.md §0.4)</span>
+grep<span class="w"> </span>-REc<span class="w"> </span><span class="s1">&#39;jira:|gitlab:|&quot;jira&quot;|&quot;gitlab&quot;|&quot;github&quot;&#39;</span><span class="w"> </span>ops/tests/test_linked_issue_team_inheritance.py
+<span class="c1">#   → attribution tests exercise jira/gitlab/github donors+items, not just linear</span>
+
+<span class="c1"># Docs changed in the same PR as behavior (Phase 11)</span>
+git<span class="w"> </span>diff<span class="w"> </span>--name-only<span class="w"> </span>&lt;base&gt;...HEAD<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-q<span class="w"> </span><span class="s1">&#39;^ops/docs/\|AGENTS.md&#39;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;DOC DRIFT: behavior change without doc update&quot;</span>
+</code></pre></div>
+<p>Plus, every PR must satisfy:
+- [ ] Tests assert the documented precedence order (not the old one).
+- [ ] <strong>Provider × entity matrix kept green</strong> — attribution tests cover <code>{jira,gitlab,github,linear} × {teams,projects,members,issues}</code>; no Linear-only coverage (matrix: <code>team-attribution.md §0.4</code>).
+- [ ] Attribution output carries <code>source</code> + <code>confidence</code> + <code>evidence</code>.
+- [ ] CI-parity gates run <strong>locally</strong> before push (ops: <code>mypy --install-types --non-interactive .</code>
+      + <code>ci/run_tests.sh format quality unit</code>; web: tsc + vitest + Playwright e2e + design-lint +
+      prettier-write).
+- [ ] <code>/codex:adversarial-review</code> run for the changeset; output captured to
+      <code>/tmp/claude/codex-review-&lt;branch&gt;.md</code>; every blocking finding fixed or explicitly waived
+      with rationale.
+- [ ] Relevant architecture/CLI/boundary docs updated <strong>in this PR</strong>.</p>
+<hr />
+<h2 id="6-final-acceptance-gate-maps-phase-13-acceptance-criteria-proof">6. Final acceptance gate (maps Phase-13 acceptance criteria → proof)<a class="headerlink" href="#6-final-acceptance-gate-maps-phase-13-acceptance-criteria-proof" title="Permanent link">&para;</a></h2>
+<p>CHAOS-2600 is done only when each row passes:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Acceptance criterion</th>
+<th>Proof</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td>No runtime attribution reads Postgres team mappings</td>
+<td><code>grep</code> (CS6) + CS5/CS6 codex gates</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td>No runtime attribution reads Postgres identity mappings</td>
+<td><code>grep</code> (CS6)</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td><code>team_bridge.py</code> deleted (or hard-deprecation only)</td>
+<td>CS5 — file removed</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td>No Postgres→CH team bridge remains</td>
+<td>CS5 grep</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td>Manual mappings stored in ClickHouse only</td>
+<td>CS1 table + CS3 reader</td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td>Manual mappings emit <code>source = manual_fallback</code></td>
+<td>CS3 test</td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td><code>linked_issue</code> lower precedence than native/imported</td>
+<td>CS2 <code>_SOURCE_ORDER</code> + tests</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td><code>linked_issue</code> requires an actual donor row</td>
+<td>preserved <code>build_linked_issue_team_resolver</code>; CS3 test</td>
+</tr>
+<tr>
+<td style="text-align: right;">9</td>
+<td>Issue-key prefix is <strong>not</strong> linked-issue inheritance</td>
+<td>CS3 test (D1/R1)</td>
+</tr>
+<tr>
+<td style="text-align: right;">10</td>
+<td>Issue-key-prefix fallback emits <code>manual_fallback</code></td>
+<td>CS3 test</td>
+</tr>
+<tr>
+<td style="text-align: right;">11</td>
+<td>Output includes source + confidence + evidence</td>
+<td>CS2/CS3 + CS4 GraphQL</td>
+</tr>
+<tr>
+<td style="text-align: right;">12</td>
+<td>Tests explicitly protect the precedence model</td>
+<td>CS2/CS3 inverted + new tests</td>
+</tr>
+<tr>
+<td style="text-align: right;">13</td>
+<td>Backend docs state ClickHouse-only attribution</td>
+<td>CS0/CS2/CS5/CS6 docs</td>
+</tr>
+<tr>
+<td style="text-align: right;">14</td>
+<td>Frontend docs state UI never resolves attribution</td>
+<td>CS7 boundary doc</td>
+</tr>
+<tr>
+<td style="text-align: right;">15</td>
+<td>Doc-freshness enforced in AGENTS/PR checklist</td>
+<td>CS0 guardrail</td>
+</tr>
+<tr>
+<td style="text-align: right;">16</td>
+<td>Any attribution change updates docs in same PR</td>
+<td>§5 drift check, every PR</td>
+</tr>
+<tr>
+<td style="text-align: right;">17</td>
+<td>Tests and docs describe the same precedence</td>
+<td>CS2 alignment check</td>
+</tr>
+<tr>
+<td style="text-align: right;">18</td>
+<td>No backfill/migration-retention/compat path for PG attribution</td>
+<td>CS5/CS6 — none added</td>
+</tr>
+<tr>
+<td style="text-align: right;">19</td>
+<td>Provider × entity test matrix all <code>yes</code>/<code>n/a</code> (no Linear-only coverage)</td>
+<td><code>team-attribution.md §0.4</code> matrix green; CS-COV (CHAOS-2609)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Final adversarial pass.</strong> Before declaring done, run one full-branch
+<code>/codex:adversarial-review --base origin/main --background "Whole-epic ship/no-ship: is ClickHouse
+truly the only attribution store, is precedence correct end-to-end, and is there any silent
+attribution-coverage regression for GitHub/GitLab PR→issue inheritance under R1?"</code></p>
+<hr />
+<h2 id="7-risk-register">7. Risk register<a class="headerlink" href="#7-risk-register" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deleting bridge silently empties CH <code>teams</code> → attribution → unassigned</td>
+<td>CS5 live-org proof (populate → daily → non-empty); codex data-loss gate</td>
+</tr>
+<tr>
+<td><code>external_issue_key</code> re-routing severs GitHub/GitLab PR→issue inheritance</td>
+<td>D1/R1 keeps donor-resolving extkeys; only bare-prefix-no-donor → manual; codex coverage gate</td>
+</tr>
+<tr>
+<td>Enum ALTER vs. worker emitting new values</td>
+<td>Ordering rule §4.1; rebuild worker/beat; explicit migrate</td>
+</tr>
+<tr>
+<td>Stale RMT duplicate wins now that ownership outranks linked</td>
+<td>§4.6 add <code>FINAL</code>/<code>argMax</code> dedup</td>
+</tr>
+<tr>
+<td>web schema exact-diff fails (regen from ops branch)</td>
+<td>§4.5 ops-main-first; never hand-edit SDL</td>
+</tr>
+<tr>
+<td><code>jira_activity_inference</code> ImportError on model delete</td>
+<td>CS5 triage before CS6 deletion</td>
+</tr>
+<tr>
+<td>Provenance regression (dropped candidate rows in staged rewrite)</td>
+<td>D2 keep full candidate emission; codex CS2 gate</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-suggested-commitpr-titles-per-the-docs-sequence">8. Suggested commit/PR titles (per the doc's sequence)<a class="headerlink" href="#8-suggested-commitpr-titles-per-the-docs-sequence" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>CS0  docs: define clickhouse-only team attribution contract + doc-freshness guardrail
+CS1  feat(clickhouse): manual_attribution_fallbacks table + source/confidence enum widening
+CS2  fix(metrics): demote linked_issue, add issue_project, lock precedence
+CS3  feat(metrics): manual_fallback resolver (incl. issue_key_prefix) with provenance
+CS4  feat(graphql): expose team attribution provenance (source/confidence/evidence)
+CS5  refactor(teams): write ClickHouse directly; remove postgres team bridge
+CS6  chore(models): delete postgres team/identity mappings + admin surface + alembic drop
+CS7    feat(web): render provenance, delete client-side attribution, add boundary doc
+CS-COV test(providers): close team/project/member dimension gaps; provider×entity matrix all-green
+</code></pre></div>
+<blockquote>
+<p><strong>CS-COV (CHAOS-2609)</strong> is the provider-coverage hardening changeset — it makes the §1.10 matrix
+green (gitlab/members, gitlab epics, jira dimension, linear projects). Mostly test-only; can run
+in parallel with CS3–CS4 since it touches the autoimport/normalize dimension, not the resolver.</p>
+</blockquote>
+<hr />
+<h2 id="appendix-a-webdocsarchitectureteam-attribution-boundarymd-cs7-ready-to-drop-in">Appendix A — <code>web/docs/architecture/team-attribution-boundary.md</code> (CS7, ready to drop in)<a class="headerlink" href="#appendix-a-webdocsarchitectureteam-attribution-boundarymd-cs7-ready-to-drop-in" title="Permanent link">&para;</a></h2>
+<p>This is the exact file CS7 creates. The compact tree is the frontend-facing "insurance" copy of
+the backend decision tree (§1.5): web devs see <em>where the decision is made</em> and that the UI's only
+job is to render it.</p>
+<div class="highlight"><pre><span></span><code><span class="gh"># Team Attribution Boundary</span>
+
+dev-health-web <span class="gs">**never resolves team attribution.**</span> The backend (ClickHouse-only, staged
+precedence) decides the team and persists the provenance; the frontend renders it and nothing more.
+
+If team coverage is low or <span class="sb">`unassigned`</span> is high, <span class="gs">**do not**</span> add frontend mapping logic. Fix it
+upstream: backend sync, linked-issue capture, ClickHouse ownership data, or a ClickHouse
+<span class="sb">`manual_attribution_fallbacks`</span> record. Manual fallbacks must render as <span class="sb">`manual_fallback`</span>
+(lower-confidence), never disguised as issue/team truth.
+
+<span class="gu">## Where the decision is made (and where it is NOT)</span>
+
+<span class="sb">```mermaid</span>
+<span class="s">flowchart TD</span>
+<span class="s">    BE[&quot;Backend resolves team&lt;br/&gt;ClickHouse · staged precedence (native → … → manual → unassigned)&quot;] --&gt; P[&quot;work_item_team_attributions&lt;br/&gt;team_id · source · confidence · evidence&quot;]</span>
+<span class="s">    P --&gt; API[&quot;GraphQL exposes source / confidence / evidence&quot;]</span>
+<span class="s">    API --&gt; WEB[&quot;dev-health-web&quot;]</span>
+<span class="s">    WEB --&gt; R{&quot;render only&quot;}</span>
+<span class="s">    R --&gt;|&quot;team_id present&quot;| Show[&quot;show team name + provenance&lt;br/&gt;manual_fallback → lower-confidence badge&quot;]</span>
+<span class="s">    R --&gt;|&quot;source = unassigned&quot;| Un[&quot;show &#39;unassigned&#39; — do NOT infer a team&quot;]</span>
+<span class="s">    WEB -. &quot;NEVER&quot; .-&gt; X[&quot;client-side mapping / repo→team derivation&lt;br/&gt;(deleted: buildRepoTeamSankey)&quot;]</span>
+<span class="sb">```</span>
+
+<span class="gu">## Rules</span>
+
+<span class="k">-</span><span class="w"> </span>Render <span class="sb">`team_name`</span> as today; surface <span class="sb">`team_attribution_source`</span> / <span class="sb">`confidence`</span> / <span class="sb">`evidence`</span> when useful.
+<span class="k">-</span><span class="w"> </span>Never recompute attribution client-side. There is no repo→team or prefix→team logic in web.
+<span class="k">-</span><span class="w"> </span><span class="sb">`source = unassigned`</span> renders as unassigned — the frontend must not guess a team.
+<span class="k">-</span><span class="w"> </span>The full backend decision tree + precedence + off-the-rails matrix live in
+  <span class="sb">`dev-health-ops`</span> <span class="sb">`docs/architecture/team-attribution.md`</span> (mirror of the CHAOS-2600 plan §1.5–1.9).
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

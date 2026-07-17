@@ -1,0 +1,3451 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>CHAOS-2622 — Rebuild Team (and Identity) Drift-Review on ClickHouse - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#chaos-2622-rebuild-team-and-identity-drift-review-on-clickhouse" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              CHAOS-2622 — Rebuild Team (and Identity) Drift-Review on ClickHouse
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/team-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/rate-limit-policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-framing-read-this-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      0. Framing (read this first)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-current-broken-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Current broken surface
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-what-was-deleted-and-why-it-cannot-be-ported-as-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. What was deleted (and why it cannot be ported as-is)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-core-problem-oracle-confirmed" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Core problem (Oracle-confirmed)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-recommended-architecture-option-c-lite" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Recommended architecture — Option C-lite
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Recommended architecture — Option C-lite">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-new-clickhouse-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.1 New ClickHouse tables
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-correctness-rules-do-not-skip" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.2 Correctness rules (do not skip)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-drift-aware-projector" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.3 Drift-aware projector
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-identities-members-manual-mapping-dimension-in-scope-sequenced-after-teams" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.4 Identities / members manual-mapping dimension (in scope — sequenced after teams)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-worker" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.5 Worker
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-wire-contract-resolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Wire contract (resolved)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Scope
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-deletion-intent-is-superseded-no-live-conflict" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Deletion intent is superseded (no live conflict)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-ordered-implementation-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Ordered implementation checklist
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-effort-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Effort &amp; risk
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-decisions-owner-resolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Decisions (owner — resolved)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="chaos-2622-rebuild-team-and-identity-drift-review-on-clickhouse">CHAOS-2622 — Rebuild Team (and Identity) Drift-Review on ClickHouse<a class="headerlink" href="#chaos-2622-rebuild-team-and-identity-drift-review-on-clickhouse" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Status:</strong> Proposed (Oracle-reviewed). Not yet scheduled.
+<strong>Repos:</strong> <code>dev-health-ops</code> (primary), <code>dev-health-web</code> (wire change).
+<strong>Related:</strong> <a href="../../architecture/team-attribution/"><code>team-attribution.md</code></a> §0,
+<a href="../../architecture/chaos-2600-implementation-plan/"><code>chaos-2600-implementation-plan.md</code></a>,
+<a href="../../architecture/database-architecture/"><code>database-architecture.md</code></a>.</p>
+</blockquote>
+<h2 id="0-framing-read-this-first">0. Framing (read this first)<a class="headerlink" href="#0-framing-read-this-first" title="Permanent link">&para;</a></h2>
+<p>CHAOS-2600 (CS5/CS6, CHAOS-2607) moved the <strong>system of record for the team catalog and
+identity→team membership</strong> from Postgres to ClickHouse. That migration was meant to <strong>move
+management to ClickHouse</strong>, <strong>not</strong> to remove the ability to maintain <strong>manual mappings</strong> —
+manually curated teams/identities and manual attribution fallbacks for entities that providers
+do not surface. Manual mapping remains a <strong>first-class, preserved capability</strong>.</p>
+<p>What the migration <em>did</em> drop, as collateral, was the <strong>drift-review reconciliation surface</strong>: the
+admin workflow that detects when provider discovery disagrees with the curated/manual config and
+lets an admin approve or dismiss each change. It was built entirely on Postgres <code>TeamMapping</code>
+columns (<code>flagged_changes</code> / <code>sync_policy</code> / <code>managed_fields</code> / <code>last_drift_sync_at</code>) +
+<code>TeamDriftSyncService</code>, all deleted in CS6. The four admin endpoints that backed it are now HTTP
+501 stubs.</p>
+<p><strong>This plan rebuilds drift-review natively on ClickHouse</strong>, covering both the <strong>team</strong> dimension
+and the <strong>identity/member manual-mapping</strong> dimension, so manual config and provider discovery can
+be reconciled instead of one silently clobbering the other.</p>
+<h2 id="1-current-broken-surface">1. Current broken surface<a class="headerlink" href="#1-current-broken-surface" title="Permanent link">&para;</a></h2>
+<p>The web admin <strong>Pending Changes</strong> panel (<code>dev-health-web</code>
+<code>src/components/admin/teams/PendingChangesPanel.tsx</code>) calls four ops endpoints on mount; all four
+are HTTP 501 stubs in <code>src/dev_health_ops/api/admin/routers/teams.py</code> (the drift-review section,
+~L332–L385). The panel therefore always toasts <em>"Failed to load pending changes: …"</em>.</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Purpose</th>
+<th>Current</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /admin/teams/pending-changes</code></td>
+<td>list flagged drift across teams</td>
+<td>501</td>
+</tr>
+<tr>
+<td><code>POST /admin/teams/{team_id}/approve-changes</code></td>
+<td>apply flagged changes</td>
+<td>501</td>
+</tr>
+<tr>
+<td><code>POST /admin/teams/{team_id}/dismiss-changes</code></td>
+<td>drop flagged changes</td>
+<td>501</td>
+</tr>
+<tr>
+<td><code>POST /admin/teams/trigger-drift-sync</code></td>
+<td>re-discover providers + recompute drift</td>
+<td>501</td>
+</tr>
+</tbody>
+</table>
+<h2 id="2-what-was-deleted-and-why-it-cannot-be-ported-as-is">2. What was deleted (and why it cannot be ported as-is)<a class="headerlink" href="#2-what-was-deleted-and-why-it-cannot-be-ported-as-is" title="Permanent link">&para;</a></h2>
+<p>The old engine (<code>TeamDriftSyncService</code>, recoverable from git <code>9365ed802~1</code>) ran on Postgres
+<code>TeamMapping</code> columns with <strong>no ClickHouse counterpart</strong>:</p>
+<ul>
+<li><code>flagged_changes</code> JSONB = <code>{"pending": [change, …]}</code> — the review lane.</li>
+<li><code>sync_policy</code> Int: <code>0</code> auto-apply, <code>1</code> flag-for-review, <code>2</code> manual/none.</li>
+<li><code>managed_fields</code> list: which fields are drift-tracked (<code>name</code>, <code>description</code>, <code>repo_patterns</code>,
+  <code>project_keys</code>).</li>
+<li><code>last_drift_sync_at</code>.</li>
+</ul>
+<p><code>run_drift_sync(provider, discovered_teams)</code> looked up each discovered team by
+<code>extra_data.provider_team_id</code>, diffed managed fields, then either auto-applied (<code>policy 0</code>) or
+appended <code>{change_type, field, old_value, new_value, discovered_at}</code> to <code>flagged_changes.pending</code>
+(<code>policy 1</code>). Catalog teams missing from discovery → <code>provider_removed</code>; discovered teams with no
+mapping → counted <code>new_available</code> (not auto-imported). <code>approve_changes</code> applied pending changes by
+index and removed them; <code>dismiss_changes</code> removed them without applying.</p>
+<p>The CH <code>teams</code> table (<code>002</code>/<code>025</code>/<code>051</code> migrations) is <code>ReplacingMergeTree(updated_at)</code> ORDER BY
+<code>(id)</code> holding <strong>one</strong> set of curated values — there is no provider-observed-vs-curated split, no
+review lane, and no per-team policy.</p>
+<h2 id="3-core-problem-oracle-confirmed">3. Core problem (Oracle-confirmed)<a class="headerlink" href="#3-core-problem-oracle-confirmed" title="Permanent link">&para;</a></h2>
+<p><strong>Drift-review is incoherent unless the sync write-path stops clobbering admin-managed fields.</strong>
+Today the auto-importers (<code>workers/team_autoimport_{github,gitlab,jira,linear}.py</code>) write provider
+values straight into <code>teams</code>. By the time anyone opens the panel, the diff is already empty because
+sync overwrote it. A faithful rebuild <strong>must</strong> re-separate provider-observed state from curated
+state in ClickHouse.</p>
+<p>The CH admin write path makes "policy columns on <code>teams</code>" unsafe:
+<code>ClickHouseTeamAdminService.create_or_update</code> rewrites the <strong>whole</strong> team row with <code>provider=""</code>
+and <code>native_team_key=None</code> on every update — any policy stored on <code>teams</code> would be clobbered unless
+every writer is audited. Policy therefore lives in a <strong>sidecar</strong> table.</p>
+<h2 id="4-recommended-architecture-option-c-lite">4. Recommended architecture — Option C-lite<a class="headerlink" href="#4-recommended-architecture-option-c-lite" title="Permanent link">&para;</a></h2>
+<p>Re-separate the two layers and centralize the write through <strong>one drift-aware projector</strong> instead
+of scattering policy logic across four importers. Existing readers keep using <code>teams FINAL</code> as the
+resolved catalog.</p>
+<h3 id="41-new-clickhouse-tables">4.1 New ClickHouse tables<a class="headerlink" href="#41-new-clickhouse-tables" title="Permanent link">&para;</a></h3>
+<p>All <code>ReplacingMergeTree</code>. Use <strong>low-cardinality strings, not <code>Enum8</code></strong>, for <code>status</code> / <code>change_type</code>
+to avoid enum-widening migration ordering before new values can be emitted.</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- Per-team drift policy (sidecar; never stored on `teams`).</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">team_sync_policies</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="n">org_id</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">team_id</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">sync_policy</span><span class="w"> </span><span class="n">UInt8</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w">          </span><span class="c1">-- 0 auto-apply, 1 flag-for-review, 2 manual/none</span>
+<span class="w">  </span><span class="n">managed_fields</span><span class="w"> </span><span class="nb">Array</span><span class="p">(</span><span class="n">String</span><span class="p">)</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="p">[],</span>
+<span class="w">  </span><span class="n">updated_by</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">updated_at</span><span class="w"> </span><span class="n">DateTime64</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">)</span>
+<span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ReplacingMergeTree</span><span class="p">(</span><span class="n">updated_at</span><span class="p">)</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="p">(</span><span class="n">org_id</span><span class="p">,</span><span class="w"> </span><span class="n">team_id</span><span class="p">);</span>
+
+<span class="c1">-- Provider-observed truth layer (what discovery last saw).</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">team_provider_observations</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="n">org_id</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">provider</span><span class="w"> </span><span class="n">LowCardinality</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">native_team_key</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">team_id</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">name</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">description</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">members_json</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">project_keys_json</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">repo_patterns_json</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">is_active</span><span class="w"> </span><span class="n">UInt8</span><span class="p">,</span>
+<span class="w">  </span><span class="n">parent_team_id</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">discovered_at</span><span class="w"> </span><span class="n">DateTime64</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">),</span>
+<span class="w">  </span><span class="n">updated_at</span><span class="w"> </span><span class="n">DateTime64</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">)</span>
+<span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ReplacingMergeTree</span><span class="p">(</span><span class="n">updated_at</span><span class="p">)</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="p">(</span><span class="n">org_id</span><span class="p">,</span><span class="w"> </span><span class="n">provider</span><span class="p">,</span><span class="w"> </span><span class="n">native_team_key</span><span class="p">);</span>
+
+<span class="c1">-- Pending-review read model (decision table, NOT a source of provider truth).</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">team_drift_changes</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="n">org_id</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">change_id</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w">                     </span><span class="c1">-- value-fingerprint hash (see 4.2)</span>
+<span class="w">  </span><span class="n">entity_type</span><span class="w"> </span><span class="n">LowCardinality</span><span class="p">(</span><span class="n">String</span><span class="p">),</span><span class="w">   </span><span class="c1">-- &#39;team&#39; now; &#39;identity&#39; in the identities slice</span>
+<span class="w">  </span><span class="n">entity_id</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">provider</span><span class="w"> </span><span class="n">LowCardinality</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">native_team_key</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">change_type</span><span class="w"> </span><span class="n">LowCardinality</span><span class="p">(</span><span class="n">String</span><span class="p">),</span><span class="w">   </span><span class="c1">-- field_changed / provider_removed / new_team_available</span>
+<span class="w">  </span><span class="n">field</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">old_value_json</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">new_value_json</span><span class="w"> </span><span class="n">String</span><span class="p">,</span>
+<span class="w">  </span><span class="n">status</span><span class="w"> </span><span class="n">LowCardinality</span><span class="p">(</span><span class="n">String</span><span class="p">),</span><span class="w">        </span><span class="c1">-- pending / approved / dismissed / resolved / superseded</span>
+<span class="w">  </span><span class="n">first_seen_at</span><span class="w"> </span><span class="n">DateTime64</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">),</span>
+<span class="w">  </span><span class="n">last_seen_at</span><span class="w"> </span><span class="n">DateTime64</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">),</span>
+<span class="w">  </span><span class="n">decided_at</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">DateTime64</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">)),</span>
+<span class="w">  </span><span class="n">decided_by</span><span class="w"> </span><span class="k">Nullable</span><span class="p">(</span><span class="n">String</span><span class="p">),</span>
+<span class="w">  </span><span class="n">updated_at</span><span class="w"> </span><span class="n">DateTime64</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;UTC&#39;</span><span class="p">)</span>
+<span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ReplacingMergeTree</span><span class="p">(</span><span class="n">updated_at</span><span class="p">)</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="p">(</span><span class="n">org_id</span><span class="p">,</span><span class="w"> </span><span class="n">change_id</span><span class="p">);</span>
+</code></pre></div>
+<h3 id="42-correctness-rules-do-not-skip">4.2 Correctness rules (do not skip)<a class="headerlink" href="#42-correctness-rules-do-not-skip" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>change_id</code> must fingerprint the values:</strong>
+  <code>hash(org_id, entity_type, entity_id, change_type, field, old_value_json, new_value_json)</code>.
+  <code>hash(team_id, change_type, field)</code> alone makes a dismissed <code>A→B</code> wrongly suppress a later
+  <code>A→C</code>.</li>
+<li><strong>No resurrection.</strong> On each projector run: if a <code>change_id</code> already exists as <code>dismissed</code> or
+  <code>approved</code>, do <strong>not</strong> re-insert a <code>pending</code> row for the same value pair. Only a <em>different</em>
+  value fingerprint creates new pending drift.</li>
+<li><strong>Lifecycle.</strong> Drift that disappears from discovery → mark stale <code>pending</code> rows <code>resolved</code>.
+  Provider value changes for the same <code>(team, field)</code> → mark the prior <code>pending</code> row <code>superseded</code>
+  and insert a new <code>pending</code> row.</li>
+<li><strong>Backwards-compatible default.</strong> <code>sync_policy = 0</code> (auto-apply) is the default, so existing orgs
+  see <strong>no behavior change</strong>. Only <code>policy 1</code> teams route managed-field changes into the pending
+  lane.</li>
+</ul>
+<h3 id="43-drift-aware-projector">4.3 Drift-aware projector<a class="headerlink" href="#43-drift-aware-projector" title="Permanent link">&para;</a></h3>
+<p>Replace the final <code>insert_teams</code> write in the four auto-importers <strong>and</strong> in
+<code>ClickHouseTeamAdminService.import_teams</code> with one projector that:</p>
+<ol>
+<li>Always writes the latest <code>team_provider_observations</code> row.</li>
+<li>Reads <code>team_sync_policies</code> for the team.</li>
+<li><code>policy 0</code> → apply observed values to <code>teams</code> (current behavior).</li>
+<li><code>policy 1</code> → for each changed managed field, emit/refresh a <code>team_drift_changes</code> <code>pending</code> row
+   instead of overwriting <code>teams</code>.</li>
+</ol>
+<p><code>approve</code> applies the observed value into <code>teams</code> via <code>create_or_update</code> and marks the change
+<code>approved</code>; <code>dismiss</code> marks it <code>dismissed</code> (catalog unchanged).</p>
+<h3 id="44-identities-members-manual-mapping-dimension-in-scope-sequenced-after-teams">4.4 Identities / members manual-mapping dimension (in scope — sequenced after teams)<a class="headerlink" href="#44-identities-members-manual-mapping-dimension-in-scope-sequenced-after-teams" title="Permanent link">&para;</a></h3>
+<p>Per the framing in §0, manual member mappings are a preserved capability, so member drift is <strong>in
+scope</strong>, not deferred to product demand. It is, however, a <strong>different shape</strong> from team-field
+drift and ships as its own slice:</p>
+<ul>
+<li>Auto-import writes both <code>teams.members</code> (identity facets) <strong>and</strong> the <code>team_memberships</code>
+  attribution dimension (read at metrics time, <code>metrics/loaders/clickhouse.py</code>). Reviewing only
+  <code>teams.members</code> would show a misleading UI while attribution changes underneath — the member
+  slice must gate the attribution-impacting dimension too.</li>
+<li>Surface conflicts where auto-import would change a manually-curated membership or where
+  <code>manual_attribution_fallbacks(scope_type='member')</code> disagrees with discovered membership; flag
+  instead of clobber; approve applies the membership change surgically (add/remove by facet, never
+  full recompute — preserving the existing surgical-by-facet invariant).</li>
+<li>Reuse <code>team_drift_changes</code> via <code>entity_type='identity'</code>, or a parallel <code>identity_drift_changes</code>
+  table if the membership change shape diverges enough in review.</li>
+</ul>
+<h3 id="45-worker">4.5 Worker<a class="headerlink" href="#45-worker" title="Permanent link">&para;</a></h3>
+<p>New <code>sync_team_drift</code> Celery task on the <code>sync</code> queue (worker-supplied provider credentials; the
+CLI no longer supplies them). It runs discovery across configured providers, calls the drift-aware
+projector, and writes pending rows. <code>POST /admin/teams/trigger-drift-sync</code> dispatches it.</p>
+<h2 id="5-wire-contract-resolved">5. Wire contract (resolved)<a class="headerlink" href="#5-wire-contract-resolved" title="Permanent link">&para;</a></h2>
+<p>There is a three-way mismatch today:</p>
+<ul>
+<li><strong>Live web caller</strong> (<code>dev-health-web</code> <code>src/lib/admin/api/teams.ts</code>) is <strong>index-based</strong>:
+  <code>{change_indices: number[], approve_all|dismiss_all: bool}</code>; the <code>FlaggedChange</code> type carries
+  <code>change_index</code>, and the panel approves/dismisses by <code>(team_id, change_index)</code>.</li>
+<li><strong>The 501 stub signatures</strong> are also index-based.</li>
+<li><strong>Ops <code>schemas_flat.py</code></strong> already has an <strong>orphaned, unused</strong> <code>ApproveChangesRequest.change_ids:
+  list[str]</code> and a <code>FlaggedChange</code> without <code>change_index</code> — a half-finished migration toward stable
+  IDs.</li>
+</ul>
+<p>Index-based approve/dismiss is racy against a shifting pending list. <strong>Decision:</strong> make <code>change_id</code>
+canonical (matching the orphaned schema's intent) and do a small mechanical web change — add
+<code>change_id</code> to <code>FlaggedChange</code> and send <code>change_ids</code> instead of <code>change_indices</code>. We own both
+repos and this is a from-scratch rebuild, so there is no reason to preserve the fragile index path.</p>
+<h2 id="6-scope">6. Scope<a class="headerlink" href="#6-scope" title="Permanent link">&para;</a></h2>
+<p><strong>In scope, teams slice (first):</strong> provider-owned team field drift over managed fields <code>name</code>,
+<code>description</code>, <code>project_keys</code>, <code>repo_patterns</code> (+ <code>members</code> as a display-only catalog field whose
+review does <strong>not</strong> yet gate <code>team_memberships</code>). Approve writes observed value into <code>teams</code>;
+dismiss acknowledges that exact old/new pair; disappearance → <code>resolved</code>; value change →
+<code>superseded</code> + new <code>pending</code>.</p>
+<p><strong>In scope, identities slice (second):</strong> member/identity drift + <code>manual_attribution_fallbacks</code>
+(<code>scope_type='member'</code>) reconciliation, gating the <code>team_memberships</code> attribution dimension (§4.4).</p>
+<p><strong>Out of scope (separate follow-ups):</strong> <code>new_team_available</code> auto-import gating; any overlay rewrite
+of all <code>teams FINAL</code> readers.</p>
+<h2 id="7-deletion-intent-is-superseded-no-live-conflict">7. Deletion intent is superseded (no live conflict)<a class="headerlink" href="#7-deletion-intent-is-superseded-no-live-conflict" title="Permanent link">&para;</a></h2>
+<p><strong>Decision (owner): CHAOS-2622 supersedes the full deletion scope — the four endpoints and the
+web <code>PendingChangesPanel</code> are NOT deleted; they are rebuilt on ClickHouse.</strong></p>
+<p>There is no live deletion ticket. CHAOS-2608 — originally cited as the deletion ticket — is in fact
+the <strong>Done</strong> CS7 <em>web provenance / boundary</em> ticket and never touched the drift-review endpoints.
+The "removed in CS7" intent only survives as two stale references that must be rewritten (not
+executed) when the rebuild lands, tracked by <strong>CHAOS-2649</strong>:</p>
+<ol>
+<li><code>ops/src/dev_health_ops/api/admin/routers/teams.py:340</code> — "the endpoints + their web caller are
+   removed together in CS7."</li>
+<li><code>ops/AGENTS.md:38</code> — "…remain as HTTP 501 stubs until CS7 removes them with the web caller —
+   CHAOS-2608…".</li>
+</ol>
+<p>Both are replaced with the CHAOS-2622 rebuild framing. No Linear ticket cancellation is required.</p>
+<h2 id="8-ordered-implementation-checklist">8. Ordered implementation checklist<a class="headerlink" href="#8-ordered-implementation-checklist" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Scrub the two stale deletion references</strong> (<code>teams.py:340</code> + <code>ops/AGENTS.md:38</code>) — CHAOS-2649.</li>
+<li>CH migrations: <code>team_sync_policies</code>, <code>team_provider_observations</code>, <code>team_drift_changes</code>.</li>
+<li>Add all three tables to the <strong>org-deletion purge</strong> path.</li>
+<li><strong>Drift-aware projector</strong> centralizing the four auto-importer writes + <code>import_teams</code>.</li>
+<li><code>ClickHouseTeamDriftService</code>: <code>get_pending_changes</code> / <code>approve</code> / <code>dismiss</code> by <code>change_id</code> over
+   <code>team_drift_changes FINAL</code>, with the §4.2 lifecycle rules.</li>
+<li>New <code>sync_team_drift</code> Celery task + <code>trigger-drift-sync</code> dispatch.</li>
+<li>Repoint the four stub endpoints to the service; switch the wire to <code>change_id</code>.</li>
+<li>Web: add <code>change_id</code> to <code>FlaggedChange</code>, send <code>change_ids</code> (<code>dev-health-web</code>).</li>
+<li>Docs (<code>team-attribution.md</code> §0) + tests: provider×entity matrix green, plus
+   resurrection/supersede/resolve lifecycle assertions, in the same PR.</li>
+<li><strong>Identities/members slice</strong> (§4.4): member + <code>manual_attribution_fallbacks(member)</code> drift,
+    gating <code>team_memberships</code>.</li>
+</ol>
+<h2 id="9-effort-risk">9. Effort &amp; risk<a class="headerlink" href="#9-effort-risk" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Teams slice:</strong> Medium. <strong>Identities slice:</strong> Large (membership + attribution-impacting writes).</li>
+<li><strong>Top risks:</strong> (a) <code>change_id</code> not value-fingerprinted → wrong suppression; (b) re-discovery
+  resurrecting dismissed changes; (c) reviewing <code>teams.members</code> without gating <code>team_memberships</code>
+  giving a misleading UI; (d) a future dev acting on the stale "removed in CS7" references and
+  deleting the rebuilt surface (mitigated by CHAOS-2649 scrubbing them first).</li>
+</ul>
+<h2 id="10-decisions-owner-resolved">10. Decisions (owner — resolved)<a class="headerlink" href="#10-decisions-owner-resolved" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Sequencing:</strong> <strong>teams slice first</strong>, identities/members slice second (CHAOS-2656 blocked-by the
+   teams projector + service).</li>
+<li><strong>Deletion scope:</strong> <strong>CHAOS-2622 supersedes the full deletion scope.</strong> CHAOS-2608 is an unrelated
+   Done web ticket; the stale references are scrubbed via CHAOS-2649. No endpoints/panel deleted.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

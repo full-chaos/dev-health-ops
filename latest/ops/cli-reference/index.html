@@ -1,0 +1,6310 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../../cli/">
+      
+      
+        <link rel="next" href="../../connectors/usage/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Reference - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cli-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-user-impact-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flags/feature-flag-prd-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/dispatch-outbox/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Durable Dispatch Outbox
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sync-unit-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Sync Unit Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/team-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/worker-scaling-readiness/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Worker Scaling Readiness
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/byo-llm-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    BYO-LLM Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inline-execution-vs-celery-backed-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inline Execution vs. Celery-Backed Operations
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#until-these-gaps-are-fixed-we-recommend-triggering-the-equivalent-celery-jobs-instead-of-running-the-commands-inline-celery-workers-run-in-a-managed-environment-where-credentials-and-configurations-are-fully-validated-you-can-find-the-list-of-celery-tasks-and-queue-configurations-in-workersmd" class="md-nav__link">
+    <span class="md-ellipsis">
+      Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in workers.md.
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Arguments
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Global Arguments">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dual-database-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dual-Database Architecture
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-connection-strings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Connection Strings
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#input-validation-preflight" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input Validation (Preflight)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sync Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sync Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sync-git" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync git
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-prs" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync prs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-work-items" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync work-items
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-cicd" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync cicd
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-deployments" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync deployments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-incidents" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync incidents
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-blame" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync blame
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync security
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-teams" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync teams
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#teams-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Teams Commands
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metrics Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metrics-daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics daily
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-rebuild" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics rebuild
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-dora" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics dora
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-complexity" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics complexity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics capacity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-release-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics release-impact
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-validate-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics validate-flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-compounding-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics compounding-risk
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Audit Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Audit Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#audit-completeness" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit completeness
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit schema
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-perf" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit perf
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit coverage
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixtures-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fixtures Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fixtures Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixtures-generate" class="md-nav__link">
+    <span class="md-ellipsis">
+      fixtures generate
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixtures-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      fixtures validate
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixtures-product-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      fixtures product-telemetry
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Admin Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Admin Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#admin-users-create" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin users create
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-orgs-create" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin orgs create
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-users-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin users list
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-orgs-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin orgs list
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-users-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin users update
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-orgs-delete" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin orgs delete
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-licenses" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin licenses
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin features
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-billing" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin billing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin bundles
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backfill-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Backfill Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backfill Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backfill-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      backfill run
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      API Server
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="API Server">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#api" class="md-nav__link">
+    <span class="md-ellipsis">
+      api
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Workers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workers-start-worker" class="md-nav__link">
+    <span class="md-ellipsis">
+      workers start-worker
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workers-start-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      workers start-scheduler
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Maintenance
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Maintenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#maintenance-cleanup-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      maintenance cleanup-tokens
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenance-cleanup-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      maintenance cleanup-all
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#billing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Billing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Billing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#billing-reconcile" class="md-nav__link">
+    <span class="md-ellipsis">
+      billing reconcile
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai-governance" class="md-nav__link">
+    <span class="md-ellipsis">
+      AI Governance
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AI Governance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ai-allowlist" class="md-nav__link">
+    <span class="md-ellipsis">
+      ai allowlist
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#work-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work Graph
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Work Graph">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#work-graph-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      work-graph build
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#investment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Investment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Investment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#investment-materialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      investment materialize
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommendations
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recommendations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommendations-compute" class="md-nav__link">
+    <span class="md-ellipsis">
+      recommendations compute
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reports
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reports">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-reports-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      How Reports Work
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#report-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Report Plan
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scheduling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#worker-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Worker Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphql-mutations" class="md-nav__link">
+    <span class="md-ellipsis">
+      GraphQL Mutations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphql-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      GraphQL Queries
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#batch-processing-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Processing Options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Variables
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provider-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provider Auth
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#linear-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Linear Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tuning
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migrate-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Migrate Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Migrate Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#migrate-postgres" class="md-nav__link">
+    <span class="md-ellipsis">
+      migrate postgres
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#migrate-clickhouse" class="md-nav__link">
+    <span class="md-ellipsis">
+      migrate clickhouse
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflow-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workflow Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Workflow Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#full-sync-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Full Sync Pipeline
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#local-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local Development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-organization-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Organization Sync
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Exit Codes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Providers
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Providers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../providers/rate-limit-policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Rate-Limit Policy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_16_9" id="__nav_16_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_16_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_19" id="__nav_19_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_19">
+            <span class="md-nav__icon md-icon"></span>
+            LLM
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Categorization Contract
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/byo-llm-credentials/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Credential Resolution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/errors-circuit-breaker/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Errors and Circuit-Breaker
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/materialize-fanout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Materialize Fan-Out
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/spend-observability/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Spend Observability
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/user-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    User Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inline-execution-vs-celery-backed-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inline Execution vs. Celery-Backed Operations
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#until-these-gaps-are-fixed-we-recommend-triggering-the-equivalent-celery-jobs-instead-of-running-the-commands-inline-celery-workers-run-in-a-managed-environment-where-credentials-and-configurations-are-fully-validated-you-can-find-the-list-of-celery-tasks-and-queue-configurations-in-workersmd" class="md-nav__link">
+    <span class="md-ellipsis">
+      Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in workers.md.
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Arguments
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Global Arguments">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dual-database-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dual-Database Architecture
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-connection-strings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Connection Strings
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#input-validation-preflight" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input Validation (Preflight)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sync-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sync Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sync Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sync-git" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync git
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-prs" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync prs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-work-items" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync work-items
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-cicd" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync cicd
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-deployments" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync deployments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-incidents" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync incidents
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-blame" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync blame
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync security
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-teams" class="md-nav__link">
+    <span class="md-ellipsis">
+      sync teams
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#teams-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Teams Commands
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metrics Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#metrics-daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics daily
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-rebuild" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics rebuild
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-dora" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics dora
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-complexity" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics complexity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics capacity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-release-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics release-impact
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-validate-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics validate-flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-compounding-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      metrics compounding-risk
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Audit Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Audit Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#audit-completeness" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit completeness
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit schema
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-perf" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit perf
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      audit coverage
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixtures-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fixtures Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fixtures Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixtures-generate" class="md-nav__link">
+    <span class="md-ellipsis">
+      fixtures generate
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixtures-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      fixtures validate
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixtures-product-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      fixtures product-telemetry
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Admin Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Admin Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#admin-users-create" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin users create
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-orgs-create" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin orgs create
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-users-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin users list
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-orgs-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin orgs list
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-users-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin users update
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-orgs-delete" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin orgs delete
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-licenses" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin licenses
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin features
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-billing" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin billing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admin-bundles" class="md-nav__link">
+    <span class="md-ellipsis">
+      admin bundles
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backfill-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Backfill Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backfill Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backfill-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      backfill run
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      API Server
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="API Server">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#api" class="md-nav__link">
+    <span class="md-ellipsis">
+      api
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Workers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workers-start-worker" class="md-nav__link">
+    <span class="md-ellipsis">
+      workers start-worker
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workers-start-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      workers start-scheduler
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Maintenance
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Maintenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#maintenance-cleanup-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      maintenance cleanup-tokens
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenance-cleanup-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      maintenance cleanup-all
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#billing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Billing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Billing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#billing-reconcile" class="md-nav__link">
+    <span class="md-ellipsis">
+      billing reconcile
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai-governance" class="md-nav__link">
+    <span class="md-ellipsis">
+      AI Governance
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AI Governance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ai-allowlist" class="md-nav__link">
+    <span class="md-ellipsis">
+      ai allowlist
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#work-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work Graph
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Work Graph">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#work-graph-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      work-graph build
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#investment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Investment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Investment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#investment-materialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      investment materialize
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommendations
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recommendations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommendations-compute" class="md-nav__link">
+    <span class="md-ellipsis">
+      recommendations compute
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reports
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reports">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-reports-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      How Reports Work
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#report-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Report Plan
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scheduling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#worker-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Worker Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphql-mutations" class="md-nav__link">
+    <span class="md-ellipsis">
+      GraphQL Mutations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphql-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      GraphQL Queries
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#batch-processing-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Processing Options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Variables
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provider-auth" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provider Auth
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#linear-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Linear Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tuning
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migrate-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Migrate Commands
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Migrate Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#migrate-postgres" class="md-nav__link">
+    <span class="md-ellipsis">
+      migrate postgres
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#migrate-clickhouse" class="md-nav__link">
+    <span class="md-ellipsis">
+      migrate clickhouse
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflow-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workflow Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Workflow Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#full-sync-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Full Sync Pipeline
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#local-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local Development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-organization-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Organization Sync
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Exit Codes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="cli-reference">CLI Reference<a class="headerlink" href="#cli-reference" title="Permanent link">&para;</a></h1>
+<p>Complete reference for the dev-health-ops command-line interface.</p>
+<hr />
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>The CLI entry point is <code>dev-hops</code> (module <code>dev_health_ops.cli</code>). Command groups:</p>
+<ul>
+<li><code>sync</code> : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams, work-items)</li>
+<li><code>teams</code> : team catalog operations (ClickHouse-backed sync)</li>
+<li><code>metrics</code> — compute analytics (daily, rebuild, dora, complexity, capacity, release-impact, validate-flags, compounding-risk)</li>
+<li><code>audit</code> — diagnostics (completeness, schema, perf, coverage)</li>
+<li><code>fixtures</code> — synthetic/demo data (generate, validate, product-telemetry)</li>
+<li><code>work-graph</code> / <code>investment</code> / <code>recommendations</code> — graph, investment, and recommendation computation</li>
+<li><code>admin</code> — users, orgs, licenses, feature flags, billing plans, feature bundles</li>
+<li><code>billing</code> — Stripe reconciliation</li>
+<li><code>ai</code> — AI governance allowlist</li>
+<li><code>migrate</code> — PostgreSQL (Alembic) and ClickHouse schema migrations</li>
+<li><code>api</code> — run the REST/GraphQL API server</li>
+<li><code>workers</code> — Celery worker and beat scheduler</li>
+<li><code>maintenance</code> — operational cleanup</li>
+</ul>
+<h3 id="inline-execution-vs-celery-backed-operations">Inline Execution vs. Celery-Backed Operations<a class="headerlink" href="#inline-execution-vs-celery-backed-operations" title="Permanent link">&para;</a></h3>
+<p>Bare CLI commands run inline, executing immediately in your terminal session. However, several commands have argument-enforcement gaps (CHAOS-2475). These operations require credentials or inputs that the CLI doesn't enforce at startup. Running them inline without these inputs can lead to silent failures or incomplete runs.</p>
+<h2 id="until-these-gaps-are-fixed-we-recommend-triggering-the-equivalent-celery-jobs-instead-of-running-the-commands-inline-celery-workers-run-in-a-managed-environment-where-credentials-and-configurations-are-fully-validated-you-can-find-the-list-of-celery-tasks-and-queue-configurations-in-workersmd">Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in <a href="../workers/">workers.md</a>.<a class="headerlink" href="#until-these-gaps-are-fixed-we-recommend-triggering-the-equivalent-celery-jobs-instead-of-running-the-commands-inline-celery-workers-run-in-a-managed-environment-where-credentials-and-configurations-are-fully-validated-you-can-find-the-list-of-celery-tasks-and-queue-configurations-in-workersmd" title="Permanent link">&para;</a></h2>
+<h2 id="global-arguments">Global Arguments<a class="headerlink" href="#global-arguments" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Environment Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--db</code></td>
+<td><code>POSTGRES_URI</code></td>
+<td>PostgreSQL connection (semantic: users, settings)</td>
+</tr>
+<tr>
+<td><code>--analytics-db</code></td>
+<td><code>CLICKHOUSE_URI</code></td>
+<td>ClickHouse connection (analytics: metrics, data)</td>
+</tr>
+</tbody>
+</table>
+<p><code>--db</code> and <code>--analytics-db</code> are <strong>not</strong> aliases. They point to different databases serving different roles (see Dual-Database Architecture below). If <code>POSTGRES_URI</code> is not set, <code>--db</code> falls back to <code>DATABASE_URI</code>.</p>
+<p>Subcommands like <code>metrics daily</code> also accept <code>--sink</code> to select the output backend. Legacy values (<code>mongo</code>, <code>sqlite</code>, <code>postgres</code>, <code>both</code>) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.</p>
+<blockquote>
+<p><strong>Caveat:</strong> Some subcommands (e.g., <code>audit completeness</code>, <code>audit coverage</code>, <code>investment materialize</code>, <code>work-graph build</code>) define their own <code>--db</code> flag that accepts an <strong>analytics</strong> (ClickHouse) connection string, overriding the global <code>--db</code> meaning for that subcommand. Check individual subcommand docs below for the expected connection type.</p>
+</blockquote>
+<h3 id="dual-database-architecture">Dual-Database Architecture<a class="headerlink" href="#dual-database-architecture" title="Permanent link">&para;</a></h3>
+<p>Dev Health Ops uses two databases:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Database</th>
+<th>Env Var</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Semantic</strong></td>
+<td>PostgreSQL</td>
+<td><code>POSTGRES_URI</code></td>
+<td>Users, orgs, settings, credentials</td>
+</tr>
+<tr>
+<td><strong>Analytics</strong></td>
+<td>ClickHouse</td>
+<td><code>CLICKHOUSE_URI</code></td>
+<td>Commits, PRs, work items, metrics</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="../../architecture/database-architecture/">Database Architecture</a> for details.</p>
+<h3 id="database-connection-strings">Database Connection Strings<a class="headerlink" href="#database-connection-strings" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th>Format</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PostgreSQL</td>
+<td><code>postgresql+asyncpg://</code></td>
+<td><code>postgresql+asyncpg://localhost:5555/postgres</code></td>
+</tr>
+<tr>
+<td>ClickHouse</td>
+<td><code>clickhouse://</code></td>
+<td><code>clickhouse://localhost:8123/default</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="input-validation-preflight">Input Validation (Preflight)<a class="headerlink" href="#input-validation-preflight" title="Permanent link">&para;</a></h2>
+<p>Before a subcommand runs, the CLI validates that the inputs it actually needs are present. Commands that require a database connection or an organization id <strong>fail fast</strong> with an argparse usage error (<strong>exit code 2</strong>) that names exactly what is missing — instead of failing deep inside the handler with a logged error or a traceback.</p>
+<p>These inputs are supplied through global flags or environment variables (<code>--analytics-db</code>/<code>CLICKHOUSE_URI</code>, <code>--db</code>/<code>POSTGRES_URI</code>, <code>--org</code>/<code>ORG_ID</code>), so they cannot be marked <code>required</code> on individual subparsers. The preflight closes that gap centrally.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>dev-hops<span class="w"> </span>metrics<span class="w"> </span>compounding-risk<span class="w">        </span><span class="c1"># no CLICKHOUSE_URI / org configured</span>
+usage:<span class="w"> </span>dev-health-ops<span class="w"> </span>metrics<span class="w"> </span>compounding-risk<span class="w"> </span><span class="o">[</span>-h<span class="o">]</span><span class="w"> </span><span class="o">[</span>--since<span class="w"> </span>SINCE<span class="w"> </span><span class="p">|</span><span class="w"> </span>--backfill<span class="w"> </span>BACKFILL<span class="o">]</span><span class="w"> </span>...
+dev-health-ops<span class="w"> </span>metrics<span class="w"> </span>compounding-risk:<span class="w"> </span>error:<span class="w"> </span>missing<span class="w"> </span>required<span class="w"> </span>input<span class="o">(</span>s<span class="o">)</span>:
+<span class="w">  </span>-<span class="w"> </span>ClickHouse<span class="w"> </span>analytics<span class="w"> </span>database<span class="w"> </span>—<span class="w"> </span>pass<span class="w"> </span>--analytics-db<span class="w"> </span>or<span class="w"> </span><span class="nb">set</span><span class="w"> </span>CLICKHOUSE_URI<span class="w"> </span><span class="o">(</span>...<span class="o">)</span>
+<span class="w">  </span>-<span class="w"> </span>organization<span class="w"> </span>id<span class="w"> </span>—<span class="w"> </span>pass<span class="w"> </span>--org<span class="w"> </span>or<span class="w"> </span><span class="nb">set</span><span class="w"> </span>ORG_ID<span class="w"> </span><span class="o">(</span>could<span class="w"> </span>not<span class="w"> </span>auto-resolve<span class="w"> </span>...<span class="o">)</span>
+</code></pre></div>
+<p>Each affected command also lists its requirements at the bottom of <code>--help</code>:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>dev-hops<span class="w"> </span>metrics<span class="w"> </span>compounding-risk<span class="w"> </span>--help
+...
+Requires:<span class="w"> </span>ClickHouse<span class="w"> </span><span class="o">(</span>--analytics-db<span class="w"> </span>/<span class="w"> </span>CLICKHOUSE_URI<span class="o">)</span>,<span class="w"> </span>organization<span class="w"> </span><span class="o">(</span>--org<span class="w"> </span>/<span class="w"> </span>ORG_ID<span class="o">)</span>.
+</code></pre></div>
+<p><strong>Requirement matrix:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>Commands</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ClickHouse (<code>--analytics-db</code> / <code>CLICKHOUSE_URI</code>)</td>
+<td><code>sync git</code>, <code>sync prs</code>, <code>sync blame</code>, <code>sync cicd</code>, <code>sync deployments</code>, <code>sync incidents</code>, <code>sync security</code>, <code>sync tests</code>, <code>sync work-items</code>, <code>sync teams</code>; <code>metrics daily</code>, <code>metrics dora</code>, <code>metrics complexity</code>, <code>metrics release-impact</code>, <code>metrics validate-flags</code>, <code>metrics rebuild</code>, <code>metrics compounding-risk</code> (+org); <code>audit perf</code>, <code>audit schema</code>; <code>recommendations compute</code>; <code>ai allowlist list/set</code> (+org); <code>migrate clickhouse</code> (bare + <code>upgrade</code>/<code>status</code>/<code>repair</code>)</td>
+</tr>
+<tr>
+<td>ClickHouse via <code>--db</code> (<code>CLICKHOUSE_URI</code>)</td>
+<td><code>investment materialize</code></td>
+</tr>
+<tr>
+<td>PostgreSQL (<code>--db</code> / <code>POSTGRES_URI</code>)</td>
+<td><code>billing reconcile</code>; <code>migrate postgres</code> (bare + <code>upgrade</code>/<code>downgrade</code>/<code>current</code>); <code>migrate configs-to-integrations</code> (one-time child-config -&gt; integration data migration; <code>--dry-run</code> to preview); legacy <code>migrate upgrade</code>/<code>downgrade</code>/<code>current</code></td>
+</tr>
+<tr>
+<td>Organization (<code>--org</code> / <code>ORG_ID</code>)</td>
+<td><code>metrics compounding-risk</code>, <code>backfill run</code>, <code>ai allowlist list/set</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>The org id auto-resolves from the first organization in PostgreSQL when <code>--org</code>/<code>ORG_ID</code> are omitted; the preflight only fails when no org can be resolved.</p>
+<p>Read-only Alembic commands that do not open a connection (<code>migrate [postgres] heads</code>, <code>migrate [postgres] history</code>) are intentionally <strong>not</strong> gated. Commands that declare their own <code>required=True</code> flag (e.g. <code>audit completeness</code>/<code>coverage</code> <code>--db</code>, <code>metrics capacity</code> <code>--db</code>, <code>fixtures validate</code> <code>--sink</code>) keep using argparse's own required-argument error.</p>
+</blockquote>
+<hr />
+<h2 id="sync-commands">Sync Commands<a class="headerlink" href="#sync-commands" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>⚠️ <strong>Warning (CHAOS-2475):</strong> Sync commands run inline and require provider credentials (such as <code>GITHUB_TOKEN</code>, <code>GITLAB_TOKEN</code>, <code>JIRA_EMAIL</code>, <code>JIRA_API_TOKEN</code>, or <code>LINEAR_API_KEY</code>) that the CLI doesn't enforce at startup. Running them inline without these inputs can cause silent failures.</p>
+<p><strong>Interim Workaround:</strong> We recommend triggering the sync via the API endpoint <code>POST /api/v1/admin/sync-configs/{config_id}/trigger</code> (which plans a <code>SyncRun</code> and dispatches <code>dispatch_sync_run</code> to the <code>sync</code> queue). See <a href="../workers/">workers.md</a> for details on Celery worker configuration.</p>
+</blockquote>
+<h3 id="sync-git"><code>sync git</code><a class="headerlink" href="#sync-git" title="Permanent link">&para;</a></h3>
+<p>Sync git repository data. Uses <code>CLICKHOUSE_URI</code> (analytics layer).</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Local repository</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>git<span class="w"> </span>--provider<span class="w"> </span><span class="nb">local</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo-path<span class="w"> </span>/path/to/repo
+
+<span class="c1"># GitHub</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>git<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>torvalds<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>linux
+
+<span class="c1"># GitHub App</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>git<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--github-app-id<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_APP_ID</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--github-app-key-path<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_APP_PRIVATE_KEY_PATH</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--github-app-installation-id<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_APP_INSTALLATION_ID</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>my-org<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>my-repo
+
+<span class="c1"># GitLab</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>git<span class="w"> </span>--provider<span class="w"> </span>gitlab<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITLAB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--project-id<span class="w"> </span><span class="m">278964</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--provider</code> | <code>local</code>, <code>github</code>, <code>gitlab</code> |
+| <code>--auth</code> | GitHub/GitLab token override (PAT mode for GitHub) |
+| <code>--github-app-id</code>, <code>--github-app-key-path</code>, <code>--github-app-installation-id</code> | GitHub App auth flags. Mutually exclusive with PAT auth. |
+| <code>--repo-path</code> | Path to local repo |
+| <code>--owner</code>, <code>--repo</code> | GitHub owner/repo |
+| <code>--project-id</code> | GitLab project ID |
+| <code>--since</code> | Start datetime (ISO 8601). Mutually exclusive with <code>--backfill</code> |
+| <code>--before</code> | End date (exclusive, default: tomorrow) |
+| <code>--backfill N</code> | Backfill N days ending before <code>--before</code>. Mutually exclusive with <code>--since</code> |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only; default) |</p>
+<p><code>--date</code> is a deprecated hidden alias for <code>--before</code>.</p>
+<p>GitHub authentication precedence is CLI flags &gt; environment variables &gt; stored database credentials. Use either PAT auth (<code>--auth</code> or <code>GITHUB_TOKEN</code>) or GitHub App auth, not both. See <a href="../../user-guide/github-app-auth/">GitHub App authentication</a>.</p>
+<h3 id="sync-prs"><code>sync prs</code><a class="headerlink" href="#sync-prs" title="Permanent link">&para;</a></h3>
+<p>Sync pull request data. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>sync<span class="w"> </span>prs<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>org<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>repo
+</code></pre></div>
+<h3 id="sync-work-items"><code>sync work-items</code><a class="headerlink" href="#sync-work-items" title="Permanent link">&para;</a></h3>
+<p>Sync work items from issue trackers. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># All providers</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>work-items<span class="w"> </span>--provider<span class="w"> </span>all<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--before<span class="w"> </span><span class="m">2025</span>-02-02<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--backfill<span class="w"> </span><span class="m">30</span>
+
+<span class="c1"># Jira only</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>work-items<span class="w"> </span>--provider<span class="w"> </span>jira
+
+<span class="c1"># GitHub with pattern</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>work-items<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-s<span class="w"> </span><span class="s2">&quot;org/*&quot;</span>
+
+<span class="c1"># Linear (all teams)</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>work-items<span class="w"> </span>--provider<span class="w"> </span>linear
+
+<span class="c1"># Linear (specific team by key)</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>work-items<span class="w"> </span>--provider<span class="w"> </span>linear<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>ENG
+</code></pre></div>
+<p><strong>Providers:</strong> <code>jira</code>, <code>github</code>, <code>gitlab</code>, <code>linear</code>, <code>synthetic</code>, <code>all</code></p>
+<h3 id="sync-cicd"><code>sync cicd</code><a class="headerlink" href="#sync-cicd" title="Permanent link">&para;</a></h3>
+<p>Sync CI/CD pipeline data. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># GitHub</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>cicd<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>org<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>repo
+
+<span class="c1"># GitLab</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>cicd<span class="w"> </span>--provider<span class="w"> </span>gitlab<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITLAB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--gitlab-url<span class="w"> </span><span class="s2">&quot;https://gitlab.com&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--project-id<span class="w"> </span><span class="m">123</span>
+</code></pre></div>
+<h3 id="sync-deployments"><code>sync deployments</code><a class="headerlink" href="#sync-deployments" title="Permanent link">&para;</a></h3>
+<p>Sync deployment events. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>sync<span class="w"> </span>deployments<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>org<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>repo
+</code></pre></div>
+<h3 id="sync-incidents"><code>sync incidents</code><a class="headerlink" href="#sync-incidents" title="Permanent link">&para;</a></h3>
+<p>Sync incident data. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>sync<span class="w"> </span>incidents<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>org<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>repo
+</code></pre></div>
+<h3 id="sync-blame"><code>sync blame</code><a class="headerlink" href="#sync-blame" title="Permanent link">&para;</a></h3>
+<p>Sync git blame data only (line-level authorship). Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>sync<span class="w"> </span>blame<span class="w"> </span>--provider<span class="w"> </span><span class="nb">local</span><span class="w"> </span>--repo-path<span class="w"> </span>/path/to/repo
+</code></pre></div>
+<p>Accepts the same provider, auth, single-repo, batch-mode, and date-range options as <a href="#sync-git"><code>sync git</code></a>. Providers: <code>local</code>, <code>github</code>, <code>gitlab</code>, <code>synthetic</code>.</p>
+<p>Planner-managed GitHub/GitLab integrations seed the heavy <code>blame</code> dataset when
+the legacy <code>git</code> target is selected. This keeps ownership and bus-factor metrics
+reachable from normal code-host onboarding while the per-sync GitHub blame crawl
+remains capped (<code>BLAME_BACKFILL_MAX_FILES=500</code>) and coverage-aware. Existing dev
+or support fixtures created before that seed can enable blame by adding an
+<code>integration_datasets</code> row for the integration with <code>dataset_key='blame'</code>,
+<code>is_enabled=true</code>, and options mirroring the integration's existing <code>git</code> dataset
+row (for example <code>{"legacy_targets":["git"]}</code>); after the row exists, the admin
+dataset endpoint can toggle it like any other dataset.</p>
+<h3 id="sync-security"><code>sync security</code><a class="headerlink" href="#sync-security" title="Permanent link">&para;</a></h3>
+<p>Sync security and dependency alerts (Dependabot, code-scanning, advisories, GitLab vulnerability/dependency findings). Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>sync<span class="w"> </span>security<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--owner<span class="w"> </span>org<span class="w"> </span>--repo<span class="w"> </span>repo
+</code></pre></div>
+<p>Accepts the same provider/auth/batch options as <a href="#sync-git"><code>sync git</code></a>. Providers: <code>local</code>, <code>github</code>, <code>gitlab</code>, <code>synthetic</code>.</p>
+<h3 id="sync-tests"><code>sync tests</code><a class="headerlink" href="#sync-tests" title="Permanent link">&para;</a></h3>
+<p>Sync CI test results and coverage (TestOps). Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>sync<span class="w"> </span>tests<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--owner<span class="w"> </span>org<span class="w"> </span>--repo<span class="w"> </span>repo
+</code></pre></div>
+<p>Accepts the same provider/auth/batch options as <a href="#sync-git"><code>sync git</code></a>. Providers: <code>local</code>, <code>github</code>, <code>gitlab</code>, <code>synthetic</code>.</p>
+<h3 id="sync-teams"><code>sync teams</code><a class="headerlink" href="#sync-teams" title="Permanent link">&para;</a></h3>
+<p>Sync team definitions. ClickHouse is the system of record for teams (CHAOS-2600 CS5); both paths write ClickHouse directly. The only difference is org tagging:</p>
+<ul>
+<li><strong>Org-scoped (<code>--org ORG</code>)</strong>: The provider data is written <strong>directly to ClickHouse</strong> via <code>insert_teams</code>, with each team row tagged with <code>org_id</code> (and any Jira ops links inserted). It does <strong>not</strong> project to PostgreSQL <code>team_mappings</code> and does <strong>not</strong> call any Postgres→ClickHouse bridge.</li>
+<li><strong>No-org (no <code>--org</code>)</strong>: The provider data is written directly to ClickHouse (preserving synthetic/local seeding), untagged.</li>
+</ul>
+<p><code>CLICKHOUSE_URI</code> (or <code>--analytics-db</code>) is required. <code>POSTGRES_URI</code> / <code>--db</code> is <strong>not</strong> required for <code>sync teams</code> (no Postgres team write).</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># From config file</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>teams<span class="w"> </span>--path<span class="w"> </span>src/dev_health_ops/config/team_mapping.yaml<span class="w"> </span>--allow-empty
+
+<span class="c1"># From Jira projects</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>teams<span class="w"> </span>--provider<span class="w"> </span>jira
+
+<span class="c1"># Synthetic teams</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>teams<span class="w"> </span>--provider<span class="w"> </span>synthetic
+
+<span class="c1"># From GitHub org (requires --owner and token)</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>teams<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>my-org<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span>
+
+<span class="c1"># From GitLab group (fetches group + subgroups)</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>teams<span class="w"> </span>--provider<span class="w"> </span>gitlab<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>my-group/path<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITLAB_TOKEN</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>The bundled <code>src/dev_health_ops/config/team_mapping.yaml</code> is intentionally empty for onboarding. By default, <code>sync teams</code> exits non-zero when discovery or persistence results in zero teams; use <code>--allow-empty</code> only when an empty/no-op sync is expected.</p>
+<hr />
+<h2 id="teams-commands">Teams Commands<a class="headerlink" href="#teams-commands" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Removed in CHAOS-2600 CS5:</strong> the <code>dev-hops teams reconcile</code> command is <strong>deleted</strong>. It reconciled org-scoped ClickHouse teams back into PostgreSQL <code>team_mappings</code> and re-bridged via <code>bridge_teams_to_clickhouse</code> — both the Postgres team control plane and the bridge are gone. ClickHouse is now the system of record for teams, written directly by <code>sync teams</code> and the admin team surface, so no reconcile step is needed.</p>
+</blockquote>
+<hr />
+<h2 id="metrics-commands">Metrics Commands<a class="headerlink" href="#metrics-commands" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>⚠️ <strong>Warning (CHAOS-2475):</strong> Metrics commands run inline and require database connections and configurations that the CLI doesn't enforce at startup. Running them inline can cause silent failures or incomplete computations.</p>
+<p><strong>Interim Workaround:</strong> We recommend triggering the equivalent Celery jobs on the <code>metrics</code> queue. See <a href="../workers/">workers.md</a> for details on Celery worker configuration.</p>
+</blockquote>
+<h3 id="metrics-daily"><code>metrics daily</code><a class="headerlink" href="#metrics-daily" title="Permanent link">&para;</a></h3>
+<p>Compute daily metrics. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Single day</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>daily<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--before<span class="w"> </span><span class="m">2025</span>-02-02<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--backfill<span class="w"> </span><span class="m">1</span>
+
+<span class="c1"># 7-day backfill</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>daily<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--before<span class="w"> </span><span class="m">2025</span>-02-02<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--backfill<span class="w"> </span><span class="m">7</span>
+
+<span class="c1"># Filter to one repo</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>daily<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--before<span class="w"> </span><span class="m">2025</span>-02-02<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo-id<span class="w"> </span>&lt;uuid&gt;
+
+<span class="c1"># Specify output format</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>daily<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--before<span class="w"> </span><span class="m">2025</span>-02-02<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sink<span class="w"> </span>clickhouse
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--since</code> | Start date. Mutually exclusive with <code>--backfill</code> |
+| <code>--before</code> | End date (exclusive, default: tomorrow) |
+| <code>--backfill N</code> | Compute N days ending before <code>--before</code> (default: 1) |
+| <code>--repo-id</code> | Filter to specific repository |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only) |</p>
+<h3 id="metrics-rebuild"><code>metrics rebuild</code><a class="headerlink" href="#metrics-rebuild" title="Permanent link">&para;</a></h3>
+<p>Recompute daily metrics for one or more repositories (or all repos) over a date range, then run a single partitioned finalize per day. Each repo/day is recomputed with finalize skipped, then the whole day is finalized once. Use after correcting or re-syncing source data for specific repos. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Rebuild all repos for the last 7 days</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>rebuild<span class="w"> </span>--backfill<span class="w"> </span><span class="m">7</span>
+
+<span class="c1"># Rebuild specific repos (repeatable --repo-id) over an explicit range</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>rebuild<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo-id<span class="w"> </span>550e8400-e29b-41d4-a716-446655440000<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo-id<span class="w"> </span>550e8400-e29b-41d4-a716-446655440001<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--since<span class="w"> </span><span class="m">2025</span>-01-01<span class="w"> </span>--before<span class="w"> </span><span class="m">2025</span>-02-01
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--repo-id</code> | Repo UUID to rebuild; repeatable. Omit to rebuild all repos |
+| <code>--since</code> | Start date (inclusive). Mutually exclusive with <code>--backfill</code> |
+| <code>--before</code> | End date (exclusive, default: tomorrow) |
+| <code>--backfill N</code> | Process N days ending before <code>--before</code> (default: 1) |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only) |
+| <code>--provider</code> | Restrict to a single provider (default: <code>auto</code>) |</p>
+<h3 id="metrics-dora"><code>metrics dora</code><a class="headerlink" href="#metrics-dora" title="Permanent link">&para;</a></h3>
+<p>Compute and persist DORA metrics (deployment frequency, lead time, change failure rate, time to restore) from synced ClickHouse data. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>metrics<span class="w"> </span>dora<span class="w"> </span>--backfill<span class="w"> </span><span class="m">30</span>
+
+<span class="c1"># Compute a subset of metrics</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>dora<span class="w"> </span>--backfill<span class="w"> </span><span class="m">30</span><span class="w"> </span>--metrics<span class="w"> </span>deployment_frequency,lead_time
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--since</code> / <code>--before</code> / <code>--backfill N</code> | Date range (as in <code>metrics daily</code>) |
+| <code>--repo-id</code> / <code>--repo-name</code> | Filter to a specific repository |
+| <code>--metrics</code> | Comma-separated metric names (default: full DORA set) |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only) |</p>
+<h3 id="metrics-complexity"><code>metrics complexity</code><a class="headerlink" href="#metrics-complexity" title="Permanent link">&para;</a></h3>
+<p>Compute file complexity and hotspot metrics from persisted <code>git_files</code>/<code>git_blame</code> data. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>metrics<span class="w"> </span>complexity<span class="w"> </span>--backfill<span class="w"> </span><span class="m">30</span>
+
+<span class="c1"># Scope to repos matching a glob and limit languages/files</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>complexity<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-s<span class="w"> </span><span class="s2">&quot;meridian/*&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--lang<span class="w"> </span><span class="s2">&quot;*.py&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--exclude<span class="w"> </span><span class="s2">&quot;*/tests/*&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-files<span class="w"> </span><span class="m">500</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--since</code> / <code>--before</code> / <code>--backfill N</code> | Date range (as in <code>metrics daily</code>) |
+| <code>--repo-id</code> | Filter to a specific repo |
+| <code>-s, --search</code> | Repo name search pattern (glob) |
+| <code>--lang</code> | Include language globs (e.g. <code>*.py</code>) |
+| <code>--exclude</code> | Exclude language globs (e.g. <code>*/tests/*</code>) |
+| <code>--max-files</code> | Limit number of files scanned per repo |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only) |</p>
+<h3 id="metrics-capacity"><code>metrics capacity</code><a class="headerlink" href="#metrics-capacity" title="Permanent link">&para;</a></h3>
+<p>Compute capacity / completion-date forecasts using Monte Carlo simulation over historical throughput. Takes its ClickHouse DSN via its own <strong>required</strong> <code>--db</code> flag (see the caveat under <a href="#global-arguments">Global Arguments</a>).</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Forecast a single team</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>capacity<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLICKHOUSE_URI</span><span class="s2">&quot;</span><span class="w"> </span>--team-id<span class="w"> </span>eng-core
+
+<span class="c1"># Forecast all discovered team/scope combinations, print without persisting</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>capacity<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLICKHOUSE_URI</span><span class="s2">&quot;</span><span class="w"> </span>--all-teams<span class="w"> </span>--dry-run
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--db</code> | ClickHouse connection string (<strong>required</strong>) |
+| <code>--team-id</code> | Filter by team ID |
+| <code>--work-scope-id</code> | Filter by work scope ID (project/board) |
+| <code>--target-items</code> | Number of items to complete (defaults to current backlog) |
+| <code>--target-date</code> | Target deadline (YYYY-MM-DD) |
+| <code>--history-days</code> | Days of history to use (default: 90) |
+| <code>--simulations</code> | Number of Monte Carlo simulations (default: 10000) |
+| <code>--all-teams</code> | Compute forecasts for all team/scope combinations |
+| <code>--dry-run</code> | Print forecasts without persisting |</p>
+<h3 id="metrics-release-impact"><code>metrics release-impact</code><a class="headerlink" href="#metrics-release-impact" title="Permanent link">&para;</a></h3>
+<p>Compute release-impact daily metrics from telemetry signal buckets. Re-computes a trailing window on each run so late-arriving signals are captured. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>metrics<span class="w"> </span>release-impact<span class="w"> </span>--backfill<span class="w"> </span><span class="m">7</span>
+
+<span class="c1"># Widen the recomputation window</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>release-impact<span class="w"> </span>--recomputation-window<span class="w"> </span><span class="m">14</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--since</code> / <code>--before</code> / <code>--backfill N</code> | Date range (as in <code>metrics daily</code>) |
+| <code>--recomputation-window N</code> | Days to recompute on each run (default: 7) |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only) |</p>
+<h3 id="metrics-validate-flags"><code>metrics validate-flags</code><a class="headerlink" href="#metrics-validate-flags" title="Permanent link">&para;</a></h3>
+<p>Run feature-flag pipeline validation checks against recent data. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>metrics<span class="w"> </span>validate-flags<span class="w"> </span>--lookback<span class="w"> </span><span class="m">30</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--lookback N</code> | Number of days to inspect (default: 30) |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only) |</p>
+<h3 id="metrics-compounding-risk"><code>metrics compounding-risk</code><a class="headerlink" href="#metrics-compounding-risk" title="Permanent link">&para;</a></h3>
+<p>Compute the Compounding Risk composite from persisted inputs (<code>repo_metrics_daily</code> + <code>repo_complexity_daily</code>) and write <code>compounding_risk_daily</code>. Requires <code>CLICKHOUSE_URI</code> <strong>and</strong> an organization id.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>metrics<span class="w"> </span>compounding-risk<span class="w"> </span>--org<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ORG_ID</span><span class="s2">&quot;</span>
+
+<span class="c1"># Backfill seven days ending before 2025-02-02, i.e. through 2025-02-01</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>compounding-risk<span class="w"> </span>--before<span class="w"> </span><span class="m">2025</span>-02-02<span class="w"> </span>--backfill<span class="w"> </span><span class="m">7</span>
+
+<span class="c1"># Explicit inclusive start with exclusive end</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>compounding-risk<span class="w"> </span>--since<span class="w"> </span><span class="m">2025</span>-01-01<span class="w"> </span>--before<span class="w"> </span><span class="m">2025</span>-02-02
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--since</code> | Start date (inclusive). Mutually exclusive with <code>--backfill</code> |
+| <code>--before</code> | End date (exclusive, default: tomorrow) |
+| <code>--backfill N</code> | Process N days ending before <code>--before</code> (default: 1) |
+| <code>--sink</code> | Analytics backend (<code>clickhouse</code> only) |</p>
+<blockquote>
+<p>CHAOS-2475 follow-up: <code>--day</code> is not supported. Use <code>--before &lt;day-after-target&gt; --backfill 1</code> for one historical day.</p>
+</blockquote>
+<hr />
+<h2 id="audit-commands">Audit Commands<a class="headerlink" href="#audit-commands" title="Permanent link">&para;</a></h2>
+<p>Diagnostic audits for data completeness, schema integrity, provider coverage, and query performance.</p>
+<h3 id="audit-completeness"><code>audit completeness</code><a class="headerlink" href="#audit-completeness" title="Permanent link">&para;</a></h3>
+<p>Check data freshness and completeness across providers within a time window.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Table output (default)</span>
+dev-hops<span class="w"> </span>audit<span class="w"> </span>completeness<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span><span class="w"> </span>--days<span class="w"> </span><span class="m">7</span>
+
+<span class="c1"># JSON output</span>
+dev-hops<span class="w"> </span>audit<span class="w"> </span>completeness<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span><span class="w"> </span>--days<span class="w"> </span><span class="m">30</span><span class="w"> </span>--format<span class="w"> </span>json
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--db</code> | Database connection string (required) |
+| <code>--days N</code> | Lookback window in days (default: 7) |
+| <code>--format</code> | Output format: <code>table</code> or <code>json</code> (default: <code>table</code>) |</p>
+<p>Checks work items, transitions, git commits, PRs, deployments, incidents, and CI pipeline runs across providers (jira, github, gitlab, synthetic). Reports staleness and missing data.</p>
+<h3 id="audit-schema"><code>audit schema</code><a class="headerlink" href="#audit-schema" title="Permanent link">&para;</a></h3>
+<p>Verify the database schema matches expected migrations (tables, columns, types).</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>audit<span class="w"> </span>schema
+</code></pre></div>
+<p>Supports ClickHouse (compares against SQL migration files) and PostgreSQL/SQLite (compares against SQLAlchemy model definitions). Reports missing tables, missing columns, and type mismatches with migration file hints.</p>
+<h3 id="audit-perf"><code>audit perf</code><a class="headerlink" href="#audit-perf" title="Permanent link">&para;</a></h3>
+<p>Find slow queries in the ClickHouse query log.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Default: queries &gt; 1000ms in the last 60 minutes</span>
+dev-hops<span class="w"> </span>audit<span class="w"> </span>perf
+
+<span class="c1"># Custom thresholds</span>
+dev-hops<span class="w"> </span>audit<span class="w"> </span>perf<span class="w"> </span>--threshold<span class="w"> </span><span class="m">500</span><span class="w"> </span>--lookback<span class="w"> </span><span class="m">120</span><span class="w"> </span>--limit<span class="w"> </span><span class="m">50</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--threshold</code> | Slow query threshold in ms (default: 1000) |
+| <code>--lookback</code> | Lookback window in minutes (default: 60) |
+| <code>--limit</code> | Max queries to display (default: 20) |</p>
+<h3 id="audit-coverage"><code>audit coverage</code><a class="headerlink" href="#audit-coverage" title="Permanent link">&para;</a></h3>
+<p>Audit provider implementation coverage -- checks that collectors, config, schema, sinks, and CLI commands are wired up for each provider.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># All providers</span>
+dev-hops<span class="w"> </span>audit<span class="w"> </span>coverage<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span>
+
+<span class="c1"># Specific providers</span>
+dev-hops<span class="w"> </span>audit<span class="w"> </span>coverage<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span><span class="w"> </span>--provider<span class="w"> </span>jira,github
+
+<span class="c1"># JSON output</span>
+dev-hops<span class="w"> </span>audit<span class="w"> </span>coverage<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span><span class="w"> </span>--format<span class="w"> </span>json
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--db</code> | Database connection string (required) |
+| <code>--provider</code> | Comma-separated provider list (default: all) |
+| <code>--format</code> | Output format: <code>table</code> or <code>json</code> (default: <code>table</code>) |</p>
+<hr />
+<h2 id="fixtures-commands">Fixtures Commands<a class="headerlink" href="#fixtures-commands" title="Permanent link">&para;</a></h2>
+<h3 id="fixtures-generate"><code>fixtures generate</code><a class="headerlink" href="#fixtures-generate" title="Permanent link">&para;</a></h3>
+<p>Generate synthetic test data. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Basic generation</span>
+dev-hops<span class="w"> </span>fixtures<span class="w"> </span>generate<span class="w"> </span>--days<span class="w"> </span><span class="m">30</span>
+
+<span class="c1"># Full generation with metrics and work graph</span>
+dev-hops<span class="w"> </span>fixtures<span class="w"> </span>generate<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sink<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLICKHOUSE_URI</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo-name<span class="w"> </span><span class="s2">&quot;meridian/web-app&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo-count<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--days<span class="w"> </span><span class="m">60</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--commits-per-day<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--pr-count<span class="w"> </span><span class="m">40</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--seed<span class="w"> </span><span class="m">42</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--with-metrics<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--with-work-graph<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--team-count<span class="w"> </span><span class="m">8</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Default | Description |
+|--------|---------|-------------|
+| <code>--sink</code> | <code>$CLICKHOUSE_URI</code> | Analytics sink URI (ClickHouse) |
+| <code>--repo-name</code> | <code>meridian/web-app</code> | Base repository name |
+| <code>--repo-count</code> | <code>1</code> | Number of repos to generate |
+| <code>--days</code> | <code>30</code> | Number of days of historical data |
+| <code>--commits-per-day</code> | <code>5</code> | Average commits per day |
+| <code>--pr-count</code> | <code>20</code> | Total pull requests to generate |
+| <code>--seed</code> | random | Deterministic seed for repeatable runs |
+| <code>--provider</code> | <code>synthetic</code> | Provider label: <code>synthetic</code>, <code>github</code>, <code>gitlab</code>, <code>jira</code> |
+| <code>--with-metrics</code> | off | Also generate derived metrics (daily, DORA, complexity, investment, Cockpit/TestOps risk inputs, etc.) |
+| <code>--with-work-graph</code> | off | Build work graph edges after generation (ClickHouse only) |
+| <code>--team-count</code> | <code>8</code> | Number of synthetic teams to create |</p>
+<p>Database type is auto-detected from the sink URI.</p>
+<p>Every fixture run also seeds synthetic security alert rows into
+<code>security_alerts</code> for each generated repo. These rows include Dependabot,
+code-scanning, advisory, GitLab vulnerability, and GitLab dependency-style
+sources so the security GraphQL resolvers and UI have demo data without a
+separate flag. Verify them with:</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(),</span><span class="w"> </span><span class="n">countDistinct</span><span class="p">(</span><span class="n">severity</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">security_alerts</span><span class="p">;</span>
+</code></pre></div>
+<p>When <code>--with-metrics</code> is enabled against ClickHouse, AI workflow intelligence
+tables are also seeded: <code>ai_attribution</code>, <code>ai_workflow_runs</code>,
+<code>ai_workflow_artifact_edges</code>, and <code>ai_workflow_issue_edges</code>. The daily metrics
+job then computes <code>ai_impact_metrics_daily</code>, <code>ai_governance_coverage_daily</code>,
+and <code>ai_policy_events</code> from those source rows.</p>
+<p><code>--with-metrics</code> also writes the Cockpit/Govern risk inputs used by Compounding
+Risk and TestOps Delivery Risk: <code>repo_complexity_daily</code>, <code>repo_metrics_daily</code>,
+<code>compounding_risk_daily</code>, <code>testops_pipeline_metrics_daily</code>,
+<code>testops_test_metrics_daily</code>, and <code>testops_coverage_metrics_daily</code>. A base
+fixture run without this flag is suitable for raw-ingest checks, but those risk
+surfaces should be expected to report missing inputs until metrics are computed.</p>
+<h3 id="fixtures-validate"><code>fixtures validate</code><a class="headerlink" href="#fixtures-validate" title="Permanent link">&para;</a></h3>
+<p>Validate that fixture data is sufficient for work graph and investment analysis.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>fixtures<span class="w"> </span>validate<span class="w"> </span>--sink<span class="w"> </span><span class="s2">&quot;clickhouse://localhost:8123/default&quot;</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--sink</code> | Analytics sink URI (required, ClickHouse only) |</p>
+<p>Checks raw data counts, the ClickHouse team catalog, cycle time metrics, work
+graph edges, connected components, security alert fixture coverage, AI
+fixture/rollup tables, and evidence bundle quality.</p>
+<h3 id="fixtures-product-telemetry"><code>fixtures product-telemetry</code><a class="headerlink" href="#fixtures-product-telemetry" title="Permanent link">&para;</a></h3>
+<p>Seed <code>product_telemetry_events</code> across one or more orgs so the platform-admin dashboard and per-org product views have data locally. Uses <code>CLICKHOUSE_URI</code>, and reads org IDs from PostgreSQL when <code>--org</code> is not supplied.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Seed the first 3 orgs from Postgres, 30 days each</span>
+dev-hops<span class="w"> </span>fixtures<span class="w"> </span>product-telemetry<span class="w"> </span>--orgs<span class="w"> </span><span class="m">3</span><span class="w"> </span>--days<span class="w"> </span><span class="m">30</span>
+
+<span class="c1"># Seed explicit orgs (repeatable --org)</span>
+dev-hops<span class="w"> </span>fixtures<span class="w"> </span>product-telemetry<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--org<span class="w"> </span>550e8400-e29b-41d4-a716-446655440000<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--days<span class="w"> </span><span class="m">60</span><span class="w"> </span>--sessions-per-day<span class="w"> </span><span class="m">50</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">42</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Default | Description |
+|--------|---------|-------------|
+| <code>--orgs</code> | — | Number of orgs to seed when <code>--org</code> is not provided (first N from Postgres <code>organizations</code>; falls back to synthetic UUIDs) |
+| <code>--org</code> | — | Explicit org id to seed (repeatable; overrides <code>--orgs</code>) |
+| <code>--days</code> | — | Days of data per org |
+| <code>--sessions-per-day</code> | — | Average synthetic sessions per day per org |
+| <code>--seed</code> | random | Deterministic seed (mixed with org_id) for repeatable runs |</p>
+<hr />
+<h2 id="admin-commands">Admin Commands<a class="headerlink" href="#admin-commands" title="Permanent link">&para;</a></h2>
+<p>User and organization management commands. These use PostgreSQL (<code>POSTGRES_URI</code>).</p>
+<blockquote>
+<p><strong>Important:</strong> Users must belong to an organization to log in. Always create an organization after creating a user.</p>
+</blockquote>
+<h3 id="admin-users-create"><code>admin users create</code><a class="headerlink" href="#admin-users-create" title="Permanent link">&para;</a></h3>
+<p>Create a new user.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>users<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--email<span class="w"> </span>admin@example.com<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--password<span class="w"> </span>secretpass123<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--full-name<span class="w"> </span><span class="s2">&quot;Admin User&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--superuser
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--db</code> | PostgreSQL URI override (or set <code>POSTGRES_URI</code>) |
+| <code>--email</code> | User email (required) |
+| <code>--password</code> | Password, min 8 chars (required) |
+| <code>--username</code> | Optional username |
+| <code>--full-name</code> | User's full name |
+| <code>--superuser</code> | Grant superuser privileges |</p>
+<h3 id="admin-orgs-create"><code>admin orgs create</code><a class="headerlink" href="#admin-orgs-create" title="Permanent link">&para;</a></h3>
+<p>Create a new organization. Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>orgs<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--name<span class="w"> </span><span class="s2">&quot;My Organization&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner-email<span class="w"> </span>admin@example.com<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--tier<span class="w"> </span>free
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--db</code> | PostgreSQL URI override (or set <code>POSTGRES_URI</code>) |
+| <code>--name</code> | Organization name (required) |
+| <code>--slug</code> | URL-safe slug (auto-generated if omitted) |
+| <code>--description</code> | Organization description |
+| <code>--tier</code> | Subscription tier (default: <code>community</code>) |
+| <code>--owner-email</code> | Email of initial owner |</p>
+<h3 id="admin-users-list"><code>admin users list</code><a class="headerlink" href="#admin-users-list" title="Permanent link">&para;</a></h3>
+<p>List all users.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>users<span class="w"> </span>list<span class="w"> </span>--limit<span class="w"> </span><span class="m">50</span>
+</code></pre></div>
+<h3 id="admin-orgs-list"><code>admin orgs list</code><a class="headerlink" href="#admin-orgs-list" title="Permanent link">&para;</a></h3>
+<p>List all organizations.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>orgs<span class="w"> </span>list<span class="w"> </span>--include-inactive
+</code></pre></div>
+<h3 id="admin-users-update"><code>admin users update</code><a class="headerlink" href="#admin-users-update" title="Permanent link">&para;</a></h3>
+<p>Update an existing user (identified by <code>--id</code>, <code>--email</code>, or <code>--username</code>) and optionally manage org memberships. Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>users<span class="w"> </span>update<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--email<span class="w"> </span>user@example.com<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--full-name<span class="w"> </span><span class="s2">&quot;New Name&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--no-active
+
+<span class="c1"># Add to an org with a role</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>users<span class="w"> </span>update<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--email<span class="w"> </span>user@example.com<span class="w"> </span>--org<span class="w"> </span>my-org<span class="w"> </span>--role<span class="w"> </span>admin
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--id</code> / <code>--email</code> / <code>--username</code> | Identify the user to update |
+| <code>--new-email</code> / <code>--new-username</code> | Change email/username (empty string clears username) |
+| <code>--full-name</code> | Set the user's full name |
+| <code>--password</code> | Set a new password (min 8 chars; revokes existing sessions) |
+| <code>--verified</code> / <code>--no-verified</code> | Set verified status |
+| <code>--superuser</code> / <code>--no-superuser</code> | Set superuser status |
+| <code>--active</code> / <code>--no-active</code> | Set active status |
+| <code>--org</code> | Org slug or ID: add the user or update their role |
+| <code>--role</code> | Membership role with <code>--org</code>: <code>owner</code>, <code>admin</code>, <code>member</code>, <code>viewer</code> (default: <code>member</code>) |
+| <code>--remove-from-org</code> | Org slug or ID: remove the user's membership |</p>
+<h3 id="admin-orgs-delete"><code>admin orgs delete</code><a class="headerlink" href="#admin-orgs-delete" title="Permanent link">&para;</a></h3>
+<p>Delete an organization and all of its scoped data. Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Preview the deletion plan</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>orgs<span class="w"> </span>delete<span class="w"> </span>--org-id<span class="w"> </span>&lt;uuid&gt;<span class="w"> </span>--dry-run
+
+<span class="c1"># Delete</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>orgs<span class="w"> </span>delete<span class="w"> </span>--org-id<span class="w"> </span>&lt;uuid&gt;
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--org-id</code> | Organization ID (required) |
+| <code>--dry-run</code> | Return the deletion plan without deleting data |</p>
+<h3 id="admin-licenses"><code>admin licenses</code><a class="headerlink" href="#admin-licenses" title="Permanent link">&para;</a></h3>
+<p>Offline license key management (Ed25519-signed). <code>create</code> uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Generate a signing key pair</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>licenses<span class="w"> </span>keygen
+
+<span class="c1"># Create a signed license key</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>licenses<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--org-id<span class="w"> </span>&lt;uuid&gt;<span class="w"> </span>--tier<span class="w"> </span>enterprise<span class="w"> </span>--duration-days<span class="w"> </span><span class="m">365</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--org-name<span class="w"> </span><span class="s2">&quot;Acme&quot;</span><span class="w"> </span>--contact-email<span class="w"> </span>billing@acme.com
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>keygen</code></td>
+<td>Generate an Ed25519 key pair for license signing</td>
+</tr>
+<tr>
+<td><code>create</code></td>
+<td>Create a signed license key (<code>--org-id</code>, <code>--tier {community,team,enterprise}</code>, <code>--duration-days</code> (default 365), <code>--org-name</code>, <code>--contact-email</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="admin-features"><code>admin features</code><a class="headerlink" href="#admin-features" title="Permanent link">&para;</a></h3>
+<p>Feature flag management. Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>features<span class="w"> </span>seed
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>seed</code></td>
+<td>Seed standard feature flags into the database</td>
+</tr>
+</tbody>
+</table>
+<h3 id="admin-billing"><code>admin billing</code><a class="headerlink" href="#admin-billing" title="Permanent link">&para;</a></h3>
+<p>Billing plan management and Stripe synchronization. Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>billing<span class="w"> </span>seed
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>billing<span class="w"> </span>list
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>billing<span class="w"> </span>pull-stripe<span class="w"> </span>--dry-run
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>billing<span class="w"> </span>sync-stripe
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>seed</code></td>
+<td>Seed standard billing plans (Community, Team, Enterprise) with prices</td>
+</tr>
+<tr>
+<td><code>list</code></td>
+<td>List all billing plans with prices and Stripe sync status</td>
+</tr>
+<tr>
+<td><code>pull-stripe</code></td>
+<td>Pull billing plans from Stripe into the database (<code>--dry-run</code> to preview)</td>
+</tr>
+<tr>
+<td><code>sync-stripe</code></td>
+<td>Push unsynced billing plans to Stripe</td>
+</tr>
+</tbody>
+</table>
+<h3 id="admin-bundles"><code>admin bundles</code><a class="headerlink" href="#admin-bundles" title="Permanent link">&para;</a></h3>
+<p>Feature bundle management (groups of feature keys mapped to plans/orgs). Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>bundles<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--key<span class="w"> </span>pro<span class="w"> </span>--name<span class="w"> </span><span class="s2">&quot;Pro&quot;</span><span class="w"> </span>--features<span class="w"> </span><span class="s2">&quot;metrics,investment,reports&quot;</span>
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>bundles<span class="w"> </span>list
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>bundles<span class="w"> </span>assign-plan<span class="w"> </span>--bundle-key<span class="w"> </span>pro<span class="w"> </span>--plan-key<span class="w"> </span>team
+python<span class="w"> </span>-m<span class="w"> </span>dev_health_ops.cli<span class="w"> </span>admin<span class="w"> </span>bundles<span class="w"> </span>assign-org<span class="w"> </span>--org-id<span class="w"> </span>&lt;uuid&gt;<span class="w"> </span>--feature-key<span class="w"> </span>reports
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create</code></td>
+<td>Create a bundle (<code>--key</code>, <code>--name</code>, <code>--features</code> comma-separated, <code>--description</code>)</td>
+</tr>
+<tr>
+<td><code>list</code></td>
+<td>List all bundles with features and plan assignments</td>
+</tr>
+<tr>
+<td><code>assign-plan</code></td>
+<td>Assign a bundle to a billing plan (<code>--bundle-key</code>, <code>--plan-key</code>)</td>
+</tr>
+<tr>
+<td><code>assign-org</code></td>
+<td>Grant an org a feature override (<code>--org-id</code>, <code>--feature-key</code>, <code>--reason</code>, <code>--expires-days</code>)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="backfill-commands">Backfill Commands<a class="headerlink" href="#backfill-commands" title="Permanent link">&para;</a></h2>
+<h3 id="backfill-run"><code>backfill run</code><a class="headerlink" href="#backfill-run" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>⚠️ <strong>Warning (CHAOS-2475):</strong> The <code>backfill run</code> command runs inline and requires provider credentials that the CLI doesn't enforce at startup. Running it inline can cause silent failures. Additionally, there is a known preflight-token bug (CHAOS-2479) where the CLI fails to validate credentials correctly.</p>
+<p><strong>Interim Workaround:</strong> We recommend triggering the backfill via the API endpoint <code>POST /api/v1/admin/sync-configs/{config_id}/backfill</code> (which plans a backfill-mode <code>SyncRun</code> and dispatches <code>dispatch_sync_run</code> to the <code>sync</code> queue). See <a href="../workers/">workers.md</a> for details on Celery worker configuration.</p>
+</blockquote>
+<p>Run historical data backfill for a sync configuration. Data is synced in chunked 7-day windows. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>backfill<span class="w"> </span>run<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--config-id<span class="w"> </span><span class="s2">&quot;550e8400-e29b-41d4-a716-446655440000&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--since<span class="w"> </span><span class="m">2024</span>-01-01<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--before<span class="w"> </span><span class="m">2024</span>-03-01
+</code></pre></div>
+<p><strong>Options:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--config-id</code></td>
+<td>Sync configuration UUID (required)</td>
+</tr>
+<tr>
+<td><code>--since</code></td>
+<td>Start date (ISO 8601). Mutually exclusive with <code>--backfill</code></td>
+</tr>
+<tr>
+<td><code>--before</code></td>
+<td>End date (exclusive, default: tomorrow)</td>
+</tr>
+<tr>
+<td><code>--backfill N</code></td>
+<td>Backfill N days ending before <code>--before</code>. Mutually exclusive with <code>--since</code></td>
+</tr>
+<tr>
+<td><code>--sink</code></td>
+<td>Analytics backend (<code>clickhouse</code> only; default)</td>
+</tr>
+</tbody>
+</table>
+<p>Backfill depth is limited by organization tier:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Max Backfill Depth</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Community</td>
+<td>30 days</td>
+</tr>
+<tr>
+<td>Team</td>
+<td>90 days</td>
+</tr>
+<tr>
+<td>Enterprise</td>
+<td>Unlimited</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Important:</strong> Backfill never updates SyncWatermarks. Incremental sync state is preserved.</p>
+</blockquote>
+<h2 id="api-server">API Server<a class="headerlink" href="#api-server" title="Permanent link">&para;</a></h2>
+<h3 id="api"><code>api</code><a class="headerlink" href="#api" title="Permanent link">&para;</a></h3>
+<p>Run the Dev Health Ops API server (FastAPI/uvicorn), which serves REST and GraphQL for <code>dev-health-web</code>. Uses both <code>POSTGRES_URI</code> and <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>api<span class="w"> </span>--reload
+dev-hops<span class="w"> </span>api<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--workers<span class="w"> </span><span class="m">4</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--host</code> | Bind host |
+| <code>--port</code> | Bind port |
+| <code>--workers</code> | Number of worker processes |
+| <code>--reload</code> | Enable auto-reload for local development |</p>
+<p>OpenAPI docs are served at <code>/docs</code> and GraphQL at the API's GraphQL endpoint when the server is running.</p>
+<hr />
+<h2 id="workers">Workers<a class="headerlink" href="#workers" title="Permanent link">&para;</a></h2>
+<p>Background jobs run on Celery with a Valkey/Redis broker. Configure with <code>CELERY_BROKER_URL</code> and <code>CELERY_RESULT_BACKEND</code>.</p>
+<h3 id="workers-start-worker"><code>workers start-worker</code><a class="headerlink" href="#workers-start-worker" title="Permanent link">&para;</a></h3>
+<p>Start a Celery worker consuming one or more queues.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>workers<span class="w"> </span>start-worker<span class="w"> </span>--queues<span class="w"> </span>default<span class="w"> </span>metrics<span class="w"> </span>sync<span class="w"> </span>reports<span class="w"> </span>--concurrency<span class="w"> </span><span class="m">4</span>
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--queues</code> | Queues to consume (default: <code>default metrics sync</code>) |
+| <code>--concurrency</code> | Number of concurrent worker processes |</p>
+<h3 id="workers-start-scheduler"><code>workers start-scheduler</code><a class="headerlink" href="#workers-start-scheduler" title="Permanent link">&para;</a></h3>
+<p>Start the Celery beat scheduler (dispatches periodic/beat tasks such as scheduled reports).</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>workers<span class="w"> </span>start-scheduler
+</code></pre></div>
+<p>For queue cleanup, stale reserved jobs, and failed-result cleanup, see
+<a href="../workers/#queue-cleanup-and-stale-jobs">Workers &amp; Celery</a>.</p>
+<hr />
+<h2 id="maintenance">Maintenance<a class="headerlink" href="#maintenance" title="Permanent link">&para;</a></h2>
+<p>Operational cleanup tasks. Use <code>POSTGRES_URI</code>.</p>
+<h3 id="maintenance-cleanup-tokens"><code>maintenance cleanup-tokens</code><a class="headerlink" href="#maintenance-cleanup-tokens" title="Permanent link">&para;</a></h3>
+<p>Delete expired refresh tokens.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>maintenance<span class="w"> </span>cleanup-tokens
+</code></pre></div>
+<h3 id="maintenance-cleanup-all"><code>maintenance cleanup-all</code><a class="headerlink" href="#maintenance-cleanup-all" title="Permanent link">&para;</a></h3>
+<p>Run all maintenance cleanup tasks (currently refresh-token cleanup).</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>maintenance<span class="w"> </span>cleanup-all
+</code></pre></div>
+<hr />
+<h2 id="billing">Billing<a class="headerlink" href="#billing" title="Permanent link">&para;</a></h2>
+<h3 id="billing-reconcile"><code>billing reconcile</code><a class="headerlink" href="#billing-reconcile" title="Permanent link">&para;</a></h3>
+<p>Run billing reconciliation against Stripe. Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Reconcile all orgs</span>
+dev-hops<span class="w"> </span>billing<span class="w"> </span>reconcile
+
+<span class="c1"># Reconcile a single org since a date</span>
+dev-hops<span class="w"> </span>billing<span class="w"> </span>reconcile<span class="w"> </span>--org-id<span class="w"> </span>&lt;uuid&gt;<span class="w"> </span>--since<span class="w"> </span><span class="m">2025</span>-01-01
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--org-id</code> | Reconcile a single organization (UUID). Omit to reconcile all orgs |
+| <code>--since</code> | Only reconcile invoices on or after this date (ISO YYYY-MM-DD) |</p>
+<hr />
+<h2 id="ai-governance">AI Governance<a class="headerlink" href="#ai-governance" title="Permanent link">&para;</a></h2>
+<h3 id="ai-allowlist"><code>ai allowlist</code><a class="headerlink" href="#ai-allowlist" title="Permanent link">&para;</a></h3>
+<p>Manage the org-level AI tool allowlist (which AI tools/models are permitted). Requires <code>CLICKHOUSE_URI</code> <strong>and</strong> an organization id.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Set a policy for a tool (optionally a specific model)</span>
+dev-hops<span class="w"> </span>ai<span class="w"> </span>allowlist<span class="w"> </span><span class="nb">set</span><span class="w"> </span>--tool<span class="w"> </span>claude-code<span class="w"> </span>--status<span class="w"> </span>allowed<span class="w"> </span>--reason<span class="w"> </span><span class="s2">&quot;approved&quot;</span>
+dev-hops<span class="w"> </span>ai<span class="w"> </span>allowlist<span class="w"> </span><span class="nb">set</span><span class="w"> </span>--tool<span class="w"> </span>claude-code<span class="w"> </span>--model<span class="w"> </span>opus<span class="w"> </span>--status<span class="w"> </span>deprecated
+
+<span class="c1"># List the latest allowlist entries for the org</span>
+dev-hops<span class="w"> </span>ai<span class="w"> </span>allowlist<span class="w"> </span>list
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>set</code></td>
+<td>Create/update an entry (<code>--tool</code>, optional <code>--model</code>, <code>--status {allowed,disallowed,deprecated}</code>, <code>--reason</code>)</td>
+</tr>
+<tr>
+<td><code>list</code></td>
+<td>Show the latest allowlist entries for the org</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="work-graph">Work Graph<a class="headerlink" href="#work-graph" title="Permanent link">&para;</a></h2>
+<h3 id="work-graph-build"><code>work-graph build</code><a class="headerlink" href="#work-graph-build" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>⚠️ <strong>Warning (CHAOS-2475):</strong> The <code>work-graph build</code> command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.</p>
+<p><strong>Interim Workaround:</strong> We recommend triggering the equivalent Celery job on the <code>metrics</code> queue. See <a href="../workers/">workers.md</a> for details on Celery worker configuration.</p>
+</blockquote>
+<p>Build work graph edges from raw data (issue → PR → commit linkages). Takes its ClickHouse DSN via its own <strong>required</strong> <code>--db</code> flag.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>work-graph<span class="w"> </span>build<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLICKHOUSE_URI</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--from<span class="w"> </span><span class="m">2025</span>-01-01<span class="w"> </span>--to<span class="w"> </span><span class="m">2025</span>-02-01
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--db</code> | ClickHouse connection string (<strong>required</strong>) |
+| <code>--from</code> | Start date (YYYY-MM-DD, default: 30 days ago) |
+| <code>--to</code> | End date (YYYY-MM-DD, default: today) |
+| <code>--repo-id</code> | Filter to a specific repository UUID |
+| <code>--heuristic-window</code> | Days window for heuristic issue→PR matching (default: 7) |
+| <code>--heuristic-confidence</code> | Confidence score for heuristic matches (default: 0.3) |
+| <code>--allow-degenerate</code> | Allow single connected-component graphs (default: fail) |
+| <code>--check-components</code> | Perform component analysis (enabled by default) |</p>
+<hr />
+<h2 id="investment">Investment<a class="headerlink" href="#investment" title="Permanent link">&para;</a></h2>
+<h3 id="investment-materialize"><code>investment materialize</code><a class="headerlink" href="#investment-materialize" title="Permanent link">&para;</a></h3>
+<p>Materialize WorkUnit investment categorization (theme/subcategory distributions and edges) into ClickHouse sinks. Takes its ClickHouse DSN via its own <code>--db</code> flag (default: <code>CLICKHOUSE_URI</code>).</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Full org materialization (publishes coverage marker)</span>
+dev-hops<span class="w"> </span>investment<span class="w"> </span>materialize<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLICKHOUSE_URI</span><span class="s2">&quot;</span><span class="w"> </span>--org<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ORG_ID</span><span class="s2">&quot;</span>
+
+<span class="c1"># Date-windowed refresh (unscoped → still publishes the org-wide coverage</span>
+<span class="c1"># marker via the full-coverage membership projection; CHAOS-2776)</span>
+dev-hops<span class="w"> </span>investment<span class="w"> </span>materialize<span class="w"> </span>--window-days<span class="w"> </span><span class="m">30</span><span class="w"> </span>--llm-provider<span class="w"> </span>none
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--db</code> | ClickHouse connection string (default: <code>CLICKHOUSE_URI</code>) |
+| <code>--from</code> / <code>--to</code> | Date range (<code>--from</code> defaults to <code>--window-days</code> before <code>--to</code>; <code>--to</code> defaults to now) |
+| <code>--window-days</code> | Window size when <code>--from</code> is not set (default: 30). Windowing does NOT suppress the org-wide membership marker — the post-run projection is full-coverage by construction (CHAOS-2776) |
+| <code>--repo-id</code> / <code>--team-id</code> | Filter to specific repos/teams. Scoped runs skip the membership projection and publish no org-wide marker |
+| <code>-l, --llm-provider</code> | LLM provider (<code>auto</code>, <code>openai</code>, <code>anthropic</code>, <code>local</code>, <code>mock</code>, <code>none</code>). Use <code>none</code> for distributions without explanations |
+| <code>-m, --model</code> | LLM model name (overrides provider default) |
+| <code>--persist-evidence-snippets</code> / <code>--no-persist-evidence-snippets</code> | Persist or skip extractive evidence quotes |
+| <code>--force</code> | Force re-materialization |</p>
+<blockquote>
+<p>Investment categorization runs at <strong>compute time</strong> and persists distributions through sinks only. See the <a href="../../llm/categorization-contract/">LLM categorization contract</a>.</p>
+</blockquote>
+<hr />
+<h2 id="recommendations">Recommendations<a class="headerlink" href="#recommendations" title="Permanent link">&para;</a></h2>
+<h3 id="recommendations-compute"><code>recommendations compute</code><a class="headerlink" href="#recommendations-compute" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>⚠️ <strong>Warning (CHAOS-2475):</strong> The <code>recommendations compute</code> command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.</p>
+<p><strong>Interim Workaround:</strong> We recommend triggering the equivalent Celery job on the <code>metrics</code> queue. See <a href="../workers/">workers.md</a> for details on Celery worker configuration.</p>
+</blockquote>
+<p>Evaluate rule-based recommendations for a team and persist results to ClickHouse — both fired recommendations and explicit <code>fired=False</code> tombstones, so a recovered signal is cleared rather than left lingering. Uses <code>CLICKHOUSE_URI</code>.</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>recommendations<span class="w"> </span>compute<span class="w"> </span>--team<span class="w"> </span>eng-core<span class="w"> </span>--window<span class="w"> </span>7d
+
+<span class="c1"># Override the window with an explicit date range and print JSON</span>
+dev-hops<span class="w"> </span>recommendations<span class="w"> </span>compute<span class="w"> </span>--team<span class="w"> </span>eng-core<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--since<span class="w"> </span><span class="m">2025</span>-01-01<span class="w"> </span>--until<span class="w"> </span><span class="m">2025</span>-01-31<span class="w"> </span>--output-json
+</code></pre></div>
+<p><strong>Options:</strong>
+| Option | Description |
+|--------|-------------|
+| <code>--team</code> | Team ID to evaluate (required) |
+| <code>--window</code> | Evaluation window, e.g. <code>7d</code> or <code>14d</code> (default: <code>7d</code>) |
+| <code>--since</code> | Override window start (exclusive end = <code>--until</code>) |
+| <code>--until</code> | Override window end (inclusive). Requires <code>--since</code> |
+| <code>--output-json</code> | Print fired recommendations as JSON to stdout |</p>
+<hr />
+<h2 id="reports">Reports<a class="headerlink" href="#reports" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>ℹ️ <strong>Note:</strong> Reports are not managed or triggered via the CLI. They are managed entirely through the GraphQL API or the Report Center UI. See <a href="../../user-guide/reports/">reports.md</a> for details.</p>
+</blockquote>
+<p>AI-generated reports are managed through the GraphQL API and executed as Celery tasks. Reports are not triggered via CLI — they are created, triggered, and scheduled through the Report Center UI or GraphQL mutations.</p>
+<h3 id="how-reports-work">How Reports Work<a class="headerlink" href="#how-reports-work" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Create</strong> a SavedReport via the Report Center UI or <code>createSavedReport</code> mutation</li>
+<li><strong>Trigger</strong> execution manually ("Run Now") or via a cron schedule</li>
+<li>The <code>execute_saved_report</code> Celery task runs on the <code>reports</code> queue</li>
+<li>The engine fetches metrics from ClickHouse, generates insights, and renders markdown</li>
+<li>Results are persisted as a <code>ReportRun</code> with rendered content and provenance records</li>
+</ol>
+<h3 id="report-plan">Report Plan<a class="headerlink" href="#report-plan" title="Permanent link">&para;</a></h3>
+<p>Each report requires a <code>ReportPlan</code> that defines scope, time range, sections, and metrics. If no explicit plan is provided, a default plan is generated from the report's <code>parameters</code> at execution time:</p>
+<ul>
+<li><code>scope</code> → team/repo/org scoping</li>
+<li><code>dateRange</code> → time window (<code>last_7_days</code>, <code>last_30_days</code>, <code>last_90_days</code>)</li>
+<li><code>metrics</code> → requested metric names</li>
+</ul>
+<h3 id="scheduling">Scheduling<a class="headerlink" href="#scheduling" title="Permanent link">&para;</a></h3>
+<p>Reports can be scheduled with a cron expression (via <code>scheduleCron</code> in the create/update mutation). The <code>dispatch_scheduled_reports</code> beat task runs every 5 minutes and dispatches any due reports.</p>
+<h3 id="worker-configuration">Worker Configuration<a class="headerlink" href="#worker-configuration" title="Permanent link">&para;</a></h3>
+<p>Reports require the <code>reports</code> queue to be active:</p>
+<div class="highlight"><pre><span></span><code>dev-hops<span class="w"> </span>workers<span class="w"> </span>start-worker<span class="w"> </span>--queues<span class="w"> </span>default<span class="w"> </span>metrics<span class="w"> </span>sync<span class="w"> </span>reports
+</code></pre></div>
+<h3 id="graphql-mutations">GraphQL Mutations<a class="headerlink" href="#graphql-mutations" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Mutation</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>createSavedReport</code></td>
+<td>Create a new report definition</td>
+</tr>
+<tr>
+<td><code>updateSavedReport</code></td>
+<td>Update name, description, parameters, schedule</td>
+</tr>
+<tr>
+<td><code>cloneSavedReport</code></td>
+<td>Clone a report with optional overrides</td>
+</tr>
+<tr>
+<td><code>deleteSavedReport</code></td>
+<td>Delete a report and its schedule</td>
+</tr>
+<tr>
+<td><code>triggerReport</code></td>
+<td>Manually trigger a report execution</td>
+</tr>
+</tbody>
+</table>
+<h3 id="graphql-queries">GraphQL Queries<a class="headerlink" href="#graphql-queries" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Query</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>savedReports</code></td>
+<td>List saved reports for an org</td>
+</tr>
+<tr>
+<td><code>savedReport</code></td>
+<td>Get a single report by ID</td>
+</tr>
+<tr>
+<td><code>reportRuns</code></td>
+<td>List execution history for a report</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="batch-processing-options">Batch Processing Options<a class="headerlink" href="#batch-processing-options" title="Permanent link">&para;</a></h2>
+<p>For GitHub/GitLab batch operations:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-s, --search PATTERN</code></td>
+<td>Glob pattern for repos</td>
+</tr>
+<tr>
+<td><code>--group NAME</code></td>
+<td>Organization/group name</td>
+</tr>
+<tr>
+<td><code>--batch-size N</code></td>
+<td>Records per batch</td>
+</tr>
+<tr>
+<td><code>--max-concurrent N</code></td>
+<td>Concurrent workers</td>
+</tr>
+<tr>
+<td><code>--max-repos N</code></td>
+<td>Maximum repos to process</td>
+</tr>
+<tr>
+<td><code>--use-async</code></td>
+<td>Enable async workers</td>
+</tr>
+<tr>
+<td><code>--rate-limit-delay SECONDS</code></td>
+<td>Delay between requests</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="environment-variables">Environment Variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h2>
+<h3 id="database">Database<a class="headerlink" href="#database" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POSTGRES_URI</code></td>
+<td>PostgreSQL connection (semantic layer: users, settings)</td>
+</tr>
+<tr>
+<td><code>CLICKHOUSE_URI</code></td>
+<td>ClickHouse connection (analytics layer: metrics, data)</td>
+</tr>
+<tr>
+<td><code>DATABASE_URI</code></td>
+<td>Legacy fallback (deprecated)</td>
+</tr>
+<tr>
+<td><code>DB_ECHO</code></td>
+<td>Enable SQL logging</td>
+</tr>
+</tbody>
+</table>
+<h3 id="provider-auth">Provider Auth<a class="headerlink" href="#provider-auth" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Provider</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GITHUB_TOKEN</code></td>
+<td>GitHub</td>
+</tr>
+<tr>
+<td><code>GITLAB_TOKEN</code></td>
+<td>GitLab</td>
+</tr>
+<tr>
+<td><code>JIRA_EMAIL</code></td>
+<td>Jira</td>
+</tr>
+<tr>
+<td><code>JIRA_API_TOKEN</code></td>
+<td>Jira</td>
+</tr>
+<tr>
+<td><code>JIRA_BASE_URL</code></td>
+<td>Jira</td>
+</tr>
+<tr>
+<td><code>LINEAR_API_KEY</code></td>
+<td>Linear</td>
+</tr>
+</tbody>
+</table>
+<h3 id="linear-options">Linear Options<a class="headerlink" href="#linear-options" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LINEAR_FETCH_COMMENTS</code></td>
+<td><code>true</code></td>
+<td>Fetch issue comments</td>
+</tr>
+<tr>
+<td><code>LINEAR_FETCH_HISTORY</code></td>
+<td><code>true</code></td>
+<td>Fetch status change history</td>
+</tr>
+<tr>
+<td><code>LINEAR_FETCH_CYCLES</code></td>
+<td><code>true</code></td>
+<td>Fetch cycles as sprints</td>
+</tr>
+<tr>
+<td><code>LINEAR_COMMENTS_LIMIT</code></td>
+<td><code>100</code></td>
+<td>Max comments per issue</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tuning">Tuning<a class="headerlink" href="#tuning" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BATCH_SIZE</code></td>
+<td>100</td>
+<td>Records per batch</td>
+</tr>
+<tr>
+<td><code>MAX_WORKERS</code></td>
+<td>4</td>
+<td>Parallel workers</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="migrate-commands">Migrate Commands<a class="headerlink" href="#migrate-commands" title="Permanent link">&para;</a></h2>
+<p>Database schema migrations for PostgreSQL (Alembic) and ClickHouse.</p>
+<h3 id="migrate-postgres"><code>migrate postgres</code><a class="headerlink" href="#migrate-postgres" title="Permanent link">&para;</a></h3>
+<p>Run PostgreSQL (Alembic) schema migrations. Uses <code>POSTGRES_URI</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Apply all pending migrations (upgrade to head)</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres<span class="w"> </span>upgrade
+
+<span class="c1"># Upgrade to a specific revision</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres<span class="w"> </span>upgrade<span class="w"> </span>abc123
+
+<span class="c1"># Revert one migration</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres<span class="w"> </span>downgrade<span class="w"> </span>-1
+
+<span class="c1"># Show current applied revision</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres<span class="w"> </span>current
+
+<span class="c1"># Show migration history</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres<span class="w"> </span><span class="nb">history</span>
+
+<span class="c1"># Show available heads</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres<span class="w"> </span>heads
+</code></pre></div>
+<p><strong>Backward-compatible aliases:</strong> <code>dev-hops migrate upgrade</code>, <code>dev-hops migrate downgrade</code>, etc. still work and target PostgreSQL.</p>
+<h3 id="migrate-clickhouse"><code>migrate clickhouse</code><a class="headerlink" href="#migrate-clickhouse" title="Permanent link">&para;</a></h3>
+<p>Run ClickHouse schema migrations. Uses <code>CLICKHOUSE_URI</code>.</p>
+<p>ClickHouse migrations are numbered <code>.sql</code> and <code>.py</code> files in <code>migrations/clickhouse/</code>, tracked via a <code>schema_migrations</code> table in ClickHouse.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Apply all pending migrations</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse<span class="w"> </span>upgrade
+
+<span class="c1"># Show applied and pending migrations</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse<span class="w"> </span>status
+
+<span class="c1"># Exit non-zero if any migration is pending (read-only wait primitive for deploy tooling)</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse<span class="w"> </span>status<span class="w"> </span>--check
+
+<span class="c1"># Remediate stale duplicate repo rows (dry-run unless --apply)</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse<span class="w"> </span>repair
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse<span class="w"> </span>repair<span class="w"> </span>--apply
+</code></pre></div>
+<blockquote>
+<p><strong>Important:</strong> Run <code>dev-hops migrate clickhouse</code> after setting up a fresh environment, before running any sync or metrics commands. ClickHouse tables are <strong>not</strong> auto-created — they require migrations to be applied first.</p>
+</blockquote>
+<hr />
+<h2 id="workflow-examples">Workflow Examples<a class="headerlink" href="#workflow-examples" title="Permanent link">&para;</a></h2>
+<h3 id="full-sync-pipeline">Full Sync Pipeline<a class="headerlink" href="#full-sync-pipeline" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Set environment variables</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">CLICKHOUSE_URI</span><span class="o">=</span><span class="s2">&quot;clickhouse://ch:ch@localhost:8123/default&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">POSTGRES_URI</span><span class="o">=</span><span class="s2">&quot;postgresql+asyncpg://postgres:postgres@localhost:5555/postgres&quot;</span>
+
+<span class="c1"># 1. Run migrations</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse
+
+<span class="c1"># 2. Sync git data</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>git<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--owner<span class="w"> </span>myorg<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo<span class="w"> </span>myrepo
+
+<span class="c1"># 3. Sync work items</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>work-items<span class="w"> </span>--provider<span class="w"> </span>jira<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--before<span class="w"> </span><span class="m">2025</span>-02-02<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--backfill<span class="w"> </span><span class="m">30</span>
+
+<span class="c1"># 4. Compute metrics</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>daily<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--backfill<span class="w"> </span><span class="m">30</span>
+</code></pre></div>
+<h3 id="local-development">Local Development<a class="headerlink" href="#local-development" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start databases</span>
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>clickhouse<span class="w"> </span>postgres
+
+<span class="c1"># Run migrations</span>
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>postgres
+dev-hops<span class="w"> </span>migrate<span class="w"> </span>clickhouse
+
+<span class="c1"># Generate synthetic data</span>
+dev-hops<span class="w"> </span>fixtures<span class="w"> </span>generate<span class="w"> </span>--days<span class="w"> </span><span class="m">30</span>
+
+<span class="c1"># Compute metrics</span>
+dev-hops<span class="w"> </span>metrics<span class="w"> </span>daily<span class="w"> </span>--backfill<span class="w"> </span><span class="m">30</span>
+</code></pre></div>
+<h3 id="batch-organization-sync">Batch Organization Sync<a class="headerlink" href="#batch-organization-sync" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Sync all repos in org</span>
+dev-hops<span class="w"> </span>sync<span class="w"> </span>git<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-s<span class="w"> </span><span class="s2">&quot;myorg/*&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--group<span class="w"> </span>myorg<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-concurrent<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--use-async
+</code></pre></div>
+<hr />
+<h2 id="exit-codes">Exit Codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Success</td>
+</tr>
+<tr>
+<td>1</td>
+<td>General error</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Configuration error — includes argparse usage errors and missing required inputs surfaced by the <a href="#input-validation-preflight">preflight</a> (e.g. unset <code>CLICKHOUSE_URI</code>/<code>POSTGRES_URI</code>/<code>ORG_ID</code>)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Authentication error</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Rate limit exceeded</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

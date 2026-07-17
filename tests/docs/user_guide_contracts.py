@@ -34,6 +34,39 @@ DIAGNOSTIC_PAGES: Final = {
     ),
 }
 FORBIDDEN_DIAGNOSTIC_COMPARISONS: Final = ("percentile", "leaderboard", "top performer")
+FLOW_PAGES: Final = {
+    "pr-flow.md": (
+        "Purpose",
+        "When to use",
+        "How to read",
+        "Worked example",
+        "Evidence path",
+        "Empty and error states",
+        "Caveats",
+        "Next step",
+    ),
+    "capacity-planning.md": (
+        "Purpose",
+        "When to use",
+        "How to read",
+        "Worked example",
+        "Evidence path",
+        "Empty and error states",
+        "Caveats",
+        "Next step",
+    ),
+    "work-graph.md": (
+        "Purpose",
+        "When to use",
+        "How to read",
+        "Worked example",
+        "Evidence path",
+        "Empty and error states",
+        "Caveats",
+        "Next step",
+    ),
+}
+FORBIDDEN_FLOW_COMPARISONS: Final = ("leaderboard", "top performer", "rank people")
 
 
 def diagnostic_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
@@ -71,4 +104,60 @@ def diagnostic_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
     for term in ("churn", "complexity", "not blame"):
         if term not in hotspots.casefold():
             errors.append(f"code-hotspots.md: missing interpretation guard {term!r}")
+    return tuple(errors)
+
+
+def flow_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
+    errors: list[str] = []
+    for page_name, required_sections in FLOW_PAGES.items():
+        content = pages[page_name]
+        for section in required_sections:
+            if section.casefold() not in content.casefold():
+                errors.append(f"{page_name}: missing section {section!r}")
+        if "../glossary.md" not in content.casefold():
+            errors.append(f"{page_name}: missing glossary link")
+        for phrase in FORBIDDEN_FLOW_COMPARISONS:
+            if phrase in content.casefold():
+                errors.append(f"{page_name}: contains comparison framing {phrase!r}")
+
+    pr_flow = pages["pr-flow.md"]
+    for term in (
+        "PR stages",
+        "State Flow",
+        "review latency",
+        "Current behavior",
+        "Planned behavior",
+    ):
+        if term.casefold() not in pr_flow.casefold():
+            errors.append(f"pr-flow.md: missing flow contract {term!r}")
+
+    capacity = pages["capacity-planning.md"]
+    for term in (
+        "backlog",
+        "historical throughput",
+        "Monte Carlo",
+        "P50",
+        "P85",
+        "P95",
+        "Refresh Forecast",
+        "not a promise",
+        "Current behavior",
+    ):
+        if term.casefold() not in capacity.casefold():
+            errors.append(f"capacity-planning.md: missing capacity contract {term!r}")
+
+    graph = pages["work-graph.md"]
+    for term in (
+        "issue",
+        "pull request",
+        "commit",
+        "file",
+        "Theme → Subcategory → Evidence",
+        "Work Graph Explorer",
+        "connection type",
+        "Current behavior",
+        "Planned behavior",
+    ):
+        if term.casefold() not in graph.casefold():
+            errors.append(f"work-graph.md: missing work-graph contract {term!r}")
     return tuple(errors)

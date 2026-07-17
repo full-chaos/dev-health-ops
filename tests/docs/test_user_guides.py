@@ -3,7 +3,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-from tests.docs.user_guide_contracts import DIAGNOSTIC_PAGES, diagnostic_contract_errors
+from tests.docs.user_guide_contracts import (
+    DIAGNOSTIC_PAGES,
+    FLOW_PAGES,
+    diagnostic_contract_errors,
+    flow_contract_errors,
+)
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 DOCS: Final = ROOT / "docs"
@@ -181,3 +186,34 @@ def test_diagnostic_negative_reports_comparison_framing_and_missing_evidence_lin
 
     assert "quadrants.md: missing glossary link" in errors
     assert "flame-diagrams.md: contains comparison framing 'percentile'" in errors
+
+
+def test_product_prd_characterization_baseline_for_flow_and_work_graph() -> None:
+    prd = (DOCS / "product" / "prd.md").read_text(encoding="utf-8")
+
+    assert "Flow & constraints" in prd
+    assert "Work Graph" in prd
+
+
+def test_pr_flow_capacity_and_work_graph_meet_user_guide_contract() -> None:
+    pages = {page_name: _read_view(page_name) for page_name in FLOW_PAGES}
+
+    assert flow_contract_errors(pages) == ()
+    reference = _read_guide("work-graph.md")
+    assert "reference role" in reference.casefold()
+    assert "canonical user journey" in pages["work-graph.md"].casefold()
+
+
+def test_flow_negative_reports_ambiguous_planning_and_comparison_framing() -> None:
+    pages = {page_name: _read_view(page_name) for page_name in FLOW_PAGES}
+    pages["pr-flow.md"] = pages["pr-flow.md"].replace(
+        "Planned behavior", "Future behavior"
+    )
+    pages["capacity-planning.md"] = (
+        f"{pages['capacity-planning.md']}\nTop performer leaderboard.\n"
+    )
+
+    errors = flow_contract_errors(pages)
+
+    assert "pr-flow.md: missing flow contract 'Planned behavior'" in errors
+    assert "capacity-planning.md: contains comparison framing 'leaderboard'" in errors

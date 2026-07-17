@@ -52,3 +52,42 @@ test.describe("diagnostic guides", () => {
         }
     });
 });
+
+test.describe("flow and planning guides", () => {
+    test("follows PR Flow through capacity planning to work relationships", async ({ page }) => {
+        await page.goto("/user-guide/views/pr-flow/");
+
+        const article = page.locator(".md-content");
+        await expect(article.getByRole("heading", { name: "PR Flow" })).toBeVisible();
+        await expect(article).toContainText("review latency");
+        await expect(article).toContainText("Current behavior");
+        await expect(article).toContainText("Planned behavior");
+
+        await article.getByRole("link", { name: "Next step: Plan capacity", exact: true }).click();
+        await expect(page).toHaveURL(/\/user-guide\/views\/capacity-planning\/$/);
+        await expect(article.getByRole("heading", { name: "Capacity Planning View" })).toBeVisible();
+        await expect(article).toContainText("backlog");
+        await expect(article).toContainText("historical throughput");
+
+        await article
+            .getByRole("link", { name: "Next step: Follow work relationships", exact: true })
+            .click();
+        await expect(page).toHaveURL(/\/user-guide\/views\/work-graph\/$/);
+        await expect(article.getByRole("heading", { name: "Work Graph: follow relationships" })).toBeVisible();
+        await expect(article).toContainText("Theme → Subcategory → Evidence");
+    });
+
+    test("keeps evidence and glossary routes available for each guide", async ({ page }) => {
+        for (const guide of [
+            "/user-guide/views/pr-flow/",
+            "/user-guide/views/capacity-planning/",
+            "/user-guide/views/work-graph/",
+        ] as const) {
+            await page.goto(guide);
+
+            const article = page.locator(".md-content");
+            await expect(article.getByRole("link", { name: /evidence model/i })).toBeVisible();
+            await expect(article.getByRole("link", { name: /glossary/i })).toBeVisible();
+        }
+    });
+});

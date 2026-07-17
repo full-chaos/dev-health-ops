@@ -12,52 +12,43 @@ troubleshooting: customer-push-ingestion/troubleshooting/
 
 # PR Flow
 
-## What it answers
-- Where work stalls (pickup, review, merge)?
-- Is the bottleneck capacity or latency?
+PR Flow helps a team understand how pull requests move through their visible stages and where **review latency** adds waiting time. It describes work movement in the selected scope and period, not individual assessment.
 
-## Implementation
+## Purpose
+Use this guide to ask where work is waiting, moving, or returning for more work before it is complete.
 
-PR Flow is implemented through multiple complementary visualizations:
+## When to use
+Use PR Flow when a delivery trend needs more detail about stages, review waiting, or merge timing. Use a [flame diagram](flame-diagrams.md) when one pull request needs a closer single-item diagnosis.
 
-### 1. Flame Diagram (Single PR Timeline)
-**Location**: `/prs/[pr_id]/page.tsx` → `FlameDiagram` component
+## Current behavior
+In **Metrics → Flow**, the current **State Flow** tab shows available work-item state
+transitions and flow paths for the selected scope and period. In this guide, **PR stages**
+means the visible stage labels and timing that connected sources make available; it does not
+promise a complete lifecycle for every pull request.
 
-Shows the lifecycle of a single PR with:
-- **States**: active, waiting, blocked, ci
-- **Categories**: planned, unplanned, rework
-- Timeline visualization with color-coded segments
-- Duration breakdown by state
+**Review latency** is the time from PR creation to first review when those timestamps
+are available. Keep the visible period and filters with any interpretation, and use a
+missing review timestamp as a coverage limitation rather than a zero-duration stage.
 
-Use case: Diagnose why a specific PR took long to merge.
+## Planned behavior
+Additional aggregate paths and drill-downs may be added as source coverage grows. Treat only controls and stages visible in the current workspace as available now.
 
-### 2. State Flow Sankey
-**Location**: `/work` → Flow tab → State Flow sub-tab
+## How to read
+Start with stage labels and durations. Compare waiting and review with the surrounding period; one long pull request is not a system trend.
 
-Shows work item state transitions across the team:
-- Source nodes: initial states
-- Target nodes: terminal states
-- Link width: volume of transitions
-- Identifies common flow paths and bottlenecks
+## Worked example
+An illustrative pull request can show a short active stage and a longer review stage. Inspect linked review, dependency, and timing evidence before choosing an explanation.
 
-Use case: See where work commonly gets stuck across all items.
+## Evidence path
+Open related pull requests, reviews, issues, and time context when an evidence path is available. The [evidence model](../../product/concepts.md) keeps a stage reading tied to artifacts.
 
-### 3. Review Heatmap
-**Location**: `/work` → Heatmap tab
+## Empty and error states
+No available stages or review dates mean there is not enough usable source information for the selected context. Check filters, connection coverage, and page help; do not read an empty result as instant flow.
 
-Shows review wait patterns by time:
-- X-axis: time of day
-- Y-axis: day of week
-- Cell intensity: review wait density
+## Caveats
+Sources can expose different stage detail, and one pull request can contain an unusual pause. Keep the view focused on work context and use longer trends before choosing a team response.
 
-Use case: Identify when review latency is highest.
-
-## Backing computations
-- Stage timestamp extraction per provider (pr_created_at, first_review_at, merged_at)
-- Windowed aggregation by scope
-- State duration calculations in `work_item_state_durations_daily`
-
-## API Endpoints
-- `GET /api/v1/flame?entity_type=pr&entity_id={id}` - Single PR timeline
-- `POST /api/v1/sankey` with `mode=state` - State transitions
-- `GET /api/v1/heatmap?type=temporal_load&metric=review_wait_density` - Review patterns
+## Next step
+- [Diagnose one item with a flame diagram](flame-diagrams.md).
+- [Read the glossary](../glossary.md).
+- [Plan capacity](capacity-planning.md).

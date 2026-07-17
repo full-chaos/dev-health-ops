@@ -204,6 +204,12 @@ input {
   color: var(--fc-ink-muted);
 }
 
+.md-nav__link {
+  align-items: center;
+  display: flex;
+  min-block-size: var(--fc-space-6);
+}
+
 .md-nav__link--active,
 .md-nav__link:focus-visible,
 .md-nav__link:hover {

@@ -30,3 +30,24 @@ test.describe("diagnostic guides accessibility", () => {
         expect(blocking).toEqual([]);
     });
 });
+
+test.describe("flow and planning guides accessibility", () => {
+    for (const guide of [
+        { path: "/user-guide/views/pr-flow/", title: "PR Flow" },
+        { path: "/user-guide/views/capacity-planning/", title: "Capacity Planning View" },
+        { path: "/user-guide/views/work-graph/", title: "Work Graph: follow relationships" },
+    ] as const) {
+        test(`has no serious or critical violations on ${guide.title}`, async ({ page }) => {
+            await page.goto(guide.path);
+
+            const results = await new AxeBuilder({ page })
+                .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+                .analyze();
+            const blocking = results.violations.filter(
+                (violation) => violation.impact === "serious" || violation.impact === "critical",
+            );
+
+            expect(blocking).toEqual([]);
+        });
+    }
+});

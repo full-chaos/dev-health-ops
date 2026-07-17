@@ -43,6 +43,7 @@ def _validate_webhook_mode(value: str | None) -> str | None:
 class IngestSourceCreate(BaseModel):
     system: str = Field(..., min_length=1)
     instance: str = Field(..., min_length=1)
+    entity_family: str = Field(default="legacy", min_length=1, max_length=255)
     display_name: str | None = None
     mode: str = "customer_push"
     webhook_mode: str = "disabled"
@@ -72,6 +73,7 @@ class IngestSourceResponse(BaseModel):
     org_id: str
     system: str
     instance: str
+    entity_family: str
     display_name: str | None
     mode: str
     enabled: bool

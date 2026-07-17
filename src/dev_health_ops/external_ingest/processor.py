@@ -96,7 +96,12 @@ def _parse_ingestion_uuid(value: str) -> uuid.UUID:
 
 
 async def _resolve_source_id(
-    session: AsyncSession, *, org_id: str, source_system: str, source_instance: str
+    session: AsyncSession,
+    *,
+    org_id: str,
+    source_system: str,
+    source_instance: str,
+    entity_family: str = "legacy",
 ) -> uuid.UUID:
     """The registered source's UUID, stamped as row provenance (CC8
     ``source_id`` column). Case-insensitive match on both system and
@@ -115,6 +120,7 @@ async def _resolve_source_id(
                     func.lower(IngestSource.system) == source_system.strip().lower(),
                     func.lower(IngestSource.instance)
                     == source_instance.strip().lower(),
+                    IngestSource.entity_family == entity_family,
                 )
                 .order_by(IngestSource.created_at)
             )
@@ -321,14 +327,14 @@ async def process_batch(
                 f"payload row for batch {ingestion_id} is missing (pruned or "
                 "already cleaned up) — batch cannot be processed"
             )
+        envelope = _parse_envelope(payload, ingestion_id=ingestion_id)
         source_id = await _resolve_source_id(
             session,
             org_id=org_id,
             source_system=source_system,
             source_instance=source_instance,
+            entity_family=envelope.source.entity_family,
         )
-
-        envelope = _parse_envelope(payload, ingestion_id=ingestion_id)
         if (
             envelope.source.system != source_system
             or envelope.source.instance != source_instance

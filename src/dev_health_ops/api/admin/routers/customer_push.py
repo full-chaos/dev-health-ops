@@ -70,7 +70,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_VALID_SYSTEMS = {"github", "gitlab", "jira", "linear", "custom"}
+_VALID_SYSTEMS = {
+    "github",
+    "gitlab",
+    "jira",
+    "linear",
+    "pagerduty",
+    "atlassian",
+    "custom",
+}
 _CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
 _CUSTOMER_PUSH_REQUIRED_TIER = LicenseTier.TEAM
 
@@ -136,6 +144,7 @@ def _source_to_response(
         org_id=source.org_id,
         system=source.system,
         instance=source.instance,
+        entity_family=source.entity_family,
         display_name=source.display_name,
         mode=source.mode,
         enabled=source.enabled,
@@ -260,7 +269,11 @@ async def _require_customer_push_access(session: AsyncSession, org_id: str) -> N
 
 
 async def _resolve_ownership(
-    session: AsyncSession, org_id: str, system: str, instance: str
+    session: AsyncSession,
+    org_id: str,
+    system: str,
+    instance: str,
+    entity_family: str,
 ) -> tuple[uuid.UUID | None, list[str]]:
     """Run CC5 per-provider ownership matching against managed integration_sources.
 
@@ -289,7 +302,11 @@ async def _resolve_ownership(
         return matched_id, warnings
 
     matches = await find_matching_managed_sources(
-        session, org_id=org_id, system=system, instance=instance
+        session,
+        org_id=org_id,
+        system=system,
+        instance=instance,
+        entity_family=entity_family,
     )
     enabled_match = next(
         (
@@ -424,6 +441,7 @@ async def create_source(
                     IngestSource.system == system,
                     func.lower(IngestSource.instance)
                     == payload.instance.strip().lower(),
+                    IngestSource.entity_family == payload.entity_family,
                 )
             )
         )
@@ -444,13 +462,14 @@ async def create_source(
     warnings: list[str] = []
     if mode == IngestSourceMode.CUSTOMER_PUSH:
         matched_id, warnings = await _resolve_ownership(
-            session, org_id, system, payload.instance
+            session, org_id, system, payload.instance, payload.entity_family
         )
 
     source = IngestSource(
         org_id=org_id,
         system=system,
         instance=payload.instance,
+        entity_family=payload.entity_family,
         display_name=payload.display_name,
         mode=mode.value,
         enabled=True,
@@ -479,7 +498,12 @@ async def create_source(
         resource_id=str(source.id),
         user_id=_user_uuid(current_user.user_id),
         description=f"Registered customer-push source {system}/{payload.instance}",
-        changes={"system": system, "instance": payload.instance, "mode": mode.value},
+        changes={
+            "system": system,
+            "instance": payload.instance,
+            "entity_family": payload.entity_family,
+            "mode": mode.value,
+        },
         request=request,
     )
     await session.commit()
@@ -555,7 +579,7 @@ async def patch_source(
     warnings: list[str] = []
     if source.is_write_eligible() and ("mode" in changes or "enabled" in changes):
         matched_id, warnings = await _resolve_ownership(
-            session, org_id, source.system, source.instance
+            session, org_id, source.system, source.instance, source.entity_family
         )
         source.matched_integration_source_id = matched_id
 

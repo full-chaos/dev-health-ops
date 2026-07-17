@@ -33,15 +33,44 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
 from dev_health_ops.api.external_ingest.schemas import (
     RECORD_KIND_MODELS,
+    EscalationPolicyV1,
+    IncidentNoteV1,
+    IncidentResponderV1,
+    IncidentTimelineEventV1,
+    OnCallAssignmentV1,
+    OnCallScheduleV1,
+    OperationalAlertV1,
+    OperationalIncidentV1,
+    OperationalRecordV1,
+    OperationalServiceV1,
+    OperationalTeamV1,
+    OperationalUserV1,
     RecordEnvelope,
+    ServiceRepositoryMappingV1,
 )
 from dev_health_ops.external_ingest.types import NormalizedBatch
 from dev_health_ops.external_ingest.validate import validate_records
+from dev_health_ops.models.operational import (
+    EscalationPolicy,
+    IncidentNote,
+    IncidentResponder,
+    IncidentTimelineEvent,
+    OnCallAssignment,
+    OnCallSchedule,
+    OperationalAlert,
+    OperationalIncident,
+    OperationalService,
+    OperationalTeam,
+    OperationalUser,
+    ServiceRepositoryMapping,
+    canonical_operational_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +81,39 @@ _WORK_ITEM_FAMILY_KINDS = frozenset(
     {"work_item.v1", "work_item_transition.v1", "work_item_dependency.v1"}
 )
 _ORG_SCOPED_KINDS = frozenset({"team.v1", "identity.v1"})
+_OPERATIONAL_KINDS = frozenset(
+    {
+        "operational_service.v1",
+        "operational_incident.v1",
+        "operational_alert.v1",
+        "incident_timeline_event.v1",
+        "incident_note.v1",
+        "incident_responder.v1",
+        "escalation_policy.v1",
+        "on_call_schedule.v1",
+        "on_call_assignment.v1",
+        "operational_team.v1",
+        "operational_user.v1",
+        "service_repository_mapping.v1",
+    }
+)
 
 #: Master-spec CC6 kind x system matrix. ``custom`` excludes the work_item
 #: family in v1 (would widen the ``WorkItem.provider`` Literal vocabulary).
 ALLOWED_KINDS_BY_SYSTEM: dict[str, frozenset[str]] = {
-    "github": _GIT_FAMILY_KINDS | _WORK_ITEM_FAMILY_KINDS | _ORG_SCOPED_KINDS,
-    "gitlab": _GIT_FAMILY_KINDS | _WORK_ITEM_FAMILY_KINDS | _ORG_SCOPED_KINDS,
+    "github": _GIT_FAMILY_KINDS
+    | _WORK_ITEM_FAMILY_KINDS
+    | _ORG_SCOPED_KINDS
+    | _OPERATIONAL_KINDS,
+    "gitlab": _GIT_FAMILY_KINDS
+    | _WORK_ITEM_FAMILY_KINDS
+    | _ORG_SCOPED_KINDS
+    | _OPERATIONAL_KINDS,
     "jira": _WORK_ITEM_FAMILY_KINDS | _ORG_SCOPED_KINDS,
     "linear": _WORK_ITEM_FAMILY_KINDS | _ORG_SCOPED_KINDS,
-    "custom": _GIT_FAMILY_KINDS | _ORG_SCOPED_KINDS,
+    "custom": _GIT_FAMILY_KINDS | _ORG_SCOPED_KINDS | _OPERATIONAL_KINDS,
+    "pagerduty": _OPERATIONAL_KINDS | _ORG_SCOPED_KINDS,
+    "atlassian": _OPERATIONAL_KINDS | _ORG_SCOPED_KINDS,
 }
 
 #: CC6: systems whose git-family records must reference the batch's own
@@ -84,6 +137,27 @@ _KIND_DISPATCH: dict[str, tuple[str, str, bool]] = {
         "work_item_dependencies",
         "work_item_dependency",
         False,
+    ),
+}
+
+_OPERATIONAL_KIND_DISPATCH: dict[str, tuple[str, str]] = {
+    "operational_service.v1": ("operational_services", "operational_service"),
+    "operational_incident.v1": ("operational_incidents", "operational_incident"),
+    "operational_alert.v1": ("operational_alerts", "operational_alert"),
+    "incident_timeline_event.v1": (
+        "incident_timeline_events",
+        "incident_timeline_event",
+    ),
+    "incident_note.v1": ("incident_notes", "incident_note"),
+    "incident_responder.v1": ("incident_responders", "incident_responder"),
+    "escalation_policy.v1": ("escalation_policies", "escalation_policy"),
+    "on_call_schedule.v1": ("on_call_schedules", "on_call_schedule"),
+    "on_call_assignment.v1": ("on_call_assignments", "on_call_assignment"),
+    "operational_team.v1": ("operational_teams", "operational_team"),
+    "operational_user.v1": ("operational_users", "operational_user"),
+    "service_repository_mapping.v1": (
+        "service_repository_mappings",
+        "service_repository_mapping",
     ),
 }
 
@@ -132,6 +206,218 @@ def _git_family_repo_identifier(kind: str, payload_model: BaseModel) -> str:
     if kind == "repository.v1":
         return str(getattr(payload_model, "external_id", "") or "")
     return str(getattr(payload_model, "repository_external_id", "") or "")
+
+
+def _operational_reference_id(
+    batch: NormalizedBatch, entity_family: str, external_id: str | None
+) -> str | None:
+    if external_id is None:
+        return None
+    return canonical_operational_id(
+        batch.org_id,
+        batch.source_system,
+        batch.source_instance,
+        entity_family,
+        external_id,
+    )
+
+
+def _operational_common(
+    payload: OperationalRecordV1, batch: NormalizedBatch, kind: str
+) -> dict[str, Any]:
+    return {
+        "org_id": batch.org_id,
+        "provider": batch.source_system,
+        "provider_instance_id": batch.source_instance,
+        "source_entity_type": f"external_push.{kind.rsplit('.', 1)[0]}",
+        "external_id": payload.external_id,
+        "source_version_at": payload.source_version_at,
+        "source_id": batch.source_id,
+        "source_url": payload.source_url,
+        "source_event_at": payload.source_event_at,
+        "source_event_id": payload.source_event_id,
+        "raw_status": payload.raw_status,
+        "raw_severity": payload.raw_severity,
+        "raw_priority": payload.raw_priority,
+        "normalized_status": payload.normalized_status,
+        "normalized_severity": payload.normalized_severity,
+        "normalized_priority": payload.normalized_priority,
+        "relationship_provenance": payload.relationship_provenance,
+        "relationship_confidence": payload.relationship_confidence,
+    }
+
+
+def _normalize_operational_record(
+    kind: str, payload: OperationalRecordV1, batch: NormalizedBatch
+) -> object:
+    common = _operational_common(payload, batch, kind)
+    match payload:
+        case OperationalServiceV1():
+            return OperationalService(
+                **common,
+                name=payload.name,
+                description=payload.description,
+                service_type=payload.service_type,
+                owning_team_id=_operational_reference_id(
+                    batch, "operational_team", payload.owning_team_external_id
+                ),
+                escalation_policy_id=_operational_reference_id(
+                    batch,
+                    "operational_escalation_policy",
+                    payload.escalation_policy_external_id,
+                ),
+                is_deleted=payload.is_deleted,
+                deleted_at=payload.deleted_at,
+            )
+        case OperationalIncidentV1():
+            return OperationalIncident(
+                **common,
+                service_id=_operational_reference_id(
+                    batch, "operational_service", payload.service_external_id
+                ),
+                service_external_id=payload.service_external_id,
+                escalation_policy_id=_operational_reference_id(
+                    batch,
+                    "operational_escalation_policy",
+                    payload.escalation_policy_external_id,
+                ),
+                title=payload.title,
+                description=payload.description,
+                started_at=payload.started_at,
+                resolved_at=payload.resolved_at,
+                is_deleted=payload.is_deleted,
+                deleted_at=payload.deleted_at,
+            )
+        case OperationalAlertV1():
+            return OperationalAlert(
+                **common,
+                service_id=_operational_reference_id(
+                    batch, "operational_service", payload.service_external_id
+                ),
+                incident_id=_operational_reference_id(
+                    batch, "operational_incident", payload.incident_external_id
+                ),
+                title=payload.title,
+                description=payload.description,
+                triggered_at=payload.triggered_at,
+                acknowledged_at=payload.acknowledged_at,
+                resolved_at=payload.resolved_at,
+                is_deleted=payload.is_deleted,
+                deleted_at=payload.deleted_at,
+            )
+        case IncidentTimelineEventV1():
+            return IncidentTimelineEvent(
+                **common,
+                incident_id=_operational_reference_id(
+                    batch, "operational_incident", payload.incident_external_id
+                )
+                or "",
+                event_type=payload.event_type,
+                body=payload.body,
+                actor_type=payload.actor_type,
+                actor_id=_operational_reference_id(
+                    batch, "operational_user", payload.actor_external_id
+                ),
+                occurred_at=payload.occurred_at,
+            )
+        case IncidentNoteV1():
+            return IncidentNote(
+                **common,
+                incident_id=_operational_reference_id(
+                    batch, "operational_incident", payload.incident_external_id
+                )
+                or "",
+                body=payload.body,
+                author_user_id=_operational_reference_id(
+                    batch, "operational_user", payload.author_user_external_id
+                ),
+                created_at=payload.created_at,
+            )
+        case IncidentResponderV1():
+            return IncidentResponder(
+                **common,
+                incident_id=_operational_reference_id(
+                    batch, "operational_incident", payload.incident_external_id
+                )
+                or "",
+                user_id=_operational_reference_id(
+                    batch, "operational_user", payload.user_external_id
+                ),
+                responder_name=payload.responder_name,
+                role=payload.role,
+                responder_assignment_id=payload.responder_assignment_id,
+                requested_at=payload.requested_at,
+                assigned_at=payload.assigned_at,
+                acknowledged_at=payload.acknowledged_at,
+                completed_at=payload.completed_at,
+            )
+        case OnCallScheduleV1():
+            return OnCallSchedule(
+                **common,
+                name=payload.name,
+                description=payload.description,
+                timezone=payload.timezone,
+                is_deleted=payload.is_deleted,
+                deleted_at=payload.deleted_at,
+            )
+        case OperationalTeamV1():
+            return OperationalTeam(
+                **common,
+                name=payload.name,
+                description=payload.description,
+                is_deleted=payload.is_deleted,
+                deleted_at=payload.deleted_at,
+            )
+        case EscalationPolicyV1():
+            return EscalationPolicy(
+                **common,
+                name=payload.name,
+                description=payload.description,
+                is_deleted=payload.is_deleted,
+                deleted_at=payload.deleted_at,
+            )
+        case OnCallAssignmentV1():
+            return OnCallAssignment(
+                **common,
+                schedule_id=_operational_reference_id(
+                    batch, "operational_on_call_schedule", payload.schedule_external_id
+                ),
+                user_id=_operational_reference_id(
+                    batch, "operational_user", payload.user_external_id
+                ),
+                escalation_policy_id=_operational_reference_id(
+                    batch,
+                    "operational_escalation_policy",
+                    payload.escalation_policy_external_id,
+                ),
+                escalation_level=payload.escalation_level,
+                starts_at=payload.starts_at,
+                ends_at=payload.ends_at,
+            )
+        case OperationalUserV1():
+            return OperationalUser(
+                **common,
+                display_name=payload.display_name,
+                email=payload.email,
+                is_deleted=payload.is_deleted,
+                deleted_at=payload.deleted_at,
+            )
+        case ServiceRepositoryMappingV1():
+            return ServiceRepositoryMapping(
+                **common,
+                service_id=_operational_reference_id(
+                    batch, "operational_service", payload.service_external_id
+                )
+                or "",
+                repo_full_name=payload.repo_full_name,
+                repo_provider=payload.repo_provider,
+                mapping_kind=payload.mapping_kind,
+                rule_id=payload.rule_id,
+                valid_from=payload.valid_from,
+                valid_to=payload.valid_to,
+                is_active=payload.is_active,
+            )
+    raise AssertionError(f"unsupported operational payload {type(payload)!r}")
 
 
 def normalize_batch(
@@ -245,9 +531,18 @@ def normalize_batch(
                 )
                 continue
 
-        attr, index_key, as_dict = _KIND_DISPATCH[record.kind]
-        target: list = getattr(batch, attr)
-        target.append(payload_model.model_dump() if as_dict else payload_model)
+        operational_dispatch = _OPERATIONAL_KIND_DISPATCH.get(record.kind)
+        if operational_dispatch is not None:
+            assert isinstance(payload_model, OperationalRecordV1)
+            attr, index_key = operational_dispatch
+            target = getattr(batch, attr)
+            target.append(
+                _normalize_operational_record(record.kind, payload_model, batch)
+            )
+        else:
+            attr, index_key, as_dict = _KIND_DISPATCH[record.kind]
+            target = getattr(batch, attr)
+            target.append(payload_model.model_dump() if as_dict else payload_model)
         batch.record_index_by_kind.setdefault(index_key, []).append(index)
         result.record_counts[record.kind] = result.record_counts.get(record.kind, 0) + 1
 

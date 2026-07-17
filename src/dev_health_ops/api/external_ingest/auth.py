@@ -358,7 +358,10 @@ def require_ingest_scope(scope: str):
 
 
 def require_matching_source(
-    ctx: IngestAuthContext, system: str, instance: str
+    ctx: IngestAuthContext,
+    system: str,
+    instance: str,
+    entity_family: str = "legacy",
 ) -> IngestSource:
     """Enforce that a write request's declared source matches the token's
     bound source (Design Decision 7 / master-spec CC16 ``source_mismatch``).
@@ -378,7 +381,12 @@ def require_matching_source(
     a mismatch, not a pass-through.
     """
     source = ctx.source
-    if source is None or source.system != system or source.instance != instance:
+    if (
+        source is None
+        or source.system != system
+        or source.instance != instance
+        or (source.entity_family or "legacy") != entity_family
+    ):
         raise ExternalIngestError(
             403,
             "source_mismatch",

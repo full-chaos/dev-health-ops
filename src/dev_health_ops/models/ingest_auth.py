@@ -73,7 +73,7 @@ def hash_ingest_token(token: str) -> str:
 
 
 class IngestSource(Base):
-    """One row per ``(org_id, system, instance)``.
+    """One row per ``(org_id, system, instance, entity_family)``.
 
     Tracks which of ``fullchaos_sync | customer_push | disabled`` currently
     owns that source instance -- the single registry the one-active-owner XOR
@@ -86,6 +86,7 @@ class IngestSource(Base):
     org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     system: Mapped[str] = mapped_column(Text, nullable=False)
     instance: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_family: Mapped[str] = mapped_column(Text, nullable=False, default="legacy")
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     mode: Mapped[str] = mapped_column(
         Text, nullable=False, default=IngestSourceMode.DISABLED.value
@@ -120,7 +121,8 @@ class IngestSource(Base):
             "org_id",
             "system",
             "instance",
-            name="uq_external_ingest_sources_org_system_instance",
+            "entity_family",
+            name="uq_external_ingest_sources_org_system_instance_family",
         ),
     )
 

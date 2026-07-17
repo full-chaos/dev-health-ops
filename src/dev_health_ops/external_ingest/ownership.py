@@ -86,7 +86,12 @@ def matches_instance(system: str, instance: str, source: IntegrationSource) -> b
 
 
 async def find_matching_managed_sources(
-    session: AsyncSession, *, org_id: str, system: str, instance: str
+    session: AsyncSession,
+    *,
+    org_id: str,
+    system: str,
+    instance: str,
+    entity_family: str = "legacy",
 ) -> list[tuple[IntegrationSource, bool]]:
     """All managed ``integration_sources`` rows matching (org, system, instance).
 
@@ -100,6 +105,8 @@ async def find_matching_managed_sources(
     indexed SQL predicate.
     """
     if system == "custom":
+        return []
+    if entity_family == "operational" and system in {"github", "gitlab"}:
         return []
 
     candidate_rows = (
@@ -120,7 +127,12 @@ async def find_matching_managed_sources(
 
 
 async def find_active_managed_owner(
-    session: AsyncSession, *, org_id: str, system: str, instance: str
+    session: AsyncSession,
+    *,
+    org_id: str,
+    system: str,
+    instance: str,
+    entity_family: str = "legacy",
 ) -> IntegrationSource | None:
     """The managed source that ACTIVELY owns this instance, if any.
 
@@ -129,7 +141,11 @@ async def find_active_managed_owner(
     left enabled under a since-deactivated integration no longer counts.
     """
     matches = await find_matching_managed_sources(
-        session, org_id=org_id, system=system, instance=instance
+        session,
+        org_id=org_id,
+        system=system,
+        instance=instance,
+        entity_family=entity_family,
     )
     return next(
         (
@@ -142,7 +158,12 @@ async def find_active_managed_owner(
 
 
 async def resolve_effective_mode(
-    session: AsyncSession, *, org_id: str, system: str, instance: str
+    session: AsyncSession,
+    *,
+    org_id: str,
+    system: str,
+    instance: str,
+    entity_family: str = "legacy",
 ) -> EffectiveMode:
     """Resolve the single active ingestion owner for (org, system, instance).
 
@@ -171,6 +192,7 @@ async def resolve_effective_mode(
                 IngestSource.org_id == org_id,
                 IngestSource.system == system,
                 IngestSource.instance == instance,
+                IngestSource.entity_family == entity_family,
             )
         )
     ).scalar_one_or_none()
@@ -181,14 +203,22 @@ async def resolve_effective_mode(
         if explicit.mode == IngestSourceMode.FULLCHAOS_SYNC.value:
             return "fullchaos_sync"
         owner = await find_active_managed_owner(
-            session, org_id=org_id, system=system, instance=instance
+            session,
+            org_id=org_id,
+            system=system,
+            instance=instance,
+            entity_family=entity_family,
         )
         if owner is not None:
             return "fullchaos_sync"
         return "customer_push"
 
     owner = await find_active_managed_owner(
-        session, org_id=org_id, system=system, instance=instance
+        session,
+        org_id=org_id,
+        system=system,
+        instance=instance,
+        entity_family=entity_family,
     )
     if owner is not None:
         return "fullchaos_sync"

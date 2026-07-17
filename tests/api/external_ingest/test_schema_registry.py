@@ -33,15 +33,29 @@ def test_get_bundle_unsupported_version_returns_none():
     assert registry.get_bundle("external-ingest.v99") is None
 
 
-def test_list_versions_has_one_entry_with_all_nine_kinds_no_duplicates():
+def test_list_versions_has_one_entry_with_all_record_kinds_no_duplicates():
     versions = registry.list_versions()
 
     assert len(versions) == 1
     entry = versions[0]
     assert entry["schemaVersion"] == SCHEMA_VERSION
     kinds = entry["recordKinds"]
-    assert len(kinds) == 9
+    assert len(kinds) == 21
     assert len(set(kinds)) == len(kinds)
+    assert {
+        "operational_service.v1",
+        "operational_incident.v1",
+        "operational_alert.v1",
+        "incident_timeline_event.v1",
+        "incident_note.v1",
+        "incident_responder.v1",
+        "escalation_policy.v1",
+        "on_call_schedule.v1",
+        "on_call_assignment.v1",
+        "operational_team.v1",
+        "operational_user.v1",
+        "service_repository_mapping.v1",
+    }.issubset(kinds)
 
 
 def test_etag_is_stable_and_shaped_like_a_quoted_sha256():

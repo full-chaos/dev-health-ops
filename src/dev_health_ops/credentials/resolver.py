@@ -46,6 +46,13 @@ PROVIDER_ENV_VARS: dict[str, dict[str, str]] = {
     },
     "launchdarkly": {"api_key": "LAUNCHDARKLY_API_KEY"},
     "telemetry": {"api_key": "TELEMETRY_API_KEY"},
+    "pagerduty": {
+        "client_id": "PAGER_DUTY_CLIENT_ID",
+        "client_secret": "PAGER_DUTY_SECRET",
+        "api_token": "PAGERDUTY_API_TOKEN",
+        "subdomain": "PAGERDUTY_SUBDOMAIN",
+        "region": "PAGERDUTY_REGION",
+    },
 }
 
 PROVIDER_CREDENTIAL_TYPES: dict[str, type[ProviderCredentials]] = {
@@ -56,6 +63,7 @@ PROVIDER_CREDENTIAL_TYPES: dict[str, type[ProviderCredentials]] = {
     "atlassian": AtlassianCredentials,
     "launchdarkly": LaunchDarklyCredentials,
     "telemetry": TelemetryCredentials,
+    "pagerduty": PagerDutyCredentials,
 }
 
 

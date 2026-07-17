@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import os
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -52,6 +53,23 @@ class PagerDutyOAuthConfig:
     authorization_url: str = "https://identity.pagerduty.com/oauth/authorize"
     token_url: str = "https://identity.pagerduty.com/oauth/token"
     revoke_url: str = "https://identity.pagerduty.com/oauth/revoke"
+
+    @classmethod
+    def from_env(cls) -> "PagerDutyOAuthConfig | None":
+        """Build the registered PagerDuty app config from ``PAGER_DUTY_*`` env vars.
+
+        Returns ``None`` when ``PAGER_DUTY_CLIENT_ID`` is unset. ``client_secret``
+        may be absent for public PKCE clients; ``redirect_uri`` is unused by the
+        client-credentials (self-hosted) flow and defaults to empty.
+        """
+        client_id = os.getenv("PAGER_DUTY_CLIENT_ID")
+        if not client_id:
+            return None
+        return cls(
+            client_id=client_id,
+            client_secret=os.getenv("PAGER_DUTY_SECRET"),
+            redirect_uri=os.getenv("PAGER_DUTY_REDIRECT_URI", ""),
+        )
 
 
 @dataclass(frozen=True, slots=True)

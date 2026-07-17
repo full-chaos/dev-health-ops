@@ -28,11 +28,21 @@ _MIGRATION = (
 def _table_columns(statement: str) -> tuple[str, ...]:
     """Extract top-level column names from a migration CREATE TABLE statement."""
     definitions = statement.split("(", maxsplit=1)[1].rsplit(") ENGINE", maxsplit=1)[0]
-    return tuple(
-        line.strip().rstrip(",").split(maxsplit=1)[0]
-        for line in definitions.splitlines()
-        if line.strip()
-    )
+    columns: list[str] = []
+    definition = ""
+    depth = 0
+    for character in definitions:
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        if character == "," and depth == 0:
+            columns.append(definition.strip().split(maxsplit=1)[0])
+            definition = ""
+        else:
+            definition += character
+    columns.append(definition.strip().split(maxsplit=1)[0])
+    return tuple(columns)
 
 
 def _create_statements() -> dict[str, str]:
@@ -48,7 +58,7 @@ def _create_statements() -> dict[str, str]:
 
 def test_identity_is_deterministic_for_the_fixed_operational_seed() -> None:
     # Given: a canonical source identity tuple.
-    seed = ("org-a", "github-org-a", "incident", "issue-42")
+    seed = ("org-a", "github", "github-org-a", "operational_incident", "issue-42")
 
     # When: the tuple is resolved repeatedly and with a changed external id.
     first = canonical_operational_id(*seed)
@@ -144,7 +154,7 @@ def test_operational_sorting_keys_are_org_scoped_and_versioned() -> None:
 
     # When: each entity table engine and sorting key are inspected.
     compliant = [
-        "ENGINE = ReplacingMergeTree(last_synced)" in statement
+        "ENGINE = ReplacingMergeTree(source_version_at)" in statement
         and "ORDER BY (org_id, id)" in statement
         for statement in statements.values()
     ]
@@ -175,6 +185,7 @@ def test_store_inserts_a_canonical_service_with_org_id_parity() -> None:
         provider_instance_id="pd-example",
         source_entity_type="service",
         external_id="payments-api",
+        source_version_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
         observed_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
         last_synced=datetime(2026, 7, 17, tzinfo=timezone.utc),
         name="Payments API",

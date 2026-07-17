@@ -34,6 +34,7 @@ from dev_health_ops.models.git import (
 )
 from dev_health_ops.models.operational import (
     CanonicalOperationalEntity,
+    OperationalContractError,
     OperationalIncident,
     operational_columns,
 )
@@ -2299,12 +2300,14 @@ class ClickHouseStore:
         table: str,
         entities: Sequence[CanonicalOperationalEntity],
     ) -> None:
-        """Write canonical rows idempotently by ``(org_id, id)`` and ``last_synced``."""
+        """Write canonical rows by ``(org_id, id)`` with source-time versioning."""
         if not entities:
             return
         entity_type = type(entities[0])
         if any(type(entity) is not entity_type for entity in entities):
             raise ValueError("operational insert batches must contain one entity type")
+        if self.org_id and any(entity.org_id != self.org_id for entity in entities):
+            raise OperationalContractError("org_id", self.org_id, "mismatched row")
         columns = list(operational_columns(entity_type))
         rows = []
         for entity in entities:
@@ -2387,7 +2390,64 @@ class ClickHouseStore:
         start: datetime,
         end: datetime,
     ) -> list[OperationalIncident]:
-        """Load current, non-deleted canonical incidents for an org-scoped window."""
+        """Load incidents resolved in ``[start, end)`` for DORA and MTTR compatibility."""
+        return await self.load_operational_incidents_resolved_between(
+            org_id, start, end
+        )
+
+    async def load_operational_incidents_resolved_between(
+        self,
+        org_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[OperationalIncident]:
+        """Load current incidents resolved in ``[start, end)``."""
+        return await self._load_operational_incidents_for_window(
+            org_id,
+            start,
+            end,
+            "resolved_at >= {start:DateTime64(6, 'UTC')} "
+            "AND resolved_at < {end:DateTime64(6, 'UTC')}",
+        )
+
+    async def load_operational_incidents_started_between(
+        self,
+        org_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[OperationalIncident]:
+        """Load current incidents started in ``[start, end)``."""
+        return await self._load_operational_incidents_for_window(
+            org_id,
+            start,
+            end,
+            "started_at >= {start:DateTime64(6, 'UTC')} "
+            "AND started_at < {end:DateTime64(6, 'UTC')}",
+        )
+
+    async def load_operational_incidents_overlapping(
+        self,
+        org_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[OperationalIncident]:
+        """Load current incidents active at any point in ``[start, end)``."""
+        return await self._load_operational_incidents_for_window(
+            org_id,
+            start,
+            end,
+            "started_at < {end:DateTime64(6, 'UTC')} "
+            "AND (resolved_at IS NULL OR resolved_at >= {start:DateTime64(6, 'UTC')})",
+        )
+
+    async def _load_operational_incidents_for_window(
+        self,
+        org_id: str,
+        start: datetime,
+        end: datetime,
+        domain_time_filter: str,
+    ) -> list[OperationalIncident]:
+        """Load current incident rows using a fixed domain-time predicate."""
         assert self.client is not None
         columns = operational_columns(OperationalIncident)
         query = f"""
@@ -2395,8 +2455,7 @@ class ClickHouseStore:
         FROM operational_incidents FINAL
         WHERE org_id = {{org_id:String}}
           AND is_deleted = 0
-          AND coalesce(source_event_at, observed_at) >= {{start:DateTime64(6, 'UTC')}}
-          AND coalesce(source_event_at, observed_at) < {{end:DateTime64(6, 'UTC')}}
+          AND {domain_time_filter}
         """
         parameters = {
             "org_id": org_id,

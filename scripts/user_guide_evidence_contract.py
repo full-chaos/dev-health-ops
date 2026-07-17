@@ -2,12 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
-
-VIEWPORT_WIDTHS: Final = (375, 768, 1280)
-VIEWPORT_HEIGHT: Final = 900
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,49 +12,61 @@ class CanonicalTask:
     routes: tuple[str, ...]
 
 
-CANONICAL_TASKS: Final = (
-    CanonicalTask(
-        number=7,
-        routes=(
-            "/user-guide/first-10-minutes/",
-            "/user-guide/how-to-read-dev-health/",
-            "/user-guide/glossary/",
-            "/user-guide/journeys/investment-view/",
+def viewport_widths() -> tuple[int, int, int]:
+    """Return the fixed capture widths for every canonical route."""
+    return (375, 768, 1280)
+
+
+def viewport_height() -> int:
+    """Return the fixed capture height for every canonical route."""
+    return 900
+
+
+def canonical_tasks() -> tuple[CanonicalTask, ...]:
+    """Return the immutable five-task user-guide evidence inventory."""
+    return (
+        CanonicalTask(
+            number=7,
+            routes=(
+                "/user-guide/first-10-minutes/",
+                "/user-guide/how-to-read-dev-health/",
+                "/user-guide/glossary/",
+                "/user-guide/journeys/investment-view/",
+            ),
         ),
-    ),
-    CanonicalTask(
-        number=8,
-        routes=(
-            "/user-guide/views/quadrants/",
-            "/user-guide/views/flame-diagrams/",
-            "/user-guide/views/code-hotspots/",
+        CanonicalTask(
+            number=8,
+            routes=(
+                "/user-guide/views/quadrants/",
+                "/user-guide/views/flame-diagrams/",
+                "/user-guide/views/code-hotspots/",
+            ),
         ),
-    ),
-    CanonicalTask(
-        number=9,
-        routes=(
-            "/user-guide/views/pr-flow/",
-            "/user-guide/views/capacity-planning/",
-            "/user-guide/views/work-graph/",
+        CanonicalTask(
+            number=9,
+            routes=(
+                "/user-guide/views/pr-flow/",
+                "/user-guide/views/capacity-planning/",
+                "/user-guide/views/work-graph/",
+            ),
         ),
-    ),
-    CanonicalTask(
-        number=10,
-        routes=(
-            "/user-guide/views/ai-impact/",
-            "/user-guide/views/ai-review-load/",
-            "/user-guide/views/ai-risk/",
-            "/user-guide/views/ai-attribution/",
+        CanonicalTask(
+            number=10,
+            routes=(
+                "/user-guide/views/ai-impact/",
+                "/user-guide/views/ai-review-load/",
+                "/user-guide/views/ai-risk/",
+                "/user-guide/views/ai-attribution/",
+            ),
         ),
-    ),
-    CanonicalTask(
-        number=11,
-        routes=(
-            "/user-guide/reports/",
-            "/user-guide/metrics-interpretation/",
+        CanonicalTask(
+            number=11,
+            routes=(
+                "/user-guide/reports/",
+                "/user-guide/metrics-interpretation/",
+            ),
         ),
-    ),
-)
+    )
 
 
 class EvidenceModel(BaseModel):

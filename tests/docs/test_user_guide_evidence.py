@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts import validate_user_guide_evidence
-from scripts.user_guide_evidence_contract import CANONICAL_TASKS
+from scripts.user_guide_evidence_contract import canonical_tasks
 from scripts.user_guide_evidence_validation import validate_evidence_root
 from tests.docs.user_guide_evidence_fixtures import (
     CAPTURE_STARTED_AT,
@@ -23,8 +23,12 @@ from tests.docs.user_guide_evidence_fixtures import (
 
 
 def test_accepts_exact_canonical_manifest_inventory(valid_evidence_root: Path) -> None:
-    assert sum(len(task.routes) for task in CANONICAL_TASKS) * len(VIEWPORTS) == 48
-    assert [len(task.routes) * len(VIEWPORTS) for task in CANONICAL_TASKS] == [
+    tasks = canonical_tasks()
+
+    assert len(tasks) == 5
+    assert sum(len(task.routes) for task in tasks) == 16
+    assert sum(len(task.routes) for task in tasks) * len(VIEWPORTS) == 48
+    assert [len(task.routes) * len(VIEWPORTS) for task in tasks] == [
         12,
         9,
         9,

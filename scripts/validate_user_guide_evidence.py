@@ -18,7 +18,8 @@ from scripts.user_guide_evidence_contract import SourceRevision  # noqa: E402
 from scripts.user_guide_evidence_validation import validate_evidence_root  # noqa: E402
 
 
-class EvidenceValidationError(Exception): ...
+class EvidenceValidationError(Exception):
+    """Raised when the validator cannot resolve the source revision."""
 
 
 def _source_revision() -> SourceRevision:

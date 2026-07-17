@@ -8,13 +8,13 @@ from typing import Final
 from pydantic import ValidationError
 
 from scripts.user_guide_evidence_contract import (
-    CANONICAL_TASKS,
-    VIEWPORT_HEIGHT,
-    VIEWPORT_WIDTHS,
     Artifact,
     CanonicalTask,
     Manifest,
     SourceRevision,
+    canonical_tasks,
+    viewport_height,
+    viewport_widths,
 )
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -33,9 +33,9 @@ def _expected_file(route: str, width: int) -> str:
 
 def _expected_keys(task: CanonicalTask) -> set[tuple[str, int, int]]:
     return {
-        (route, width, VIEWPORT_HEIGHT)
+        (route, width, viewport_height())
         for route in task.routes
-        for width in VIEWPORT_WIDTHS
+        for width in viewport_widths()
     }
 
 
@@ -193,7 +193,7 @@ def _recursive_png_paths(directory: Path) -> set[Path]:
 
 def _canonical_inventory_errors(evidence_root: Path) -> tuple[str, ...]:
     errors: list[str] = []
-    for task in CANONICAL_TASKS:
+    for task in canonical_tasks():
         task_directory = _task_directory(evidence_root, task)
         manifest, _ = _load_manifest(task_directory / "manifest.json")
         if manifest is not None:
@@ -218,7 +218,7 @@ def _known_orphan_errors(evidence_root: Path) -> tuple[str, ...]:
 
 def _duplicate_image_errors(evidence_root: Path) -> tuple[str, ...]:
     by_digest: dict[str, list[tuple[int, Artifact]]] = {}
-    for task in CANONICAL_TASKS:
+    for task in canonical_tasks():
         task_directory = _task_directory(evidence_root, task)
         manifest, _ = _load_manifest(task_directory / "manifest.json")
         if manifest is not None:
@@ -259,7 +259,7 @@ def validate_evidence_root(
     errors.extend(_canonical_inventory_errors(evidence_root))
     errors.extend(
         error
-        for task in CANONICAL_TASKS
+        for task in canonical_tasks()
         for error in _manifest_errors(task, evidence_root, source)
     )
     errors.extend(_duplicate_image_errors(evidence_root))

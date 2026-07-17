@@ -8,7 +8,12 @@ from typing import Final, TypeAlias
 
 import pytest
 
-from scripts.user_guide_evidence_contract import CANONICAL_TASKS, SourceRevision
+from scripts.user_guide_evidence_contract import (
+    SourceRevision,
+    canonical_tasks,
+    viewport_height,
+    viewport_widths,
+)
 
 SOURCE_COMMITTED_AT: Final = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
 CAPTURE_STARTED_AT: Final = SOURCE_COMMITTED_AT + timedelta(minutes=1)
@@ -20,8 +25,8 @@ SOURCE_REVISION: Final = SourceRevision(
     committed_at=SOURCE_COMMITTED_AT,
     validated_at=VALIDATED_AT,
 )
-VIEWPORTS: Final = (375, 768, 1280)
-HEIGHT: Final = 900
+VIEWPORTS: Final = viewport_widths()
+HEIGHT: Final = viewport_height()
 JsonValue: TypeAlias = str | int | dict[str, "JsonValue"] | list["JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
@@ -65,7 +70,7 @@ def _artifact(
 
 @pytest.fixture
 def valid_evidence_root(tmp_path: Path) -> Path:
-    for task in CANONICAL_TASKS:
+    for task in canonical_tasks():
         directory = tmp_path / f"task-{task.number}-unified-cloudflare-documentation"
         artifacts: list[JsonValue] = [
             _artifact(route, width, CAPTURED_AT, directory)

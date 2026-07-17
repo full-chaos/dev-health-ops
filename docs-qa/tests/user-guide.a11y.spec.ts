@@ -15,18 +15,47 @@ test.describe("user-guide onboarding accessibility", () => {
         expect(blocking).toEqual([]);
     });
 
-    test("keeps the narrow common-measures table keyboard reachable", async ({ page }) => {
+    test("scrolls the narrow common-measures table with scoped keyboard controls", async ({ page }) => {
         // Given the common-measures table overflows on a narrow reader viewport.
         await page.setViewportSize({ width: 375, height: 900 });
 
         // When the guide is rendered with instant navigation enabled.
         await page.goto("/user-guide/how-to-read-dev-health/");
 
-        // Then keyboard users can focus the table's horizontal scroll region.
+        // Then keyboard users can focus and scroll the table's horizontal scroll region.
         const table = page.locator(".md-typeset__table");
         await expect(table).toHaveAttribute("tabindex", "0");
         await table.focus();
         await expect(table).toBeFocused();
+
+        const initialScrollLeft = await table.evaluate((element) => element.scrollLeft);
+        await page.keyboard.press("ArrowRight");
+        const afterArrowRight = await table.evaluate((element) => element.scrollLeft);
+        expect(afterArrowRight).toBeGreaterThan(initialScrollLeft);
+
+        const maximumScrollLeft = await table.evaluate(
+            (element) => element.scrollWidth - element.clientWidth,
+        );
+        await page.keyboard.press("End");
+        const afterEnd = await table.evaluate((element) => element.scrollLeft);
+        expect(afterEnd).toBeCloseTo(maximumScrollLeft, 1);
+
+        await page.keyboard.press("Home");
+        await expect
+            .poll(() => table.evaluate((element) => element.scrollLeft))
+            .toBeCloseTo(0, 1);
+
+        await table.evaluate((element) => {
+            const recordPageDown: EventListener = (event) => {
+                if (event instanceof KeyboardEvent && event.key === "PageDown") {
+                    element.setAttribute("data-page-down-default-prevented", String(event.defaultPrevented));
+                    element.removeEventListener("keydown", recordPageDown);
+                }
+            };
+            element.addEventListener("keydown", recordPageDown);
+        });
+        await page.keyboard.press("PageDown");
+        await expect(table).toHaveAttribute("data-page-down-default-prevented", "false");
     });
 });
 

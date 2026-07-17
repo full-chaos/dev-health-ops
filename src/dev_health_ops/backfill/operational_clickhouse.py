@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
@@ -86,9 +87,9 @@ async def _load_legacy_incident_repository_rows(
         """
         SELECT
             i.repo_id, i.incident_id, i.status, i.started_at, i.resolved_at,
-            i.last_synced, r.repo, r.provider
-        FROM incidents AS i
-        INNER JOIN repos AS r ON i.repo_id = r.id
+            r.repo, r.provider, r.settings
+        FROM incidents FINAL AS i
+        INNER JOIN repos FINAL AS r ON i.repo_id = r.id
         WHERE i.org_id = {org_id:String}
           AND r.org_id = {org_id:String}
           AND r.provider IN ('github', 'gitlab')
@@ -97,21 +98,24 @@ async def _load_legacy_incident_repository_rows(
     )
     rows: list[LegacyIncidentRepositoryRow] = []
     for row in result.result_rows:
-        provider = str(row[7])
-        provider_instance_id = (
-            github_provider_instance_id
-            if provider == "github"
-            else gitlab_provider_instance_id
+        provider = str(row[6])
+        settings = _repo_settings(row[7])
+        provider_instance_id = str(
+            settings.get(f"{provider}_instance_url")
+            or (
+                github_provider_instance_id
+                if provider == "github"
+                else gitlab_provider_instance_id
+            )
         )
         started_at = row[3]
-        source_version_at = row[5]
         if not isinstance(started_at, datetime):
             continue
         rows.append(
             LegacyIncidentRepositoryRow(
                 org_id=org_id,
                 repo_id=UUID(str(row[0])),
-                repo_full_name=str(row[6]),
+                repo_full_name=str(row[5]),
                 provider=provider,
                 provider_instance_id=provider_instance_id,
                 incident_id=str(row[1]),
@@ -119,13 +123,27 @@ async def _load_legacy_incident_repository_rows(
                 started_at=started_at,
                 resolved_at=row[4] if isinstance(row[4], datetime) else None,
                 source_version_at=(
-                    source_version_at
-                    if isinstance(source_version_at, datetime)
-                    else started_at
+                    row[4] if isinstance(row[4], datetime) else started_at
                 ),
             )
         )
     return tuple(rows)
+
+
+def _repo_settings(value: object) -> dict[str, str]:
+    if isinstance(value, dict):
+        return {str(key): str(item) for key, item in value.items()}
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return (
+        {str(key): str(item) for key, item in parsed.items()}
+        if isinstance(parsed, dict)
+        else {}
+    )
 
 
 async def _load_atlassian_ops_batch(

@@ -26,6 +26,7 @@ from dev_health_ops.models.operational import (
     OperationalService,
     ServiceRepositoryMapping,
 )
+from dev_health_ops.models.operational_identity import operational_source_coordinates
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,27 +150,52 @@ def map_issue_incidents(sources: Sequence[IssueIncidentSource]) -> OperationalBa
         raise ValueError("at least one issue incident source is required")
 
     first = sources[0]
+    first_coordinates = operational_source_coordinates(
+        OperationalIncident,
+        provider=first.provider,
+        provider_instance_id=first.provider_instance_id,
+        external_id=first.external_id,
+        repo_full_name=first.repo_full_name,
+        issue_number=first.issue_number,
+    )
     services: dict[str, OperationalService] = {}
     mappings: dict[str, ServiceRepositoryMapping] = {}
     incidents: dict[str, OperationalIncident] = {}
     for source in sources:
-        if (
-            source.org_id != first.org_id
-            or source.provider != first.provider
-            or source.provider_instance_id != first.provider_instance_id
+        source_coordinates = operational_source_coordinates(
+            OperationalIncident,
+            provider=source.provider,
+            provider_instance_id=source.provider_instance_id,
+            external_id=source.external_id,
+            repo_full_name=source.repo_full_name,
+            issue_number=source.issue_number,
+        )
+        if source.org_id != first.org_id or (
+            source_coordinates.provider,
+            source_coordinates.provider_instance_id,
+        ) != (
+            first_coordinates.provider,
+            first_coordinates.provider_instance_id,
         ):
             raise ValueError(
                 "issue incident sources must share canonical identity context"
             )
 
+        service_coordinates = operational_source_coordinates(
+            OperationalService,
+            provider=source.provider,
+            provider_instance_id=source.provider_instance_id,
+            external_id=source.repo_full_name,
+        )
+        incident_coordinates = source_coordinates
         service = services.setdefault(
             source.repo_full_name,
             OperationalService(
                 org_id=source.org_id,
-                provider=source.provider,
-                provider_instance_id=source.provider_instance_id,
+                provider=service_coordinates.provider,
+                provider_instance_id=service_coordinates.provider_instance_id,
                 source_entity_type="repository",
-                external_id=source.repo_full_name,
+                external_id=service_coordinates.external_id,
                 source_version_at=source.source_version_at,
                 source_url=None,
                 name=source.repo_full_name,
@@ -178,8 +204,8 @@ def map_issue_incidents(sources: Sequence[IssueIncidentSource]) -> OperationalBa
         )
         mapping = ServiceRepositoryMapping(
             org_id=source.org_id,
-            provider=source.provider,
-            provider_instance_id=source.provider_instance_id,
+            provider=service_coordinates.provider,
+            provider_instance_id=service_coordinates.provider_instance_id,
             source_entity_type="repository_mapping",
             external_id=f"{source.repo_full_name}:{source.repo_id}",
             source_version_at=source.source_version_at,
@@ -194,10 +220,10 @@ def map_issue_incidents(sources: Sequence[IssueIncidentSource]) -> OperationalBa
         mappings.setdefault(mapping.id, mapping)
         incident = OperationalIncident(
             org_id=source.org_id,
-            provider=source.provider,
-            provider_instance_id=source.provider_instance_id,
+            provider=incident_coordinates.provider,
+            provider_instance_id=incident_coordinates.provider_instance_id,
             source_entity_type="issue",
-            external_id=source.external_id,
+            external_id=incident_coordinates.external_id,
             source_version_at=source.source_version_at,
             source_url=source.source_url,
             source_event_id=source.issue_number,
@@ -214,8 +240,8 @@ def map_issue_incidents(sources: Sequence[IssueIncidentSource]) -> OperationalBa
 
     return OperationalBatch(
         org_id=first.org_id,
-        provider=first.provider,
-        provider_instance_id=first.provider_instance_id,
+        provider=first_coordinates.provider,
+        provider_instance_id=first_coordinates.provider_instance_id,
         services=tuple(services.values()),
         incidents=tuple(incidents.values()),
         service_repository_mappings=tuple(mappings.values()),

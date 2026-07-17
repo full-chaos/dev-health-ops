@@ -117,6 +117,7 @@ class BatchRow:
     payload_hash: str
     source_system: str
     source_instance: str
+    entity_family: str
     producer: str | None
     producer_version: str | None
     schema_version: str
@@ -193,6 +194,7 @@ def _row_to_batch(m: RowMapping) -> BatchRow:
         payload_hash=m["payload_hash"],
         source_system=m["source_system"],
         source_instance=m["source_instance"],
+        entity_family=m["entity_family"],
         producer=m["producer"],
         producer_version=m["producer_version"],
         schema_version=m["schema_version"],
@@ -258,6 +260,7 @@ async def find_existing_batch(
     source_system: str,
     source_instance: str,
     idempotency_key: str,
+    entity_family: str = "legacy",
 ) -> BatchRow | None:
     """Idempotency-key lookup. Consumed by CHAOS-2695's conflict policy
     BEFORE calling ``create_batch()`` -- this is the primary dedupe path; the
@@ -268,12 +271,14 @@ async def find_existing_batch(
         text(
             f"SELECT * FROM {_BATCHES_TABLE} WHERE org_id = :org_id "
             "AND source_system = :source_system AND source_instance = :source_instance "
+            "AND entity_family = :entity_family "
             "AND idempotency_key = :idempotency_key"
         ),
         {
             "org_id": org_id,
             "source_system": source_system,
             "source_instance": source_instance,
+            "entity_family": entity_family,
             "idempotency_key": idempotency_key,
         },
     )
@@ -296,6 +301,7 @@ async def create_batch(
     window_started_at: datetime | None,
     window_ended_at: datetime | None,
     items_received: int,
+    entity_family: str = "legacy",
 ) -> BatchRow:
     """INSERT a new ``status='accepted'`` row. This is the FIRST write in
     the accept sequence (master-spec CC22: idempotency row -> payload row ->
@@ -316,6 +322,7 @@ async def create_batch(
         "payload_hash": payload_hash,
         "source_system": source_system,
         "source_instance": source_instance,
+        "entity_family": entity_family,
         "producer": producer,
         "producer_version": producer_version,
         "schema_version": schema_version,
@@ -346,7 +353,7 @@ async def create_batch(
         f"""
         INSERT INTO {_BATCHES_TABLE} (
             ingestion_id, org_id, idempotency_key, payload_hash, source_system,
-            source_instance, producer, producer_version, schema_version,
+            source_instance, entity_family, producer, producer_version, schema_version,
             window_started_at, window_ended_at, status, attempts,
             items_received, items_accepted, items_rejected, record_counts,
             error_summary, created_at, updated_at, completed_at,
@@ -354,7 +361,7 @@ async def create_batch(
             recompute_completed_at, recompute_error
         ) VALUES (
             :ingestion_id, :org_id, :idempotency_key, :payload_hash, :source_system,
-            :source_instance, :producer, :producer_version, :schema_version,
+            :source_instance, :entity_family, :producer, :producer_version, :schema_version,
             :window_started_at, :window_ended_at, :status, :attempts,
             :items_received, :items_accepted, :items_rejected, :record_counts,
             :error_summary, :created_at, :updated_at, :completed_at,
@@ -381,6 +388,7 @@ async def create_batch(
         payload_hash=payload_hash,
         source_system=source_system,
         source_instance=source_instance,
+        entity_family=entity_family,
         producer=producer,
         producer_version=producer_version,
         schema_version=schema_version,

@@ -162,7 +162,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
             )
             legacy_incident = Incident(
                 repo_id=repo_id,
-                incident_id="github-incident-1",
+                incident_id="17",
                 status="closed",
                 started_at=source_version,
                 resolved_at=source_version,
@@ -206,7 +206,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
                             provider_instance_id="github.com",
                             repo_id=repo_id,
                             repo_full_name="acme/api",
-                            external_id="github-incident-1",
+                            external_id="17",
                             issue_number="17",
                             source_url="https://github.com/acme/api/issues/17",
                             labels=("incident",),
@@ -215,7 +215,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
                             description=None,
                             created_at=source_version,
                             resolved_at=source_version,
-                            source_version_at=source_version,
+                            source_version_at=source_version + timedelta(seconds=1),
                         ),
                     )
                 )
@@ -274,11 +274,17 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
         }
         assert counts == {
             "operational_services": 1,
-            "operational_incidents": 2,
+            "operational_incidents": 1,
             "operational_alerts": 1,
             "operational_on_call_schedules": 1,
             "operational_service_repository_mappings": 1,
         }
+        incident = sink.client.query(
+            "SELECT title FROM operational_incidents FINAL "
+            "WHERE org_id = {org_id:String}",
+            parameters={"org_id": org_id},
+        ).result_rows
+        assert incident == [("Database unavailable",)]
     finally:
         for table in (
             "operational_services",

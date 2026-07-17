@@ -12,13 +12,15 @@ REST-boundary/ownership-model rationale.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SCHEMA_VERSION = "external-ingest.v1"
 MAX_RECORDS_DEFAULT = 1000
 MAX_BODY_BYTES_DEFAULT = 10_000_000
+LEGACY_ENTITY_FAMILY: Final = "legacy"
+OPERATIONAL_ENTITY_FAMILY: Final = "operational"
 
 _WORK_ITEM_STATUS = Literal[
     "backlog",
@@ -41,8 +43,8 @@ class SourceDescriptor(BaseModel):
         "github", "gitlab", "jira", "linear", "pagerduty", "atlassian", "custom"
     ]
     instance: str = Field(..., min_length=1, max_length=255)
-    entity_family: str = Field(
-        default="legacy", alias="entityFamily", min_length=1, max_length=255
+    entity_family: Literal["legacy", "operational"] = Field(
+        default=LEGACY_ENTITY_FAMILY, alias="entityFamily"
     )
     producer: str | None = None
     producer_version: str | None = Field(default=None, alias="producerVersion")
@@ -541,6 +543,34 @@ RECORD_KIND_MODELS: dict[str, type[BaseModel]] = {
     "service_repository_mapping.v1": ServiceRepositoryMappingV1,
 }
 
+OPERATIONAL_RECORD_KINDS: Final[frozenset[str]] = frozenset(
+    {
+        "operational_service.v1",
+        "operational_incident.v1",
+        "operational_alert.v1",
+        "incident_timeline_event.v1",
+        "incident_note.v1",
+        "incident_responder.v1",
+        "escalation_policy.v1",
+        "on_call_schedule.v1",
+        "on_call_assignment.v1",
+        "operational_team.v1",
+        "operational_user.v1",
+        "service_repository_mapping.v1",
+    }
+)
+
+
+def entity_family_for_record_kinds(record_kinds: list[str]) -> str | None:
+    """Return the single family required by the submitted record kinds."""
+    families = {
+        OPERATIONAL_ENTITY_FAMILY
+        if kind in OPERATIONAL_RECORD_KINDS
+        else LEGACY_ENTITY_FAMILY
+        for kind in record_kinds
+    }
+    return families.pop() if len(families) == 1 else None
+
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -576,4 +606,8 @@ __all__ = [
     "OperationalUserV1",
     "ServiceRepositoryMappingV1",
     "RECORD_KIND_MODELS",
+    "OPERATIONAL_RECORD_KINDS",
+    "LEGACY_ENTITY_FAMILY",
+    "OPERATIONAL_ENTITY_FAMILY",
+    "entity_family_for_record_kinds",
 ]

@@ -43,9 +43,9 @@ def test_legacy_incident_backfill_joins_repository_identity_without_collision() 
     # When: legacy incident and repository rows are mapped into canonical batches.
     batches = map_legacy_issue_incident_batches(rows)
 
-    # Then: globally stable incident identity dedupes while repository edges remain distinct.
+    # Then: repository-qualified incident identities remain distinct.
     assert len(batches) == 1
-    assert len(batches[0].incidents) == 1
+    assert len(batches[0].incidents) == 2
     assert len(batches[0].services) == 2
     assert {
         mapping.repo_full_name for mapping in batches[0].service_repository_mappings
@@ -93,7 +93,7 @@ def test_legacy_incident_backfill_separates_organizations_and_provider_instances
     assert len(batches) == 2
     assert {batch.org_id for batch in batches} == {"org-a", "org-b"}
     assert {batch.provider_instance_id for batch in batches} == {
-        "https://gitlab.com",
-        "https://gitlab.example.com",
+        "gitlab.com",
+        "gitlab.example.com",
     }
     assert len({batch.incidents[0].id for batch in batches}) == 2

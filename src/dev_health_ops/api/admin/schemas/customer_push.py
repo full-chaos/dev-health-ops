@@ -8,6 +8,7 @@ deliberate divergence from the camelCase data-plane batch envelope.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -43,7 +44,7 @@ def _validate_webhook_mode(value: str | None) -> str | None:
 class IngestSourceCreate(BaseModel):
     system: str = Field(..., min_length=1)
     instance: str = Field(..., min_length=1)
-    entity_family: str = Field(default="legacy", min_length=1, max_length=255)
+    entity_family: Literal["legacy", "operational"] = "legacy"
     display_name: str | None = None
     mode: str = "customer_push"
     webhook_mode: str = "disabled"

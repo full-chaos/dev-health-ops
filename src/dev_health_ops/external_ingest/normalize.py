@@ -71,6 +71,7 @@ from dev_health_ops.models.operational import (
     ServiceRepositoryMapping,
     canonical_operational_id,
 )
+from dev_health_ops.models.operational_identity import operational_source_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,36 @@ _OPERATIONAL_KIND_DISPATCH: dict[str, tuple[str, str]] = {
     ),
 }
 
+_OPERATIONAL_ENTITY_TYPES = {
+    "operational_service": OperationalService,
+    "operational_incident": OperationalIncident,
+    "operational_alert": OperationalAlert,
+    "operational_incident_timeline_event": IncidentTimelineEvent,
+    "operational_incident_note": IncidentNote,
+    "operational_incident_responder": IncidentResponder,
+    "operational_escalation_policy": EscalationPolicy,
+    "operational_on_call_schedule": OnCallSchedule,
+    "operational_on_call_assignment": OnCallAssignment,
+    "operational_team": OperationalTeam,
+    "operational_user": OperationalUser,
+    "operational_service_repository_mapping": ServiceRepositoryMapping,
+}
+
+_OPERATIONAL_KIND_ENTITY_TYPES = {
+    "operational_service.v1": OperationalService,
+    "operational_incident.v1": OperationalIncident,
+    "operational_alert.v1": OperationalAlert,
+    "incident_timeline_event.v1": IncidentTimelineEvent,
+    "incident_note.v1": IncidentNote,
+    "incident_responder.v1": IncidentResponder,
+    "escalation_policy.v1": EscalationPolicy,
+    "on_call_schedule.v1": OnCallSchedule,
+    "on_call_assignment.v1": OnCallAssignment,
+    "operational_team.v1": OperationalTeam,
+    "operational_user.v1": OperationalUser,
+    "service_repository_mapping.v1": ServiceRepositoryMapping,
+}
+
 
 @dataclass(frozen=True)
 class RecordRejection:
@@ -209,28 +240,52 @@ def _git_family_repo_identifier(kind: str, payload_model: BaseModel) -> str:
 
 
 def _operational_reference_id(
-    batch: NormalizedBatch, entity_family: str, external_id: str | None
+    batch: NormalizedBatch,
+    entity_family: str,
+    external_id: str | None,
 ) -> str | None:
     if external_id is None:
         return None
+    entity_type = _OPERATIONAL_ENTITY_TYPES[entity_family]
+    coordinates = operational_source_coordinates(
+        entity_type,
+        provider=batch.source_system,
+        provider_instance_id=batch.source_instance,
+        external_id=external_id,
+    )
     return canonical_operational_id(
         batch.org_id,
-        batch.source_system,
-        batch.source_instance,
-        entity_family,
-        external_id,
+        coordinates.provider,
+        coordinates.provider_instance_id,
+        coordinates.entity_family,
+        coordinates.external_id,
     )
 
 
 def _operational_common(
     payload: OperationalRecordV1, batch: NormalizedBatch, kind: str
 ) -> dict[str, Any]:
+    entity_type = _OPERATIONAL_KIND_ENTITY_TYPES[kind]
+    issue_repo = (
+        payload.service_external_id
+        if isinstance(payload, OperationalIncidentV1)
+        and batch.source_system in {"github", "gitlab"}
+        else None
+    )
+    coordinates = operational_source_coordinates(
+        entity_type,
+        provider=batch.source_system,
+        provider_instance_id=batch.source_instance,
+        external_id=payload.external_id,
+        repo_full_name=issue_repo,
+        issue_number=payload.source_event_id,
+    )
     return {
         "org_id": batch.org_id,
-        "provider": batch.source_system,
-        "provider_instance_id": batch.source_instance,
+        "provider": coordinates.provider,
+        "provider_instance_id": coordinates.provider_instance_id,
         "source_entity_type": f"external_push.{kind.rsplit('.', 1)[0]}",
-        "external_id": payload.external_id,
+        "external_id": coordinates.external_id,
         "source_version_at": payload.source_version_at,
         "source_id": batch.source_id,
         "source_url": payload.source_url,
@@ -530,6 +585,21 @@ def normalize_batch(
                     )
                 )
                 continue
+
+        if isinstance(payload_model, ServiceRepositoryMappingV1) and (
+            payload_model.repo_full_name is None or payload_model.repo_provider is None
+        ):
+            result.rejections.append(
+                RecordRejection(
+                    index=index,
+                    kind=record.kind,
+                    external_id=record.external_id,
+                    code="repository_identity_required",
+                    message="service_repository_mapping requires repoFullName and repoProvider",
+                    path=f"records[{index}].payload",
+                )
+            )
+            continue
 
         operational_dispatch = _OPERATIONAL_KIND_DISPATCH.get(record.kind)
         if operational_dispatch is not None:

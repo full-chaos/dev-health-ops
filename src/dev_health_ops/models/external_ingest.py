@@ -75,6 +75,9 @@ class ExternalIngestBatch(Base):
     payload_hash: Mapped[str] = mapped_column(Text, nullable=False)
     source_system: Mapped[str] = mapped_column(Text, nullable=False)
     source_instance: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_family: Mapped[str] = mapped_column(
+        Text, nullable=False, default="legacy", server_default="legacy"
+    )
     producer: Mapped[str | None] = mapped_column(Text, nullable=True)
     producer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     schema_version: Mapped[str] = mapped_column(Text, nullable=False)
@@ -132,6 +135,7 @@ class ExternalIngestBatch(Base):
             "org_id",
             "source_system",
             "source_instance",
+            "entity_family",
             "idempotency_key",
             name="uq_external_ingest_batches_idem",
         ),

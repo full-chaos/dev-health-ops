@@ -106,9 +106,6 @@ async def find_matching_managed_sources(
     """
     if system == "custom":
         return []
-    if entity_family == "operational" and system in {"github", "gitlab"}:
-        return []
-
     candidate_rows = (
         await session.execute(
             select(IntegrationSource, Integration.is_active)

@@ -173,6 +173,26 @@ class TestHappyPath:
             ORG, "pagerduty", "pd-example", "operational_incident", "inc-1"
         )
 
+    def test_mapping_without_repository_identity_is_rejected(self) -> None:
+        result = _normalize(
+            [
+                RecordEnvelope(
+                    kind="service_repository_mapping.v1",
+                    external_id="mapping-1",
+                    payload={
+                        "externalId": "mapping-1",
+                        "sourceVersionAt": "2026-07-01T00:00:00Z",
+                        "serviceExternalId": "payments",
+                    },
+                )
+            ],
+            source_system="pagerduty",
+            source_instance="pd-example",
+        )
+
+        assert result.items_accepted == 0
+        assert result.rejections[0].code == "repository_identity_required"
+
 
 class TestShapeRejections:
     def test_invalid_payload_rejected_with_validate_py_code(self) -> None:

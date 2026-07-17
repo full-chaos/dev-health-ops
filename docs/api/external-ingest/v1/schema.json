@@ -3695,8 +3695,10 @@
       "properties": {
         "entityFamily": {
           "default": "legacy",
-          "maxLength": 255,
-          "minLength": 1,
+          "enum": [
+            "legacy",
+            "operational"
+          ],
           "title": "Entityfamily",
           "type": "string"
         },

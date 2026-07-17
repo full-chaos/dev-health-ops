@@ -578,10 +578,11 @@ def _github_provider_instance_id(connector) -> str:
     """Return a stable public or enterprise GitHub instance identifier."""
     rest_base_url = getattr(connector, "_rest_base_url", None)
     raw_base_url = rest_base_url() if callable(rest_base_url) else None
-    host = urlparse(str(raw_base_url or "https://api.github.com")).hostname
+    parsed = urlparse(str(raw_base_url or "https://api.github.com"))
+    host = parsed.hostname
     if host is None or host in {"api.github.com", "github.com"}:
         return "github.com"
-    return host
+    return f"{host}:{parsed.port}" if parsed.port is not None else host
 
 
 async def _list_github_repositories_for_batch(

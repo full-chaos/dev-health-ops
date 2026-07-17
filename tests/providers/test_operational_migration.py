@@ -46,7 +46,7 @@ def test_issue_incident_mapper_creates_repository_service_and_mapping() -> None:
     # Then: incident provenance and repository linkage are explicit.
     assert len(batch.incidents) == 1
     assert batch.incidents[0].source_entity_type == "issue"
-    assert batch.incidents[0].external_id == "12345"
+    assert batch.incidents[0].external_id == "acme/api#17"
     assert batch.incidents[0].normalized_status == "resolved"
     assert batch.incidents[0].service_id == batch.services[0].id
     assert batch.incidents[0].service_external_id == "acme/api"

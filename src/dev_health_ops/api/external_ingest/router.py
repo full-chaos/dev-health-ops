@@ -61,6 +61,7 @@ from .schemas import (
     BatchAcceptedResponse,
     BatchEnvelope,
     ValidationResponse,
+    entity_family_for_record_kinds,
 )
 from .status import (
     BatchRow,
@@ -97,6 +98,18 @@ def _max_body_bytes() -> int:
 
 def _limits_payload() -> dict[str, int]:
     return {"maxRecordsPerBatch": _max_records(), "maxBodyBytes": _max_body_bytes()}
+
+
+def _check_entity_family_or_400(envelope: BatchEnvelope) -> None:
+    expected_family = entity_family_for_record_kinds(
+        [record.kind for record in envelope.records]
+    )
+    if expected_family != envelope.source.entity_family:
+        raise ExternalIngestError(
+            400,
+            "entity_family_mismatch",
+            "source.entityFamily must match the submitted record kinds",
+        )
 
 
 async def _read_body_enforcing_size_limit(request: Request) -> bytes:
@@ -337,6 +350,7 @@ async def accept_batch(
     _check_idempotency_header_matches_body(envelope, idempotency_key_header)
     _check_schema_version_or_400(envelope)
     _check_all_kinds_known_or_400(envelope)
+    _check_entity_family_or_400(envelope)
     _check_batch_size_or_400(envelope)
     # Adversarial-review fix: require_ingest_scope resolves before the body
     # is parsed, so it can't check payload source vs. token-bound source
@@ -367,9 +381,6 @@ async def accept_batch(
 
     window = envelope.window
     payload_hash = compute_payload_hash(envelope)
-    idempotency_key = envelope.idempotency_key
-    if envelope.source.entity_family != "legacy":
-        idempotency_key = f"{envelope.source.entity_family}:{idempotency_key}"
     try:
         # FIRST Postgres write of the accept sequence (CC22) -- the unique
         # idempotency index is the serialization point for concurrent
@@ -379,8 +390,9 @@ async def accept_batch(
             org_id=ctx.org_id,
             source_system=envelope.source.system,
             source_instance=envelope.source.instance,
-            idempotency_key=idempotency_key,
+            idempotency_key=envelope.idempotency_key,
             payload_hash=payload_hash,
+            entity_family=envelope.source.entity_family,
             schema_version=envelope.schema_version,
             producer=envelope.source.producer,
             producer_version=envelope.source.producer_version,

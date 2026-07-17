@@ -123,6 +123,26 @@ def test_canonicalization_timestamp_format_invariant():
     assert compute_payload_hash(zulu) == compute_payload_hash(offset)
 
 
+def test_legacy_payload_hash_matches_the_pre_entity_family_wire_shape():
+    legacy_payload = _envelope_dict()
+    envelope = BatchEnvelope.model_validate(legacy_payload)
+    import hashlib
+    import json as json_mod
+
+    pre_deploy_payload = envelope.model_dump(mode="json")
+    pre_deploy_payload["source"].pop("entity_family")
+    expected = hashlib.sha256(
+        json_mod.dumps(
+            pre_deploy_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert compute_payload_hash(envelope) == expected
+
+
 def test_record_order_is_position_significant():
     """Brief decision 3: records are NOT sorted before hashing -- swapping
     two records is a different payload (CONFLICT), by design."""

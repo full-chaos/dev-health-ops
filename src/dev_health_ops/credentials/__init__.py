@@ -31,6 +31,7 @@ from dev_health_ops.credentials.types import (
     JiraCredentials,
     LaunchDarklyCredentials,
     LinearCredentials,
+    PagerDutyCredentials,
     ProviderCredentials,
     TelemetryCredentials,
 )

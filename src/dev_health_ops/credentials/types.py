@@ -133,6 +133,32 @@ class LinearCredentials(ProviderCredentials):
 
 
 @dataclass
+class PagerDutyCredentials(ProviderCredentials):
+    """PagerDuty OAuth, client-credentials, or API-token fallback credentials."""
+
+    provider: str = "pagerduty"
+    access_token: str | None = None
+    refresh_token: str | None = None
+    expires_at: str | None = None
+    granted_scopes: tuple[str, ...] = ()
+    client_id: str | None = None
+    client_secret: str | None = None
+    api_token: str | None = None
+    subdomain: str | None = None
+    region: str = "us"
+
+    def __post_init__(self) -> None:
+        if not any(
+            (self.access_token, self.api_token, self.client_id and self.client_secret)
+        ):
+            raise ValueError(
+                "PagerDuty credentials require OAuth, client credentials, or api_token"
+            )
+        if self.region not in {"us", "eu"}:
+            raise ValueError("PagerDuty region must be 'us' or 'eu'")
+
+
+@dataclass
 class AtlassianCredentials(ProviderCredentials):
     """Atlassian Cloud credentials (GraphQL Gateway).
 

@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/investment-mix/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Compare investment flows
+  url: user-guide/views/investment-flows/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # Investment View — Product Specification
 
 ## Status
@@ -52,45 +64,11 @@ This is:
 
 ---
 
-## Canonical Investment Categories
+## Canonical Investment Taxonomy
 
-### Themes (Fixed, Leadership-Facing)
-
-| Theme | Description |
-|-------|-------------|
-| **Feature Delivery** | New value, customer-requested, roadmap items |
-| **Operational / Support** | External support, internal support, incident response |
-| **Maintenance / Tech Debt** | Refactoring, upgrades, cleanup |
-| **Quality / Reliability** | Testing, observability, stability work |
-| **Risk / Security** | Security fixes, compliance, vulnerability remediation |
-
-**Rules:**
-- No synonyms
-- No overrides
-- No per-team customization
-
-### Subcategories (Fixed Per Theme)
-
-Each theme has a curated subcategory set providing resolution without fragmenting language.
-
-Example structure:
-```
-Operational
- ├── External-facing
- ├── Internal support
- ├── Incident response
- └── On-call / reactive
-
-Feature Delivery
- ├── Customer-requested
- ├── Strategic / roadmap
- └── Enablement / platform
-```
-
-**Rules:**
-- Subcategories are **not user-defined**
-- Subcategories are **comparable across orgs**
-- Subcategories roll up cleanly into themes
+The fixed themes, subcategory keys, and definitions are maintained in the
+[Investment Taxonomy](../../product/investment-taxonomy.md). This page uses that
+vocabulary and does not define an alternate taxonomy.
 
 ---
 
@@ -132,10 +110,10 @@ Where:
       "risk": 0.0
     },
     "subcategories": {
-      "operational.external": 0.29,
-      "operational.internal": 0.18,
+      "operational.support": 0.29,
+      "operational.on_call": 0.18,
       "feature_delivery.customer": 0.21,
-      "feature_delivery.platform": 0.12,
+      "feature_delivery.enablement": 0.12,
       "maintenance.refactor": 0.15,
       "quality.testing": 0.05
     }

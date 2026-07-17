@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+  {% set metadata = page.meta if page and page.meta else {} %}
+  {% if metadata %}
+    <aside class="fc-page-metadata" aria-label="Page information" data-template="{{ metadata.get('template', 'reference') }}">
+      {% if metadata.get('audience') %}<p class="fc-eyebrow">For {{ metadata.get('audience') }}</p>{% endif %}
+      <dl class="fc-metadata-list">
+        {% if metadata.get('owner') %}<div><dt>Owner</dt><dd>{{ metadata.get('owner') }}</dd></div>{% endif %}
+        {% if metadata.get('last-reviewed') %}<div><dt>Reviewed</dt><dd>{{ metadata.get('last-reviewed') }}</dd></div>{% endif %}
+        {% if metadata.get('canonical') %}<div><dt>Canonical</dt><dd><a href="{{ metadata.get('canonical') }}">Public page</a></dd></div>{% endif %}
+      </dl>
+    </aside>
+  {% endif %}
+  {{ super() }}
+  <nav class="fc-page-paths" aria-label="Continue this documentation path">
+    {% if metadata.get('next') %}
+      <a class="fc-page-paths__link fc-page-paths__link--primary" href="{{ metadata.get('next').get('url') | url }}">Next step: {{ metadata.get('next').get('label') }}</a>
+    {% endif %}
+    {% if metadata.get('troubleshooting') %}
+      <a class="fc-page-paths__link" href="{{ metadata.get('troubleshooting') | url }}">Troubleshooting</a>
+    {% endif %}
+    <a class="fc-page-paths__link" href="https://github.com/full-chaos/dev-health-ops/issues/new">Send feedback</a>
+  </nav>
+{% endblock %}

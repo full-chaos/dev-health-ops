@@ -5,7 +5,7 @@
 Compounding Risk is a deterministic, inspectable composite signal that flags
 where change pressure is overlapping with architectural and operational risk.
 It is the canonical "Compounding Risk" wedge from
-[`dev-health-product-market-simplification.md`](../product/dev-health-product-market-simplification.md)
+[`dev-health-product-market-simplification.md`](https://github.com/full-chaos/dev-health-ops/blob/main/docs/product/dev-health-product-market-simplification.md)
 and is consumed by the `/risk/compounding` web surface (CHAOS-1642).
 
 This document specifies the formula. The implementation lives in

@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/capacity-planning/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Follow work relationships
+  url: user-guide/views/work-graph/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # Capacity Planning View
 
 Monte Carlo forecast for work completion at `/work?tab=capacity`.

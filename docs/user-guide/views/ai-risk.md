@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/ai-risk/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Inspect AI attribution
+  url: user-guide/views/ai-attribution/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # AI Risk
 
 The AI Risk view is the diagnostic surface for **quality risk associated

@@ -31,12 +31,22 @@ jobs:
           filters: |
             docs:
               - 'docs/**'
+              - 'mkdocs.yml'
               - 'scripts/check_docs_links.py'
               - 'scripts/check_investment_docs_drift.py'
+              - 'scripts/check_external_links.py'
+              - 'scripts/check_built_site_links.py'
+              - 'scripts/check_freshness_inventory.py'
+              - 'scripts/check_code_prerequisites.py'
+              - 'scripts/docs_publication.py'
+              - 'scripts/render_workspace_agents.py'
               - 'scripts/gen_taxonomy_docs.py'
               - 'src/dev_health_ops/investment_taxonomy.py'
               - 'src/dev_health_ops/work_graph/investment/llm_schema.py'
+              - 'requirements-docs.txt'
+              - 'docs-qa/**'
               - 'Makefile'
+              - '.github/workflows/docs-guards.yml'
 
   docs-guards-job:
     needs: [changes]
@@ -54,6 +64,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install docs build dependencies
+        run: pip install -r requirements-docs.txt
+
       - name: Check generated taxonomy is up to date
         run: |
           make docs:generate-taxonomy
@@ -62,17 +75,54 @@ jobs:
       - name: Run docs guards
         run: make docs:check
 
+      - name: Strict MkDocs build
+        run: mkdocs build --strict --site-dir .build/site
+
+      - name: Check built-site internal links, anchors, and assets
+        run: python scripts/check_built_site_links.py --site-dir .build/site
+
+      - name: Check external links
+        run: |
+          python scripts/check_external_links.py \
+            --built-site .build/site \
+            --allowlist docs/external-link-allowlist.yml \
+            --site-url https://docs.fullchaos.dev
+
+      - name: Set up Node
+        uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
+        with:
+          node-version: "22"
+
+      - name: Install docs browser QA dependencies
+        working-directory: docs-qa
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+
+      - name: Run docs search acceptance
+        working-directory: docs-qa
+        run: |
+          pnpm run typecheck
+          pnpm run test:search
+
   docs-guards:
     name: docs-guards
     if: always()
-    needs: [docs-guards-job]
+    needs: [changes, docs-guards-job]
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate docs guards result
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_GUARDS_RESULT: ${{ needs.docs-guards-job.result }}
         run: |
+          echo "changes job result: ${CHANGES_RESULT}"
           echo "docs-guards-job result: ${DOCS_GUARDS_RESULT}"
+          if [ "${CHANGES_RESULT}" != "success" ] && [ "${CHANGES_RESULT}" != "skipped" ]; then
+            echo "docs guards failed: the changes (paths-filter) job did not succeed, so required docs guards may have been skipped instead of run"
+            exit 1
+          fi
           case "${DOCS_GUARDS_RESULT}" in
             success|skipped)
               echo "docs guards passed"

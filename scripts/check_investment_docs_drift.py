@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ LLM_SCHEMA_PATH = (
 )
 TAXONOMY_DOC = ROOT / "docs" / "product" / "investment-taxonomy.md"
 LLM_CONTRACT_DOC = ROOT / "docs" / "llm" / "categorization-contract.md"
+INVESTMENT_MIX_DOC = ROOT / "docs" / "user-guide" / "views" / "investment-mix.md"
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"
@@ -163,8 +165,63 @@ def check_llm_schema_examples() -> list[str]:
     return errors
 
 
+def _unknown_taxonomy_example_keys(document: str, source: str) -> list[str]:
+    errors: list[str] = []
+    canonical_themes = _literal_set(TAXONOMY_PATH, "THEMES")
+    canonical_subcategories = _literal_set(TAXONOMY_PATH, "SUBCATEGORIES")
+    for index, raw_json in enumerate(JSON_BLOCK_RE.findall(document), start=1):
+        try:
+            payload = json.loads(raw_json)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        taxonomies = [payload]
+        investment = payload.get("investment")
+        if isinstance(investment, dict):
+            taxonomies.append(investment)
+        for taxonomy in taxonomies:
+            for field, canonical in (
+                ("themes", canonical_themes),
+                ("subcategories", canonical_subcategories),
+            ):
+                values = taxonomy.get(field)
+                if not isinstance(values, dict):
+                    continue
+                unknown_keys = set(values) - canonical
+                if unknown_keys:
+                    errors.append(
+                        f"{source} JSON example #{index} unknown {field} keys: "
+                        f"{sorted(unknown_keys)}"
+                    )
+    return errors
+
+
+def check_published_investment_examples() -> list[str]:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from scripts.docs_publication import classify_all
+
+    errors: list[str] = []
+    classification = classify_all(
+        ROOT / "docs", ROOT / "mkdocs.yml", ROOT / "docs" / "publication.yml"
+    )
+    for relpath, bucket in classification.items():
+        if bucket == "excluded-internal":
+            continue
+        path = ROOT / "docs" / relpath
+        errors.extend(
+            _unknown_taxonomy_example_keys(path.read_text(encoding="utf-8"), relpath)
+        )
+    return errors
+
+
 def main() -> int:
-    errors = [*check_taxonomy_doc(), *check_llm_schema_examples()]
+    errors = [
+        *check_taxonomy_doc(),
+        *check_llm_schema_examples(),
+        *check_published_investment_examples(),
+    ]
     if errors:
         for error in errors:
             print(f"ERROR: {error}")

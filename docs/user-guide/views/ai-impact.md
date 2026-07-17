@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/ai-impact/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Compare AI review load
+  url: user-guide/views/ai-review-load/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # AI Impact
 
 The AI Impact view summarizes how AI-assisted and agent-created work
@@ -59,8 +71,8 @@ Use the leverage breakdown as an investigation path, not a verdict:
 | Unknown attribution            | Detection coverage is incomplete and should remain visible.   | Improve labels, trailers, bot identity mapping, or CI annotations. |
 | Governance coverage            | Controls may be missing for AI-attributed workflows.          | Review policy violations and coverage gaps.                        |
 
-For demo talk tracks and buyer-facing copy, see
-[AI Operating Leverage demo narrative](../../product/ai-assisted/AI%20Operating%20Leverage%20Demo%20Narrative.md).
+For demo talk tracks and buyer-facing copy, see the
+[AI Operating Leverage demo narrative](https://github.com/full-chaos/dev-health-ops/blob/main/docs/product/ai-assisted/AI%20Operating%20Leverage%20Demo%20Narrative.md).
 
 ---
 

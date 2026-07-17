@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/work-graph/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Return to views and charts
+  url: user-guide/views-index/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # Work Graph View
 
 The Work Graph View visualizes entity relationships across issues, PRs, commits, and files.

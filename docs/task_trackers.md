@@ -119,7 +119,7 @@ dev-hops sync work-items --provider github -s "org/*" --date 2025-02-01 --backfi
 
 The project is migrating from a legacy custom Jira client to a shared `atlassian` client library. This migration is managed via feature flags and runs in parallel with the legacy implementation.
 
-See [Atlassian Client Integration Plan](./plans/atlassian-client-integration.md) for the full phased roadmap.
+See [Atlassian Client Integration Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/atlassian-client-integration.md) for the full phased roadmap.
 
 ### Feature Flags
 

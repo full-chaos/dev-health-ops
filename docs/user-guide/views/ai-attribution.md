@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/ai-attribution/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Return to views and charts
+  url: user-guide/views-index/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # AI Attribution
 
 This page is the **interpretation reference** for the attribution signals
@@ -107,7 +119,7 @@ enforced by what the data model exposes — not just by policy:
 - ❌ **No "did you use AI?" surveys surfaced through this view.**
   Self-attestation, if added later, will be a separate audited surface.
 
-These limits are encoded in the model — the [AI Governance audit](../../audit/ai_governance/)
+These limits are encoded in the model — the [AI Governance audit](https://github.com/full-chaos/dev-health-ops/blob/main/tests/audit/ai_governance/test_surveillance_posture.py)
 includes a `test_surveillance_posture` test suite that *fails* if a
 per-individual AI usage rollup is ever introduced.
 

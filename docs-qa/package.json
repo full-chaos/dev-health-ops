@@ -1,0 +1,21 @@
+{
+  "name": "dev-health-docs-qa",
+  "private": true,
+  "packageManager": "pnpm@11.1.1",
+  "scripts": {
+    "build:docs": "cd .. && python -m mkdocs build --strict --site-dir .build/site",
+    "test:visual": "playwright test --project=chrome-visual",
+    "test:a11y": "playwright test --project=chrome-a11y",
+    "test:search": "pnpm run build:docs && node tests/run-search.mjs",
+    "test:local": "pnpm run build:docs && playwright test --project=chrome-visual --project=chrome-a11y",
+    "test:preview": "playwright test --project=chrome-visual --project=chrome-a11y",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@axe-core/playwright": "4.11.0",
+    "@playwright/test": "1.61.1",
+    "lighthouse": "12.6.0",
+    "typescript": "5.9.3"
+  }
+}

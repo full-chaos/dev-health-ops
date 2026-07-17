@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views-index/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Investigate investment
+  url: user-guide/views/investment-mix/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # Views and Charts
 
 Each view answers a specific operational question. Views are explanations with drill-down, not a wall of widgets.

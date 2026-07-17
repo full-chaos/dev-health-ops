@@ -1,3 +1,15 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/views/pr-flow/
+owner: Dev Health documentation
+last-reviewed: 2026-07-16
+template: guide.html
+next:
+  label: Plan capacity
+  url: user-guide/views/capacity-planning/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # PR Flow
 
 ## What it answers

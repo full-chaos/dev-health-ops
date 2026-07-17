@@ -1,6 +1,6 @@
 # AGENTS — dev-health-ops
 
-Backend: ingest → metrics → API → jobs. Platform-wide contracts (Work Graph, Investment taxonomy, sink-only, ClickHouse-only, hard bans) live in [`../AGENTS.md`](../AGENTS.md) and are **not repeated here**. Deep dives: MkDocs site under [`docs/`](docs/index.md).
+Backend: ingest → metrics → API → jobs. The versioned platform contract (Work Graph, Investment taxonomy, sink-only, ClickHouse-only, hard bans, and documentation delivery) lives in [`docs/contributing/platform-contract.md`](docs/contributing/platform-contract.md) and is **not repeated here**. Deep dives: MkDocs site under [`docs/`](docs/index.md).
 
 ## Read-first
 

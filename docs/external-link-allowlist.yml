@@ -1,0 +1,53 @@
+# Bounded exceptions for scripts/check_external_links.py.
+#
+# Every entry MUST carry an owner, a reason, and an `expires` date. An
+# expired entry fails the guard even if the underlying URL happens to be
+# reachable again, so a stale exception cannot silently outlive its review
+# window. Do not add an entry without a concrete follow-up plan.
+
+- url: "https://github.com/chrisgeo/dev-health-ops/blob/main/LICENSE"
+  owner: "docs-content"
+  reason: >-
+    404: repository moved to github.com/full-chaos/dev-health-ops. The
+    self-hosted-quickstart.md license link and pyproject.toml project URLs
+    both still point at the pre-migration chrisgeo org and need a coordinated
+    content fix, tracked separately from the docs-guards foundation work.
+  expires: "2026-10-16"
+
+- url: "https://fullchaos.studio/pricing"
+  owner: "docs-content"
+  reason: >-
+    404: commercial-licensing page is not live yet. Revisit once the pricing
+    page ships or replace with the correct interim contact path.
+  expires: "2026-10-16"
+
+- url: "https://api.fullchaos.studio/docs"
+  owner: "docs-content"
+  reason: >-
+    Connection failure: hosted API docs endpoint is not publicly reachable
+    yet. Revisit once the API docs deployment is live.
+  expires: "2026-10-16"
+
+- url: "https://www.highlight.io/"
+  owner: "docs-content"
+  reason: >-
+    Connection failure when probed with a bounded HEAD request from CI-style
+    network conditions; the vendor site is reachable interactively. Revisit
+    with a GET-based retry policy or vendor-status confirmation.
+  expires: "2026-10-16"
+
+- url: "https://actionableagile.com/monte-carlo/"
+  owner: "docs-content"
+  reason: >-
+    404: vendor restructured their site; the Monte Carlo reference moved.
+    Replace with the current URL when the capacity-planning guide is next
+    revised.
+  expires: "2026-10-16"
+
+- url: "https://www.focusedobjective.com/w/monte-carlo-simulation/"
+  owner: "docs-content"
+  reason: >-
+    404: vendor restructured their site; the Monte Carlo reference moved.
+    Replace with the current URL when the capacity-planning guide is next
+    revised.
+  expires: "2026-10-16"

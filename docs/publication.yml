@@ -1,0 +1,75 @@
+# Publication classification for every ops/docs/**/*.md file.
+#
+# Every Markdown file under docs/ resolves to exactly one bucket, computed by
+# scripts/docs_publication.py and enforced by tests/docs/test_publication_manifest.py:
+#
+#   public-nav        - reachable through mkdocs.yml's `nav:` tree.
+#   public-reference   - built into the site but intentionally left out of
+#                         `nav:` (deep reference material, ADRs, appendices,
+#                         runbooks not yet promoted to a navigation entry).
+#   excluded-internal  - never built into the public site at all (removed
+#                         from the MkDocs build via `exclude_docs` in
+#                         mkdocs.yml). History is preserved in git; nothing
+#                         under these patterns is deleted.
+#
+# Rule order: a path already reachable from `nav:` is always public-nav (and
+# it is an error for it to also match an excluded_internal pattern below).
+# Otherwise excluded_internal is checked before public_reference, so a
+# narrow exclusion always wins over a broad reference-directory glob.
+# A path matching neither list, and not present in nav, is an unclassified
+# page and fails the build loudly rather than defaulting silently.
+
+excluded_internal:
+  # Internal engineering plans, specs, and implementation briefs. Never
+  # published: publishing planning material is an explicit platform
+  # guardrail (see AGENTS.md Must-NOT-have).
+  - "superpowers/**"
+  - "plans/**"
+  - "implementation/**"
+  # Raw before/after evidence artifacts captured during an investigation,
+  # not authored documentation prose.
+  - "screenshots/**"
+  # Unpolished product scratch specs (working titles contain literal
+  # spaces, not durable page slugs).
+  - "product/ai-assisted/**"
+  # Dated internal audit / revisit notes, not living reference material.
+  - "decisions/chaos-105-fixture-validation-revisit.md"
+  - "security/credential-encryption-audit-*.md"
+  # Named "Implementation Plan" / "Corrective Plan" in their own titles.
+  - "architecture/chaos-2600-implementation-plan.md"
+  - "architecture/team-realignment.md"
+  # Internal product/market research and internal staged-rollout material.
+  - "product/dev-health-product-market-simplification.md"
+  - "ops/testops-demo-pack.md"
+  - "ops/testops-rollout-plan.md"
+  # Internal engineering checklist / product-market research mistakenly
+  # wired into the legacy nav under misleading "Roadmap" / "Project Plan"
+  # labels; both track unfinished internal work, not user documentation.
+  - "roadmap.md"
+  - "project.md"
+  # Golden test fixture for scripts/render_workspace_agents.py: a byte-for-
+  # byte copy of contributing/platform-contract.md kept only so
+  # tests/docs/test_platform_contract.py has something to diff against. Not
+  # authored documentation prose.
+  - "contributing/workspace-AGENTS.golden.md"
+
+public_reference:
+  - "appendix/**"
+  - "architecture/*.md"
+  - "architecture/adr/*.md"
+  - "computations/*.md"
+  - "connectors/*.md"
+  - "contributing/*.md"
+  - "decisions/*.md"
+  - "examples/**"
+  - "llm/*.md"
+  - "ops/*.md"
+  - "product/feature-flags/*.md"
+  - "reference/*.md"
+  - "security/*.md"
+  - "user-guide/*.md"
+  - "coverage-matrix.md"
+  - "design-system.md"
+  - "graphql.md"
+  - "*.md"
+  - "**/*.md"

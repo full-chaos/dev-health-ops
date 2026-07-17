@@ -37,7 +37,7 @@ def test_aggregate_job_depends_on_both_changes_and_docs_guards_job() -> None:
     assert set(aggregate_job["needs"]) == {"changes", "docs-guards-job"}
 
 
-def test_docs_guards_pins_setup_node_to_the_v4_0_4_commit() -> None:
+def test_docs_guards_pins_setup_node_to_the_v7_0_0_commit() -> None:
     workflow = _load_workflow()
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)
@@ -54,7 +54,7 @@ def test_docs_guards_pins_setup_node_to_the_v4_0_4_commit() -> None:
     ]
 
     assert setup_node_uses == [
-        "actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6"
+        "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
     ]
 
 

@@ -24,6 +24,13 @@ Each view answers a specific operational question. Views are explanations with d
 - Flame diagrams (single-point decomposition)
 - Work Graph (entity relationships, related entities)
 
+## AI workflow views
+
+- [AI Impact](views/ai-impact.md) — compare AI-associated delivery and drag signals in a shared scope.
+- [AI Review Load](views/ai-review-load.md) — inspect aggregate review pressure without ranking people.
+- [AI Risk](views/ai-risk.md) — follow rework, reverts, test gaps, and incident evidence with caveats.
+- [AI Attribution](views/ai-attribution.md) — inspect the saved attribution evidence behind AI workflow signals.
+
 ## Interpretation rules
 - Trends over snapshots.
 - Compare within the same window + filter context.

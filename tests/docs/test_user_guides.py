@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Final
 
 from tests.docs.user_guide_contracts import (
+    AI_VIEW_PAGES,
     DIAGNOSTIC_PAGES,
     FLOW_PAGES,
+    ai_view_contract_errors,
     diagnostic_contract_errors,
     flow_contract_errors,
 )
@@ -217,3 +219,68 @@ def test_flow_negative_reports_ambiguous_planning_and_comparison_framing() -> No
 
     assert "pr-flow.md: missing flow contract 'Planned behavior'" in errors
     assert "capacity-planning.md: contains comparison framing 'leaderboard'" in errors
+
+
+def test_ai_views_explain_current_fields_with_calibrated_language() -> None:
+    pages = {page_name: _read_view(page_name) for page_name in AI_VIEW_PAGES}
+
+    assert ai_view_contract_errors(pages) == ()
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    views_index = _read_guide("views-index.md")
+    for path in (
+        "user-guide/views/ai-impact.md",
+        "user-guide/views/ai-review-load.md",
+        "user-guide/views/ai-risk.md",
+        "user-guide/views/ai-attribution.md",
+    ):
+        assert path in nav
+        assert path.removeprefix("user-guide/") in views_index
+
+
+def test_ai_negative_reports_definitive_and_ranking_language() -> None:
+    pages = {page_name: _read_view(page_name) for page_name in AI_VIEW_PAGES}
+    pages["ai-impact.md"] = (
+        f"{pages['ai-impact.md']}\nThe model determined the result.\n"
+    )
+    pages["ai-review-load.md"] = (
+        f"{pages['ai-review-load.md']}\nRank individual reviewers.\n"
+    )
+
+    errors = ai_view_contract_errors(pages)
+
+    assert (
+        "ai-impact.md: contains definitive or ranking language 'determined'" in errors
+    )
+    assert (
+        "ai-review-load.md: contains definitive or ranking language 'rank individual'"
+        in errors
+    )
+
+
+def test_ai_negative_reports_invented_fields_unlabeled_estimates_and_recomputation() -> (
+    None
+):
+    pages = {page_name: _read_view(page_name) for page_name in AI_VIEW_PAGES}
+    pages["ai-impact.md"] = (
+        f"{pages['ai-impact.md'].replace('**estimates**', 'estimates')}\n"
+        "Leverage components estimate.\n"
+    )
+    pages["ai-risk.md"] = f"{pages['ai-risk.md']}\nIncident counts.\n"
+    pages["ai-attribution.md"] = (
+        f"{pages['ai-attribution.md']}\nThe browser recomputes a verdict.\n"
+    )
+
+    errors = ai_view_contract_errors(pages)
+
+    assert (
+        "ai-impact.md: contains invented current field 'Leverage components'" in errors
+    )
+    assert "ai-impact.md: estimate is not explicitly labeled" in errors
+    assert "ai-risk.md: contains invented current field 'incident counts'" in errors
+    assert (
+        "ai-attribution.md: contains definitive or ranking language 'verdict'" in errors
+    )
+    assert (
+        "ai-attribution.md: contains definitive or ranking language 'browser recomputes'"
+        in errors
+    )

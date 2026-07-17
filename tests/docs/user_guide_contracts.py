@@ -67,6 +67,64 @@ FLOW_PAGES: Final = {
     ),
 }
 FORBIDDEN_FLOW_COMPARISONS: Final = ("leaderboard", "top performer", "rank people")
+AI_VIEW_PAGES: Final = {
+    "ai-impact.md": (
+        "AI-assisted work share",
+        "Agent-created work share",
+        "Unknown attribution",
+        "Net delivery lift",
+        "Last computed",
+    ),
+    "ai-review-load.md": (
+        "Pickup latency",
+        "Review comments per LOC",
+        "Change request rate",
+        "Approval friction",
+        "Review amplification",
+    ),
+    "ai-risk.md": (
+        "Rework rate",
+        "Revert rate",
+        "Test gap rate",
+        "Incident rate",
+        "Linked incidents",
+    ),
+    "ai-attribution.md": (
+        "Attribution mix",
+        "Attribution evidence",
+        "Subject",
+        "Provider",
+        "Observed",
+        "highest-precedence",
+        "Unknown attribution",
+        "human bucket",
+    ),
+}
+AI_GUIDE_SECTIONS: Final = (
+    "Purpose",
+    "What it measures",
+    "How to read",
+    "Confidence and provenance",
+    "Empty and error states",
+    "Caveats and limits",
+    "Next step",
+)
+CALIBRATED_AI_LANGUAGE: Final = ("appears", "leans", "suggests")
+AI_ESTIMATE_LABELS: Final = ("**estimate**", "**estimates**")
+FORBIDDEN_AI_LANGUAGE: Final = (
+    "determined",
+    "detected",
+    "rank individual",
+    "individual ranking",
+    "verdict",
+    "browser recompute",
+    "browser recalculates",
+    "browser recomputes",
+)
+INVENTED_AI_VIEW_FIELDS: Final = {
+    "ai-impact.md": ("Leverage components",),
+    "ai-risk.md": ("incident counts",),
+}
 
 
 def diagnostic_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
@@ -160,4 +218,39 @@ def flow_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
     ):
         if term.casefold() not in graph.casefold():
             errors.append(f"work-graph.md: missing work-graph contract {term!r}")
+    return tuple(errors)
+
+
+def ai_view_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
+    errors: list[str] = []
+    for page_name, required_fields in AI_VIEW_PAGES.items():
+        content = pages[page_name]
+        for section in AI_GUIDE_SECTIONS:
+            if section.casefold() not in content.casefold():
+                errors.append(f"{page_name}: missing section {section!r}")
+        for field in required_fields:
+            if field.casefold() not in content.casefold():
+                errors.append(f"{page_name}: missing current field {field!r}")
+        for phrase in CALIBRATED_AI_LANGUAGE:
+            if phrase not in content.casefold():
+                errors.append(f"{page_name}: missing calibrated language {phrase!r}")
+        if "[glossary](../glossary.md)" not in content.casefold():
+            errors.append(f"{page_name}: missing glossary link")
+        if (
+            "[how to read dev health](../how-to-read-dev-health.md)"
+            not in content.casefold()
+        ):
+            errors.append(f"{page_name}: missing interpretation overview link")
+        for phrase in FORBIDDEN_AI_LANGUAGE:
+            if phrase in content.casefold():
+                errors.append(
+                    f"{page_name}: contains definitive or ranking language {phrase!r}"
+                )
+        for field in INVENTED_AI_VIEW_FIELDS.get(page_name, ()):
+            if field.casefold() in content.casefold():
+                errors.append(f"{page_name}: contains invented current field {field!r}")
+        if "estimate" in content.casefold() and not any(
+            label in content.casefold() for label in AI_ESTIMATE_LABELS
+        ):
+            errors.append(f"{page_name}: estimate is not explicitly labeled")
     return tuple(errors)

@@ -30,6 +30,11 @@ nav:
       - Read metrics with care: metrics.md
       - Investigate investment: user-guide/journeys/investment-view.md
       - Follow work relationships: user-guide/views/work-graph.md
+      - AI workflow views:
+          - AI Impact: user-guide/views/ai-impact.md
+          - AI Review Load: user-guide/views/ai-review-load.md
+          - AI Risk: user-guide/views/ai-risk.md
+          - AI Attribution: user-guide/views/ai-attribution.md
       - Review reports: user-guide/reports.md
   - Administer & integrate:
       - Configure a workspace: configuration.md

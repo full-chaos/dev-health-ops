@@ -277,6 +277,11 @@ input {
   margin: 0;
 }
 
+.fc-evidence-rail__step > span:last-child {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
 .fc-evidence-rail__number {
   align-items: center;
   background: var(--fc-evidence);
@@ -482,12 +487,16 @@ input {
     padding: var(--fc-space-4);
   }
 
+  .md-content .fc-evidence-rail--in-flow {
+    display: none;
+  }
+
   .fc-evidence-rail--showcase {
     inline-size: var(--fc-evidence-rail-measure);
     margin: 0;
   }
 
-  .md-sidebar--secondary .fc-evidence-rail {
+  .md-sidebar--secondary .fc-evidence-rail--rail {
     display: flex;
     flex-direction: column;
     inset-block-start: var(--fc-space-6);

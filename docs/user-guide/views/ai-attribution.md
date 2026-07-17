@@ -12,141 +12,61 @@ troubleshooting: customer-push-ingestion/troubleshooting/
 
 # AI Attribution
 
-This page is the **interpretation reference** for the attribution signals
-that power every AI Workflow Intelligence view. It explains what counts as
-AI-assisted, how confidence is recorded, what stays *unknown*, and — most
-importantly — the explicit guardrails on how this data may and may not be
-used.
+AI Attribution explains the saved signal evidence behind the AI views. It helps a team
+see how work **appears** to split across the available attribution kinds without turning
+that context into a statement about a person. AI-derived signals are **estimates** from
+the available persisted evidence and source coverage.
 
-> If you read only one page in the AI section, read this one. The
-> dashboards make sense only when the attribution rules are understood.
+## Purpose
+Use this view when an AI Impact, Review Load, or Risk pattern needs its stored evidence
+and source context.
 
----
+## What it measures
+The current page has an **Attribution mix** and an **Attribution evidence** table. The mix
+groups the highest-precedence, non-superseded signal for each subject: AI-assisted,
+Agent-created, AI review, or **Unknown attribution**. Unknown means attribution remains
+unresolved and is never guessed. The mix intentionally excludes a synthesized human bucket;
+use AI Impact for an AI-versus-human split. The table shows **Subject**, Attribution, Source,
+**Provider**, Team, and **Observed** fields for the saved evidence rows in the selected
+window. The implemented precedence is `MANUAL > PR_LABEL > BOT_AUTHOR > COMMIT_TRAILER >
+CI_ANNOTATION > BRANCH_NAME > PR_BODY`. The Subject field suggests which saved work item
+should be opened for context.
 
-## Buckets
+## How to read
+Start with the mix, then open the evidence rows for the work that matters to the
+question. A source and confidence label may **suggest** how much care to take with the
+signal; it does not settle a causal explanation.
 
-Every PR (and every reviewed artifact) lands in exactly one attribution
-bucket. The buckets are stable across resolvers, metrics, and storage:
+<aside class="fc-evidence-rail fc-evidence-rail--in-flow" aria-label="Evidence trail">
+  <p class="fc-evidence-rail__label">Evidence trail</p>
+  <ol class="fc-evidence-rail__steps">
+    <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">01</span><span>Read the attribution kind with its source and confidence.</span></li>
+    <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">02</span><span>Open the subject to inspect the saved evidence.</span></li>
+    <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">03</span><span>Keep Unknown visible when coverage is unresolved.</span></li>
+  </ol>
+  <a class="fc-evidence-rail__link" href="../../how-to-read-dev-health/">Open the evidence model</a>
+</aside>
 
-| Bucket          | Meaning                                                          |
-| --------------- | ---------------------------------------------------------------- |
-| `ai_assisted`   | Human-authored with explicit AI assistance.                      |
-| `agent_created` | Autonomous agent produced the artifact end-to-end.               |
-| `ai_review`     | AI performed the review.                                         |
-| `human`         | Human-only baseline; no detected AI involvement.                 |
-| `unknown`       | Attribution unresolved. **Never guessed.**                       |
+## Confidence and provenance
+Each evidence row carries its persisted source, confidence, provider, and observation
+date. Confidence is the detector's source-specific confidence from `0.0` to `1.0` saved
+with the signal; it is not an outcome, quality, or person-performance score. The resolver
+enriches the `team_id` context when the view is queried. The table **leans** on those saved
+rows and does not derive a new attribution in the browser. The mix covers resolved signals
+in the chosen window; use AI Impact when a human baseline is needed for a comparison.
 
-Buckets are mutually exclusive at the artifact level. Aggregates sum to
-the total artifact count on every resolver.
+## Empty and error states
+No AI attribution data yet means the selected window has no available persisted signal.
+Check source coverage and widen the context only when that matches the question.
 
----
+## Caveats and limits
+Attribution evidence can **appear** incomplete when a source has limited coverage. The
+view does not expose prompt or session content and does not support a person-level
+usage comparison. Keep the source, confidence, and observed date beside every reading.
 
-## P0 detection sources (CHAOS-1580)
-
-The ingestion path detects assistance from these provider signals, in
-**precedence order**:
-
-1. **Explicit PR labels.** `ai-assisted`, `agent-created`, `ai-review`,
-   and similar canonical labels override every weaker signal.
-2. **Bot / app authors.** Known agent identities (e.g. `app/devin-ai-…`,
-   `bot/copilot-…`) attribute the PR as `agent_created`.
-3. **Commit trailers.** `AI-Assisted-By:` and equivalent trailers attribute
-   the commits (and the PR through commit roll-up).
-4. **Branch naming conventions.** Branch prefixes like `agent/…`,
-   `copilot/…` contribute as a *secondary* signal.
-5. **PR description patterns** and **CI annotations** — secondary signals.
-
-Manual attribution (operator override) is preserved and always wins over
-auto-detection.
-
----
-
-## Confidence
-
-Every inferred attribution carries a `confidence` value and a `source`
-field describing the strongest signal that produced the classification.
-
-| Source class      | Typical confidence | Interpretation                                       |
-| ----------------- | ------------------ | ---------------------------------------------------- |
-| `explicit_label`  | 1.0                | Operator or org has tagged this artifact directly.   |
-| `bot_author`      | 0.95               | Identified bot/app account is the author.            |
-| `commit_trailer`  | 0.85 – 0.9         | Trailer parsed cleanly from commit message.          |
-| `branch_pattern`  | 0.5 – 0.7          | Branch name matches a known agent prefix.            |
-| `pr_description`  | 0.5                | PR body contains assistance markers.                 |
-| `heuristic`       | 0.3                | Time-window / co-occurrence matching only.           |
-| `manual_override` | 1.0                | Operator set this attribution explicitly.            |
-
-If the strongest signal is weaker than the ingestion threshold, the
-artifact remains in `unknown` — it does **not** get demoted into a "maybe
-AI-assisted" bucket. Unknown is a first-class state, not a guess.
-
----
-
-## What "unknown" really means
-
-`unknown` is preserved deliberately:
-
-- **In the API**: every resolver exposes the unknown count and ratio.
-- **In the UI**: the AI Impact dashboard surfaces an "Unknown attribution"
-  card so coverage gaps stay visible.
-- **In aggregates**: unknown contributes to denominators where appropriate
-  so AI-share percentages don't silently inflate.
-
-A high unknown rate is a **data-coverage signal first**, a pattern signal
-second. If unknown is climbing, the answer is usually missing labels,
-missing trailers, or a bot account that hasn't been added to the identity
-registry — not a usage trend.
-
----
-
-## What this attribution model **explicitly does not do**
-
-The product contract (CHAOS-1578) bans the following uses. These bans are
-enforced by what the data model exposes — not just by policy:
-
-- ❌ **No individual surveillance.** There is no per-author AI usage
-  rollup. No resolver returns "AI assistance by login". No filter narrows
-  any AI view to a single person.
-- ❌ **No "AI productivity score" per person.** AI Operating Leverage is
-  org-scoped and decomposable; there is no per-person variant.
-- ❌ **No ranking of developers by AI use, AI-attributed quality, or any
-  AI-derived metric.** Aggregations stop at team granularity.
-- ❌ **No raw prompt or session capture.** Attribution uses only the
-  provider signals listed above. Prompt content is never ingested,
-  rendered, or persisted.
-- ❌ **No invasive IDE telemetry.** This milestone covers PR/commit/issue/
-  workflow-run signals, not editor session data.
-- ❌ **No "did you use AI?" surveys surfaced through this view.**
-  Self-attestation, if added later, will be a separate audited surface.
-
-These limits are encoded in the model — the [AI Governance audit](https://github.com/full-chaos/dev-health-ops/blob/main/tests/audit/ai_governance/test_surveillance_posture.py)
-includes a `test_surveillance_posture` test suite that *fails* if a
-per-individual AI usage rollup is ever introduced.
-
----
-
-## How to use this data well
-
-| ✅ Use for                                                          | ❌ Do not use for                                              |
-| ------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Understanding org-wide adoption trends.                             | Ranking developers by AI use.                                  |
-| Spotting review-load or quality patterns at team / repo scope.      | Performance reviews, calibration, or HR processes.             |
-| Sizing the impact of an agent rollout.                              | Justifying replacing specific individuals.                     |
-| Identifying coverage gaps to improve detection.                     | Naming-and-shaming PRs or contributors.                        |
-| Informing automation opportunity prioritization.                    | Gating individual merges based on AI attribution.              |
-
-If a stakeholder asks for "the list of who is using AI the most", the
-correct answer is to point them at this page and decline. The product
-will keep declining.
-
----
-
-## Related
-
-- [AI Impact](ai-impact.md) — top-level summary view.
-- [AI Review Load](ai-review-load.md) — review pressure view.
-- [AI Risk](ai-risk.md) — quality risk view.
-- Attribution Storage spec — `docs/product/ai-assisted/Attribution Storage.md`
-- Attribution Ingestion spec — `docs/product/ai-assisted/Attribution Ingestion.md`
-- [AI Workflow Analytics — GraphQL Contracts](../../api/graphql-ai.md)
-- [AI Opportunity Detector computation reference](../../computations/ai-opportunity-detector.md)
+## Next step
+- [AI Impact](ai-impact.md) provides the delivery context.
+- [AI Review Load](ai-review-load.md) helps read review pressure.
+- [AI Risk](ai-risk.md) helps read quality signals.
+- [How to read Dev Health](../how-to-read-dev-health.md) explains the shared interpretation model.
+- [Glossary](../glossary.md) defines the terms used here.

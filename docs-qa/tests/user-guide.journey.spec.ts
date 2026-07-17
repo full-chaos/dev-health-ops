@@ -51,6 +51,7 @@ test.describe("diagnostic guides", () => {
             await expect(article.getByRole("link", { name: /evidence model/i })).toBeVisible();
         }
     });
+
 });
 
 test.describe("flow and planning guides", () => {
@@ -88,6 +89,46 @@ test.describe("flow and planning guides", () => {
             const article = page.locator(".md-content");
             await expect(article.getByRole("link", { name: /evidence model/i })).toBeVisible();
             await expect(article.getByRole("link", { name: /glossary/i })).toBeVisible();
+        }
+    });
+});
+
+test.describe("AI view guides", () => {
+    test("opens every guide with calibrated language and interpretation routes", async ({ page }) => {
+        for (const guide of [
+            { path: "/user-guide/views/ai-impact/", title: "AI Impact", field: "AI-assisted work share" },
+            { path: "/user-guide/views/ai-review-load/", title: "AI Review Load", field: "Pickup latency" },
+            { path: "/user-guide/views/ai-risk/", title: "AI Risk", field: "Rework rate" },
+            { path: "/user-guide/views/ai-attribution/", title: "AI Attribution", field: "Attribution mix" },
+        ] as const) {
+            await page.goto(guide.path);
+
+            const article = page.locator(".md-content");
+            await expect(article.getByRole("heading", { name: guide.title })).toBeVisible();
+            await expect(article).toContainText(guide.field);
+            await expect(article).toContainText("appears");
+            await expect(article.getByRole("link", { name: "How to read Dev Health" })).toBeVisible();
+            await expect(article.getByRole("link", { name: "Glossary" })).toBeVisible();
+        }
+    });
+
+    test("keeps the in-flow evidence trail keyboard reachable", async ({ page }) => {
+        for (const guide of [
+            "/user-guide/views/ai-impact/",
+            "/user-guide/views/ai-review-load/",
+            "/user-guide/views/ai-risk/",
+            "/user-guide/views/ai-attribution/",
+        ] as const) {
+            await page.setViewportSize({ width: 375, height: 900 });
+            await page.goto(guide);
+
+            const evidenceLink = page
+                .getByRole("complementary", { name: "Evidence trail" })
+                .getByRole("link", { name: "Open the evidence model" });
+            await evidenceLink.focus();
+            await expect(evidenceLink).toBeFocused();
+            await page.keyboard.press("Enter");
+            await expect(page).toHaveURL(/\/user-guide\/how-to-read-dev-health\/$/);
         }
     });
 });

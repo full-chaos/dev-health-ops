@@ -12,121 +12,58 @@ troubleshooting: customer-push-ingestion/troubleshooting/
 
 # AI Risk
 
-The AI Risk view is the diagnostic surface for **quality risk associated
-with AI-attributed work**. It compares AI-attributed PRs against the
-human-only baseline on the same scope and time window and surfaces
-governance violations that fire on AI workflows.
+AI Risk brings persisted quality and governance signals into one team-level reading.
+It helps a group see where AI-associated work **appears** to need more evidence or a
+closer operating conversation. AI-derived signals are **estimates** from the available
+persisted quality facts and source coverage.
 
-> **Purpose:** Surface where AI-assisted work appears to land with lower
-> quality signals (rework, reverts, test gaps, incidents, governance
-> violations). This is a *system-quality* lens. It is **not** a per-
-> author quality grading tool.
+## Purpose
+Use the view to investigate rework, reverts, test gaps, incidents, and governance
+context in one selected scope and time window.
 
----
+## What it measures
+The current comparison cards show **Rework rate**, **Revert rate**, **Test gap rate**, and
+**Incident rate**. Supporting context can show hotspot-file overlap, high-complexity-file
+overlap, **Linked incidents**, and governance findings when their persisted inputs are
+available. For every displayed AI bucket, `incidentsCount` repeats all incidents that
+started in the selected window for the same repository. It is not a Work Graph
+linked-incident rollup. The Incident rate panel uses this repository-level context as an
+estimate that may suggest a closer evidence review.
 
-## What this view shows
+## How to read
+Read several signals together and compare the same window before acting. A rising test
+gap with rework suggests a follow-up investigation, while an isolated change may lean on
+one unusual release. Open the available evidence before forming a response.
 
-Four metric cards comparing AI-side to baseline, three risk-overlap panels,
-one rollup card, and the governance violations list.
+<aside class="fc-evidence-rail fc-evidence-rail--in-flow" aria-label="Evidence trail">
+  <p class="fc-evidence-rail__label">Evidence trail</p>
+  <ol class="fc-evidence-rail__steps">
+    <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">01</span><span>Compare rates in the same period and selected scope.</span></li>
+    <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">02</span><span>Open linked work and incident context before responding.</span></li>
+    <li class="fc-evidence-rail__step"><span class="fc-evidence-rail__number">03</span><span>Use missing coverage as a question, not a zero value.</span></li>
+  </ol>
+  <a class="fc-evidence-rail__link" href="../../how-to-read-dev-health/">Open the evidence model</a>
+</aside>
 
-### Risk metrics (vs human baseline)
+## Confidence and provenance
+Saved counts and related evidence support the selected scope. The resolver calculates
+per-bucket rates when the view is queried, while governance findings keep the related
+subject and observation context visible. The page **leans** on those records and does not
+create a new attribution or incident link while you read it.
 
-| Card           | What it answers                                                  |
-| -------------- | ---------------------------------------------------------------- |
-| Rework rate    | Share of AI-attributed PRs that appear to require iteration.     |
-| Revert rate    | Share of AI-attributed PRs associated with a subsequent revert.  |
-| Test gap rate  | Share of AI-attributed PRs landing without matching test deltas. |
-| Incident rate  | Share of AI-attributed PRs linked to incident rollups.           |
+## Empty and error states
+Overlap panels show an explicit unavailable state when their input is absent. A missing
+panel or value means the relevant coverage is not ready in that context, not that there
+is no risk or that the value equals zero.
 
-### Risk overlap panels
+## Caveats and limits
+These signals provide evidence for a team conversation, not a quality label for a
+person. An incident edge or a revert can **appear** alongside a pull request without
+explaining cause. Keep the source, period, and linked work in view.
 
-Two file-overlap panels render as **missing-data cards** today because the
-underlying detectors do not yet expose per-file overlap with AI-attributed
-PR changed-file sets:
-
-| Missing card                       | What it will show when it lands                                              |
-| ---------------------------------- | ---------------------------------------------------------------------------- |
-| Hotspot file overlap               | AI-attributed PRs that touched detector-flagged hotspot files.               |
-| High-complexity file overlap       | AI-attributed PRs that touched complexity-flagged files.                     |
-
-### Linked incidents
-
-A single rollup card surfacing the count of incidents associated with
-AI-attributed PR edges in the window. PR-level drilldown will arrive when
-a specific PR is selected — the aggregate card does *not* fabricate PR-level
-edges from rollups.
-
-### Governance violations
-
-The AI Governance summary feed is rendered in the same view to make policy
-breaches visible where the quality conversation happens. Each row carries:
-
-- the rule ID
-- severity
-- subject type and subject ID (e.g. `PR pr-7001`)
-- team and repo
-- evidence string
-- observation timestamp
-
-Violations are surfaced by **ruleId + subjectId**, not by author handle.
-
----
-
-## How to read it
-
-1. **Read deltas, not absolutes.** Every risk card shows the AI-side value
-   alongside the delta vs human-only baseline on the same scope.
-2. **One signal at a time.** A small positive delta on a single metric is
-   noise. Multiple deltas trending the same direction across rework, test
-   gap, and incident is a real pattern.
-3. **Missing-data cards are honest.** When the detector is not yet wired,
-   the card stays present with a "data source needed" note rather than
-   silently disappearing.
-4. **Governance violations are evidence.** Each violation row links to the
-   subject (PR or repo) — drill into the artifact, not the author.
-
----
-
-## What this view does **not** do
-
-- ❌ **No author quality grading.** No card maps a quality metric to an
-  individual author or reviewer. There is no per-author filter and no
-  resolver path that exposes per-author quality rollups.
-- ❌ **No "AI risk score".** Risk is exposed as named, decomposable
-  metrics, not a synthetic composite.
-- ❌ **No incident attribution to people.** Linked incidents trace to PRs
-  and repos, never to individuals.
-- ❌ **No predictive blocking.** This view explains observed patterns; it
-  does not gate merges, reviews, or deployments.
-
----
-
-## Interpretation guardrails
-
-| Signal                                                       | Useful framing                                                          | Misuse                                                       |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Rework rate elevated on AI side                              | "Are we landing AI-attributed work that needs follow-up iterations?"    | "Author X writes worse code."                                |
-| Test gap rate elevated on AI side                            | "Is test coverage lagging behind AI-assisted change?"                   | "AI = no tests, ban it."                                     |
-| Incident rate elevated on AI side                            | "Is AI-attributed work clustering near incident-linked PRs?"            | Conclude causality from a single window.                     |
-| Governance violations rising                                 | "Is policy enforcement keeping up with workflow change?"                | Use as a list of contributors to discipline.                 |
-| All cards quiet, missing-data cards loud                     | "Detectors haven't ramped here yet — invest in detection coverage."     | Conclude there is no risk.                                   |
-
----
-
-## Data sources and freshness
-
-- Risk cards read from `aiRiskBreakdown`.
-- Deltas read from `aiComparison`.
-- Governance violations read from `aiGovernanceSummary.recentViolations`.
-- All three queries return `dataAvailable: Boolean!` — `false` triggers the
-  missing-data UX rather than a silently empty dashboard.
-- Schema details: [graphql-ai.md](../../api/graphql-ai.md).
-
----
-
-## Related
-
-- [AI Impact](ai-impact.md) — top-level summary view.
-- [AI Review Load](ai-review-load.md) — diagnostic view for review pressure.
-- [AI Attribution](ai-attribution.md) — how AI-assisted is detected and the
-  anti-surveillance posture this view inherits.
+## Next step
+- [AI Impact](ai-impact.md) provides the wider delivery context.
+- [AI Review Load](ai-review-load.md) helps read review pressure.
+- [AI Attribution](ai-attribution.md) shows the saved signal evidence.
+- [How to read Dev Health](../how-to-read-dev-health.md) explains the shared interpretation model.
+- [Glossary](../glossary.md) defines the terms used here.

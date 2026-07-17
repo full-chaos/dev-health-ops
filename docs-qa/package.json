@@ -7,6 +7,7 @@
     "test:visual": "playwright test --project=chrome-visual",
     "test:a11y": "playwright test --project=chrome-a11y",
     "test:search": "pnpm run build:docs && node tests/run-search.mjs",
+    "test:journeys": "pnpm run build:docs && playwright test --project=chrome-journeys",
     "test:local": "pnpm run build:docs && playwright test --project=chrome-visual --project=chrome-a11y",
     "test:preview": "playwright test --project=chrome-visual --project=chrome-a11y",
     "typecheck": "tsc --noEmit"

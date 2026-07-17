@@ -12,6 +12,7 @@ SHOWCASE_PATH = ROOT / "docs" / "reference" / "primitive-showcase.md"
 DOCS_QA_PACKAGE_PATH = ROOT / "docs-qa" / "package.json"
 DOCS_QA_CONFIG_PATH = ROOT / "docs-qa" / "playwright.config.ts"
 ACCESS_HEADERS_PATH = ROOT / "docs-qa" / "tests" / "support" / "accessHeaders.ts"
+SOURCE_PARTIAL_PATH = ROOT / "docs" / "overrides" / "partials" / "source.html"
 RAW_CSS_VALUE_PATTERN: Final = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
 REQUIRED_TOKENS = (
@@ -129,4 +130,16 @@ def test_docs_qa_harness_uses_pinned_chrome_and_redacted_access_headers() -> Non
     assert 'channel: "chrome"' in config
     assert "CF_ACCESS_CLIENT_ID" in access_headers
     assert "CF_ACCESS_CLIENT_SECRET" in access_headers
-    assert "python3 -m http.server 8008 --directory ../.build/site" in config
+    assert 'const docsQaPort = process.env["DOCS_QA_PORT"] ?? "8008";' in config
+    assert "python3 -m http.server ${docsQaPort} --directory ../.build/site" in config
+
+
+def test_repository_source_link_does_not_enable_material_github_api_requests() -> None:
+    assert SOURCE_PARTIAL_PATH.is_file(), (
+        "missing repository source override that prevents Material GitHub API requests"
+    )
+    source_partial = SOURCE_PARTIAL_PATH.read_text(encoding="utf-8")
+
+    assert 'href="{{ config.repo_url }}"' in source_partial
+    assert 'class="md-source"' in source_partial
+    assert 'data-md-component="source"' not in source_partial

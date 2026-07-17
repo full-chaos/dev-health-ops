@@ -73,16 +73,21 @@
   min-block-size: auto;
 }
 
-.fc-page-paths__link--primary {
+.md-typeset .fc-page-paths__link--primary {
   background: var(--fc-orange);
   border-color: var(--fc-orange);
   color: var(--fc-paper-raised);
 }
 
-.fc-page-paths__link--primary:hover {
+.md-typeset .fc-page-paths__link--primary:hover {
   background: var(--fc-orange-dark);
   border-color: var(--fc-orange-dark);
   color: var(--fc-paper-raised);
+}
+
+.fc-page-paths__link:focus-visible {
+  box-shadow: var(--fc-focus-ring);
+  outline: none;
 }
 
 @media screen and (max-width: 48rem) {

@@ -12,52 +12,49 @@ troubleshooting: customer-push-ingestion/troubleshooting/
 
 # PR Flow
 
-## What it answers
-- Where work stalls (pickup, review, merge)?
-- Is the bottleneck capacity or latency?
+PR Flow helps a team understand how work moves between available states in the selected scope and period. It describes aggregated work-item movement, not individual assessment.
 
-## Implementation
+## Purpose
+Use this guide to ask where work is waiting, moving, or returning for more work before it is complete.
 
-PR Flow is implemented through multiple complementary visualizations:
+## When to use
+Use PR Flow when a delivery trend needs more detail about state movement or returns to an earlier state. Use a [flame diagram](flame-diagrams.md) when one item needs a closer single-item diagnosis.
 
-### 1. Flame Diagram (Single PR Timeline)
-**Location**: `/prs/[pr_id]/page.tsx` → `FlameDiagram` component
+## Current behavior
+In **Metrics → Flow**, the current **State Flow** tab is a **work-item state-transition Sankey**
+for the selected scope and period. Its nodes are available state labels and its
+links summarize observed state transitions between those labels. It does not promise a complete
+lifecycle for every item.
 
-Shows the lifecycle of a single PR with:
-- **States**: active, waiting, blocked, ci
-- **Categories**: planned, unplanned, rework
-- Timeline visualization with color-coded segments
-- Duration breakdown by state
+Keep the visible period and filters with any interpretation. A missing transition can be a
+coverage limitation, not evidence that work moved directly from one state to another.
 
-Use case: Diagnose why a specific PR took long to merge.
+## Planned behavior
+Additional transition detail and drill-downs may be added as source coverage grows. Treat
+only controls and states visible in the current workspace as available now.
 
-### 2. State Flow Sankey
-**Location**: `/work` → Flow tab → State Flow sub-tab
+## How to read
+Start with state labels and the relative size of their transition links. Compare a pattern
+with the surrounding period; one item moving back is not a system trend.
 
-Shows work item state transitions across the team:
-- Source nodes: initial states
-- Target nodes: terminal states
-- Link width: volume of transitions
-- Identifies common flow paths and bottlenecks
+## Worked example
+An illustrative flow can show work moving from active to blocked and then back to active.
+Inspect linked work, dependencies, and time context before choosing an explanation.
 
-Use case: See where work commonly gets stuck across all items.
+## Evidence path
+Open related work items, dependencies, and time context when an evidence path is available.
+The [evidence model](../../product/concepts.md) keeps a state-transition reading tied to artifacts.
 
-### 3. Review Heatmap
-**Location**: `/work` → Heatmap tab
+## Empty and error states
+No available transitions mean there is not enough usable source information for the selected
+context. Check filters, connection coverage, and page help; do not read an empty result as
+instant flow.
 
-Shows review wait patterns by time:
-- X-axis: time of day
-- Y-axis: day of week
-- Cell intensity: review wait density
+## Caveats
+Sources can expose different state detail, and one item can have an unusual transition.
+Keep the view focused on work context and use longer trends before choosing a team response.
 
-Use case: Identify when review latency is highest.
-
-## Backing computations
-- Stage timestamp extraction per provider (pr_created_at, first_review_at, merged_at)
-- Windowed aggregation by scope
-- State duration calculations in `work_item_state_durations_daily`
-
-## API Endpoints
-- `GET /api/v1/flame?entity_type=pr&entity_id={id}` - Single PR timeline
-- `POST /api/v1/sankey` with `mode=state` - State transitions
-- `GET /api/v1/heatmap?type=temporal_load&metric=review_wait_density` - Review patterns
+## Next step
+- [Diagnose one item with a flame diagram](flame-diagrams.md).
+- [Read the glossary](../glossary.md).
+- [Plan capacity](capacity-planning.md).

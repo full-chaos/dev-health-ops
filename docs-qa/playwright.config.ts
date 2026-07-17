@@ -2,7 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 import { previewTransport } from "./tests/support/previewTransport";
 
-const docsBaseUrl = process.env["DOCS_BASE_URL"] ?? "http://127.0.0.1:8008";
+const docsQaPort = process.env["DOCS_QA_PORT"] ?? "8008";
+const docsBaseUrl = process.env["DOCS_BASE_URL"] ?? `http://127.0.0.1:${docsQaPort}`;
 const preview = previewTransport();
 const usesRemotePreview = process.env["DOCS_BASE_URL"] !== undefined;
 
@@ -33,13 +34,18 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], channel: "chrome" },
       testMatch: "**/*.search.spec.ts",
     },
+    {
+      name: "chrome-journeys",
+      use: { ...devices["Desktop Chrome"], channel: "chrome" },
+      testMatch: "**/*.journey.spec.ts",
+    },
   ],
   ...(usesRemotePreview
     ? {}
     : {
         webServer: {
-        command: "python3 -m http.server 8008 --directory ../.build/site",
-        url: "http://127.0.0.1:8008/",
+        command: `python3 -m http.server ${docsQaPort} --directory ../.build/site`,
+        url: `${docsBaseUrl}/`,
         reuseExistingServer: !process.env["CI"],
         timeout: 30_000,
         },

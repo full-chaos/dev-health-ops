@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.docs.user_guide_evidence_fixtures import (
+    valid_evidence_root as valid_evidence_root,
+)
+
 # `scripts/` has no `__init__.py` and pytest.ini only puts `src` on
 # sys.path, so tests that import `scripts.docs_publication` as a library
 # (rather than invoking it as a subprocess) need the ops repo root on

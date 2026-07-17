@@ -19,14 +19,22 @@ theme:
 nav:
   - Start here:
       - Welcome: index.md
+      - Your first 10 minutes: user-guide/first-10-minutes.md
+      - How to read Dev Health: user-guide/how-to-read-dev-health.md
+      - Glossary: user-guide/glossary.md
       - Understand Dev Health: product/concepts.md
       - Find the right view: user-guide/views-index.md
-      - Read the Investment model: user-guide/investment-view.md
+      - Follow the Investment journey: user-guide/journeys/investment-view.md
   - Use Dev Health:
       - Explore views and charts: user-guide/views-index.md
-      - Read metrics with care: metrics.md
-      - Investigate investment: user-guide/views/investment-mix.md
+      - Read metrics with care: user-guide/metrics-interpretation.md
+      - Investigate investment: user-guide/journeys/investment-view.md
       - Follow work relationships: user-guide/views/work-graph.md
+      - AI workflow views:
+          - AI Impact: user-guide/views/ai-impact.md
+          - AI Review Load: user-guide/views/ai-review-load.md
+          - AI Risk: user-guide/views/ai-risk.md
+          - AI Attribution: user-guide/views/ai-attribution.md
       - Review reports: user-guide/reports.md
   - Administer & integrate:
       - Configure a workspace: configuration.md
@@ -78,6 +86,9 @@ plugins:
 extra_css:
   - overrides/extra.css
   - overrides/audience.css
+
+extra_javascript:
+  - overrides/table-scroll-accessibility.js
 
 markdown_extensions:
   - admonition

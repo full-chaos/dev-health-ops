@@ -1,0 +1,114 @@
+## Scope
+
+Completes the evidence-led user-guide coverage packet while preserving calibrated,
+non-ranking interpretation guidance and the existing AI evidence paths.
+
+## Issue mapping
+
+- CHAOS-2329 — First 10 minutes walkthrough: Cockpit context, navigation, chart reading,
+  confidence, evidence, help, operating modes, trends over absolutes, and signals not judgment.
+- CHAOS-2331 — How to read Dev Health: context, trends, caveats, evidence quality, and
+  plain-language interpretation guardrails.
+- CHAOS-2332 — Glossary: WorkUnit, taxonomy, flow, capacity, resilience, and evidence terms.
+- CHAOS-2333 — Quadrants guide: raw-value, no-ranking interpretation and evidence path.
+- CHAOS-2334 — Flame diagrams guide: single-item diagnosis and evidence drill-down.
+- CHAOS-2335 — Code Hotspots guide: churn/complexity context without blame.
+- CHAOS-2336 — PR Flow guide: current versus planned state-flow behavior and follow-up path.
+- CHAOS-2337 — Capacity Planning guide: backlog derivation, forecast caveats, and scenario use.
+- CHAOS-2338 — Work Graph guide: relationship inspection and Theme → Subcategory → Evidence.
+- CHAOS-2339 — AI Impact, AI Attribution, AI Review Load, and AI Risk: labeled estimates,
+  calibrated language, and persisted evidence without browser recomputation or ranking.
+- CHAOS-2340 — Reports Center guide: create, clone, None/Weekly/Monthly schedules, Run Now,
+  rendered output, AI labeling, and operator follow-up.
+- CHAOS-2341 — Metrics interpretation: cycle/lead time, throughput, WIP, after-hours/weekend
+  ratios, bus factor, trends, and null-is-not-zero guidance.
+
+## Validation
+
+| Gate label | Required command |
+| --- | --- |
+| `DOCS-CONTRACTS` | `pytest tests/docs -q` |
+| `DOCS-STRICT-SOURCE` | `make docs:check` |
+| `DOCS-SOURCE-LINKS` | `python scripts/check_docs_links.py` |
+| `DOCS-STRICT-BUILT` | `python -m mkdocs build --strict --site-dir .build/site` |
+| `DOCS-BUILT-LINKS` | `python scripts/check_built_site_links.py --site-dir .build/site` |
+| `DOCS-EXTERNAL-LINKS` | `make docs:check-external-links` |
+| `DOCS-FRESHNESS` | `make docs:check-freshness` |
+| `DOCS-CODE-PREREQ` | `make docs:check-code-prerequisites` |
+| `DOCS-QA-TYPECHECK` | `pnpm --dir docs-qa run typecheck` |
+| `DOCS-QA-CHROME-VISUAL` | `pnpm --dir docs-qa run test:visual` |
+| `DOCS-QA-CHROME-A11Y` | `pnpm --dir docs-qa run test:a11y` |
+| `DOCS-QA-CHROME-JOURNEYS` | `pnpm --dir docs-qa run test:journeys` |
+| `DOCS-QA-SEARCH` | `pnpm --dir docs-qa run test:search` |
+| `EVIDENCE-VALIDATOR` | `EVIDENCE_ROOT="/path/to/user-guide-coverage-evidence"; .venv/bin/python scripts/validate_user_guide_evidence.py --evidence-root "$EVIDENCE_ROOT"` |
+| `OPS-LOCAL-VALIDATE` | `bash ci/local_validate.sh` |
+
+### Required receipts before opening the PR
+
+- [ ] `FINAL-GATE-RECEIPT`: `<!-- paste the final local gate receipt after push -->`
+- [ ] `EVIDENCE-VALIDATOR-RECEIPT`: `<!-- paste the 5-manifest / 48-artifact local validator receipt after fresh capture -->`
+
+The evidence-validator command is a required local pre-PR gate. It recursively inventories only
+the five canonical task-7 through task-11 directories, so unrelated historical evidence elsewhere
+under the explicit root is ignored. The known noncanonical `task-3-final` orphan is explicitly
+rejected for this wave and must be removed before capture validation. CI does not depend on
+uncommitted workspace evidence.
+
+## Visual evidence
+
+<!-- Add hosted GitHub attachment URLs only after the branch is pushed and the PR exists. -->
+
+- [ ] First 10 minutes — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] First 10 minutes — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] First 10 minutes — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] How to read Dev Health — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] How to read Dev Health — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] How to read Dev Health — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Glossary — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Glossary — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Glossary — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Investment journey — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Investment journey — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Investment journey — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Quadrants — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Quadrants — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Quadrants — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Flame diagrams — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Flame diagrams — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Flame diagrams — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Code Hotspots — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Code Hotspots — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Code Hotspots — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] PR Flow — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] PR Flow — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] PR Flow — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Capacity Planning — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Capacity Planning — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Capacity Planning — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Work Graph — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Work Graph — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Work Graph — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] AI Impact — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] AI Impact — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] AI Impact — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] AI Attribution — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] AI Attribution — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] AI Attribution — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] AI Review Load — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] AI Review Load — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] AI Review Load — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] AI Risk — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] AI Risk — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] AI Risk — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Report Center — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Report Center — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Report Center — desktop (1280 × 900): `<!-- screenshot-url -->`
+- [ ] Metrics interpretation — mobile (375 × 900): `<!-- screenshot-url -->`
+- [ ] Metrics interpretation — tablet (768 × 900): `<!-- screenshot-url -->`
+- [ ] Metrics interpretation — desktop (1280 × 900): `<!-- screenshot-url -->`
+
+## Risk
+
+Low: documentation templates, coverage contracts, and local evidence validation only. Guides
+remain evidence-led: AI-generated narrative is labeled, missing context is not represented as
+zero, and no output is framed as a person-level conclusion.

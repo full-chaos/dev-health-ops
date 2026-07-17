@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.services.configuration.integration_credentials import (
     IntegrationCredentialsService,
 )
+from dev_health_ops.credentials.resolver import environment_base_url
 from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
 from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.models.operational import OperationalIncident
@@ -195,6 +196,16 @@ async def _credential_host_resolution(
     return _CredentialHostResolution(_CredentialHostState.MISSING_BASE_URL, None)
 
 
+def _environment_host_resolution(system: str) -> _CredentialHostResolution:
+    """Resolve a credentialless managed integration host from runtime environment."""
+    base_url = environment_base_url(system)
+    if base_url is None or not base_url.strip():
+        return _CredentialHostResolution(_CredentialHostState.MISSING_BASE_URL, None)
+    if normalized_operational_provider_instance(system, base_url) is None:
+        return _CredentialHostResolution(_CredentialHostState.UNREADABLE, None)
+    return _CredentialHostResolution(_CredentialHostState.RESOLVED, base_url)
+
+
 async def find_matching_managed_sources(
     session: AsyncSession,
     *,
@@ -253,6 +264,20 @@ async def find_matching_managed_sources(
                 credential_host.state is not _CredentialHostState.RESOLVED
                 and _operational_host(system, instance)
                 != _operational_host(system, default_host)
+                and source.is_enabled
+                and integration.is_active
+            ):
+                raise OperationalOwnershipResolutionUnavailableError(system)
+        elif (
+            entity_family in {"operational", "operational_incident"}
+            and system in {"github", "gitlab"}
+            and not (isinstance(configured_host, str) and configured_host.strip())
+            and credential_id is None
+        ):
+            environment_host = _environment_host_resolution(system)
+            credential_base_url = environment_host.base_url
+            if (
+                environment_host.state is _CredentialHostState.UNREADABLE
                 and source.is_enabled
                 and integration.is_active
             ):

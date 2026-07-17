@@ -421,6 +421,198 @@ async def test_operational_registration_rejects_linked_credential_host(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("provider", "instance", "environment_url"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3", "GITHUB_URL"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4", "GITLAB_URL"),
+    ),
+)
+async def test_operational_registration_rejects_environment_auth_host(
+    session_maker,
+    client,
+    monkeypatch,
+    provider: str,
+    instance: str,
+    environment_url: str,
+):
+    # Given: a credentialless managed integration authenticated from its environment.
+    ac, state = client
+    monkeypatch.setenv(f"{provider.upper()}_TOKEN", "test-token")
+    monkeypatch.setenv(environment_url, instance)
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: a customer push registers the operational family for that host.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: environment-auth ownership prevents a second owner.
+    assert response.status_code != 201
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "source_owned_by_fullchaos_sync"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance", "environment_url"),
+    (
+        ("github", "https://ghe.acme.test:8443/api/v3", "GITHUB_URL"),
+        ("gitlab", "https://gitlab.acme.test:8443/api/v4", "GITLAB_URL"),
+    ),
+)
+async def test_operational_registration_rejects_invalid_environment_auth_host(
+    session_maker,
+    client,
+    monkeypatch,
+    provider: str,
+    instance: str,
+    environment_url: str,
+):
+    # Given: an active credentialless integration with an invalid declared environment host.
+    ac, state = client
+    monkeypatch.setenv(f"{provider.upper()}_TOKEN", "test-token")
+    monkeypatch.setenv(environment_url, "not a valid host")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: a customer push registers an operational source for the same provider and org.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: ownership fails closed instead of defaulting the bad declaration to public.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ownership_resolution_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "instance", "environment_url"),
+    (
+        ("github", "https://ghe.other.test:8443/api/v3", "GITHUB_URL"),
+        ("gitlab", "https://gitlab.other.test:8443/api/v4", "GITLAB_URL"),
+    ),
+)
+async def test_operational_registration_allows_unrelated_host_without_environment_url(
+    session_maker,
+    client,
+    monkeypatch,
+    provider: str,
+    instance: str,
+    environment_url: str,
+):
+    # Given: a credentialless public managed integration with no declared environment host.
+    ac, state = client
+    monkeypatch.delenv(environment_url, raising=False)
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: a customer push registers an unrelated self-hosted operational source.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance=instance,
+        entity_family="operational",
+    )
+
+    # Then: no declared environment host preserves the public default without over-blocking.
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "environment_url"),
+    (("github", "GITHUB_URL"), ("gitlab", "GITLAB_URL")),
+)
+async def test_invalid_environment_auth_host_does_not_block_another_org(
+    session_maker, client, monkeypatch, provider: str, environment_url: str
+):
+    # Given: an invalid environment host belonging only to another organization.
+    ac, _ = client
+    monkeypatch.setenv(environment_url, "not a valid host")
+    await _seed_integration_source(
+        session_maker,
+        str(uuid.uuid4()),
+        provider=provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: this organization registers the same provider for a self-hosted instance.
+    response = await _create_source(
+        ac,
+        system=provider,
+        instance="https://ghe.other.test:8443/api/v3",
+        entity_family="operational",
+    )
+
+    # Then: another organization's unavailable resolution does not block this source.
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("managed_provider", "requested_provider", "environment_url"),
+    (
+        ("github", "gitlab", "GITHUB_URL"),
+        ("gitlab", "github", "GITLAB_URL"),
+    ),
+)
+async def test_invalid_environment_auth_host_does_not_block_another_provider(
+    session_maker,
+    client,
+    monkeypatch,
+    managed_provider: str,
+    requested_provider: str,
+    environment_url: str,
+):
+    # Given: this organization has an invalid environment host for a different provider.
+    ac, state = client
+    monkeypatch.setenv(environment_url, "not a valid host")
+    await _seed_integration_source(
+        session_maker,
+        state["org_id"],
+        provider=managed_provider,
+        external_id="acme/api",
+        full_name="acme/api",
+    )
+
+    # When: the other provider registers its operational source.
+    response = await _create_source(
+        ac,
+        system=requested_provider,
+        instance="https://ghe.other.test:8443/api/v3",
+        entity_family="operational",
+    )
+
+    # Then: provider-scoped resolution does not over-block.
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("provider", "instance"),
     (
         ("github", "https://ghe.acme.test:8443/api/v3"),

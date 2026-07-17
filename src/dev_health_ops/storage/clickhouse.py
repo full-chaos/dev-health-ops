@@ -6,6 +6,7 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -31,6 +32,11 @@ from dev_health_ops.models.git import (
     Incident,
     Repo,
 )
+from dev_health_ops.models.operational import (
+    CanonicalOperationalEntity,
+    OperationalIncident,
+    operational_columns,
+)
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -47,6 +53,19 @@ if TYPE_CHECKING:
         AtlassianOpsAlert,
         AtlassianOpsIncident,
         AtlassianOpsSchedule,
+    )
+    from dev_health_ops.models.operational import (
+        EscalationPolicy,
+        IncidentNote,
+        IncidentResponder,
+        IncidentTimelineEvent,
+        OnCallAssignment,
+        OnCallSchedule,
+        OperationalAlert,
+        OperationalService,
+        OperationalTeam,
+        OperationalUser,
+        ServiceRepositoryMapping,
     )
     from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
 
@@ -2274,6 +2293,128 @@ class ClickHouseStore:
             ],
             rows,
         )
+
+    async def _insert_operational_rows(
+        self,
+        table: str,
+        entities: Sequence[CanonicalOperationalEntity],
+    ) -> None:
+        """Write canonical rows idempotently by ``(org_id, id)`` and ``last_synced``."""
+        if not entities:
+            return
+        entity_type = type(entities[0])
+        if any(type(entity) is not entity_type for entity in entities):
+            raise ValueError("operational insert batches must contain one entity type")
+        columns = list(operational_columns(entity_type))
+        rows = []
+        for entity in entities:
+            row = asdict(entity)
+            rows.append(
+                {
+                    name: self._normalize_datetime(value)
+                    if isinstance(value, datetime)
+                    else value
+                    for name, value in row.items()
+                }
+            )
+        await self._insert_rows(table, columns, rows)
+
+    async def insert_operational_services(
+        self, services: list[OperationalService]
+    ) -> None:
+        await self._insert_operational_rows("operational_services", services)
+
+    async def insert_operational_incidents(
+        self, incidents: list[OperationalIncident]
+    ) -> None:
+        await self._insert_operational_rows("operational_incidents", incidents)
+
+    async def insert_operational_alerts(self, alerts: list[OperationalAlert]) -> None:
+        await self._insert_operational_rows("operational_alerts", alerts)
+
+    async def insert_operational_incident_timeline_events(
+        self, events: list[IncidentTimelineEvent]
+    ) -> None:
+        await self._insert_operational_rows(
+            "operational_incident_timeline_events", events
+        )
+
+    async def insert_operational_incident_notes(
+        self, notes: list[IncidentNote]
+    ) -> None:
+        await self._insert_operational_rows("operational_incident_notes", notes)
+
+    async def insert_operational_incident_responders(
+        self, responders: list[IncidentResponder]
+    ) -> None:
+        await self._insert_operational_rows(
+            "operational_incident_responders", responders
+        )
+
+    async def insert_operational_escalation_policies(
+        self, policies: list[EscalationPolicy]
+    ) -> None:
+        await self._insert_operational_rows("operational_escalation_policies", policies)
+
+    async def insert_operational_on_call_schedules(
+        self, schedules: list[OnCallSchedule]
+    ) -> None:
+        await self._insert_operational_rows("operational_on_call_schedules", schedules)
+
+    async def insert_operational_on_call_assignments(
+        self, assignments: list[OnCallAssignment]
+    ) -> None:
+        await self._insert_operational_rows(
+            "operational_on_call_assignments", assignments
+        )
+
+    async def insert_operational_teams(self, teams: list[OperationalTeam]) -> None:
+        await self._insert_operational_rows("operational_teams", teams)
+
+    async def insert_operational_users(self, users: list[OperationalUser]) -> None:
+        await self._insert_operational_rows("operational_users", users)
+
+    async def insert_operational_service_repository_mappings(
+        self, mappings: list[ServiceRepositoryMapping]
+    ) -> None:
+        await self._insert_operational_rows(
+            "operational_service_repository_mappings", mappings
+        )
+
+    async def load_operational_incidents(
+        self,
+        org_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[OperationalIncident]:
+        """Load current, non-deleted canonical incidents for an org-scoped window."""
+        assert self.client is not None
+        columns = operational_columns(OperationalIncident)
+        query = f"""
+        SELECT {", ".join(columns)}
+        FROM operational_incidents FINAL
+        WHERE org_id = {{org_id:String}}
+          AND is_deleted = 0
+          AND coalesce(source_event_at, observed_at) >= {{start:DateTime64(6, 'UTC')}}
+          AND coalesce(source_event_at, observed_at) < {{end:DateTime64(6, 'UTC')}}
+        """
+        parameters = {
+            "org_id": org_id,
+            "start": self._normalize_datetime(start),
+            "end": self._normalize_datetime(end),
+        }
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query,
+                query,
+                parameters=parameters,
+            )
+        incidents: list[OperationalIncident] = []
+        for row in result.result_rows or []:
+            values = dict(zip(columns, row, strict=True))
+            values.pop("id")
+            incidents.append(OperationalIncident(**values))
+        return incidents
 
     async def get_all_teams(self) -> list[Team]:
         from dev_health_ops.models.teams import Team

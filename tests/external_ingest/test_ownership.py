@@ -52,6 +52,7 @@ async def _seed_managed(
     full_name: str,
     name: str | None = None,
     metadata_: dict | None = None,
+    config: dict | None = None,
     source_enabled: bool = True,
     integration_active: bool = True,
     org_id: str = ORG,
@@ -64,6 +65,7 @@ async def _seed_managed(
                 org_id=org_id,
                 provider=provider,
                 name=f"{provider}-integration",
+                config=config or {},
                 is_active=integration_active,
             )
         )
@@ -100,10 +102,20 @@ async def _seed_explicit(
         await session.commit()
 
 
-async def _mode(session_maker, *, system: str = "github", instance: str = "acme/api"):
+async def _mode(
+    session_maker,
+    *,
+    system: str = "github",
+    instance: str = "acme/api",
+    entity_family: str = "legacy",
+):
     async with session_maker() as session:
         return await resolve_effective_mode(
-            session, org_id=ORG, system=system, instance=instance
+            session,
+            org_id=ORG,
+            system=system,
+            instance=instance,
+            entity_family=entity_family,
         )
 
 
@@ -217,6 +229,48 @@ async def test_gitlab_metadata_path_case_insensitive(session_maker):
     assert (
         await _mode(session_maker, system="gitlab", instance="group/project")
         == "fullchaos_sync"
+    )
+
+
+@pytest.mark.asyncio
+async def test_operational_family_is_owned_by_managed_github_host(session_maker):
+    await _seed_managed(
+        session_maker, provider="github", external_id="acme/api", full_name="acme/api"
+    )
+
+    assert (
+        await _mode(
+            session_maker,
+            instance="https://github.com/api/v3",
+            entity_family="operational",
+        )
+        == "fullchaos_sync"
+    )
+
+
+@pytest.mark.asyncio
+async def test_operational_family_keeps_unrelated_host_and_legacy_path_independent(
+    session_maker,
+):
+    await _seed_managed(
+        session_maker,
+        provider="gitlab",
+        external_id="12345",
+        full_name="group/project",
+        config={"gitlab_url": "https://gitlab.acme.test:8443/api/v4"},
+    )
+
+    assert (
+        await _mode(
+            session_maker,
+            system="gitlab",
+            instance="gitlab.other.test:8443",
+            entity_family="operational",
+        )
+        == "unclaimed"
+    )
+    assert await _mode(session_maker, system="gitlab", instance="group/project") == (
+        "fullchaos_sync"
     )
 
 

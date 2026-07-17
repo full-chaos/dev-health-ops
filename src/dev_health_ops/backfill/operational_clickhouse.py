@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID
 
@@ -16,6 +17,10 @@ from dev_health_ops.models.atlassian_ops import (
     AtlassianOpsAlert,
     AtlassianOpsIncident,
     AtlassianOpsSchedule,
+)
+from dev_health_ops.models.operational import OperationalBatch
+from dev_health_ops.models.operational_identity import (
+    normalized_operational_provider_instance,
 )
 from dev_health_ops.providers.operational_migration import (
     AtlassianOpsRows,
@@ -41,8 +46,8 @@ async def run_canonical_operational_backfill(
     *,
     clickhouse_uri: str,
     org_id: str,
-    github_provider_instance_id: str = "github.com",
-    gitlab_provider_instance_id: str = "https://gitlab.com",
+    github_provider_instance_id: str | None = None,
+    gitlab_provider_instance_id: str | None = None,
     atlassian_provider_instance_id: str = "atlassian-ops",
 ) -> OperationalBackfillResult:
     """Join legacy rows and persist their deterministic canonical replacements."""
@@ -54,7 +59,9 @@ async def run_canonical_operational_backfill(
             github_provider_instance_id=github_provider_instance_id,
             gitlab_provider_instance_id=gitlab_provider_instance_id,
         )
-        issue_batches = map_legacy_issue_incident_batches(legacy_rows)
+        issue_batches = await _without_existing_incidents(
+            store, map_legacy_issue_incident_batches(legacy_rows)
+        )
         atlassian_batch = await _load_atlassian_ops_batch(
             store,
             org_id=org_id,
@@ -74,12 +81,35 @@ async def run_canonical_operational_backfill(
     )
 
 
+async def _without_existing_incidents(
+    store: ClickHouseStore, batches: tuple[OperationalBatch, ...]
+) -> tuple[OperationalBatch, ...]:
+    assert store.client is not None
+    result = await asyncio.to_thread(
+        store.client.query,
+        "SELECT id FROM operational_incidents FINAL WHERE org_id = {org_id:String}",
+        parameters={"org_id": store.org_id},
+    )
+    existing_ids = {str(row[0]) for row in result.result_rows}
+    return tuple(
+        replace(
+            batch,
+            incidents=tuple(
+                incident
+                for incident in batch.incidents
+                if incident.id not in existing_ids
+            ),
+        )
+        for batch in batches
+    )
+
+
 async def _load_legacy_incident_repository_rows(
     store: ClickHouseStore,
     *,
     org_id: str,
-    github_provider_instance_id: str,
-    gitlab_provider_instance_id: str,
+    github_provider_instance_id: str | None,
+    gitlab_provider_instance_id: str | None,
 ) -> tuple[LegacyIncidentRepositoryRow, ...]:
     assert store.client is not None
     result = await asyncio.to_thread(
@@ -88,8 +118,8 @@ async def _load_legacy_incident_repository_rows(
         SELECT
             i.repo_id, i.incident_id, i.status, i.started_at, i.resolved_at,
             r.repo, r.provider, r.settings
-        FROM incidents FINAL AS i
-        INNER JOIN repos FINAL AS r ON i.repo_id = r.id
+        FROM incidents AS i FINAL
+        INNER JOIN repos AS r FINAL ON i.repo_id = r.id
         WHERE i.org_id = {org_id:String}
           AND r.org_id = {org_id:String}
           AND r.provider IN ('github', 'gitlab')
@@ -100,14 +130,20 @@ async def _load_legacy_incident_repository_rows(
     for row in result.result_rows:
         provider = str(row[6])
         settings = _repo_settings(row[7])
-        provider_instance_id = str(
-            settings.get(f"{provider}_instance_url")
-            or (
-                github_provider_instance_id
-                if provider == "github"
-                else gitlab_provider_instance_id
-            )
+        provider_instance_id = _recover_provider_instance_id(
+            provider,
+            settings,
+            github_provider_instance_id
+            if provider == "github"
+            else gitlab_provider_instance_id,
         )
+        if provider_instance_id is None:
+            logging.warning(
+                "Skipping operational incident backfill without recoverable %s host for repo %s",
+                provider,
+                row[5],
+            )
+            continue
         started_at = row[3]
         if not isinstance(started_at, datetime):
             continue
@@ -128,6 +164,22 @@ async def _load_legacy_incident_repository_rows(
             )
         )
     return tuple(rows)
+
+
+def _recover_provider_instance_id(
+    provider: str, settings: dict[str, str], configured_instance: str | None
+) -> str | None:
+    candidates = (
+        settings.get(f"{provider}_instance_url"),
+        settings.get("html_url"),
+        settings.get("api_url"),
+        settings.get("url"),
+        configured_instance,
+    )
+    for candidate in candidates:
+        if candidate:
+            return normalized_operational_provider_instance(provider, candidate)
+    return None
 
 
 def _repo_settings(value: object) -> dict[str, str]:
@@ -156,20 +208,20 @@ async def _load_atlassian_ops_batch(
     incidents_result = await asyncio.to_thread(
         store.client.query,
         "SELECT id, url, summary, description, status, severity, created_at, "
-        "provider_id, last_synced FROM atlassian_ops_incidents "
+        "provider_id, last_synced FROM atlassian_ops_incidents FINAL "
         "WHERE org_id = {org_id:String}",
         parameters={"org_id": org_id},
     )
     alerts_result = await asyncio.to_thread(
         store.client.query,
         "SELECT id, status, priority, created_at, acknowledged_at, snoozed_at, "
-        "closed_at, last_synced FROM atlassian_ops_alerts "
+        "closed_at, last_synced FROM atlassian_ops_alerts FINAL "
         "WHERE org_id = {org_id:String}",
         parameters={"org_id": org_id},
     )
     schedules_result = await asyncio.to_thread(
         store.client.query,
-        "SELECT id, name, timezone, last_synced FROM atlassian_ops_schedules "
+        "SELECT id, name, timezone, last_synced FROM atlassian_ops_schedules FINAL "
         "WHERE org_id = {org_id:String}",
         parameters={"org_id": org_id},
     )

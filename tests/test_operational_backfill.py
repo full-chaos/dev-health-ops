@@ -11,8 +11,8 @@ from dev_health_ops.backfill.operational import (
 _AT = datetime(2026, 7, 17, tzinfo=timezone.utc)
 
 
-def test_legacy_incident_backfill_joins_repository_identity_without_collision() -> None:
-    # Given: equal legacy incident ids from separate repositories in one organization.
+def test_legacy_incident_backfill_preserves_distinct_global_issue_ids() -> None:
+    # Given: distinct provider-global issue ids from separate repositories in one organization.
     rows = (
         LegacyIncidentRepositoryRow(
             org_id="org-a",
@@ -20,7 +20,7 @@ def test_legacy_incident_backfill_joins_repository_identity_without_collision() 
             repo_full_name="acme/api",
             provider="github",
             provider_instance_id="github.com",
-            incident_id="incident-1",
+            incident_id="incident-2",
             status="closed",
             started_at=_AT,
             resolved_at=_AT,
@@ -43,7 +43,7 @@ def test_legacy_incident_backfill_joins_repository_identity_without_collision() 
     # When: legacy incident and repository rows are mapped into canonical batches.
     batches = map_legacy_issue_incident_batches(rows)
 
-    # Then: repository-qualified incident identities remain distinct.
+    # Then: provider-global incident identities remain distinct.
     assert len(batches) == 1
     assert len(batches[0].incidents) == 2
     assert len(batches[0].services) == 2

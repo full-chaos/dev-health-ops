@@ -3,7 +3,6 @@ import logging
 import zipfile
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import urlparse
 
 from dev_health_ops.analytics.complexity import (
     DEFAULT_COMPLEXITY_CONFIG_PATH,
@@ -576,13 +575,15 @@ def _github_code_client_from_connector(connector) -> "GitHubCodeClient":
 
 def _github_provider_instance_id(connector) -> str:
     """Return a stable public or enterprise GitHub instance identifier."""
+    from dev_health_ops.models.operational_identity import (
+        normalized_operational_provider_instance,
+    )
+
     rest_base_url = getattr(connector, "_rest_base_url", None)
     raw_base_url = rest_base_url() if callable(rest_base_url) else None
-    parsed = urlparse(str(raw_base_url or "https://api.github.com"))
-    host = parsed.hostname
-    if host is None or host in {"api.github.com", "github.com"}:
-        return "github.com"
-    return f"{host}:{parsed.port}" if parsed.port is not None else host
+    return normalized_operational_provider_instance(
+        "github", str(raw_base_url or "https://api.github.com")
+    )
 
 
 async def _list_github_repositories_for_batch(
@@ -1935,6 +1936,7 @@ async def process_github_repo(
                 provider="github",
                 settings={
                     "source": "github",
+                    "github_instance_url": _github_provider_instance_id(connector),
                     "repo_id": repo_info.id,
                     "url": repo_info.url,
                     "default_branch": repo_info.default_branch,

@@ -20,13 +20,16 @@ See docs/architecture/external-ingest-idempotency-ownership.md.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode
 from dev_health_ops.models.integrations import Integration, IntegrationSource
+from dev_health_ops.models.operational import OperationalIncident
+from dev_health_ops.models.operational_identity import operational_source_coordinates
 
 EffectiveMode = Literal["fullchaos_sync", "customer_push", "disabled", "unclaimed"]
 
@@ -57,7 +60,23 @@ def _candidate_set(*values: object) -> set[str]:
     return {v.strip().lower() for v in values if isinstance(v, str) and v.strip()}
 
 
-def matches_instance(system: str, instance: str, source: IntegrationSource) -> bool:
+def _operational_host(system: str, instance: str) -> str:
+    return operational_source_coordinates(
+        OperationalIncident,
+        provider=system,
+        provider_instance_id=instance,
+        external_id="ownership",
+    ).provider_instance_id
+
+
+def matches_instance(
+    system: str,
+    instance: str,
+    source: IntegrationSource,
+    *,
+    entity_family: str = "legacy",
+    integration_config: Mapping[str, Any] | None = None,
+) -> bool:
     """CC5 per-provider matching (see docs/architecture/customer-push-authz.md).
 
     Comparisons are case-insensitive on BOTH sides (adversarial-review
@@ -71,6 +90,18 @@ def matches_instance(system: str, instance: str, source: IntegrationSource) -> b
     inst = instance.strip().lower()
     if not inst:
         return False
+    if entity_family in {"operational", "operational_incident"} and system in {
+        "github",
+        "gitlab",
+    }:
+        config = integration_config or {}
+        configured_host = config.get(f"{system}_instance_url") or config.get(
+            f"{system}_url"
+        )
+        default_host = "github.com" if system == "github" else "gitlab.com"
+        return _operational_host(system, instance) == _operational_host(
+            system, str(configured_host or default_host)
+        )
     if system in ("github", "jira"):
         return inst in _candidate_set(source.external_id, source.full_name)
     if system == "gitlab":
@@ -108,7 +139,7 @@ async def find_matching_managed_sources(
         return []
     candidate_rows = (
         await session.execute(
-            select(IntegrationSource, Integration.is_active)
+            select(IntegrationSource, Integration)
             .join(Integration, IntegrationSource.integration_id == Integration.id)
             .where(
                 IntegrationSource.org_id == org_id,
@@ -117,9 +148,15 @@ async def find_matching_managed_sources(
         )
     ).all()
     return [
-        (source, bool(integration_is_active))
-        for source, integration_is_active in candidate_rows
-        if matches_instance(system, instance, source)
+        (source, bool(integration.is_active))
+        for source, integration in candidate_rows
+        if matches_instance(
+            system,
+            instance,
+            source,
+            entity_family=entity_family,
+            integration_config=integration.config,
+        )
     ]
 
 

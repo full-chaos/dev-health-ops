@@ -43,12 +43,12 @@ def register_backfill_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     operational_parser.add_argument("--org", required=True, help="Organization id")
     operational_parser.add_argument(
-        "--github-provider-instance-id", default="github.com", help="GitHub instance"
+        "--github-provider-instance-id",
+        help="Explicit GitHub instance override for legacy rows without a persisted host",
     )
     operational_parser.add_argument(
         "--gitlab-provider-instance-id",
-        default="https://gitlab.com",
-        help="GitLab instance",
+        help="Explicit GitLab instance override for legacy rows without a persisted host",
     )
     operational_parser.add_argument(
         "--atlassian-provider-instance-id",

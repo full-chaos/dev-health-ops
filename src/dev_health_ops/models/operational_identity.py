@@ -18,17 +18,30 @@ class OperationalSourceCoordinates:
     external_id: str
 
 
-def _normalized_instance(provider: str, provider_instance_id: str) -> str:
-    """Normalize account or host identity without admitting repository scope."""
+def normalized_operational_provider_instance(
+    provider: str, provider_instance_id: str
+) -> str:
+    """Normalize an operational provider host without repository scope."""
     raw_instance = provider_instance_id.strip()
     if provider not in {"github", "gitlab", "atlassian"}:
         return raw_instance.casefold()
-    parsed = urlsplit(raw_instance if "://" in raw_instance else f"//{raw_instance}")
+    try:
+        parsed = urlsplit(
+            raw_instance if "://" in raw_instance else f"//{raw_instance}"
+        )
+        port = parsed.port
+    except ValueError:
+        return raw_instance.casefold().rstrip("/")
     host = parsed.hostname
     if host is None:
         return raw_instance.casefold().rstrip("/")
-    port = f":{parsed.port}" if parsed.port is not None else ""
-    return f"{host.casefold()}{port}"
+    normalized_host = host.casefold()
+    if provider == "github" and normalized_host in {"api.github.com", "github.com"}:
+        return "github.com"
+    scheme = parsed.scheme.casefold() or "https"
+    default_port = 443 if scheme == "https" else 80 if scheme == "http" else None
+    port_suffix = f":{port}" if port is not None and port != default_port else ""
+    return f"{normalized_host}{port_suffix}"
 
 
 def operational_source_coordinates(
@@ -42,17 +55,15 @@ def operational_source_coordinates(
 ) -> OperationalSourceCoordinates:
     """Return the only allowed source coordinates for an operational entity.
 
-    Issue-derived incidents are unique per repository, rather than per host-wide
-    issue number. The entity family always comes from the canonical dataclass.
+    Provider-global issue ids are recoverable from legacy incidents, native
+    producers, and external push. The entity family always comes from the
+    canonical dataclass.
     """
     normalized_provider = provider.strip().casefold()
     normalized_external_id = external_id.strip()
-    if entity_type.entity_family == "operational_incident" and repo_full_name:
-        number = (issue_number or normalized_external_id).strip()
-        normalized_external_id = f"{repo_full_name}#{number}"
     return OperationalSourceCoordinates(
         provider=normalized_provider,
-        provider_instance_id=_normalized_instance(
+        provider_instance_id=normalized_operational_provider_instance(
             normalized_provider, provider_instance_id
         ),
         entity_family=entity_type.entity_family,

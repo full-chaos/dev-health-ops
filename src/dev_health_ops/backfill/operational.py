@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from dev_health_ops.models.operational import OperationalBatch
@@ -53,7 +53,7 @@ def map_legacy_issue_incident_batches(
                 description=None,
                 created_at=row.started_at,
                 resolved_at=row.resolved_at,
-                source_version_at=row.source_version_at,
+                source_version_at=row.source_version_at - timedelta(seconds=1),
             )
         )
     return tuple(map_issue_incidents(sources) for sources in grouped.values())

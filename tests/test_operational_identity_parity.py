@@ -21,20 +21,45 @@ _REPO_ID = UUID("00000000-0000-0000-0000-000000000101")
 
 
 @pytest.mark.parametrize(
-    ("provider", "instance"),
-    (("github", "https://github.com"), ("gitlab", "https://gitlab.example.com")),
+    (
+        "provider",
+        "native_instance",
+        "backfill_instance",
+        "push_instance",
+        "global_issue_id",
+    ),
+    (
+        (
+            "github",
+            "https://GHE.Acme.test:8443/api/v3",
+            "ghe.acme.test:8443",
+            "https://ghe.acme.test:8443/api/v3",
+            "100000001",
+        ),
+        (
+            "gitlab",
+            "https://GitLab.Acme.test:8443/api/v4",
+            "gitlab.acme.test:8443",
+            "https://gitlab.acme.test:8443/api/v4",
+            "200000001",
+        ),
+    ),
 )
 def test_operational_incident_identity_matches_native_backfill_and_push(
-    provider: str, instance: str
+    provider: str,
+    native_instance: str,
+    backfill_instance: str,
+    push_instance: str,
+    global_issue_id: str,
 ) -> None:
     # Given: one logical issue incident represented by all three ingestion paths.
     native = IssueIncidentSource(
         org_id="org-a",
         provider=provider,
-        provider_instance_id=instance,
+        provider_instance_id=native_instance,
         repo_id=_REPO_ID,
-        repo_full_name="acme/api",
-        external_id="17",
+        repo_full_name="AcMe/API",
+        external_id=global_issue_id,
         issue_number="17",
         source_url=None,
         labels=("incident",),
@@ -48,10 +73,10 @@ def test_operational_incident_identity_matches_native_backfill_and_push(
     backfill = LegacyIncidentRepositoryRow(
         org_id="org-a",
         repo_id=_REPO_ID,
-        repo_full_name="acme/api",
+        repo_full_name="AcMe/API",
         provider=provider,
-        provider_instance_id=instance,
-        incident_id="17",
+        provider_instance_id=backfill_instance,
+        incident_id=global_issue_id,
         status="open",
         started_at=_AT,
         resolved_at=None,
@@ -59,12 +84,12 @@ def test_operational_incident_identity_matches_native_backfill_and_push(
     )
     push_record = RecordEnvelope(
         kind="operational_incident.v1",
-        external_id="17",
+        external_id=global_issue_id,
         payload={
-            "externalId": "17",
+            "externalId": global_issue_id,
             "sourceVersionAt": _AT.isoformat(),
             "sourceEventId": "17",
-            "serviceExternalId": "acme/api",
+            "serviceExternalId": "AcMe/API",
             "title": "Database unavailable",
         },
     )
@@ -77,7 +102,7 @@ def test_operational_incident_identity_matches_native_backfill_and_push(
             org_id="org-a",
             source_id=uuid4(),
             source_system=provider,
-            source_instance=instance,
+            source_instance=push_instance,
             ingestion_id=uuid4(),
             records=[push_record],
         )

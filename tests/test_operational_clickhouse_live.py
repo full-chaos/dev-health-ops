@@ -157,7 +157,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
                 id=repo_id,
                 repo="acme/api",
                 provider="github",
-                settings={"source": "github"},
+                settings={"source": "github", "github_instance_url": "github.com"},
                 tags=["github"],
             )
             legacy_incident = Incident(
@@ -215,7 +215,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
                             description=None,
                             created_at=source_version,
                             resolved_at=source_version,
-                            source_version_at=source_version + timedelta(seconds=1),
+                            source_version_at=source_version,
                         ),
                     )
                 )
@@ -258,7 +258,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
         ):
             sink.client.command(f"OPTIMIZE TABLE {table} FINAL")
 
-        # Then: FINAL reads retain one deterministic canonical row per source identity.
+        # Then: native content wins even when the legacy backfill has the same source time.
         counts = {
             table: sink.client.query(
                 f"SELECT count() FROM {table} FINAL WHERE org_id = {{org_id:String}}",
@@ -274,14 +274,14 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
         }
         assert counts == {
             "operational_services": 1,
-            "operational_incidents": 1,
+            "operational_incidents": 2,
             "operational_alerts": 1,
             "operational_on_call_schedules": 1,
             "operational_service_repository_mappings": 1,
         }
         incident = sink.client.query(
             "SELECT title FROM operational_incidents FINAL "
-            "WHERE org_id = {org_id:String}",
+            "WHERE org_id = {org_id:String} AND provider = 'github'",
             parameters={"org_id": org_id},
         ).result_rows
         assert incident == [("Database unavailable",)]

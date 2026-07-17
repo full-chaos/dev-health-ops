@@ -28,7 +28,7 @@ jobs:
           pip install -r requirements-docs.txt
 
       - name: Set up Node
-        uses: actions/setup-node@1e60f620b9541d59f6531b8cd2c53f536c270a64 # v4.0.4
+        uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
         with:
           node-version: "22"
 

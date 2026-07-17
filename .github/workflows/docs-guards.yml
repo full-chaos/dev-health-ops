@@ -101,9 +101,10 @@ jobs:
           pnpm install --frozen-lockfile
 
       - name: Run docs search acceptance
+        working-directory: docs-qa
         run: |
-          pnpm --dir docs-qa run typecheck
-          pnpm --dir docs-qa run test:search
+          pnpm run typecheck
+          pnpm run test:search
 
   docs-guards:
     name: docs-guards

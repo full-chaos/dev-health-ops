@@ -79,6 +79,25 @@ def test_docs_guards_installs_the_project_pinned_pnpm_version() -> None:
     )
 
 
+def test_docs_search_step_uses_the_docs_qa_working_directory() -> None:
+    workflow = _load_workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    docs_guards_job = jobs["docs-guards-job"]
+    assert isinstance(docs_guards_job, dict)
+    steps = docs_guards_job["steps"]
+    assert isinstance(steps, list)
+
+    search_step = next(
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "Run docs search acceptance"
+    )
+
+    assert search_step["working-directory"] == "docs-qa"
+    assert search_step["run"].strip() == "pnpm run typecheck\npnpm run test:search"
+
+
 @pytest.mark.parametrize(
     ("changes_result", "docs_guards_result", "expected_exit_code"),
     [

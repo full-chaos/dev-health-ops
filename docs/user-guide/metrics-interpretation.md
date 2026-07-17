@@ -36,7 +36,7 @@ are a better reason to ask a team question.
 | **WIP** | Work in progress: active work that is not complete. | Throughput, blocked work, and a longer trend. |
 | **After-hours ratio** | The share of observed weekday activity outside the configured working window. | The team's business timezone and a longer trend. |
 | **Weekend ratio** | The share of observed activity on weekends. | The same scope, business timezone, and a longer trend. |
-| **Bus factor** | A concentration signal: the smallest number of contributors behind at least half of recent code change. | The evidence sample, ownership context, and related work. |
+| **Bus factor** | A concentration signal: the smallest number of contributors behind at least 80% of recent code-change churn. | The evidence sample, ownership context, and related work. |
 
 ## Interpret without ranking
 

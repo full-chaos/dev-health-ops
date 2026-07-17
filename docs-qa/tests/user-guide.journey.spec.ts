@@ -9,6 +9,9 @@ test.describe("first 10 minutes", () => {
         await expect(
             article.getByRole("img", { name: /Sanitized fixture-backed Cockpit capture/i }),
         ).toBeVisible();
+        await expect(article).toContainText(
+            "populated Cockpit signals alongside a source-connection prompt",
+        );
         await expect(article.getByRole("link", { name: "How to read Dev Health" })).toBeVisible();
 
         await article.getByRole("link", { name: "How to read Dev Health" }).click();
@@ -20,7 +23,7 @@ test.describe("first 10 minutes", () => {
         await expect(
             article.getByRole("img", { name: /Sanitized fixture-backed Investment availability capture/i }),
         ).toBeVisible();
-        await expect(article).toContainText("availability gate");
+        await expect(article).toContainText("Team-plan availability gate");
     });
 
     test("exposes the fixture source metadata without putting a raw screenshot claim in the copy", async ({ page }) => {
@@ -60,7 +63,8 @@ test.describe("flow and planning guides", () => {
 
         const article = page.locator(".md-content");
         await expect(article.getByRole("heading", { name: "PR Flow" })).toBeVisible();
-        await expect(article).toContainText("review latency");
+        await expect(article).toContainText("work-item state-transition Sankey");
+        await expect(article).not.toContainText("review latency");
         await expect(article).toContainText("Current behavior");
         await expect(article).toContainText("Planned behavior");
 
@@ -141,15 +145,21 @@ test.describe("Report Center guide", () => {
         await expect(article.getByRole("heading", { name: "Report Center" })).toBeVisible();
         await expect(article).toContainText("New report");
         await expect(article).toContainText("Clone");
+        await expect(article).toContainText("None");
+        await expect(article).toContainText("Weekly");
+        await expect(article).toContainText("Monthly");
         await expect(article).toContainText("Run Now");
         await expect(article).toContainText("Rendered Markdown");
-        await expect(article).toContainText("Provenance");
+        await expect(article).toContainText("does not show a separate provenance panel");
+        await expect(article).not.toContainText("cron");
+        await expect(article).not.toContainText("timezone");
         await expect(article).toContainText("AI-generated");
 
         await article.getByRole("link", { name: "Interpret shared metrics" }).first().click();
         await expect(page).toHaveURL(/\/user-guide\/metrics-interpretation\/$/);
         await expect(article.getByRole("heading", { name: "Interpret shared metrics" })).toBeVisible();
         await expect(article).toContainText("Cycle time");
+        await expect(article).toContainText("at least 80%");
         await expect(article).toContainText("does not mean zero");
     });
 });

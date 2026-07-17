@@ -18,10 +18,10 @@ open a theme, a subcategory, and the supporting WorkUnits.
 
 ![Sanitized fixture-backed Investment availability capture. It shows the current access state rather than an allocation result.](../images/investment-fixture.png)
 
-This sanitized fixture capture truthfully shows an availability gate in the current test
-surface; it is not an allocation result. Its [capture metadata](../images/fixture-capture-metadata.json)
-records the fixture source and redaction. When Investment is available for your selected
-workspace, use the journey below to read its current result.
+This sanitized fixture capture truthfully shows a Team-plan availability gate in the current
+test surface; it is not an allocation result. Its [capture metadata](../images/fixture-capture-metadata.json)
+records the fixture source, redaction, and rendered fixture state. When Investment is
+available for your selected workspace, use the journey below to read its current result.
 
 ## 1. Start with the theme mix
 

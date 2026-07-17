@@ -16,11 +16,13 @@ Dev Health is a manual for asking better questions about how work moves. It is n
 scorecard for people. Start in the **Cockpit**, then follow a signal to its evidence
 before deciding what to do next.
 
-![Sanitized fixture-backed Cockpit capture showing confidence, evidence links, and a selected time window.](images/cockpit-fixture.png)
+![Sanitized fixture-backed Cockpit capture showing populated signals, confidence, evidence links, and a source-connection prompt.](images/cockpit-fixture.png)
 
-The image is a sanitized fixture capture, not a production workspace. Its [capture
-metadata](images/fixture-capture-metadata.json) records the source, redaction, and
-viewport. Your workspace can show different values, connections, and available views.
+The image is a sanitized fixture capture, not a production workspace. It shows populated
+Cockpit signals alongside a source-connection prompt. Its [capture
+metadata](images/fixture-capture-metadata.json) records the source, redaction, viewport,
+and rendered fixture state. Your workspace can show different values, connections, and
+available views.
 
 ## 1. Orient in the Cockpit
 

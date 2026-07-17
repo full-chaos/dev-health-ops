@@ -133,10 +133,10 @@ REPORTS_AND_METRICS_GUIDES: Final = {
         "Schedule a report",
         "Run Now",
         "Rendered Markdown",
-        "Provenance",
-        "cron expression",
-        "timezone",
-        "operator details",
+        "does not show a separate provenance panel",
+        "None",
+        "Weekly",
+        "Monthly",
     ),
     "metrics-interpretation.md": (
         "Cycle time",
@@ -215,9 +215,9 @@ def flow_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
 
     pr_flow = pages["pr-flow.md"]
     for term in (
-        "PR stages",
+        "work-item state-transition Sankey",
         "State Flow",
-        "review latency",
+        "state transitions",
         "Current behavior",
         "Planned behavior",
     ):

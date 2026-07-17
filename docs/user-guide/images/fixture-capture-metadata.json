@@ -3,6 +3,8 @@
   "captures": [
     {
       "route": "/dashboard",
+      "rendered_state": "populated cockpit with source-connection prompt",
+      "rendered_state_evidence": "Populated signals and evidence actions appear alongside the source-connection prompt; this is not an empty Cockpit capture.",
       "fixture_source": "fixture-backed web e2e mock server",
       "capture_method": "Chrome via Playwright against DEV_HEALTH_TEST_MODE and MSW fixture server",
       "redaction": "Sanitized main-content crop with fixture account and organization labels replaced by [redacted fixture label]. Fixture values are not production data.",
@@ -14,6 +16,8 @@
     },
     {
       "route": "/investment",
+      "rendered_state": "team-plan availability gate",
+      "rendered_state_evidence": "The capture shows a Team-plan availability gate, not an Investment allocation result.",
       "fixture_source": "fixture-backed web e2e mock server",
       "capture_method": "Chrome via Playwright against DEV_HEALTH_TEST_MODE and MSW fixture server",
       "redaction": "Sanitized main-content crop with fixture account and organization labels replaced by [redacted fixture label]. Fixture values are not production data.",

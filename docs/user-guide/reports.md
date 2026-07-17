@@ -41,13 +41,12 @@ the source report's schedule or run history.
 
 ## Schedule a report
 
-Set a **cron expression** and **timezone** only when the report should run on a recurring
-cadence. The cron expression says when it runs; the timezone says which local clock those
-times use. For example, `0 9 * * 1` requests Monday at 09:00 in the selected timezone,
-not automatically at 09:00 UTC.
+Choose one fixed schedule: **None**, **Weekly**, or **Monthly**. **None** keeps the report
+manual; **Weekly** and **Monthly** request recurring runs at the product's fixed cadence.
+These are the complete scheduling choices in the current Report Center.
 
-Choose a cadence that lets the trend accumulate. A weekly schedule can support a team
-review; a daily schedule may be too noisy for a longer-term question.
+Choose a fixed schedule that lets the trend accumulate. A weekly run can support a team
+review; a monthly run can suit a longer-term question.
 
 ## Run Now
 
@@ -57,10 +56,10 @@ output as the report for the selected context.
 
 ## Read a completed report
 
-A completed run presents **Rendered Markdown** and its **Provenance**. Read the report's
-scope, period, measures, and provenance together before relying on a statement in the
-narrative. The provenance shows the saved context behind the run; it is the starting point
-for checking the underlying work when a trend needs explanation.
+A completed run presents **Rendered Markdown**. Read the report's scope, period, and
+measures together before relying on a statement in the narrative. The current reading
+surface does not show a separate provenance panel, so return to the linked work and source
+context when a trend needs explanation.
 
 Some narrative text can be **AI-generated**. That label means the text is a generated
 summary of the available report context, not a conclusion about a person or a replacement

@@ -34,6 +34,10 @@ concepts, not a way to score individuals.
   relationship. Lower evidence quality means read the linked work and caveats more
   closely.
 
+**Source label**
+: A connected source may supply a label in its original language, such as **진행 중인 검토**.
+  Keep that label readable with its source reference—<code>sourceEventRef_<wbr>2026Q3EngineeringEnablementMigration</code>—instead of widening the page or replacing the source text.
+
 ## Flow and capacity
 
 **Cycle time**

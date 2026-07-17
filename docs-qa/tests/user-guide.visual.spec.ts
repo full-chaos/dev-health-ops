@@ -52,4 +52,23 @@ test.describe("user-guide coverage matrix", () => {
       });
     }
   }
+
+  test("keeps a supplied CJK label and long source key within the narrow glossary viewport", async ({ page }) => {
+    // Given a narrow reader viewport.
+    await page.setViewportSize({ width: 375, height: 900 });
+
+    // When the glossary renders source-label guidance.
+    await page.goto("/user-guide/glossary/");
+
+    // Then the multilingual label and unbroken source key remain visible without widening the page.
+    await expect(page.getByText("진행 중인 검토", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("sourceEventRef_2026Q3EngineeringEnablementMigration", { exact: true }),
+    ).toBeVisible();
+    const dimensions = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+  });
 });

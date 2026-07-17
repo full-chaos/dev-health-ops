@@ -32,3 +32,23 @@ test.describe("first 10 minutes", () => {
         await expect(article).toContainText("sanitized fixture capture");
     });
 });
+
+test.describe("diagnostic guides", () => {
+    const diagnosticGuides = [
+        { path: "/user-guide/views/quadrants/", title: "Quadrants" },
+        { path: "/user-guide/views/flame-diagrams/", title: "Flame diagrams" },
+        { path: "/user-guide/views/code-hotspots/", title: "Code Hotspots" },
+    ] as const;
+
+    test("opens the plain-language guides with evidence and glossary paths", async ({ page }) => {
+        for (const guide of diagnosticGuides) {
+            await page.goto(guide.path);
+
+            const article = page.locator(".md-content");
+            await expect(article.getByRole("heading", { name: guide.title })).toBeVisible();
+            await expect(article).toContainText("Evidence path");
+            await expect(article.getByRole("link", { name: /glossary/i })).toBeVisible();
+            await expect(article.getByRole("link", { name: /evidence model/i })).toBeVisible();
+        }
+    });
+});

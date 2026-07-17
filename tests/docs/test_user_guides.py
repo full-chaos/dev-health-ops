@@ -3,6 +3,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
+from tests.docs.user_guide_contracts import DIAGNOSTIC_PAGES, diagnostic_contract_errors
+
 ROOT: Final = Path(__file__).resolve().parents[2]
 DOCS: Final = ROOT / "docs"
 GUIDES: Final = DOCS / "user-guide"
@@ -52,6 +54,10 @@ FORBIDDEN_DEFINITIVE_LANGUAGE: Final = ("detected", "determined")
 
 def _read_guide(relative_path: str) -> str:
     return (GUIDES / relative_path).read_text(encoding="utf-8")
+
+
+def _read_view(page_name: str) -> str:
+    return (GUIDES / "views" / page_name).read_text(encoding="utf-8")
 
 
 def _onboarding_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
@@ -146,3 +152,32 @@ def test_onboarding_navigation_and_sanitized_fixture_capture_are_present() -> No
     }
     for screenshot in ("cockpit-fixture.png", "investment-fixture.png"):
         assert (IMAGE_DIR / screenshot).is_file()
+
+
+def test_visualization_patterns_characterization_baseline() -> None:
+    patterns = (DOCS / "visualizations" / "patterns.md").read_text(encoding="utf-8")
+
+    assert "Quadrants show raw values only" in patterns
+    assert "Flames for diagnosis" in patterns
+    assert "Person-to-person rankings or comparisons" in patterns
+
+
+def test_quadrants_flame_and_hotspots_meet_diagnostic_contract() -> None:
+    pages = {page_name: _read_view(page_name) for page_name in DIAGNOSTIC_PAGES}
+
+    assert diagnostic_contract_errors(pages) == ()
+
+
+def test_diagnostic_negative_reports_comparison_framing_and_missing_evidence_link() -> (
+    None
+):
+    pages = {page_name: _read_view(page_name) for page_name in DIAGNOSTIC_PAGES}
+    pages["quadrants.md"] = pages["quadrants.md"].replace(
+        "../glossary.md", "../missing.md"
+    )
+    pages["flame-diagrams.md"] = f"{pages['flame-diagrams.md']}\nPercentile score.\n"
+
+    errors = diagnostic_contract_errors(pages)
+
+    assert "quadrants.md: missing glossary link" in errors
+    assert "flame-diagrams.md: contains comparison framing 'percentile'" in errors

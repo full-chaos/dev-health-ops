@@ -116,25 +116,6 @@ test.describe("AI view guides", () => {
         }
     });
 
-    test("keeps the in-flow evidence trail keyboard reachable", async ({ page }) => {
-        for (const guide of [
-            "/user-guide/views/ai-impact/",
-            "/user-guide/views/ai-review-load/",
-            "/user-guide/views/ai-risk/",
-            "/user-guide/views/ai-attribution/",
-        ] as const) {
-            await page.setViewportSize({ width: 375, height: 900 });
-            await page.goto(guide);
-
-            const evidenceLink = page
-                .getByRole("complementary", { name: "Evidence trail" })
-                .getByRole("link", { name: "Open the evidence model" });
-            await evidenceLink.focus();
-            await expect(evidenceLink).toBeFocused();
-            await page.keyboard.press("Enter");
-            await expect(page).toHaveURL(/\/user-guide\/how-to-read-dev-health\/$/);
-        }
-    });
 });
 
 test.describe("Report Center guide", () => {

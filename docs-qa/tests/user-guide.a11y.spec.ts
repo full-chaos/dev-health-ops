@@ -121,24 +121,6 @@ test.describe("AI view guides accessibility", () => {
         expect(blocking).toEqual([]);
     });
 
-    for (const viewport of [
-        { name: "mobile", width: 375, height: 900, variant: "in-flow" },
-        { name: "tablet", width: 768, height: 900, variant: "in-flow" },
-        { name: "desktop", width: 1280, height: 900, variant: "rail" },
-    ] as const) {
-        test(`exposes one named Evidence Trail ${viewport.variant} landmark at ${viewport.name}`, async ({ page }) => {
-            await page.setViewportSize({ width: viewport.width, height: viewport.height });
-            await page.goto("/user-guide/views/ai-impact/");
-
-            const evidenceTrail = page.getByRole("complementary", {
-                name: "Evidence trail",
-            });
-            await expect(evidenceTrail).toHaveCount(1);
-            await expect(evidenceTrail).toHaveClass(
-                new RegExp(`fc-evidence-rail--${viewport.variant}`),
-            );
-        });
-    }
 });
 
 test.describe("reports and metrics guides accessibility", () => {

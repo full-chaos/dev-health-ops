@@ -15,7 +15,7 @@
     </aside>
   {% endif %}
   {{ super() }}
-  {% if metadata.get('template') == 'guide.html' and not has_in_flow_evidence_trail %}
+  {% if metadata.get('template') in ('guide.html', 'reference.html') and not has_in_flow_evidence_trail %}
     {% set evidence_variant = "in-flow" %}
     {% include "partials/evidence-trail.html" %}
   {% endif %}

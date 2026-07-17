@@ -348,6 +348,8 @@ async def test_connection(
             success, details = await _test_linear_connection(creds)
         elif payload.provider == "launchdarkly":
             success, details = await _test_launchdarkly_connection(creds)
+        elif payload.provider == "pagerduty":
+            success, details = await _test_pagerduty_connection(creds)
         else:
             error = f"Unknown provider: {payload.provider}"
     except Exception as e:
@@ -703,6 +705,31 @@ async def _test_linear_connection(creds: dict[str, Any]) -> tuple[bool, dict[str
             # itself guarantees internally.
             "error": sanitize_error_text(resp.text, max_length=200),
         }
+
+
+async def _test_pagerduty_connection(
+    creds: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """Preflight a minimal PagerDuty read without exposing credential material."""
+    from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth, OAuthBearerAuth
+    from dev_health_ops.providers.pagerduty.client import PagerDutyClient
+    from dev_health_ops.providers.pagerduty.oauth import missing_read_scopes
+
+    access_token = creds.get("access_token")
+    api_token = creds.get("api_token")
+    if not access_token and not api_token:
+        return False, {"error": "PagerDuty access_token or api_token is required"}
+    auth = (
+        OAuthBearerAuth(str(access_token))
+        if access_token
+        else ApiTokenAuth(str(api_token))
+    )
+    client = PagerDutyClient(auth, region=str(creds.get("region", "us")))
+    users = await client.list_users()
+    datasets = {str(value) for value in creds.get("enabled_datasets", [])}
+    granted = {str(value) for value in creds.get("granted_scopes", [])}
+    missing = sorted(missing_read_scopes(datasets, granted)) if access_token else []
+    return not missing, {"users_checked": len(users), "missing_scopes": missing}
 
 
 async def _test_launchdarkly_connection(

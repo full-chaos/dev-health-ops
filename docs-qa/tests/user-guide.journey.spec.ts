@@ -132,3 +132,24 @@ test.describe("AI view guides", () => {
         }
     });
 });
+
+test.describe("Report Center guide", () => {
+    test("follows report creation, review, and metric interpretation in a real browser", async ({ page }) => {
+        await page.goto("/user-guide/reports/");
+
+        const article = page.locator(".md-content");
+        await expect(article.getByRole("heading", { name: "Report Center" })).toBeVisible();
+        await expect(article).toContainText("New report");
+        await expect(article).toContainText("Clone");
+        await expect(article).toContainText("Run Now");
+        await expect(article).toContainText("Rendered Markdown");
+        await expect(article).toContainText("Provenance");
+        await expect(article).toContainText("AI-generated");
+
+        await article.getByRole("link", { name: "Interpret shared metrics" }).first().click();
+        await expect(page).toHaveURL(/\/user-guide\/metrics-interpretation\/$/);
+        await expect(article.getByRole("heading", { name: "Interpret shared metrics" })).toBeVisible();
+        await expect(article).toContainText("Cycle time");
+        await expect(article).toContainText("does not mean zero");
+    });
+});

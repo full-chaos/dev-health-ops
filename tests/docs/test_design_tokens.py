@@ -129,4 +129,5 @@ def test_docs_qa_harness_uses_pinned_chrome_and_redacted_access_headers() -> Non
     assert 'channel: "chrome"' in config
     assert "CF_ACCESS_CLIENT_ID" in access_headers
     assert "CF_ACCESS_CLIENT_SECRET" in access_headers
-    assert "python3 -m http.server 8008 --directory ../.build/site" in config
+    assert 'const docsQaPort = process.env["DOCS_QA_PORT"] ?? "8008";' in config
+    assert "python3 -m http.server ${docsQaPort} --directory ../.build/site" in config

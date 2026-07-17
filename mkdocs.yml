@@ -27,7 +27,7 @@ nav:
       - Follow the Investment journey: user-guide/journeys/investment-view.md
   - Use Dev Health:
       - Explore views and charts: user-guide/views-index.md
-      - Read metrics with care: metrics.md
+      - Read metrics with care: user-guide/metrics-interpretation.md
       - Investigate investment: user-guide/journeys/investment-view.md
       - Follow work relationships: user-guide/views/work-graph.md
       - AI workflow views:

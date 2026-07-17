@@ -210,6 +210,10 @@ input {
   min-block-size: var(--fc-space-6);
 }
 
+.md-sidebar--primary .md-nav[aria-expanded="false"] {
+  display: none;
+}
+
 .md-nav__link--active,
 .md-nav__link:focus-visible,
 .md-nav__link:hover {

@@ -24,6 +24,10 @@ Each view answers a specific operational question. Views are explanations with d
 - Flame diagrams (single-point decomposition)
 - Work Graph (entity relationships, related entities)
 
+## Guides
+- [Interpret shared metrics](metrics-interpretation.md) — read cycle, lead, flow, sustainability, and resilience signals with care.
+- [Report Center](reports.md) — create repeatable reports and inspect their provenance.
+
 ## AI workflow views
 
 - [AI Impact](views/ai-impact.md) — compare AI-associated delivery and drag signals in a shared scope.

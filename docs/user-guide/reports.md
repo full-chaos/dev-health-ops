@@ -1,190 +1,87 @@
+---
+audience: Use Dev Health
+canonical: https://docs.fullchaos.dev/user-guide/reports/
+owner: Dev Health documentation
+last-reviewed: 2026-07-17
+template: guide.html
+next:
+  label: Interpret shared metrics
+  url: user-guide/metrics-interpretation/
+troubleshooting: customer-push-ingestion/troubleshooting/
+---
+
 # Report Center
 
-The Report Center lets you create, schedule, and manage AI-generated reports that summarize engineering health metrics across your organization.
+Report Center turns a saved question about a selected scope and period into a repeatable
+report. Use it to preserve the context, compare trends carefully, and return to the
+source material before acting.
 
----
+## Purpose
 
-## Overview
+Create a repeatable report when a team needs the same scope, time window, and metric
+context for a regular conversation. A report supports a shared reading; it is not a
+scorecard for people.
 
-Reports combine metric data from ClickHouse with AI-generated insights to produce rendered markdown summaries. Each report is defined once and can be triggered manually or on a cron schedule.
+## Create a report
 
-### Key Concepts
+In **Report Center**, choose **New report**. Give the report a **Name** and, when useful,
+a **Description** that states the question it should help the group discuss. Set the
+visible report settings for its scope, date range, and measures before saving.
 
-| Concept | Description |
-|---------|-------------|
-| **SavedReport** | A report definition with name, parameters, and optional schedule |
-| **ReportRun** | A single execution of a report, with status, duration, and rendered output |
-| **ReportPlan** | The structured specification that drives the rendering engine |
-| **Parameters** | User-facing configuration (scope, date range, metrics) stored on the report |
+Start with one question, such as “How has work moved through the platform team this
+month?” Keep the scope and date range in the description so a later reader can tell what
+the report covers.
 
----
+## Clone a report
 
-## Creating a Report
+Choose **Clone** when an existing report is close to the question you need. The copy keeps
+the source report's saved settings and receives a new name, so update the scope, period,
+or description before using it for a different conversation. A clone does not bring over
+the source report's schedule or run history.
 
-Navigate to **Reports > New Report** in the web UI to create a report.
+## Schedule a report
 
-### Configuration Options
+Set a **cron expression** and **timezone** only when the report should run on a recurring
+cadence. The cron expression says when it runs; the timezone says which local clock those
+times use. For example, `0 9 * * 1` requests Monday at 09:00 in the selected timezone,
+not automatically at 09:00 UTC.
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **Name** | Display name for the report | "Weekly Engineering Health" |
-| **Description** | What the report covers | "DORA metrics overview for the platform team" |
-| **Scope** | Organization, Team, or Repository | Organization |
-| **Date Range** | Time window for metrics | Last 7 Days |
-| **Metrics** | Which metrics to include | Deployment Frequency, Lead Time, Change Failure Rate |
-| **Schedule** | How often to auto-run | Weekly, Monthly, or Manual only |
+Choose a cadence that lets the trend accumulate. A weekly schedule can support a team
+review; a daily schedule may be too noisy for a longer-term question.
 
-When a report is created without an explicit `ReportPlan`, the system generates a default plan from the parameters at execution time.
+## Run Now
 
----
+Choose **Run Now** to request a new run immediately. The current run appears in **Run
+history** while it is pending or in progress. Wait for a completed run before treating its
+output as the report for the selected context.
 
-## Running a Report
+## Read a completed report
 
-### Manual Trigger
+A completed run presents **Rendered Markdown** and its **Provenance**. Read the report's
+scope, period, measures, and provenance together before relying on a statement in the
+narrative. The provenance shows the saved context behind the run; it is the starting point
+for checking the underlying work when a trend needs explanation.
 
-Clicking **Run Now** on the report detail page triggers the `triggerReport` mutation. This creates a `ReportRun` (with `triggered_by="api"` and status `PENDING`) and dispatches the `execute_saved_report` Celery task to the `reports` queue. The mutation serves as an example of the preferred Celery-job trigger pattern (CHAOS-2475, CHAOS-2482) to avoid running resource-intensive or credential-heavy operations inline. Using this pattern ensures credentials aren't exposed or bypassed. See [workers.md](../ops/workers.md) for details on Celery worker configuration.
-### Scheduled Execution
+Some narrative text can be **AI-generated**. That label means the text is a generated
+summary of the available report context, not a conclusion about a person or a replacement
+for the linked evidence. Keep calibrated language—appears, leans, and suggests—beside any
+AI-derived interpretation.
 
-Reports with a schedule (Weekly or Monthly) are triggered automatically by the `dispatch_scheduled_reports` beat task, which runs every 5 minutes and checks for due reports based on their cron expression. The cron is evaluated in the schedule's selected **timezone** (`ScheduledJob.timezone`, defaulting to UTC), so the times below are wall-clock times in that zone — a report scheduled in `America/Los_Angeles` fires at 09:00 Pacific, not 09:00 UTC (CHAOS-2689).
+## Empty and error states
 
-| Schedule | Cron Expression |
-|----------|----------------|
-| Weekly | `0 9 * * 1` (Mondays at 09:00 in the report's timezone) |
-| Monthly | `0 9 1 * *` (1st of month at 09:00 in the report's timezone) |
+No completed output can mean the report has not run successfully yet, its selected context
+has no usable information, or the run needs attention. It does not mean that every measure
+is zero. Check the report settings and Run history first. If a run needs operational
+follow-up, use the [report failures operator details](../ops/runbook-report-failures.md).
 
----
+## Caveats
 
-## Execution Pipeline
+Keep the same scope and date range when comparing report runs. A change in either can make
+a difference appear larger or smaller than the underlying trend. Use the report to choose
+a team question and an evidence path, not to rate contributors.
 
-```
-Trigger (UI or scheduler)
-  → ReportRun created (PENDING)
-  → Celery task dispatched to `reports` queue
-  → Worker builds/loads ReportPlan
-  → Engine fetches metrics from ClickHouse
-  → Charts rendered, insights generated
-  → Markdown assembled with provenance
-  → ReportRun updated (SUCCESS + rendered content)
-```
+## Next step
 
-If execution fails, the `ReportRun` is marked `FAILED` with the error message and traceback stored for debugging. See the [Report Failures Runbook](../ops/runbook-report-failures.md) for troubleshooting.
-
----
-
-## Report Detail Page
-
-The detail page shows:
-
-- **Latest Rendered Report** — The markdown output from the most recent successful run
-- **Configuration** — Scope, date range, schedule, and selected metrics
-- **Run History** — Table of all executions with status, duration, and trigger type
-
-### Actions
-
-| Action | Description |
-|--------|-------------|
-| **Edit** | Inline edit of report name and description |
-| **Clone** | Create a copy with a new name |
-| **Delete** | Permanently remove the report and its schedule |
-| **Run Now** | Trigger immediate execution |
-
----
-
-## GraphQL API
-
-Reports are managed entirely through the GraphQL API. The web UI is a consumer of these operations.
-
-### Queries
-
-```graphql
-# List all reports for an org
-query {
-  savedReports(orgId: "my-org", limit: 50) {
-    items { id name lastRunStatus lastRunAt }
-    total
-  }
-}
-
-# Get a single report with full details
-query {
-  savedReport(orgId: "my-org", reportId: "uuid") {
-    id name description parameters scheduleId
-    lastRunAt lastRunStatus
-  }
-}
-
-# Get run history
-query {
-  reportRuns(orgId: "my-org", reportId: "uuid", limit: 10) {
-    items { id status startedAt durationSeconds renderedMarkdown triggeredBy }
-    total
-  }
-}
-```
-
-### Mutations
-
-```graphql
-# Create a report
-mutation {
-  createSavedReport(orgId: "my-org", input: {
-    name: "Weekly Health"
-    description: "DORA metrics summary"
-    scheduleCron: "0 9 * * 1"
-    parameters: { scope: "org", dateRange: "last_7_days", metrics: ["Lead Time"] }
-  }) {
-    id name
-  }
-}
-
-# Trigger execution
-mutation {
-  triggerReport(orgId: "my-org", reportId: "uuid") {
-    id status startedAt
-  }
-}
-```
-
----
-
-## Infrastructure Requirements
-
-- **ClickHouse** must be running and accessible (`CLICKHOUSE_URI`)
-- **PostgreSQL** stores report definitions and run records
-- **Celery worker** must be consuming the `reports` queue:
-  ```bash
-  dev-hops workers start-worker --queues default metrics sync reports
-  ```
-- **Celery beat** must be running for scheduled reports
-
----
-
-## Data Model
-
-### SavedReport (PostgreSQL)
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID | Primary key |
-| `org_id` | String | Organization scope |
-| `name` | String | Display name |
-| `description` | String | Optional description |
-| `report_plan` | JSON | Structured ReportPlan (or empty for auto-generation) |
-| `parameters` | JSON | User-facing config (scope, dateRange, metrics) |
-| `schedule_id` | UUID | FK to ScheduledJob (if scheduled) |
-| `is_active` | Boolean | Whether the report is active |
-| `last_run_at` | DateTime | Timestamp of last execution |
-| `last_run_status` | String | Status of last execution |
-
-### ReportRun (PostgreSQL)
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID | Primary key |
-| `report_id` | UUID | FK to SavedReport |
-| `status` | String | PENDING, RUNNING, SUCCESS, FAILED |
-| `rendered_markdown` | Text | The generated report content |
-| `duration_seconds` | Float | Execution time |
-| `provenance_records` | JSON | Audit trail of data sources used |
-| `triggered_by` | String | "manual" or "scheduler" |
-| `error` | Text | Error message (if failed) |
+- [Interpret shared metrics](metrics-interpretation.md) before comparing a measure.
+- [How to read Dev Health](how-to-read-dev-health.md) explains the shared evidence model.
+- [Glossary](glossary.md) defines the terms used across the manual.

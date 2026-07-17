@@ -111,3 +111,23 @@ test.describe("AI view guides accessibility", () => {
         });
     }
 });
+
+test.describe("reports and metrics guides accessibility", () => {
+    for (const guide of [
+        { path: "/user-guide/reports/", title: "Report Center" },
+        { path: "/user-guide/metrics-interpretation/", title: "Interpret shared metrics" },
+    ] as const) {
+        test(`has no serious or critical violations on ${guide.title}`, async ({ page }) => {
+            await page.goto(guide.path);
+
+            const results = await new AxeBuilder({ page })
+                .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+                .analyze();
+            const blocking = results.violations.filter(
+                (violation) => violation.impact === "serious" || violation.impact === "critical",
+            );
+
+            expect(blocking).toEqual([]);
+        });
+    }
+});

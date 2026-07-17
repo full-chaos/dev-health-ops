@@ -7,9 +7,11 @@ from tests.docs.user_guide_contracts import (
     AI_VIEW_PAGES,
     DIAGNOSTIC_PAGES,
     FLOW_PAGES,
+    REPORTS_AND_METRICS_GUIDES,
     ai_view_contract_errors,
     diagnostic_contract_errors,
     flow_contract_errors,
+    reports_and_metrics_contract_errors,
 )
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -282,5 +284,48 @@ def test_ai_negative_reports_invented_fields_unlabeled_estimates_and_recomputati
     )
     assert (
         "ai-attribution.md: contains definitive or ranking language 'browser recomputes'"
+        in errors
+    )
+
+
+def test_reports_and_metrics_guides_explain_current_actions_and_interpretation() -> (
+    None
+):
+    pages = {
+        page_name: _read_guide(page_name) for page_name in REPORTS_AND_METRICS_GUIDES
+    }
+
+    assert reports_and_metrics_contract_errors(pages) == ()
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    for path in (
+        "user-guide/reports.md",
+        "user-guide/metrics-interpretation.md",
+    ):
+        assert path in nav
+
+
+def test_reports_metrics_negative_reports_jargon_missing_data_and_unlabeled_ai() -> (
+    None
+):
+    pages = {
+        page_name: _read_guide(page_name) for page_name in REPORTS_AND_METRICS_GUIDES
+    }
+    pages["reports.md"] = (
+        pages["reports.md"].replace(
+            "**AI-generated**",
+            "AI-generated",
+        )
+        + "\nGraphQL endpoint.\n"
+    )
+    pages["metrics-interpretation.md"] = (
+        f"{pages['metrics-interpretation.md']}\nNull means zero.\n"
+    )
+
+    errors = reports_and_metrics_contract_errors(pages)
+
+    assert "reports.md: AI content is not explicitly labeled" in errors
+    assert "reports.md: contains implementation jargon 'GraphQL'" in errors
+    assert (
+        "metrics-interpretation.md: claims missing data is zero 'null means zero'"
         in errors
     )

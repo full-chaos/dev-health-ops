@@ -125,6 +125,41 @@ INVENTED_AI_VIEW_FIELDS: Final = {
     "ai-impact.md": ("Leverage components",),
     "ai-risk.md": ("incident counts",),
 }
+REPORTS_AND_METRICS_GUIDES: Final = {
+    "reports.md": (
+        "Purpose",
+        "Create a report",
+        "Clone a report",
+        "Schedule a report",
+        "Run Now",
+        "Rendered Markdown",
+        "Provenance",
+        "cron expression",
+        "timezone",
+        "operator details",
+    ),
+    "metrics-interpretation.md": (
+        "Cycle time",
+        "Lead time",
+        "Throughput",
+        "WIP",
+        "After-hours ratio",
+        "Weekend ratio",
+        "Bus factor",
+        "trends",
+        "not a ranking",
+        "does not mean zero",
+    ),
+}
+FORBIDDEN_REPORTS_IMPLEMENTATION_JARGON: Final = (
+    "GraphQL",
+    "ClickHouse",
+    "Celery",
+    "ReportRun",
+    "SavedReport",
+    "triggerReport",
+)
+NULL_AS_ZERO_CLAIMS: Final = ("null means zero", "null is zero", "null = zero")
 
 
 def diagnostic_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
@@ -253,4 +288,24 @@ def ai_view_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
             label in content.casefold() for label in AI_ESTIMATE_LABELS
         ):
             errors.append(f"{page_name}: estimate is not explicitly labeled")
+    return tuple(errors)
+
+
+def reports_and_metrics_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
+    errors: list[str] = []
+    for page_name, required_terms in REPORTS_AND_METRICS_GUIDES.items():
+        content = pages[page_name]
+        for term in required_terms:
+            if term.casefold() not in content.casefold():
+                errors.append(f"{page_name}: missing user-guide contract {term!r}")
+        for term in NULL_AS_ZERO_CLAIMS:
+            if term in content.casefold():
+                errors.append(f"{page_name}: claims missing data is zero {term!r}")
+
+    reports = pages["reports.md"]
+    if "**ai-generated**" not in reports.casefold():
+        errors.append("reports.md: AI content is not explicitly labeled")
+    for term in FORBIDDEN_REPORTS_IMPLEMENTATION_JARGON:
+        if term.casefold() in reports.casefold():
+            errors.append(f"reports.md: contains implementation jargon {term!r}")
     return tuple(errors)

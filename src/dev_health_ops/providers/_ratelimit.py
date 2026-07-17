@@ -27,9 +27,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitGate
+if TYPE_CHECKING:
+    from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitGate
 
 
 @contextmanager

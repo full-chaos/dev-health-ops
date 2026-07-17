@@ -5,6 +5,7 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Final
 from urllib.parse import urlencode
 
 import httpx
@@ -24,6 +25,7 @@ READ_SCOPES = frozenset(
 DATASET_SCOPES = {
     "incidents": frozenset({"Incidents.read"}),
     "services": frozenset({"Services.read"}),
+    # PagerDuty's published scoped-OAuth list has no Business_services.read scope.
     "business_services": frozenset(),
     "escalation_policies": frozenset({"Escalation_policies.read"}),
     "schedules": frozenset({"Schedules.read"}),
@@ -31,6 +33,7 @@ DATASET_SCOPES = {
     "users": frozenset({"Users.read"}),
     "teams": frozenset({"Teams.read"}),
 }
+DEFAULT_RENEWAL_WINDOW: Final = timedelta(minutes=5)
 
 
 class OAuthTokens(BaseModel):
@@ -57,6 +60,10 @@ class AuthorizationRequest:
     state: str
     nonce: str
     code_verifier: str
+
+
+class OAuthCallbackValidationError(ValueError):
+    """Raised when an OAuth callback cannot be tied to its authorization request."""
 
 
 def required_read_scopes(enabled_datasets: set[str]) -> frozenset[str]:
@@ -94,6 +101,19 @@ def build_authorization_request(
     return AuthorizationRequest(
         f"{config.authorization_url}?{urlencode(params)}", state, nonce, verifier
     )
+
+
+def validate_callback(
+    request: AuthorizationRequest, *, state: str, code: str, code_verifier: str
+) -> str:
+    """Validate callback state and its PKCE verifier before exchanging the code."""
+    if not secrets.compare_digest(request.state, state):
+        raise OAuthCallbackValidationError("PagerDuty OAuth callback state mismatch")
+    if not secrets.compare_digest(request.code_verifier, code_verifier):
+        raise OAuthCallbackValidationError("PagerDuty OAuth callback PKCE mismatch")
+    if not code:
+        raise OAuthCallbackValidationError("PagerDuty OAuth callback code is required")
+    return code
 
 
 async def exchange_code(
@@ -146,6 +166,16 @@ async def client_credentials(
     )
     response.raise_for_status()
     return _tokens(response.json())
+
+
+async def revoke_token(config: PagerDutyOAuthConfig, token: str) -> None:
+    """Best-effort OAuth revocation request; callers own local credential removal."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            config.revoke_url,
+            data={"token": token, "client_id": config.client_id},
+        )
+    response.raise_for_status()
 
 
 def _tokens(payload: dict[str, object]) -> OAuthTokens:

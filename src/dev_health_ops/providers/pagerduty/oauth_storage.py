@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
@@ -60,3 +60,13 @@ class PagerDutyOAuthCredentialRepository:
             OAuthTokens.model_validate_json(decrypt_value(credential.token_encrypted)),
             credential.version,
         )
+
+    async def delete(self) -> None:
+        """Delete this credential without reading or logging its encrypted token."""
+        statement = delete(ProviderOAuthCredential).where(
+            ProviderOAuthCredential.org_id == self._org_id,
+            ProviderOAuthCredential.provider == "pagerduty",
+            ProviderOAuthCredential.credential_name == self._credential_name,
+        )
+        await self._session.execute(statement)
+        await self._session.flush()

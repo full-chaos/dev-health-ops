@@ -15,6 +15,7 @@ from dev_health_ops.credentials.types import (
     JiraCredentials,
     LaunchDarklyCredentials,
     LinearCredentials,
+    PagerDutyCredentials,
     ProviderCredentials,
     TelemetryCredentials,
 )
@@ -360,6 +361,37 @@ def linear_credentials_from_mapping(
         )
     except (ValueError, TypeError):
         logger.debug("Linear credentials mapping was incomplete or invalid")
+        return None
+
+
+def pagerduty_credentials_from_mapping(
+    cred_dict: dict[str, Any],
+    *,
+    source: CredentialSource = CredentialSource.DATABASE,
+    credential_name: str = "default",
+) -> PagerDutyCredentials | None:
+    """Build PagerDuty credentials without logging secret-bearing validation errors."""
+    aliases = {
+        "accessToken": "access_token",
+        "refreshToken": "refresh_token",
+        "apiToken": "api_token",
+        "clientId": "client_id",
+        "clientSecret": "client_secret",
+        "grantedScopes": "granted_scopes",
+    }
+    values = {
+        aliases.get(key, key): value
+        for key, value in cred_dict.items()
+        if value is not None
+    }
+    values.update(source=source, credential_name=credential_name)
+    if isinstance(values.get("granted_scopes"), list):
+        values["granted_scopes"] = tuple(
+            str(scope) for scope in values["granted_scopes"]
+        )
+    try:
+        return PagerDutyCredentials(**values)
+    except (ValueError, TypeError):
         return None
 
 

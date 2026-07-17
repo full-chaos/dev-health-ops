@@ -207,6 +207,24 @@ class IntegrationCredential(Base):
         self.updated_at = datetime.now(timezone.utc)
 
 
+class ProviderOAuthCredential(Base):
+    """Encrypted OAuth payload with an optimistic-lock version for token rotation."""
+
+    __tablename__ = "provider_oauth_credentials"
+
+    org_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    credential_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class GithubAppInstallation(Base):
     """Mapping of a GitHub App installation to a Dev Health organization.
 

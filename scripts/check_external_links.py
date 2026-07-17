@@ -39,6 +39,14 @@ FetchResult = tuple[bool, str]
 Fetcher = Callable[[str], FetchResult]
 
 
+class _HttpRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed_url = urlsplit(newurl)
+        if parsed_url.scheme not in {"http", "https"} or parsed_url.hostname is None:
+            raise urllib.error.URLError("unsupported redirect URL scheme")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 @dataclass(frozen=True, slots=True)
 class AllowlistEntry:
     url: str
@@ -166,12 +174,17 @@ def check_external_links(
 
 
 def default_fetcher(url: str, timeout_seconds: float = 10.0) -> FetchResult:
+    parsed_url = urlsplit(url)
+    if parsed_url.scheme not in {"http", "https"} or parsed_url.hostname is None:
+        return False, "unsupported URL scheme"
+
+    opener = urllib.request.build_opener(_HttpRedirectHandler())
     for method in ("HEAD", "GET"):
         request = urllib.request.Request(
             url, method=method, headers={"User-Agent": USER_AGENT}
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - link-check boundary
+            with opener.open(request, timeout=timeout_seconds) as response:
                 if response.status < 400:
                     return True, f"status {response.status} ({method})"
                 detail = f"status {response.status} ({method})"

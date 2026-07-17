@@ -1,7 +1,18 @@
 from datetime import date
+from http.client import HTTPMessage
+from io import BytesIO
 from pathlib import Path
+from urllib.request import Request
 
-from scripts.check_external_links import FetchResult, check_external_links, main
+import pytest
+
+from scripts.check_external_links import (
+    FetchResult,
+    _HttpRedirectHandler,
+    check_external_links,
+    default_fetcher,
+    main,
+)
 
 
 def _write(path: Path, content: str) -> None:
@@ -15,6 +26,26 @@ def _always_ok(_url: str) -> FetchResult:
 
 def _always_broken(_url: str) -> FetchResult:
     return False, "status 404"
+
+
+def test_default_fetcher_rejects_non_http_urls_before_opening_them(monkeypatch) -> None:
+    def unexpected_opener(*_args, **_kwargs) -> None:
+        raise AssertionError("unsupported URL must not be opened")
+
+    monkeypatch.setattr(
+        "scripts.check_external_links.urllib.request.build_opener", unexpected_opener
+    )
+
+    assert default_fetcher("file:///etc/passwd") == (False, "unsupported URL scheme")
+
+
+def test_http_redirect_handler_rejects_non_http_redirect_targets() -> None:
+    request = Request("https://example.com/")
+
+    with pytest.raises(OSError, match="unsupported redirect URL scheme"):
+        _HttpRedirectHandler().redirect_request(
+            request, BytesIO(), 302, "Found", HTTPMessage(), "file:///etc/passwd"
+        )
 
 
 def test_check_external_links_accepts_a_reachable_link(tmp_path: Path) -> None:

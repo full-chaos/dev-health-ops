@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Final
 
 from pydantic import ValidationError
 
@@ -17,6 +18,7 @@ from scripts.user_guide_evidence_contract import (
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_IHDR_MARKER = b"\x00\x00\x00\rIHDR"
+FORBIDDEN_SCHEMES: Final = ("http://", "https://", "file:", "data:")
 
 
 def _task_directory(evidence_root: Path, task: CanonicalTask) -> Path:
@@ -55,6 +57,16 @@ def _load_manifest(path: Path) -> tuple[Manifest | None, tuple[str, ...]]:
         return None, (f"invalid manifest {path}: {error}",)
 
 
+def _forbidden_scheme_errors(
+    prefix: str, fields: tuple[tuple[str, str], ...]
+) -> tuple[str, ...]:
+    return tuple(
+        f"{prefix} contains a forbidden URL scheme in {name}"
+        for name, value in fields
+        if any(scheme in value.lower() for scheme in FORBIDDEN_SCHEMES)
+    )
+
+
 def _artifact_errors(
     artifact: Artifact,
     task: CanonicalTask,
@@ -84,6 +96,18 @@ def _artifact_errors(
         errors.append(f"{prefix} has blocking accessibility violations")
     if artifact.sanitization.status != "sanitized":
         errors.append(f"{prefix} is not marked sanitized")
+    errors.extend(
+        _forbidden_scheme_errors(
+            prefix,
+            (
+                ("state", artifact.state),
+                ("browser.engine", artifact.browser.engine),
+                ("browser.version", artifact.browser.version),
+                ("sanitization.status", artifact.sanitization.status),
+                ("sanitization.notes", artifact.sanitization.notes),
+            ),
+        )
+    )
 
     candidate = task_directory / artifact.file
     if candidate.is_symlink() or not candidate.resolve().is_relative_to(
@@ -128,6 +152,12 @@ def _manifest_errors(
     }
     if len(manifest.artifacts) != len(artifact_keys):
         findings.append(f"task {task.number}: duplicate route and viewport artifact")
+    if len({artifact.file for artifact in manifest.artifacts}) != len(
+        manifest.artifacts
+    ):
+        findings.append(
+            f"task {task.number}: duplicate artifact file reused across route/viewport pairs"
+        )
     if artifact_keys != expected_keys:
         findings.append(
             f"task {task.number}: route and viewport inventory is not exact"

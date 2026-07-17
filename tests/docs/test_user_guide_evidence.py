@@ -184,3 +184,71 @@ def test_main_requires_an_explicit_evidence_root(
         validate_user_guide_evidence.main(["--evidence-root", str(valid_evidence_root)])
         == 0
     )
+
+
+def test_rejects_manifest_task_identity_mismatch(valid_evidence_root: Path) -> None:
+    manifest_path = _manifest_path(valid_evidence_root, 7)
+
+    def mutate(manifest: JsonObject) -> None:
+        manifest["task"] = 8
+
+    _rewrite_manifest(manifest_path, mutate)
+
+    errors = validate_evidence_root(valid_evidence_root, SOURCE_REVISION)
+
+    assert "task 7: manifest task does not match directory" in errors
+
+
+def test_rejects_duplicate_artifact_file_reuse(valid_evidence_root: Path) -> None:
+    manifest_path = _manifest_path(valid_evidence_root, 9)
+
+    def mutate(manifest: JsonObject) -> None:
+        artifacts = manifest["artifacts"]
+        assert isinstance(artifacts, list)
+        first_artifact = artifacts[0]
+        second_artifact = artifacts[1]
+        assert isinstance(first_artifact, dict)
+        assert isinstance(second_artifact, dict)
+        second_artifact["file"] = first_artifact["file"]
+        second_artifact["sha256"] = first_artifact["sha256"]
+
+    _rewrite_manifest(manifest_path, mutate)
+
+    errors = validate_evidence_root(valid_evidence_root, SOURCE_REVISION)
+
+    assert (
+        "task 9: duplicate artifact file reused across route/viewport pairs" in errors
+    )
+
+
+@pytest.mark.parametrize(
+    "scheme",
+    [
+        "http://evil.example/x",
+        "https://evil.example/x",
+        "file:///etc/passwd",
+        "data:text/plain;base64,eA==",
+    ],
+)
+def test_rejects_raw_url_scheme_in_free_text_fields(
+    valid_evidence_root: Path, scheme: str
+) -> None:
+    manifest_path = _manifest_path(valid_evidence_root, 10)
+
+    def mutate(manifest: JsonObject) -> None:
+        artifacts = manifest["artifacts"]
+        assert isinstance(artifacts, list)
+        first_artifact = artifacts[0]
+        assert isinstance(first_artifact, dict)
+        sanitization = first_artifact["sanitization"]
+        assert isinstance(sanitization, dict)
+        sanitization["notes"] = f"No secrets or user data. See {scheme}"
+
+    _rewrite_manifest(manifest_path, mutate)
+
+    errors = validate_evidence_root(valid_evidence_root, SOURCE_REVISION)
+
+    assert any(
+        "contains a forbidden URL scheme in sanitization.notes" in error
+        for error in errors
+    )

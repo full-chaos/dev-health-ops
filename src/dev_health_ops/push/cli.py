@@ -355,6 +355,21 @@ def _derive_correlation_external_id(kind: str, payload: dict[str, Any]) -> str:
         )
     if base_kind == "commit":
         return f"{payload['repositoryExternalId']}@{payload['hash']}"
+    if base_kind in {
+        "operational_service",
+        "operational_incident",
+        "operational_alert",
+        "incident_timeline_event",
+        "incident_note",
+        "incident_responder",
+        "escalation_policy",
+        "on_call_schedule",
+        "on_call_assignment",
+        "operational_team",
+        "operational_user",
+        "service_repository_mapping",
+    }:
+        return str(payload["externalId"])
     raise ValueError(f"no correlation-id rule for kind: {kind!r}")
 
 

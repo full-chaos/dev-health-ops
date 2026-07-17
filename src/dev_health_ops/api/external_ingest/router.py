@@ -343,7 +343,12 @@ async def accept_batch(
     # itself -- a source-bound ingest:write token must not be able to push
     # data for a different source instance in the same org (CC16
     # source_mismatch / source_disabled).
-    require_matching_source(ctx, envelope.source.system, envelope.source.instance)
+    require_matching_source(
+        ctx,
+        envelope.source.system,
+        envelope.source.instance,
+        envelope.source.entity_family,
+    )
 
     # One-active-owner re-check at accept time (CC5/CC14 defense in depth):
     # require_matching_source only proves the token binds to a registered,
@@ -355,12 +360,16 @@ async def accept_batch(
         org_id=ctx.org_id,
         system=envelope.source.system,
         instance=envelope.source.instance,
+        entity_family=envelope.source.entity_family,
     )
     if mode != "customer_push":
         raise _ownership_error(mode, envelope.source.system, envelope.source.instance)
 
     window = envelope.window
     payload_hash = compute_payload_hash(envelope)
+    idempotency_key = envelope.idempotency_key
+    if envelope.source.entity_family != "legacy":
+        idempotency_key = f"{envelope.source.entity_family}:{idempotency_key}"
     try:
         # FIRST Postgres write of the accept sequence (CC22) -- the unique
         # idempotency index is the serialization point for concurrent
@@ -370,7 +379,7 @@ async def accept_batch(
             org_id=ctx.org_id,
             source_system=envelope.source.system,
             source_instance=envelope.source.instance,
-            idempotency_key=envelope.idempotency_key,
+            idempotency_key=idempotency_key,
             payload_hash=payload_hash,
             schema_version=envelope.schema_version,
             producer=envelope.source.producer,

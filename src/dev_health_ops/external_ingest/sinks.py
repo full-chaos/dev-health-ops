@@ -104,6 +104,15 @@ def _track_scope_timestamp(scope: AffectedScope, value: Any) -> None:
         scope.max_timestamp = dt
 
 
+def _track_operational_scope(scope: AffectedScope, records: list[Any]) -> None:
+    for record in records:
+        _track_scope_timestamp(scope, record.source_version_at)
+        if record.entity_family == "operational_service":
+            scope.service_ids.add(record.id)
+        if record.entity_family == "operational_incident":
+            scope.incident_ids.add(record.id)
+
+
 def _resolve_customer_identity(system: str, raw: str | None) -> str | None:
     """D4: resolve a work-item-family raw assignee/reporter/actor string.
 
@@ -643,6 +652,18 @@ async def write_batch(
         or batch.reviews
         or batch.teams
         or batch.identities
+        or batch.operational_services
+        or batch.operational_incidents
+        or batch.operational_alerts
+        or batch.incident_timeline_events
+        or batch.incident_notes
+        or batch.incident_responders
+        or batch.escalation_policies
+        or batch.on_call_schedules
+        or batch.on_call_assignments
+        or batch.operational_teams
+        or batch.operational_users
+        or batch.service_repository_mappings
     )
 
     async with _maybe_store(clickhouse_dsn, batch.org_id, needs_async_store) as store:
@@ -813,6 +834,73 @@ async def write_batch(
                     SinkWriteError(
                         record_index=-1,
                         kind="identity",
+                        external_id=None,
+                        code="clickhouse_insert_failed",
+                        message=str(exc),
+                    )
+                )
+
+        operational_writes = (
+            (
+                "operational_services",
+                "operational_service",
+                "insert_operational_services",
+            ),
+            (
+                "operational_incidents",
+                "operational_incident",
+                "insert_operational_incidents",
+            ),
+            ("operational_alerts", "operational_alert", "insert_operational_alerts"),
+            (
+                "incident_timeline_events",
+                "incident_timeline_event",
+                "insert_operational_incident_timeline_events",
+            ),
+            ("incident_notes", "incident_note", "insert_operational_incident_notes"),
+            (
+                "incident_responders",
+                "incident_responder",
+                "insert_operational_incident_responders",
+            ),
+            (
+                "escalation_policies",
+                "escalation_policy",
+                "insert_operational_escalation_policies",
+            ),
+            (
+                "on_call_schedules",
+                "on_call_schedule",
+                "insert_operational_on_call_schedules",
+            ),
+            (
+                "on_call_assignments",
+                "on_call_assignment",
+                "insert_operational_on_call_assignments",
+            ),
+            ("operational_teams", "operational_team", "insert_operational_teams"),
+            ("operational_users", "operational_user", "insert_operational_users"),
+            (
+                "service_repository_mappings",
+                "service_repository_mapping",
+                "insert_operational_service_repository_mappings",
+            ),
+        )
+        for attribute, kind, writer_name in operational_writes:
+            records = getattr(batch, attribute)
+            if not records:
+                continue
+            try:
+                await getattr(store, writer_name)(records)
+                counts[kind] = len(records)
+                scope.record_kinds.add(kind)
+                _track_operational_scope(scope, records)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("write_batch: %s sink write failed", kind)
+                errors.append(
+                    SinkWriteError(
+                        record_index=-1,
+                        kind=kind,
                         external_id=None,
                         code="clickhouse_insert_failed",
                         message=str(exc),

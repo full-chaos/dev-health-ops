@@ -1,5 +1,7 @@
 import hashlib
 import os
+import subprocess
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -278,3 +280,20 @@ def test_main_requires_an_explicit_evidence_root(
         validate_user_guide_evidence.main(["--evidence-root", str(valid_evidence_root)])
         == 0
     )
+
+
+def test_validator_cli_runs_from_the_documentation_qa_directory() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "../scripts/validate_user_guide_evidence.py",
+            "--help",
+        ],
+        capture_output=True,
+        check=False,
+        cwd=repository_root / "docs-qa",
+        text=True,
+    )
+
+    assert result.returncode == 0

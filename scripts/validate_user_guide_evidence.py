@@ -10,10 +10,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-from scripts.user_guide_evidence_contract import SourceRevision
-from scripts.user_guide_evidence_validation import validate_evidence_root
-
 ROOT: Final = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.user_guide_evidence_contract import SourceRevision  # noqa: E402
+from scripts.user_guide_evidence_validation import validate_evidence_root  # noqa: E402
 
 
 class EvidenceValidationError(Exception): ...

@@ -24,6 +24,16 @@ class DatasetKey(str, Enum):
     WORK_ITEM_HISTORY = "work-item-history"
     WORK_ITEM_COMMENTS = "work-item-comments"
     FEATURE_FLAGS = "feature-flags"
+    SERVICES = "services"
+    BUSINESS_SERVICES = "business-services"
+    ESCALATION_POLICIES = "escalation-policies"
+    SCHEDULES = "schedules"
+    ON_CALLS = "on-calls"
+    USERS = "users"
+    TEAMS = "teams"
+    INCIDENT_ALERTS = "incident-alerts"
+    INCIDENT_LOG_ENTRIES = "incident-log-entries"
+    INCIDENT_NOTES = "incident-notes"
 
 
 class CostClass(str, Enum):
@@ -54,6 +64,12 @@ _LIGHT_DATASETS = frozenset(
         DatasetKey.INCIDENTS.value,
         DatasetKey.WORK_ITEM_LABELS.value,
         DatasetKey.WORK_ITEM_PROJECTS.value,
+        DatasetKey.SERVICES.value,
+        DatasetKey.BUSINESS_SERVICES.value,
+        DatasetKey.ESCALATION_POLICIES.value,
+        DatasetKey.SCHEDULES.value,
+        DatasetKey.USERS.value,
+        DatasetKey.TEAMS.value,
     }
 )
 _MEDIUM_DATASETS = frozenset(
@@ -69,6 +85,10 @@ _MEDIUM_DATASETS = frozenset(
         DatasetKey.WORK_ITEM_HISTORY.value,
         DatasetKey.WORK_ITEM_COMMENTS.value,
         DatasetKey.FEATURE_FLAGS.value,
+        DatasetKey.ON_CALLS.value,
+        DatasetKey.INCIDENT_ALERTS.value,
+        DatasetKey.INCIDENT_LOG_ENTRIES.value,
+        DatasetKey.INCIDENT_NOTES.value,
     }
 )
 _HEAVY_DATASETS = frozenset(
@@ -115,11 +135,28 @@ _LEGACY_TARGETS_BY_DATASET: dict[str, frozenset[str]] = {
     DatasetKey.WORK_ITEM_HISTORY.value: frozenset({"work-items"}),
     DatasetKey.WORK_ITEM_COMMENTS.value: frozenset({"work-items"}),
     DatasetKey.FEATURE_FLAGS.value: frozenset({"feature-flags"}),
+    DatasetKey.SERVICES.value: frozenset({"operational"}),
+    DatasetKey.BUSINESS_SERVICES.value: frozenset({"operational"}),
+    DatasetKey.ESCALATION_POLICIES.value: frozenset({"operational"}),
+    DatasetKey.SCHEDULES.value: frozenset({"operational"}),
+    DatasetKey.ON_CALLS.value: frozenset({"operational"}),
+    DatasetKey.USERS.value: frozenset({"operational"}),
+    DatasetKey.TEAMS.value: frozenset({"operational"}),
+    DatasetKey.INCIDENT_ALERTS.value: frozenset({"operational"}),
+    DatasetKey.INCIDENT_LOG_ENTRIES.value: frozenset({"operational"}),
+    DatasetKey.INCIDENT_NOTES.value: frozenset({"operational"}),
 }
 
 _NO_WATERMARK_DATASETS = frozenset(
     {
         DatasetKey.REPO_METADATA.value,
+        DatasetKey.SERVICES.value,
+        DatasetKey.BUSINESS_SERVICES.value,
+        DatasetKey.ESCALATION_POLICIES.value,
+        DatasetKey.SCHEDULES.value,
+        DatasetKey.ON_CALLS.value,
+        DatasetKey.USERS.value,
+        DatasetKey.TEAMS.value,
     }
 )
 
@@ -134,6 +171,7 @@ _LEGACY_TARGET_ORDER = (
     "tests",
     "work-items",
     "feature-flags",
+    "operational",
 )
 
 _PROVIDER_SUPPORTED_DATASETS: dict[str, frozenset[str]] = {
@@ -201,6 +239,21 @@ _PROVIDER_SUPPORTED_DATASETS: dict[str, frozenset[str]] = {
         }
     ),
     "launchdarkly": frozenset({DatasetKey.FEATURE_FLAGS.value}),
+    "pagerduty": frozenset(
+        {
+            DatasetKey.SERVICES.value,
+            DatasetKey.BUSINESS_SERVICES.value,
+            DatasetKey.ESCALATION_POLICIES.value,
+            DatasetKey.SCHEDULES.value,
+            DatasetKey.ON_CALLS.value,
+            DatasetKey.USERS.value,
+            DatasetKey.TEAMS.value,
+            DatasetKey.INCIDENTS.value,
+            DatasetKey.INCIDENT_ALERTS.value,
+            DatasetKey.INCIDENT_LOG_ENTRIES.value,
+            DatasetKey.INCIDENT_NOTES.value,
+        }
+    ),
 }
 
 

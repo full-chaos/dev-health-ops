@@ -1,0 +1,9 @@
+id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
+get-started	home	/get-started/	Get started	landing	true	public	planned	true	Provisional minimal orientation and task routing; all content is rewritten from scratch.
+gs-choose	get-started	/get-started/choose-a-task/	Choose the task you need	task-guide	true	public	planned	false	Route directly into use, admin, operate, integrate, reference, or contribute.
+gs-prereq	get-started	/get-started/prerequisites/	Check product access and prerequisites	task-guide	true	public	planned	false	State access, source, scope, and data prerequisites that block first use.
+gs-concepts	get-started	/get-started/concepts/	Read only the concepts needed before first use	landing	true	public	planned	true	Minimal shared concepts; not a second product manual.
+gs-signals	gs-concepts	/get-started/concepts/signals-evidence-confidence/	Signals, evidence, and confidence	concept	true	public	planned	false	
+gs-scope	gs-concepts	/get-started/concepts/scope-time-coverage/	Scope, time, and coverage	concept	true	public	planned	false	
+gs-responsible	gs-concepts	/get-started/concepts/responsible-interpretation/	Responsible interpretation	concept	true	public	planned	false	
+gs-glossary	get-started	/get-started/glossary/	Glossary	reference	true	public	planned	false	

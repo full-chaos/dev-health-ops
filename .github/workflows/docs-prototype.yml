@@ -1,0 +1,26 @@
+name: Documentation v2 prototype
+
+on:
+  pull_request:
+    paths:
+      - 'docs-prototype/**'
+      - 'mkdocs.prototype.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/docs-prototype.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install documentation dependencies
+        run: pip install -r requirements-docs.txt
+      - name: Build the v2 prototype
+        run: mkdocs build --strict --config-file mkdocs.prototype.yml

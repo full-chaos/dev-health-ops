@@ -20,6 +20,10 @@ from dev_health_ops.models.operational import (
     OperationalUser,
 )
 from dev_health_ops.providers.pagerduty.client import PagerDutyClient
+from dev_health_ops.providers.pagerduty.degradation import (
+    DATASET_FETCH_ERRORS,
+    PagerDutyDatasetDegradedError,
+)
 from dev_health_ops.providers.pagerduty.incident_cursor import (
     incident_source_time,
     iter_resumable_incidents,
@@ -101,6 +105,12 @@ class PagerDutyOperationalSync:
         self._normalizer = normalizer
 
     async def run(self, options: PagerDutySyncOptions) -> PagerDutySyncResult:
+        try:
+            return await self._run(options)
+        except DATASET_FETCH_ERRORS as exc:
+            raise PagerDutyDatasetDegradedError(options.dataset_key, exc) from exc
+
+    async def _run(self, options: PagerDutySyncOptions) -> PagerDutySyncResult:
         watermark_at: datetime | None = None
         match options.dataset_key:
             case "services":
@@ -204,17 +214,22 @@ class PagerDutyOperationalSync:
         values: list[OperationalIncident] = []
         persisted = 0
         watermark_at: datetime | None = None
-        async for incident in iter_resumable_incidents(self._client, options):
-            source_time = incident_source_time(incident)
-            if source_time is not None and (
-                watermark_at is None or source_time > watermark_at
-            ):
-                watermark_at = source_time
-            values.append(self._normalizer.incident(incident))
-            if len(values) == options.batch_size:
+        try:
+            async for incident in iter_resumable_incidents(self._client, options):
+                source_time = incident_source_time(incident)
+                if source_time is not None and (
+                    watermark_at is None or source_time > watermark_at
+                ):
+                    watermark_at = source_time
+                values.append(self._normalizer.incident(incident))
+                if len(values) == options.batch_size:
+                    await self._store.insert_operational_incidents(values)
+                    persisted += len(values)
+                    values = []
+        except DATASET_FETCH_ERRORS:
+            if values:
                 await self._store.insert_operational_incidents(values)
-                persisted += len(values)
-                values = []
+            raise
         if values:
             await self._store.insert_operational_incidents(values)
             persisted += len(values)

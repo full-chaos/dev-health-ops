@@ -7,6 +7,7 @@ from typing import Any
 from dev_health_ops.credentials.resolver import (
     github_credentials_from_mapping,
     gitlab_credentials_from_mapping,
+    pagerduty_credentials_from_mapping,
     resolve_gitlab_url,
 )
 from dev_health_ops.providers.usage import (
@@ -58,6 +59,22 @@ _WORK_ITEM_DATASETS = frozenset(
         DatasetKey.WORK_ITEM_PROJECTS.value,
         DatasetKey.WORK_ITEM_HISTORY.value,
         DatasetKey.WORK_ITEM_COMMENTS.value,
+    }
+)
+
+_PAGERDUTY_DATASETS = frozenset(
+    {
+        DatasetKey.SERVICES.value,
+        DatasetKey.BUSINESS_SERVICES.value,
+        DatasetKey.ESCALATION_POLICIES.value,
+        DatasetKey.SCHEDULES.value,
+        DatasetKey.ON_CALLS.value,
+        DatasetKey.USERS.value,
+        DatasetKey.TEAMS.value,
+        DatasetKey.INCIDENTS.value,
+        DatasetKey.INCIDENT_ALERTS.value,
+        DatasetKey.INCIDENT_LOG_ENTRIES.value,
+        DatasetKey.INCIDENT_NOTES.value,
     }
 )
 
@@ -136,6 +153,30 @@ def _gitlab_project_id(source_external_id: str) -> int:
     raise ValueError(
         "GitLab dataset unit requires numeric source_external_id project id"
     )
+
+
+def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
+    from dev_health_ops.providers.pagerduty.auth import (
+        ApiTokenAuth,
+        OAuthBearerAuth,
+        PagerDutyAuth,
+    )
+    from dev_health_ops.providers.pagerduty.client import PagerDutyClient
+
+    credentials = pagerduty_credentials_from_mapping(_credentials_mapping(context))
+    if credentials is None:
+        raise ValueError("Missing PagerDuty credentials for dataset unit")
+    auth: PagerDutyAuth
+    if credentials.access_token:
+        auth = OAuthBearerAuth(credentials.access_token)
+    elif credentials.api_token:
+        auth = ApiTokenAuth(credentials.api_token)
+    else:
+        raise ValueError("PagerDuty dataset unit requires an access token or API token")
+    provider_instance_id = credentials.subdomain or context.source_external_id
+    if not provider_instance_id:
+        raise ValueError("PagerDuty dataset unit requires an account subdomain")
+    return PagerDutyClient(auth, region=credentials.region), provider_instance_id
 
 
 def _window_backfill_days(context: SyncTaskContext) -> int:
@@ -332,6 +373,68 @@ def _run_gitlab_dataset(
     return result
 
 
+def _run_pagerduty_dataset(
+    context: SyncTaskContext, runtime: ProviderRuntime
+) -> dict[str, Any]:
+    from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
+    from dev_health_ops.providers.pagerduty.sync import (
+        PagerDutyOperationalSync,
+        PagerDutySyncOptions,
+    )
+
+    client, provider_instance_id = _pagerduty_client(context)
+    usage_sink: list[dict[str, Any]] = []
+
+    async def _handler(store: Any) -> dict[str, Any]:
+        result = await PagerDutyOperationalSync(
+            client=client,
+            store=store,
+            normalizer=PagerDutyNormalizer(
+                org_id=context.org_id,
+                provider_instance_id=provider_instance_id,
+                observed_at=context.window_end
+                or context.window_start
+                or datetime.now(timezone.utc),
+            ),
+        ).run(
+            PagerDutySyncOptions(
+                dataset_key=context.dataset_key,
+                window_start=context.window_start,
+                window_end=context.window_end,
+            )
+        )
+        usage_sink.extend(result.observations)
+        return {
+            "persisted": result.persisted,
+            "degraded": result.degraded,
+        }
+
+    try:
+        sync_result = run_async(
+            _run_with_reused_or_new_store(context, runtime, _handler)
+        )
+    except Exception as exc:
+        usage_sink.extend(client.drain_usage_observations())
+        _attach_usage_sink_to_exception(exc, usage_sink)
+        raise
+    result: dict[str, Any] = {
+        "provider": context.provider,
+        "dataset": context.dataset_key,
+        "source": context.source_external_id,
+        "provider_instance_id": provider_instance_id,
+        "window_start": context.window_start.isoformat()
+        if context.window_start is not None
+        else None,
+        "window_end": context.window_end.isoformat()
+        if context.window_end is not None
+        else None,
+        **sync_result,
+    }
+    if usage_sink:
+        result["observations"] = {PROVIDER_USAGE_OBSERVATION_KEY: usage_sink}
+    return result
+
+
 def _attach_usage_sink_to_exception(
     exc: BaseException, usage_sink: list[dict[str, Any]]
 ) -> None:
@@ -425,6 +528,9 @@ def run_dataset_unit(
 ) -> dict[str, Any]:
     provider = context.provider.lower()
     dataset_key = context.dataset_key
+
+    if provider == "pagerduty" and dataset_key in _PAGERDUTY_DATASETS:
+        return _run_pagerduty_dataset(context, runtime)
 
     if dataset_key in _CODE_DATASETS:
         if provider == "github":

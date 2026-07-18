@@ -15,6 +15,8 @@ class PagerDutyModel(BaseModel):
     summary: str | None = None
     self_url: str | None = Field(default=None, alias="self")
     html_url: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     raw: dict[str, JsonValue] = Field(default_factory=dict)
 
 

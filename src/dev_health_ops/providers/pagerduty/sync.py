@@ -3,61 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol, TypeVar
+from typing import TypeVar
 
-from dev_health_ops.models.operational import (
-    EscalationPolicy,
-    IncidentNote,
-    IncidentTimelineEvent,
-    OnCallAssignment,
-    OnCallSchedule,
-    OperationalAlert,
-    OperationalIncident,
-    OperationalService,
-    OperationalTeam,
-    OperationalUser,
-)
+from dev_health_ops.models.operational import OperationalIncident
 from dev_health_ops.providers.pagerduty.client import PagerDutyClient
 from dev_health_ops.providers.pagerduty.degradation import (
     DATASET_FETCH_ERRORS,
     PagerDutyDatasetDegradedError,
 )
+from dev_health_ops.providers.pagerduty.enrichment import PagerDutyEnrichmentToggles
 from dev_health_ops.providers.pagerduty.incident_cursor import (
     incident_source_time,
     iter_resumable_incidents,
 )
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
-
-
-class PagerDutyOperationalStore(Protocol):
-    async def insert_operational_services(
-        self, values: list[OperationalService]
-    ) -> None: ...
-    async def insert_operational_incidents(
-        self, values: list[OperationalIncident]
-    ) -> None: ...
-    async def insert_operational_alerts(
-        self, values: list[OperationalAlert]
-    ) -> None: ...
-    async def insert_operational_incident_timeline_events(
-        self, values: list[IncidentTimelineEvent]
-    ) -> None: ...
-    async def insert_operational_incident_notes(
-        self, values: list[IncidentNote]
-    ) -> None: ...
-    async def insert_operational_escalation_policies(
-        self, values: list[EscalationPolicy]
-    ) -> None: ...
-    async def insert_operational_on_call_schedules(
-        self, values: list[OnCallSchedule]
-    ) -> None: ...
-    async def insert_operational_on_call_assignments(
-        self, values: list[OnCallAssignment]
-    ) -> None: ...
-    async def insert_operational_teams(self, values: list[OperationalTeam]) -> None: ...
-    async def insert_operational_users(self, values: list[OperationalUser]) -> None: ...
+from dev_health_ops.providers.pagerduty.operational_store import (
+    PagerDutyOperationalStore,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +33,9 @@ class PagerDutySyncOptions:
     incident_cap: int = 100
     batch_size: int = 100
     enrichment_cap: int = 100
+    enrichment: PagerDutyEnrichmentToggles = field(
+        default_factory=PagerDutyEnrichmentToggles
+    )
 
     def __post_init__(self) -> None:
         if self.batch_size <= 0:
@@ -113,6 +80,10 @@ class PagerDutyOperationalSync:
     async def _run(self, options: PagerDutySyncOptions) -> PagerDutySyncResult:
         watermark_at: datetime | None = None
         match options.dataset_key:
+            case (
+                "incident-alerts" | "incident-log-entries" | "incident-notes"
+            ) as dataset_key if not options.enrichment.enabled(dataset_key):
+                persisted = 0
             case "services":
                 persisted = await self._sync(
                     self._client.list_services,
@@ -245,7 +216,10 @@ class PagerDutyOperationalSync:
         values: list[_Destination] = []
         persisted = 0
         watermark_at: datetime | None = None
+        enriched_incidents = 0
         async for incident in iter_resumable_incidents(self._client, options):
+            if enriched_incidents >= options.enrichment_cap:
+                break
             source_time = incident_source_time(incident)
             if source_time is not None and (
                 watermark_at is None or source_time > watermark_at
@@ -258,6 +232,7 @@ class PagerDutyOperationalSync:
                     await persist(values)
                     persisted += len(values)
                     values = []
+            enriched_incidents += 1
         if values:
             await persist(values)
             persisted += len(values)

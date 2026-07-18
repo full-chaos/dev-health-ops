@@ -12,6 +12,7 @@ from dev_health_ops.models.operational import OperationalIncident
 from dev_health_ops.providers.pagerduty.models import Incident
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 from dev_health_ops.providers.pagerduty.sync import (
+    PagerDutyEnrichmentToggles,
     PagerDutyOperationalSync,
     PagerDutySyncOptions,
 )
@@ -184,3 +185,94 @@ async def test_incident_sync_resumes_from_persisted_watermark_without_boundary_l
         "incident-2",
         "incident-3",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("dataset_key", "toggles", "fetch_name"),
+    [
+        ("incident-alerts", PagerDutyEnrichmentToggles(alerts=False), "alerts"),
+        (
+            "incident-log-entries",
+            PagerDutyEnrichmentToggles(log_entries=False),
+            "log_entries",
+        ),
+        ("incident-notes", PagerDutyEnrichmentToggles(notes=False), "notes"),
+    ],
+)
+async def test_disabled_enrichment_dataset_makes_no_provider_calls(
+    dataset_key: str,
+    toggles: PagerDutyEnrichmentToggles,
+    fetch_name: str,
+) -> None:
+    incidents = [
+        Incident(id="incident-1", created_at=SOURCE_TIME, updated_at=SOURCE_TIME)
+    ]
+
+    async def pages(*, params: dict[str, str] | None = None):
+        del params
+        yield incidents
+
+    client = Mock()
+    client.iter_incident_pages = pages
+    fetch = AsyncMock(return_value=[])
+    setattr(client, f"list_incident_{fetch_name}", fetch)
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    sync = PagerDutyOperationalSync(
+        client=client,
+        store=store,
+        normalizer=PagerDutyNormalizer("org-1", "acme", SOURCE_TIME),
+    )
+
+    result = await sync.run(
+        PagerDutySyncOptions(
+            dataset_key=dataset_key,
+            window_start=None,
+            window_end=None,
+            enrichment=toggles,
+        )
+    )
+
+    assert result.persisted == 0
+    assert fetch.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_enrichment_cap_bounds_provider_calls_across_incidents() -> None:
+    incidents = [
+        Incident(
+            id=f"incident-{number}",
+            created_at=SOURCE_TIME,
+            updated_at=SOURCE_TIME,
+        )
+        for number in range(3)
+    ]
+
+    async def pages(*, params: dict[str, str] | None = None):
+        del params
+        yield incidents
+
+    client = Mock()
+    client.iter_incident_pages = pages
+    client.list_incident_alerts = AsyncMock(return_value=[])
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    store.insert_operational_alerts = AsyncMock()
+    sync = PagerDutyOperationalSync(
+        client=client,
+        store=store,
+        normalizer=PagerDutyNormalizer("org-1", "acme", SOURCE_TIME),
+    )
+
+    result = await sync.run(
+        PagerDutySyncOptions(
+            dataset_key="incident-alerts",
+            window_start=None,
+            window_end=None,
+            enrichment_cap=2,
+        )
+    )
+
+    assert result.persisted == 0
+    assert client.list_incident_alerts.await_count == 2

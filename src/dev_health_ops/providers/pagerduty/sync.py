@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Protocol, TypeGuard, TypeVar
 from uuid import UUID
 
 from dev_health_ops.models.operational import (
@@ -79,7 +79,6 @@ _ReferenceEntity = TypeVar(
 )
 
 
-@runtime_checkable
 class PagerDutyOperationalSyncStore(PagerDutyOperationalStore, Protocol):
     """Operational store capabilities required for PagerDuty catalog correlation."""
 
@@ -88,6 +87,12 @@ class PagerDutyOperationalSyncStore(PagerDutyOperationalStore, Protocol):
     ) -> list[dict[str, object]]:
         """Load organization-scoped repository catalog rows."""
         ...
+
+
+def _has_repository_catalog(
+    store: PagerDutyOperationalStore,
+) -> TypeGuard[PagerDutyOperationalSyncStore]:
+    return hasattr(store, "query_dicts")
 
 
 class PagerDutyOperationalSync:
@@ -230,7 +235,7 @@ class PagerDutyOperationalSync:
                 self._mapping_inputs,
             )
         ]
-        if not isinstance(self._store, PagerDutyOperationalSyncStore):
+        if not _has_repository_catalog(self._store):
             raise TypeError(
                 "PagerDuty service correlation requires repository catalog access"
             )

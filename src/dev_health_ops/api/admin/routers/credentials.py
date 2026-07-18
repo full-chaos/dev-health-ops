@@ -754,6 +754,7 @@ async def _test_pagerduty_connection(
             return False, {"records_checked": 0, "missing_scopes": missing}
         if not datasets:
             return False, {"error": "Select at least one PagerDuty dataset"}
+        records_count = 0
         match datasets[0]:
             case "incidents":
                 records_count = len(await client.list_incidents())

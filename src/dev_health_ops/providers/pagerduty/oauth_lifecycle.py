@@ -24,9 +24,11 @@ from dev_health_ops.providers.pagerduty.oauth_storage import (
 class OAuthCredentialStore(Protocol):
     """Minimal persistence seam for token renewal and disconnect."""
 
-    async def get(self) -> VersionedOAuthTokens | None: ...
+    async def get(self) -> VersionedOAuthTokens | None:
+        """Return the current stored credential version, if any."""
 
-    async def get_for_update(self) -> VersionedOAuthTokens | None: ...
+    async def get_for_update(self) -> VersionedOAuthTokens | None:
+        """Return the current credential version under a row lock, if any."""
 
     async def rotate(
         self,
@@ -34,9 +36,11 @@ class OAuthCredentialStore(Protocol):
         tokens: OAuthTokens,
         *,
         expected_binding_id: str,
-    ) -> int: ...
+    ) -> int:
+        """Rotate the stored token to a new version, returning that version."""
 
-    async def delete(self) -> None: ...
+    async def delete(self) -> None:
+        """Delete the stored credential."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +177,8 @@ async def disconnect(
             try:
                 await revoke_token(config, token)
             except httpx.HTTPError:
+                # Remote revocation is best-effort; the guaranteed local delete
+                # in the finally block is the authoritative disconnect action.
                 pass
     finally:
         await repository.delete()

@@ -2380,6 +2380,17 @@ class ClickHouseStore:
         assert self.client is not None
         columns = operational_columns(entity_type)
         table = OPERATIONAL_ENTITY_TABLES[entity_type]
+        # Entities carry either is_deleted (services/incidents/...) or is_active
+        # (service->repo mappings); pick the column the table actually has so the
+        # generated SQL never references a non-existent column.
+        if include_deleted:
+            active_filter = ""
+        elif "is_deleted" in columns:
+            active_filter = "AND is_deleted = 0"
+        elif "is_active" in columns:
+            active_filter = "AND is_active = 1"
+        else:
+            active_filter = ""
         query = f"""
         SELECT {", ".join(columns)}
         FROM {table} FINAL
@@ -2387,7 +2398,7 @@ class ClickHouseStore:
           AND provider = {{provider:String}}
           AND provider_instance_id = {{provider_instance_id:String}}
           AND source_entity_type = {{source_entity_type:String}}
-          {"" if include_deleted else "AND is_deleted = 0"}
+          {active_filter}
         """
         parameters = {
             "org_id": org_id,

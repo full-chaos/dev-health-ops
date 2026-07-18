@@ -180,3 +180,32 @@ def test_configuration_and_test_event_paths(client: TestClient) -> None:
     }
     assert validation.status_code == 200
     assert validation.json()["event_id"] == "test-event"
+
+
+def test_enqueue_does_not_cap_pending_stream_with_maxlen(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dev_health_ops.api.webhooks import pagerduty
+
+    kwargs_seen: list[dict[str, object]] = []
+
+    class Redis:
+        def xadd(self, stream: str, fields: dict[str, str], **kwargs: object) -> str:
+            kwargs_seen.append(kwargs)
+            return "1-0"
+
+    class Task:
+        @staticmethod
+        def delay(**_: str) -> None:
+            return None
+
+    monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
+    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
+    body = _payload()
+    headers = {"x-pagerduty-signature": _signature(body)}
+
+    response = client.post("/api/v1/webhooks/pagerduty", content=body, headers=headers)
+
+    # Pending entries must never be trimmed: no maxlen/approximate on ingest xadd.
+    assert response.status_code == 202
+    assert kwargs_seen == [{}]

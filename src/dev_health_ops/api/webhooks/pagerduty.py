@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 MAX_WEBHOOK_BODY_BYTES = 1_048_576
 MAX_SIGNATURE_CANDIDATES = 8
-STREAM_MAXLEN = 100_000
 router = APIRouter(prefix="/pagerduty")
 
 
@@ -111,13 +110,15 @@ def _enqueue_event(
         "provider_instance_id": provider_instance_id,
         "payload": webhook.model_dump_json(),
     }
+    # Never cap this stream with MAXLEN: entries stay until a worker persists
+    # them and xdel's the entry (or dead-letters it). A MAXLEN trim would drop
+    # the OLDEST *unpersisted* events under backlog — silent data loss.
+
     try:
         return str(
             client.xadd(
                 _stream_name(org_id, provider_instance_id),
                 fields,
-                maxlen=STREAM_MAXLEN,
-                approximate=True,
             )
         )
     except Exception as exc:

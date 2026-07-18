@@ -148,3 +148,45 @@ def test_pagerduty_worker_retains_source_when_dlq_write_fails() -> None:
         )
 
     assert deleted == []
+
+
+def test_pagerduty_worker_reroutes_unparseable_entry_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PAGERDUTY_API_TOKEN", "token")
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example")
+
+    class Redis:
+        def xrange(self, *_: object, **__: object) -> list[tuple[str, dict[str, str]]]:
+            return [
+                (
+                    "1-0",
+                    {
+                        "payload": "not-json",
+                        "received_at": "2026-07-17T12:00:00+00:00",
+                    },
+                )
+            ]
+
+        def xadd(self, *_: object, **__: object) -> str:
+            return "2-0"
+
+        def xdel(self, *_: object, **__: object) -> None:
+            return None
+
+    with (
+        patch(
+            "dev_health_ops.api.ingest.streams.get_redis_client",
+            return_value=Redis(),
+        ),
+        patch.object(
+            system_webhooks.process_pagerduty_webhook_event, "retry", _retry_sentinel
+        ),
+    ):
+        task = cast(Any, system_webhooks.process_pagerduty_webhook_event)
+        with pytest.raises(_RetrySentinel):
+            task.run(
+                org_id="org-1",
+                provider_instance_id="acme",
+                stream_entry_id="1-0",
+            )

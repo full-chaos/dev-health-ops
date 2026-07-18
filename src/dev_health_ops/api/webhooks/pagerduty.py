@@ -211,10 +211,8 @@ async def pagerduty_webhook(
             received_at=received_at,
         )
         getattr(process_pagerduty_webhook_event, "delay")(
-            webhook=webhook.model_dump(mode="json"),
             org_id=org_id,
             provider_instance_id=provider_instance_id,
-            received_at=received_at.isoformat(),
             stream_entry_id=stream_entry_id,
         )
     except HTTPException:

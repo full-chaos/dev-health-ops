@@ -169,20 +169,22 @@ def _record_delivery(provider: str, delivery_id: str) -> None:
 @celery_app.task(
     bind=True,
     max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
     queue="webhooks",
     name="dev_health_ops.workers.tasks.process_pagerduty_webhook_event",
 )
 def process_pagerduty_webhook_event(
     self,
     *,
-    webhook: dict,
     org_id: str,
     provider_instance_id: str,
-    received_at: str,
     stream_entry_id: str,
 ) -> dict:
+    import json
     from datetime import datetime
 
+    from dev_health_ops.api.ingest.streams import get_redis_client
     from dev_health_ops.api.webhooks.pagerduty_models import PagerDutyV3Webhook
     from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth
     from dev_health_ops.providers.pagerduty.client import PagerDutyClient
@@ -193,8 +195,22 @@ def process_pagerduty_webhook_event(
     clickhouse_url = os.getenv("CLICKHOUSE_URI")
     if not token or not clickhouse_url:
         return {"processed": False, "reason": "pagerduty_webhook_unconfigured"}
-    parsed = PagerDutyV3Webhook.model_validate(webhook)
-    processed_at = datetime.fromisoformat(received_at)
+    redis_client = get_redis_client()
+    stream_name = f"pagerduty-webhooks:{org_id}:{provider_instance_id}"
+    if redis_client is None:
+        raise self.retry(
+            exc=RuntimeError("pagerduty webhook stream unavailable"), countdown=30
+        )
+    entries = getattr(redis_client, "xrange")(
+        stream_name, min=stream_entry_id, max=stream_entry_id
+    )
+    if not entries:
+        raise self.retry(
+            exc=RuntimeError("pagerduty webhook stream entry missing"), countdown=30
+        )
+    _, fields = entries[0]
+    parsed = PagerDutyV3Webhook.model_validate(json.loads(fields["payload"]))
+    processed_at = datetime.fromisoformat(fields["received_at"])
 
     async def _process(store):
         client = PagerDutyClient(ApiTokenAuth(token))
@@ -214,6 +230,7 @@ def process_pagerduty_webhook_event(
         processed = run_async(
             run_with_store(clickhouse_url, "clickhouse", _process, org_id=org_id)
         )
+        redis_client.xdel(stream_name, stream_entry_id)
         return {
             "processed": processed,
             "event_id": parsed.event.id,

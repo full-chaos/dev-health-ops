@@ -31,6 +31,7 @@ class Store:
         provider: str,
         provider_instance_id: str,
         source_entity_type: str,
+        include_deleted: bool = False,
     ) -> list[CanonicalOperationalEntity]:
         return [self.current] if type(self.current) is entity_type else []
 
@@ -146,3 +147,42 @@ async def test_service_delete_writes_versioned_tombstone() -> None:
     assert processed is True
     assert store.services[0].is_deleted is True
     assert store.services[0].source_version_at == occurred_at
+
+
+@pytest.mark.anyio
+async def test_stale_service_update_cannot_resurrect_a_tombstone() -> None:
+    store = Store(
+        OperationalService(
+            org_id="org-1",
+            provider="pagerduty",
+            provider_instance_id="acme",
+            source_entity_type="service",
+            external_id="service-1",
+            source_version_at=datetime(2026, 7, 18, tzinfo=UTC),
+            name="Payments",
+            is_deleted=True,
+            deleted_at=datetime(2026, 7, 18, tzinfo=UTC),
+        )
+    )
+    webhook = PagerDutyV3Webhook.model_validate(
+        {
+            "event": {
+                "id": "event-3",
+                "event_type": "service.updated",
+                "occurred_at": "2026-07-17T00:00:00Z",
+                "data": {"id": "service-1", "name": "Payments"},
+            }
+        }
+    )
+
+    processed = await reconcile_pagerduty_webhook(
+        webhook=webhook,
+        org_id="org-1",
+        provider_instance_id="acme",
+        received_at=datetime(2026, 7, 19, tzinfo=UTC),
+        store=store,
+        client=Client(),
+    )
+
+    assert processed is False
+    assert store.services == []

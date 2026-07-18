@@ -33,6 +33,7 @@ class PagerDutyWebhookStore(Protocol):
         provider: str,
         provider_instance_id: str,
         source_entity_type: str,
+        include_deleted: bool = False,
     ) -> list[CanonicalOperationalEntity]: ...
 
     async def insert_operational_services(
@@ -96,6 +97,7 @@ async def _is_newer(
         provider=entity.provider,
         provider_instance_id=entity.provider_instance_id,
         source_entity_type=entity.source_entity_type,
+        include_deleted=True,
     )
     for current in active:
         if current.external_id == entity.external_id:
@@ -137,6 +139,7 @@ async def _tombstone_service(
         provider=service.provider,
         provider_instance_id=service.provider_instance_id,
         source_entity_type="service",
+        include_deleted=True,
     )
     matching = next(
         (row for row in active if row.external_id == service.external_id), None

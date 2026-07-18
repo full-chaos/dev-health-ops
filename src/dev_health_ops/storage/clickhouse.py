@@ -2345,6 +2345,7 @@ class ClickHouseStore:
         provider: str,
         provider_instance_id: str,
         source_entity_type: str,
+        include_deleted: bool = False,
     ) -> list[T]:
         assert self.client is not None
         columns = operational_columns(entity_type)
@@ -2356,7 +2357,7 @@ class ClickHouseStore:
           AND provider = {{provider:String}}
           AND provider_instance_id = {{provider_instance_id:String}}
           AND source_entity_type = {{source_entity_type:String}}
-          AND is_deleted = 0
+          {"" if include_deleted else "AND is_deleted = 0"}
         """
         parameters = {
             "org_id": org_id,

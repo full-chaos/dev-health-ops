@@ -1,0 +1,27 @@
+id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
+reference	home	/reference/	Reference	landing	true	public	planned	false	Exact facts, contracts, configuration, metrics, and compatibility.
+ref-api	reference	/reference/api/	API reference	landing	true	public	planned	false	
+ref-api-auth	ref-api	/reference/api/authentication/	Authentication and authorization	api-reference	true	public	planned	false	
+ref-api-errors	ref-api	/reference/api/errors-pagination-rate-limits/	Errors, pagination, and rate limits	api-reference	true	public	planned	false	
+ref-graphql	reference	/reference/graphql/	GraphQL reference	landing	true	public	planned	false	
+ref-graphql-schema	ref-graphql	/reference/graphql/schema/	Schema and fields	generated-reference	true	public	planned	false	
+ref-graphql-filters	ref-graphql	/reference/graphql/filters/	Filters and scope	api-reference	true	public	planned	false	
+ref-graphql-errors	ref-graphql	/reference/graphql/nullability-and-errors/	Nullability and errors	api-reference	true	public	planned	false	
+ref-cli	reference	/reference/cli/	CLI reference	landing	true	public	planned	false	
+ref-config	reference	/reference/configuration/	Configuration reference	landing	true	public	planned	false	
+ref-config-env	ref-config	/reference/configuration/environment/	Environment variables	configuration-reference	true	public	planned	false	
+ref-config-flags	ref-config	/reference/configuration/feature-flags/	Feature flags and availability	configuration-reference	true	public	planned	false	
+ref-schemas	reference	/reference/schemas/	Schemas and contracts	landing	true	public	planned	false	
+ref-record-kinds	ref-schemas	/reference/schemas/record-kinds-and-enums/	Record kinds and enums	generated-reference	true	public	planned	false	
+ref-data-models	reference	/reference/data-models/	Data models	landing	true	public	planned	false	
+ref-work-graph	ref-data-models	/reference/data-models/work-graph/	Work Graph model	reference	true	public	planned	false	
+ref-investment-model	ref-data-models	/reference/data-models/investment/	Investment data model	reference	true	public	planned	false	
+ref-metrics	reference	/reference/metrics/	Metrics and computations	landing	true	public	planned	false	
+ref-metric-defs	ref-metrics	/reference/metrics/definitions/	Canonical metric definitions	generated-reference	true	public	planned	false	
+ref-weighting	ref-metrics	/reference/metrics/weighting-and-aggregation/	Weighting and aggregation	reference	true	public	planned	false	
+ref-taxonomy	reference	/reference/taxonomies/	Product taxonomies	landing	true	public	planned	false	
+ref-investment-taxonomy	ref-taxonomy	/reference/taxonomies/investment/	Investment taxonomy	generated-reference	true	public	planned	false	
+ref-limits	reference	/reference/limits-and-compatibility/	Provider limits and compatibility	landing	true	public	planned	false	
+ref-provider-limits	ref-limits	/reference/limits-and-compatibility/provider-limits/	Provider limits	reference	true	public	planned	false	
+ref-compat	ref-limits	/reference/limits-and-compatibility/compatibility/	Version and compatibility matrix	reference	true	public	planned	false	
+ref-deprecations	reference	/reference/deprecations/	Deprecations and replacements	reference	true	public	planned	false	

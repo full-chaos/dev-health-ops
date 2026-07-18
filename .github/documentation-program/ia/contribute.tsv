@@ -1,0 +1,22 @@
+id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
+contribute	home	/contribute/	Contribute	landing	true	public	planned	false	Development, architecture, testing, release, and documentation contribution.
+con-start	contribute	/contribute/start/	Start contributing	landing	true	public	planned	false	
+con-repos	con-start	/contribute/start/repository-map/	Choose the correct repository	concept	true	public	planned	false	
+con-setup	con-start	/contribute/start/development-environment/	Set up a development environment	tutorial	true	public	planned	false	
+con-arch	contribute	/contribute/architecture/	Understand architecture and boundaries	landing	true	public	planned	false	
+con-platform	con-arch	/contribute/architecture/platform/	Platform architecture	architecture	true	public	planned	false	
+con-storage	con-arch	/contribute/architecture/data-and-storage/	Data and storage boundaries	architecture	true	public	planned	false	
+con-contracts	con-arch	/contribute/architecture/contracts/	Stable contracts and source-of-truth rules	architecture	true	public	planned	false	
+con-dev	contribute	/contribute/development/	Develop and test	landing	true	public	planned	false	
+con-commands	con-dev	/contribute/development/commands/	Common development commands	task-guide	true	public	planned	false	
+con-tests	con-dev	/contribute/development/testing/	Testing layers and local validation	task-guide	true	public	planned	false	
+con-fixtures	con-dev	/contribute/development/fixtures-and-live-validation/	Fixtures and production-like validation	task-guide	true	public	planned	false	
+con-migrations	con-dev	/contribute/development/migrations/	Create and validate database migrations	task-guide	true	public	planned	false	
+con-debug	con-dev	/contribute/development/debugging/	Debug and observe development environments	task-guide	true	public	planned	false	
+con-review	contribute	/contribute/review-and-release/	Review and release	landing	true	public	planned	false	
+con-pr	con-review	/contribute/review-and-release/pull-requests/	Prepare and review a pull request	task-guide	true	public	planned	false	
+con-release	con-review	/contribute/review-and-release/releases/	Release and rollback expectations	task-guide	true	public	planned	false	
+con-docs	contribute	/contribute/documentation/	Contribute documentation	landing	true	public	planned	false	
+con-doc-classify	con-docs	/contribute/documentation/classify-and-place/	Classify and place a page	task-guide	true	public	planned	false	
+con-doc-write	con-docs	/contribute/documentation/write-and-review/	Write and review documentation	task-guide	true	public	planned	false	
+con-doc-preview	con-docs	/contribute/documentation/preview-and-validate/	Preview and validate documentation	task-guide	true	public	planned	false	

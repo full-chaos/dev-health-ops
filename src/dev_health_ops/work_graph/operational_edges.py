@@ -24,19 +24,35 @@ def build_operational_incident_edges(
     now: datetime,
     heuristic_days_window: int,
     heuristic_confidence: float,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    repo_id: uuid.UUID | None = None,
 ) -> list[WorkGraphEdge]:
     """Build canonical operational edges with source evidence on every link."""
     query_dicts = getattr(sink, "query_dicts")
-    params = {"org_id": org_id}
+    params = {
+        "org_id": org_id,
+        "now": now,
+        "from_date": from_date,
+        "to_date": to_date,
+        "repo_id": repo_id,
+    }
+    repository_scope = " AND repo_id = {repo_id:UUID}" if repo_id else ""
+    incident_window = _timestamp_window("started_at", from_date, to_date)
+    deployment_window = _timestamp_window("deployed_at", from_date, to_date)
     mappings = query_dicts(
-        "SELECT service_id, repo_id, relationship_provenance, relationship_confidence, "
+        "SELECT service_id, repo_id, provider, relationship_provenance, relationship_confidence, "
         "mapping_kind, rule_id, source_url FROM operational_service_repository_mappings FINAL "
-        "WHERE org_id = {org_id:String} AND is_active = 1",
+        "WHERE org_id = {org_id:String} AND is_active = 1 "
+        "AND valid_from <= {now:DateTime} "
+        "AND (valid_to IS NULL OR valid_to > {now:DateTime})"
+        f"{repository_scope}",
         params,
     )
     incidents = query_dicts(
         "SELECT id, service_id, escalation_policy_id, started_at, source_url FROM operational_incidents FINAL "
-        "WHERE org_id = {org_id:String} AND is_deleted = 0",
+        "WHERE org_id = {org_id:String} AND is_deleted = 0"
+        f"{incident_window}",
         params,
     )
     services = query_dicts(
@@ -73,20 +89,28 @@ def build_operational_incident_edges(
     )
     deployments = query_dicts(
         "SELECT repo_id, deployment_id, environment, deployed_at FROM deployments FINAL "
-        "WHERE org_id = {org_id:String}",
+        "WHERE org_id = {org_id:String}"
+        f"{repository_scope}{deployment_window}",
         params,
     )
 
     edges: list[WorkGraphEdge] = []
-    service_repos: dict[str, list[uuid.UUID]] = {}
+    preferred_mappings: dict[tuple[str, uuid.UUID], dict[str, object]] = {}
     for row in mappings:
-        repo_id = row.get("repo_id")
+        mapping_repo_id = row.get("repo_id")
         service_id = str(row.get("service_id") or "")
-        if not repo_id or not service_id:
+        if not mapping_repo_id or not service_id:
             continue
-        repo_uuid = uuid.UUID(str(repo_id))
+        repo_uuid = uuid.UUID(str(mapping_repo_id))
+        key = (service_id, repo_uuid)
+        current = preferred_mappings.get(key)
+        if current is None or _mapping_confidence(row) > _mapping_confidence(current):
+            preferred_mappings[key] = row
+
+    service_repos: dict[str, list[uuid.UUID]] = {}
+    for (service_id, repo_uuid), row in preferred_mappings.items():
         service_repos.setdefault(service_id, []).append(repo_uuid)
-        confidence = float(row.get("relationship_confidence") or 0.0)
+        confidence = _mapping_confidence(row)
         evidence = ":".join(
             str(row.get(key) or "")
             for key in (
@@ -103,11 +127,12 @@ def build_operational_incident_edges(
                 EdgeType.MAPS_TO_REPOSITORY,
                 NodeType.REPOSITORY,
                 str(repo_uuid),
-                Provenance.NATIVE,
+                _mapping_provenance(str(row.get("relationship_provenance") or "")),
                 confidence,
                 evidence,
                 repo_uuid,
                 now,
+                provider=str(row.get("provider") or "pagerduty"),
             )
         )
 
@@ -121,7 +146,11 @@ def build_operational_incident_edges(
         for row in services
         if row.get("escalation_policy_id")
     }
-    incident_by_id = {str(row.get("id")): row for row in incidents}
+    incident_by_id = {
+        str(row.get("id")): row
+        for row in incidents
+        if repo_id is None or str(row.get("service_id") or "") in service_repos
+    }
     for incident_id, row in incident_by_id.items():
         service_id = str(row.get("service_id") or "")
         event_at = row.get("started_at") or now
@@ -174,18 +203,26 @@ def build_operational_incident_edges(
                     event_at,
                 )
             )
-        for repo_id in service_repos.get(service_id, []):
+        for mapped_repo_id in service_repos.get(service_id, []):
             for deployment in deployments:
-                if str(deployment.get("repo_id")) != str(repo_id):
+                if str(deployment.get("repo_id")) != str(mapped_repo_id):
                     continue
                 deployed_at = deployment.get("deployed_at")
-                if not isinstance(deployed_at, datetime) or not isinstance(
-                    event_at, datetime
+                incident_started_at = row.get("started_at")
+                environment = str(deployment.get("environment") or "").casefold()
+                if (
+                    not isinstance(deployed_at, datetime)
+                    or not isinstance(incident_started_at, datetime)
+                    or environment in {"", "unknown", "unspecified"}
                 ):
                     continue
-                if abs(deployed_at - event_at) > timedelta(days=heuristic_days_window):
+                if (
+                    deployed_at > incident_started_at
+                    or incident_started_at - deployed_at
+                    > timedelta(days=heuristic_days_window)
+                ):
                     continue
-                evidence = f"rule:operational_service_mapped_deployment_window.v1;environment:{deployment.get('environment') or 'unspecified'}"
+                evidence = f"rule:operational_service_mapped_deployment_window.v1;environment:{environment}"
                 edges.append(
                     _edge(
                         NodeType.DEPLOYMENT,
@@ -196,12 +233,14 @@ def build_operational_incident_edges(
                         Provenance.HEURISTIC,
                         heuristic_confidence,
                         evidence,
-                        repo_id,
+                        mapped_repo_id,
                         deployed_at,
                     )
                 )
 
     for row in alerts:
+        if str(row.get("incident_id") or "") not in incident_by_id:
+            continue
         _append_direct(
             edges,
             row,
@@ -211,6 +250,8 @@ def build_operational_incident_edges(
             now,
         )
     for row in timeline:
+        if str(row.get("incident_id") or "") not in incident_by_id:
+            continue
         _append_direct(
             edges,
             row,
@@ -221,6 +262,8 @@ def build_operational_incident_edges(
         )
         _append_user(edges, row, "actor_id", now)
     for row in responders:
+        if str(row.get("incident_id") or "") not in incident_by_id:
+            continue
         _append_direct(
             edges,
             row,
@@ -238,6 +281,8 @@ def build_operational_incident_edges(
     }
     for row in [*timeline, *notes]:
         incident_id = str(row.get("incident_id") or "")
+        if incident_id not in incident_by_id:
+            continue
         body = str(row.get("body") or "")
         event_at = row.get("occurred_at") or row.get("created_at") or now
         for key in _JIRA_KEY.findall(body):
@@ -349,6 +394,7 @@ def _edge(
     evidence: str,
     repo_id: uuid.UUID | None,
     event_ts: datetime,
+    provider: str = "pagerduty",
 ) -> WorkGraphEdge:
     return WorkGraphEdge(
         generate_edge_id(source_type, source_id, edge_type, target_type, target_id),
@@ -361,6 +407,30 @@ def _edge(
         confidence,
         evidence,
         repo_id=repo_id,
-        provider="pagerduty",
+        provider=provider,
         event_ts=event_ts,
+    )
+
+
+def _timestamp_window(
+    column: str, from_date: datetime | None, to_date: datetime | None
+) -> str:
+    clauses: list[str] = []
+    if from_date is not None:
+        clauses.append(f" AND {column} >= {{from_date:DateTime}}")
+    if to_date is not None:
+        clauses.append(f" AND {column} <= {{to_date:DateTime}}")
+    return "".join(clauses)
+
+
+def _mapping_confidence(row: dict[str, object]) -> float:
+    value = row.get("relationship_confidence")
+    return float(value) if isinstance(value, int | float | str) else 0.0
+
+
+def _mapping_provenance(source: str) -> Provenance:
+    return (
+        Provenance.HEURISTIC
+        if source == "bounded_service_repository_heuristic"
+        else Provenance.NATIVE
     )

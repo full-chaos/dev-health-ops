@@ -459,16 +459,7 @@ class WorkGraphBuilder:
         #    source of flag associations; registry-validated + confidence-gated.
         stats["flag_guards_edges"] = self._build_flag_guards_edges()
 
-        if self.config.org_id:
-            stats["operational_incident_edges"] = self._write_edges(
-                build_operational_incident_edges(
-                    self.sink,
-                    self.config.org_id,
-                    self._now,
-                    self.config.heuristic_days_window,
-                    self.config.heuristic_confidence,
-                )
-            )
+        stats["operational_incident_edges"] = self._build_operational_incident_edges()
 
         logger.info(
             "Work graph build complete: %s",
@@ -476,6 +467,22 @@ class WorkGraphBuilder:
         )
 
         return stats
+
+    def _build_operational_incident_edges(self) -> int:
+        if not self.config.org_id:
+            return 0
+        return self._write_edges(
+            build_operational_incident_edges(
+                self.sink,
+                self.config.org_id,
+                self._now,
+                self.config.heuristic_days_window,
+                self.config.heuristic_confidence,
+                self.config.from_date,
+                self.config.to_date,
+                self.config.repo_id,
+            )
+        )
 
     def _build_flag_guards_edges(self) -> int:
         """Build GUARDS edges (feature_flag -> issue) from real flag-key text refs.

@@ -86,6 +86,45 @@ class TestWorkGraphBuilder:
             builder.close()
             fake_sink.close.assert_called_once()
 
+    def test_passes_operational_scope_to_edge_builder(self) -> None:
+        from_date = datetime(2026, 7, 15, tzinfo=timezone.utc)
+        to_date = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        repo_id = uuid.uuid4()
+        config = BuildConfig(
+            dsn="clickhouse://localhost:9000/default",
+            org_id="org-a",
+            from_date=from_date,
+            to_date=to_date,
+            repo_id=repo_id,
+        )
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+
+        with (
+            patch(
+                "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+            ),
+            patch(
+                "dev_health_ops.work_graph.builder.build_operational_incident_edges",
+                return_value=[],
+            ) as build_operational_edges,
+        ):
+            builder = WorkGraphBuilder(config)
+            with patch.object(builder, "_write_edges", return_value=0):
+                builder._build_operational_incident_edges()
+            builder.close()
+
+        build_operational_edges.assert_called_once_with(
+            fake_sink,
+            "org-a",
+            builder._now,
+            config.heuristic_days_window,
+            config.heuristic_confidence,
+            from_date,
+            to_date,
+            repo_id,
+        )
+
 
 class TestDependencyIssuePrLinks:
     def test_linear_attachment_derives_issue_pr_fast_path_link(self):

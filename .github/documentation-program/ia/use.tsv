@@ -1,0 +1,40 @@
+id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
+use	home	/use/	Use Dev Health	landing	true	public	planned	false	Complete product workflows and user-visible troubleshooting.
+use-navigate	use	/use/navigate/	Navigate and set context	landing	true	public	planned	false	
+use-cockpit	use-navigate	/use/navigate/cockpit/	Use the Cockpit and primary navigation	task-guide	true	public	planned	false	
+use-scope	use-navigate	/use/navigate/scope-and-time/	Set scope and time window	task-guide	true	public	planned	false	
+use-filters	use-navigate	/use/navigate/filters-and-comparisons/	Use filters and comparisons	task-guide	true	public	planned	false	
+use-data-states	use-navigate	/use/navigate/data-states/	Understand loading, empty, stale, and partial data	concept	true	public	planned	false	
+use-investment	use	/use/investment/	Understand investment	landing	true	public	planned	false	
+use-investigate-effort	use-investment	/use/investment/investigate-effort/	Investigate where effort goes	task-guide	true	public	planned	false	
+use-investment-mix	use-investment	/use/investment/investment-mix/	Read Investment Mix	workflow-guide	true	public	planned	false	
+use-investment-flows	use-investment	/use/investment/investment-flows/	Read Investment Flows	workflow-guide	true	public	planned	false	
+use-investment-expense	use-investment	/use/investment/investment-expense/	Read Investment Expense	workflow-guide	true	public	planned	false	
+use-investment-evidence	use-investment	/use/investment/follow-evidence/	Follow investment evidence	task-guide	true	public	planned	false	
+use-delivery	use	/use/delivery-flow/	Diagnose delivery flow	landing	true	public	planned	false	
+use-pr-flow	use-delivery	/use/delivery-flow/pr-flow/	Read PR Flow	workflow-guide	true	public	planned	false	
+use-quadrants	use-delivery	/use/delivery-flow/quadrants/	Read Quadrants	workflow-guide	true	public	planned	false	
+use-review-pressure	use-delivery	/use/delivery-flow/review-pressure/	Investigate review pressure	task-guide	true	public	planned	false	
+use-code	use	/use/code-and-relationships/	Diagnose code and work relationships	landing	true	public	planned	false	
+use-hotspots	use-code	/use/code-and-relationships/code-hotspots/	Read Code Hotspots	workflow-guide	true	public	planned	false	
+use-flame	use-code	/use/code-and-relationships/flame-diagrams/	Read a flame diagram	workflow-guide	true	public	planned	false	
+use-work-graph	use-code	/use/code-and-relationships/work-graph/	Follow relationships in Work Graph	workflow-guide	true	public	planned	false	
+use-plan	use	/use/plan-and-improve/	Plan and improve	landing	true	public	planned	false	
+use-capacity	use-plan	/use/plan-and-improve/capacity-planning/	Use Capacity Planning	workflow-guide	true	public	planned	false	
+use-trends	use-plan	/use/plan-and-improve/compare-trends/	Compare trends responsibly	task-guide	true	public	planned	false	
+use-conversations	use-plan	/use/plan-and-improve/team-conversations/	Prepare a team operating conversation	task-guide	true	public	planned	false	
+use-ai	use	/use/ai-workflows/	Use AI-associated workflow views	landing	true	public	planned	false	
+use-ai-impact	use-ai	/use/ai-workflows/impact/	AI Impact	workflow-guide	true	public	planned	false	
+use-ai-review	use-ai	/use/ai-workflows/review-load/	AI Review Load	workflow-guide	true	public	planned	false	
+use-ai-risk	use-ai	/use/ai-workflows/risk/	AI Risk	workflow-guide	true	public	planned	false	
+use-ai-attribution	use-ai	/use/ai-workflows/attribution/	AI Attribution	workflow-guide	true	public	planned	false	
+use-reports	use	/use/reports/	Create and read reports	landing	true	public	planned	false	
+use-report-create	use-reports	/use/reports/create-or-clone/	Create or clone a report	task-guide	true	public	planned	false	
+use-report-run	use-reports	/use/reports/run-and-schedule/	Run and schedule reports	task-guide	true	public	planned	false	
+use-report-read	use-reports	/use/reports/read-output-and-provenance/	Read output and provenance	task-guide	true	public	planned	false	
+use-troubleshooting	use	/use/troubleshooting/	Troubleshoot product use	troubleshooting-index	true	public	planned	false	
+use-no-data	use-troubleshooting	/use/troubleshooting/no-or-incomplete-data/	No or incomplete data	troubleshooting	true	public	planned	false	
+use-scope-problems	use-troubleshooting	/use/troubleshooting/scope-and-filters/	Unexpected scope or filters	troubleshooting	true	public	planned	false	
+use-permissions	use-troubleshooting	/use/troubleshooting/permissions-and-availability/	Missing permission or unavailable view	troubleshooting	true	public	planned	false	
+use-stale	use-troubleshooting	/use/troubleshooting/stale-or-delayed-results/	Stale or delayed results	troubleshooting	true	public	planned	false	
+use-report-problems	use-troubleshooting	/use/troubleshooting/reports/	Report generation problems	troubleshooting	true	public	planned	false	

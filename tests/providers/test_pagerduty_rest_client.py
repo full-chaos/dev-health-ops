@@ -37,6 +37,35 @@ async def test_incident_pagination_honors_more_and_uses_bearer_auth() -> None:
 
 
 @pytest.mark.asyncio
+async def test_incident_page_iterator_preserves_window_at_each_resume_offset() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        offset = request.url.params["offset"]
+        return httpx.Response(
+            200,
+            json={"incidents": [{"id": offset, "raw": {}}], "more": offset == "0"},
+        )
+
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"), transport=httpx.MockTransport(handler)
+    )
+    pages = [
+        page
+        async for page in client.iter_incident_pages(
+            params={"since": "a", "until": "b"}
+        )
+    ]
+
+    assert [[incident.id for incident in page] for page in pages] == [["0"], ["1"]]
+    assert [
+        (request.url.params["since"], request.url.params["until"])
+        for request in requests
+    ] == [("a", "b"), ("a", "b")]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [429, 503])
 async def test_retries_transient_response_with_bounded_attempts(
     monkeypatch: pytest.MonkeyPatch, status: int

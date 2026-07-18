@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, TypeVar
@@ -62,6 +62,13 @@ class PagerDutySyncOptions:
     window_end: datetime | None
     incident_cap: int = 100
     batch_size: int = 100
+    enrichment_cap: int = 100
+
+    def __post_init__(self) -> None:
+        if self.batch_size <= 0:
+            raise ValueError("PagerDuty batch_size must be positive")
+        if self.incident_cap < 0 or self.enrichment_cap < 0:
+            raise ValueError("PagerDuty caps must not be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,13 +194,18 @@ class PagerDutyOperationalSync:
         return len(values)
 
     async def _sync_incidents(self, options: PagerDutySyncOptions) -> int:
-        incidents = await self._incidents(options)
-        values = [self._normalizer.incident(row) for row in incidents]
-        for start in range(0, len(values), options.batch_size):
-            await self._store.insert_operational_incidents(
-                values[start : start + options.batch_size]
-            )
-        return len(values)
+        values: list[OperationalIncident] = []
+        persisted = 0
+        async for incident in self._iter_incidents(options):
+            values.append(self._normalizer.incident(incident))
+            if len(values) == options.batch_size:
+                await self._store.insert_operational_incidents(values)
+                persisted += len(values)
+                values = []
+        if values:
+            await self._store.insert_operational_incidents(values)
+            persisted += len(values)
+        return persisted
 
     async def _sync_enrichment(
         self,
@@ -204,26 +216,31 @@ class PagerDutyOperationalSync:
     ) -> int:
         values: list[_Destination] = []
         persisted = 0
-        for incident in await self._incidents(options):
+        async for incident in self._iter_incidents(options):
             incident_id = self._normalizer.incident(incident).id
-            values.extend(
-                normalize(row, incident_id) for row in await fetch(incident.id)
-            )
-            if len(values) >= options.batch_size:
-                await persist(values)
-                persisted += len(values)
-                values = []
+            for row in (await fetch(incident.id))[: options.enrichment_cap]:
+                values.append(normalize(row, incident_id))
+                if len(values) == options.batch_size:
+                    await persist(values)
+                    persisted += len(values)
+                    values = []
         if values:
             await persist(values)
             persisted += len(values)
         return persisted
 
-    async def _incidents(self, options: PagerDutySyncOptions) -> Sequence[Incident]:
+    async def _iter_incidents(
+        self, options: PagerDutySyncOptions
+    ) -> AsyncIterator[Incident]:
         params: dict[str, str] = {}
         if options.window_start is not None:
             params["since"] = options.window_start.isoformat()
         if options.window_end is not None:
             params["until"] = options.window_end.isoformat()
-        return (await self._client.list_incidents(params=params))[
-            : options.incident_cap
-        ]
+        emitted = 0
+        async for page in self._client.iter_incident_pages(params=params):
+            for incident in page:
+                if emitted == options.incident_cap:
+                    return
+                yield incident
+                emitted += 1

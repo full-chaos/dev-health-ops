@@ -1,5 +1,6 @@
 """Read-only PagerDuty REST V2 client composed over InstrumentedRESTCore."""
 
+from collections.abc import AsyncIterator
 from typing import TypeVar
 
 import httpx
@@ -70,6 +71,12 @@ class PagerDutyClient:
     ) -> list[Incident]:
         return await self._many("/incidents", "incidents", Incident, params)
 
+    async def iter_incident_pages(
+        self, *, params: dict[str, str] | None = None
+    ) -> AsyncIterator[list[Incident]]:
+        async for page in self._iter_many("/incidents", "incidents", Incident, params):
+            yield page
+
     async def list_incident_alerts(self, incident_id: str) -> list[Alert]:
         return await self._many(
             f"/incidents/{incident_id}/alerts", "alerts", Alert, None
@@ -120,8 +127,15 @@ class PagerDutyClient:
     async def _many(
         self, path: str, key: str, model: type[T], params: dict[str, str] | None
     ) -> list[T]:
-        offset = 0
         values: list[T] = []
+        async for page in self._iter_many(path, key, model, params):
+            values.extend(page)
+        return values
+
+    async def _iter_many(
+        self, path: str, key: str, model: type[T], params: dict[str, str] | None
+    ) -> AsyncIterator[list[T]]:
+        offset = 0
         while True:
             query = {**(params or {}), "limit": "100", "offset": str(offset)}
             response = await self._core.request(
@@ -132,8 +146,10 @@ class PagerDutyClient:
                 headers=self._auth.headers(),
             )
             payload = response.json()
-            page = payload.get(key, [])
-            values.extend(model.model_validate(value) for value in page)
+            page = [model.model_validate(value) for value in payload.get(key, [])]
+            yield page
             if not payload.get("more", False):
-                return values
+                return
+            if not page:
+                raise RuntimeError(f"PagerDuty pagination made no progress for {path}")
             offset += len(page)

@@ -76,38 +76,38 @@ class _Store(PagerDutyOperationalStore):
         self.incidents.extend(values)
 
     async def insert_operational_alerts(self, values: list[OperationalAlert]) -> None:
-        del values
+        return None
 
     async def insert_operational_incident_timeline_events(
         self, values: list[IncidentTimelineEvent]
     ) -> None:
-        del values
+        return None
 
     async def insert_operational_incident_notes(
         self, values: list[IncidentNote]
     ) -> None:
-        del values
+        return None
 
     async def insert_operational_escalation_policies(
         self, values: list[EscalationPolicy]
     ) -> None:
-        del values
+        return None
 
     async def insert_operational_on_call_schedules(
         self, values: list[OnCallSchedule]
     ) -> None:
-        del values
+        return None
 
     async def insert_operational_on_call_assignments(
         self, values: list[OnCallAssignment]
     ) -> None:
-        del values
+        return None
 
     async def insert_operational_teams(self, values: list[OperationalTeam]) -> None:
-        del values
+        return None
 
     async def insert_operational_users(self, values: list[OperationalUser]) -> None:
-        del values
+        return None
 
 
 def _normalizer() -> PagerDutyNormalizer:

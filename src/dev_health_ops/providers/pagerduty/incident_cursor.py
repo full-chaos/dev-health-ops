@@ -14,13 +14,16 @@ class IncidentCursorOptions(Protocol):
     """Pagination fields required to resume an incident collection."""
 
     @property
-    def window_start(self) -> datetime | None: ...
+    def window_start(self) -> datetime | None:
+        """Earliest incident created-at timestamp to include, or None for no lower bound."""
 
     @property
-    def window_end(self) -> datetime | None: ...
+    def window_end(self) -> datetime | None:
+        """Latest incident created-at timestamp to include, or None for no upper bound."""
 
     @property
-    def resume_after(self) -> datetime | None: ...
+    def resume_after(self) -> datetime | None:
+        """Inclusive created-at watermark for resuming incident iteration, or None."""
 
 
 async def iter_resumable_incidents(

@@ -93,6 +93,7 @@ class PagerDutyOperationalSync:
 
     async def _run(self, options: PagerDutySyncOptions) -> PagerDutySyncResult:
         watermark_at: datetime | None = None
+        persisted: int = 0
         match options.dataset_key:
             case (
                 "incident-alerts" | "incident-log-entries" | "incident-notes"

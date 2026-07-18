@@ -13,27 +13,31 @@ class PagerDutyEnrichmentToggles:
     def enabled(self, dataset_key: str) -> bool:
         match dataset_key:
             case "incident-alerts":
-                return self.alerts
+                enabled = self.alerts
             case "incident-log-entries":
-                return self.log_entries
+                enabled = self.log_entries
             case "incident-notes":
-                return self.notes
+                enabled = self.notes
             case _:
-                return True
+                enabled = True
+        return enabled
 
     @classmethod
     def from_dataset_options(
         cls, dataset_key: str, options: Mapping[str, object]
     ) -> PagerDutyEnrichmentToggles:
         enabled = options.get("enabled")
-        if not isinstance(enabled, bool):
-            return cls()
-        match dataset_key:
-            case "incident-alerts":
-                return cls(alerts=enabled)
-            case "incident-log-entries":
-                return cls(log_entries=enabled)
-            case "incident-notes":
-                return cls(notes=enabled)
+        match enabled:
+            case bool() as is_enabled:
+                match dataset_key:
+                    case "incident-alerts":
+                        toggles = cls(alerts=is_enabled)
+                    case "incident-log-entries":
+                        toggles = cls(log_entries=is_enabled)
+                    case "incident-notes":
+                        toggles = cls(notes=is_enabled)
+                    case _:
+                        toggles = cls()
             case _:
-                return cls()
+                toggles = cls()
+        return toggles

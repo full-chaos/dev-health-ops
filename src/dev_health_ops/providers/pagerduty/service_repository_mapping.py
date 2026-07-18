@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
@@ -86,6 +86,60 @@ class PagerDutyServiceRepositoryMappingInputs:
     def empty(cls) -> PagerDutyServiceRepositoryMappingInputs:
         """Return an input collection with no configured mappings."""
         return cls(admin={}, compass={}, heuristic={})
+
+    @classmethod
+    def from_dataset_options(
+        cls, options: Mapping[str, object]
+    ) -> PagerDutyServiceRepositoryMappingInputs:
+        """Build explicit admin/Compass mapping inputs from sync configuration.
+
+        Untrusted config is parsed defensively: malformed entries are skipped
+        rather than raising, so one bad row cannot break a dataset sync.
+        """
+        config = options.get("service_repository_mappings")
+        if not isinstance(config, Mapping):
+            return cls.empty()
+        return cls(
+            admin=_parse_reference_config(config.get("admin")),
+            compass=_parse_reference_config(config.get("compass")),
+            heuristic={},
+        )
+
+
+def _reference_from_entry(entry: object) -> RepositoryReference | None:
+    if not isinstance(entry, Mapping):
+        return None
+    provider = entry.get("provider")
+    full_name = entry.get("full_name")
+    if (
+        isinstance(provider, str)
+        and isinstance(full_name, str)
+        and provider
+        and full_name
+    ):
+        return RepositoryReference(provider=provider, full_name=full_name)
+    return None
+
+
+def _parse_reference_config(
+    value: object,
+) -> dict[str, tuple[RepositoryReference, ...]]:
+    if not isinstance(value, Mapping):
+        return {}
+    parsed: dict[str, tuple[RepositoryReference, ...]] = {}
+    for service_external_id, references in value.items():
+        if not isinstance(service_external_id, str) or not isinstance(
+            references, (list, tuple)
+        ):
+            continue
+        resolved = tuple(
+            reference
+            for entry in references
+            if (reference := _reference_from_entry(entry)) is not None
+        )
+        if resolved:
+            parsed[service_external_id] = resolved
+    return parsed
 
 
 def mapping_from_repository_reference(

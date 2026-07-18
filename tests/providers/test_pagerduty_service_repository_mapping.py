@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from dev_health_ops.models.operational import OperationalService
 from dev_health_ops.providers.pagerduty.service_repository_mapping import (
+    PagerDutyServiceRepositoryMappingInputs,
     PagerDutyServiceRepositoryMappingSource,
     RepositoryReference,
     mapping_from_repository_reference,
@@ -135,3 +136,59 @@ def test_mapping_precedence_selects_admin_over_exact_metadata() -> None:
     preferred = select_preferred_mappings((metadata, admin))
 
     assert preferred == (admin,)
+
+
+def test_mapping_inputs_from_dataset_options_parses_admin_and_compass() -> None:
+    inputs = PagerDutyServiceRepositoryMappingInputs.from_dataset_options(
+        {
+            "service_repository_mappings": {
+                "admin": {
+                    "svc-1": [{"provider": "github", "full_name": "full-chaos/api"}],
+                },
+                "compass": {
+                    "svc-2": [
+                        {"provider": "gitlab", "full_name": "full-chaos/worker"},
+                    ],
+                },
+            }
+        }
+    )
+
+    assert inputs.admin == {"svc-1": (RepositoryReference("github", "full-chaos/api"),)}
+    assert inputs.compass == {
+        "svc-2": (RepositoryReference("gitlab", "full-chaos/worker"),)
+    }
+    assert inputs.heuristic == {}
+
+
+def test_mapping_inputs_from_dataset_options_defaults_to_empty() -> None:
+    empty = PagerDutyServiceRepositoryMappingInputs.empty()
+    assert PagerDutyServiceRepositoryMappingInputs.from_dataset_options({}) == empty
+    assert (
+        PagerDutyServiceRepositoryMappingInputs.from_dataset_options(
+            {"service_repository_mappings": "not-a-mapping"}
+        )
+        == empty
+    )
+
+
+def test_mapping_inputs_from_dataset_options_skips_malformed_entries() -> None:
+    inputs = PagerDutyServiceRepositoryMappingInputs.from_dataset_options(
+        {
+            "service_repository_mappings": {
+                "admin": {
+                    "svc-1": [
+                        {"provider": "github", "full_name": "full-chaos/api"},
+                        {"provider": "github"},
+                        {"full_name": "full-chaos/no-provider"},
+                        {"provider": "", "full_name": "full-chaos/blank"},
+                        "not-a-dict",
+                    ],
+                    "svc-empty": [{"provider": 1, "full_name": 2}],
+                },
+            }
+        }
+    )
+
+    assert inputs.admin == {"svc-1": (RepositoryReference("github", "full-chaos/api"),)}
+    assert inputs.compass == {}

@@ -1179,6 +1179,7 @@ class ClickHouseStore:
                         "release_ref_confidence": float(
                             item.get("release_ref_confidence") or 0.0
                         ),
+                        "org_id": str(item.get("org_id") or self.org_id or ""),
                         "last_synced": self._normalize_datetime(
                             item.get("last_synced") or synced_at_default
                         ),
@@ -1210,6 +1211,9 @@ class ClickHouseStore:
                         "release_ref_confidence": float(
                             getattr(item, "release_ref_confidence", 0.0) or 0.0
                         ),
+                        "org_id": str(
+                            getattr(item, "org_id", None) or self.org_id or ""
+                        ),
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -1230,6 +1234,7 @@ class ClickHouseStore:
                 "pull_request_number",
                 "release_ref",
                 "release_ref_confidence",
+                "org_id",
                 "last_synced",
             ],
             rows,

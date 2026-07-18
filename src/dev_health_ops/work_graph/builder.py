@@ -48,6 +48,7 @@ from dev_health_ops.work_graph.models import (
     WorkGraphIssuePR,
     WorkGraphPRCommit,
 )
+from dev_health_ops.work_graph.operational_edges import build_operational_incident_edges
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +413,7 @@ class WorkGraphBuilder:
             "commit_file_edges": 0,
             "heuristic_edges": 0,
             "flag_guards_edges": 0,
+            "operational_incident_edges": 0,
         }
 
         logger.info("Starting work graph build...")
@@ -456,6 +458,17 @@ class WorkGraphBuilder:
         #    references in issue text. CHAOS-2630 Phase C1: the only non-fixture
         #    source of flag associations; registry-validated + confidence-gated.
         stats["flag_guards_edges"] = self._build_flag_guards_edges()
+
+        if self.config.org_id:
+            stats["operational_incident_edges"] = self._write_edges(
+                build_operational_incident_edges(
+                    self.sink,
+                    self.config.org_id,
+                    self._now,
+                    self.config.heuristic_days_window,
+                    self.config.heuristic_confidence,
+                )
+            )
 
         logger.info(
             "Work graph build complete: %s",

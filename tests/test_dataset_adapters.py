@@ -434,6 +434,7 @@ def test_pagerduty_dataset_passes_persisted_resume_cursor_and_returns_source_wat
         resume_cursor=WINDOW_START,
     )
     client = Mock()
+    client.close = AsyncMock()
     client.drain_usage_observations.return_value = []
     sync_result = PagerDutySyncResult(
         dataset_key="incidents",
@@ -460,6 +461,7 @@ def test_pagerduty_dataset_passes_persisted_resume_cursor_and_returns_source_wat
     options = await_args.args[0]
     assert options.resume_after == WINDOW_START
     assert result["watermark_at"] == WINDOW_END.isoformat()
+    client.close.assert_awaited_once()
 
 
 def test_pagerduty_dataset_applies_persisted_enrichment_options() -> None:
@@ -474,6 +476,7 @@ def test_pagerduty_dataset_applies_persisted_enrichment_options() -> None:
         dataset_options={"enrichment_cap": 2, "enabled": False},
     )
     client = Mock()
+    client.close = AsyncMock()
     client.drain_usage_observations.return_value = []
     sync_result = PagerDutySyncResult(
         dataset_key="incident-alerts",
@@ -500,6 +503,33 @@ def test_pagerduty_dataset_applies_persisted_enrichment_options() -> None:
     options = await_args.args[0]
     assert options.enrichment_cap == 2
     assert options.enrichment.alerts is False
+
+
+def test_pagerduty_dataset_closes_client_when_store_setup_fails() -> None:
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="services",
+        source_external_id="acme",
+    )
+    client = Mock()
+    client.close = AsyncMock()
+    client.drain_usage_observations.return_value = []
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._run_with_reused_or_new_store",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("store setup failed"),
+        ),
+        pytest.raises(RuntimeError, match="store setup failed"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    client.close.assert_awaited_once()
 
 
 def test_pagerduty_dataset_rejects_source_id_without_verified_account_identity() -> (

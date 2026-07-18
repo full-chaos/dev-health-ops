@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TypeVar
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from dev_health_ops.api.services.integrations import SyncRunService
-from dev_health_ops.exceptions import APIException, AuthenticationException
+from dev_health_ops.exceptions import (
+    APIException,
+    AuthenticationException,
+    PaginationException,
+)
 from dev_health_ops.models.integrations import SyncRunUnit
 from dev_health_ops.models.operational import (
+    CanonicalOperationalEntity,
     EscalationPolicy,
     IncidentNote,
     IncidentTimelineEvent,
@@ -20,6 +26,9 @@ from dev_health_ops.models.operational import (
     OperationalTeam,
     OperationalUser,
 )
+from dev_health_ops.providers.pagerduty.degradation import (
+    PagerDutyInsufficientScopeError,
+)
 from dev_health_ops.providers.pagerduty.models import Incident, Service
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 from dev_health_ops.providers.pagerduty.sync import (
@@ -30,12 +39,31 @@ from dev_health_ops.providers.pagerduty.sync import (
 )
 
 SOURCE_TIME = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+T = TypeVar("T", bound=CanonicalOperationalEntity)
 
 
 class _Store(PagerDutyOperationalStore):
     def __init__(self) -> None:
         self.services: list[OperationalService] = []
         self.incidents: list[OperationalIncident] = []
+
+    async def load_active_operational_entities(
+        self,
+        entity_type: type[T],
+        *,
+        org_id: str,
+        provider: str,
+        provider_instance_id: str,
+        source_entity_type: str,
+    ) -> list[T]:
+        del (
+            entity_type,
+            org_id,
+            provider,
+            provider_instance_id,
+            source_entity_type,
+        )
+        return []
 
     async def insert_operational_services(
         self, values: list[OperationalService]
@@ -118,7 +146,7 @@ def _partial_failure_summary(dataset_key: str, category: str) -> dict[str, objec
 
 
 @pytest.mark.asyncio
-async def test_permission_denial_degrades_only_incident_dataset_and_reports_partial_failure() -> (
+async def test_insufficient_scope_degrades_only_incident_dataset_and_reports_partial_failure() -> (
     None
 ):
     store = _Store()
@@ -133,7 +161,7 @@ async def test_permission_denial_degrades_only_incident_dataset_and_reports_part
 
     async def denied_pages(*, params: dict[str, str] | None = None):
         del params
-        raise AuthenticationException("pagerduty forbidden: insufficient scope")
+        raise PagerDutyInsufficientScopeError("pagerduty forbidden: insufficient scope")
         yield []
 
     denied_client.iter_incident_pages = denied_pages
@@ -146,13 +174,13 @@ async def test_permission_denial_degrades_only_incident_dataset_and_reports_part
             normalizer=_normalizer(),
         ).run(PagerDutySyncOptions("incidents", None, None))
 
-    summary = _partial_failure_summary("incidents", "auth")
+    summary = _partial_failure_summary("incidents", "provider_error")
     assert [service.external_id for service in store.services] == ["service-1"]
     assert store.incidents == []
     assert summary == {
         "failed_sources": ["source-1"],
         "failed_datasets": ["incidents"],
-        "error_categories": {"auth": 1},
+        "error_categories": {"provider_error": 1},
     }
 
 
@@ -195,3 +223,50 @@ async def test_partial_incident_page_flushes_prior_rows_and_reports_partial_fail
         "failed_datasets": ["incidents"],
         "error_categories": {"provider_error": 1},
     }
+
+
+@pytest.mark.asyncio
+async def test_authentication_failure_is_not_silently_degraded() -> None:
+    client = Mock()
+
+    async def unauthorized_pages(*, params: dict[str, str] | None = None):
+        del params
+        raise AuthenticationException("pagerduty authentication failed")
+        yield []
+
+    client.iter_incident_pages = unauthorized_pages
+    client.drain_usage_observations.return_value = []
+
+    with pytest.raises(AuthenticationException):
+        await PagerDutyOperationalSync(
+            client=client,
+            store=_Store(),
+            normalizer=_normalizer(),
+        ).run(PagerDutySyncOptions("incidents", None, None))
+
+
+@pytest.mark.asyncio
+async def test_no_progress_pagination_degrades_after_partial_incident_page() -> None:
+    store = _Store()
+    client = Mock()
+
+    async def partial_pages(*, params: dict[str, str] | None = None):
+        del params
+        yield [
+            Incident(id="incident-1", created_at=SOURCE_TIME, updated_at=SOURCE_TIME)
+        ]
+        raise PaginationException(
+            "PagerDuty pagination made no progress for /incidents"
+        )
+
+    client.iter_incident_pages = partial_pages
+    client.drain_usage_observations.return_value = []
+
+    with pytest.raises(PagerDutyDatasetDegradedError, match="incidents"):
+        await PagerDutyOperationalSync(
+            client=client,
+            store=store,
+            normalizer=_normalizer(),
+        ).run(PagerDutySyncOptions("incidents", None, None, batch_size=100))
+
+    assert [incident.external_id for incident in store.incidents] == ["incident-1"]

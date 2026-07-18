@@ -6,9 +6,13 @@ from typing import TypeVar
 import httpx
 from pydantic import BaseModel
 
+from dev_health_ops.exceptions import PaginationException
 from dev_health_ops.providers._http import InstrumentedRESTCore
 from dev_health_ops.providers.pagerduty.auth import PagerDutyAuth
 from dev_health_ops.providers.pagerduty.budget import PAGERDUTY_OPERATION_RESOLVER
+from dev_health_ops.providers.pagerduty.degradation import (
+    PagerDutyInsufficientScopeError,
+)
 from dev_health_ops.providers.pagerduty.models import (
     Alert,
     BusinessService,
@@ -34,6 +38,13 @@ def pagerduty_base_url(*, region: str) -> str:
     return "https://api.pagerduty.com"
 
 
+def _classify_pagerduty_error(response: httpx.Response, operation: str) -> None:
+    if response.status_code == 403:
+        raise PagerDutyInsufficientScopeError(
+            f"PagerDuty insufficient scope on {operation}: {response.text}"
+        )
+
+
 class PagerDutyClient:
     """Only exposes PagerDuty GET endpoints approved for V1."""
 
@@ -57,11 +68,15 @@ class PagerDutyClient:
                 "ratelimit-reset",
                 "retry-after",
             ),
+            classify_error=_classify_pagerduty_error,
             transport=transport,
         )
 
     def drain_usage_observations(self) -> list[dict[str, object]]:
         return self._core.drain_usage_observations()
+
+    async def close(self) -> None:
+        await self._core.close()
 
     async def get_incident(self, incident_id: str) -> Incident:
         return await self._one(f"/incidents/{incident_id}", "incident", Incident)
@@ -175,5 +190,7 @@ class PagerDutyClient:
             if not payload.get("more", False):
                 return
             if not page:
-                raise RuntimeError(f"PagerDuty pagination made no progress for {path}")
+                raise PaginationException(
+                    f"PagerDuty pagination made no progress for {path}"
+                )
             offset += len(page)

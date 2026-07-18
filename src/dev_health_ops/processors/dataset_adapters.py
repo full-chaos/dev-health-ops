@@ -424,14 +424,22 @@ def _run_pagerduty_dataset(
             else None,
         }
 
+    sync_error: Exception | None = None
     try:
         sync_result = run_async(
             _run_with_reused_or_new_store(context, runtime, _handler)
         )
     except Exception as exc:
+        sync_error = exc
         usage_sink.extend(client.drain_usage_observations())
         _attach_usage_sink_to_exception(exc, usage_sink)
         raise
+    finally:
+        try:
+            run_async(client.close())
+        except Exception:
+            if sync_error is None:
+                raise
     result: dict[str, Any] = {
         "provider": context.provider,
         "dataset": context.dataset_key,

@@ -238,7 +238,6 @@ class PagerDutyOperationalSync:
                 self._mapping_inputs,
             )
         ]
-        mappings = tuple(mapping_evidence)
         if _has_repository_catalog(self._store):
             repository_rows = self._store.query_dicts(
                 "SELECT id, provider, repo FROM repos FINAL WHERE org_id = {org_id:String}",
@@ -254,16 +253,18 @@ class PagerDutyOperationalSync:
                 and isinstance(provider, str)
                 and isinstance(repo, str)
             )
-            mappings = resolve_repository_mappings(mappings, repositories)
+            mappings = resolve_repository_mappings(
+                tuple(mapping_evidence), repositories
+            )
+            for start in range(0, len(mappings), batch_size):
+                await self._store.insert_operational_service_repository_mappings(
+                    list(mappings[start : start + batch_size])
+                )
+            await self._reconcile_service_repository_mappings(mappings)
         else:
             logger.info(
-                "PagerDuty repository catalog unavailable; retaining unresolved mapping evidence"
+                "PagerDuty repository catalog unavailable; skipping service repository mapping population"
             )
-        for start in range(0, len(mappings), batch_size):
-            await self._store.insert_operational_service_repository_mappings(
-                list(mappings[start : start + batch_size])
-            )
-        await self._reconcile_service_repository_mappings(mappings)
 
         active_entities = await self._store.load_active_operational_entities(
             OperationalService,

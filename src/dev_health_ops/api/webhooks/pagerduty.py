@@ -30,7 +30,7 @@ from .pagerduty_models import (
 logger = logging.getLogger(__name__)
 
 MAX_WEBHOOK_BODY_BYTES = 1_048_576
-REPLAY_TTL_SECONDS = 86_400
+MAX_SIGNATURE_CANDIDATES = 8
 STREAM_MAXLEN = 100_000
 router = APIRouter(prefix="/pagerduty")
 
@@ -44,10 +44,30 @@ def _configuration() -> tuple[str | None, str | None, str | None]:
 
 
 def _verify_signature(body: bytes, header: str | None, secret: str) -> bool:
-    if header is None or not header.startswith("v1="):
+    if header is None:
         return False
-    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(f"v1={digest}", header)
+    header_candidates = header.split(",")
+    if len(header_candidates) > MAX_SIGNATURE_CANDIDATES:
+        return False
+
+    candidates: list[str] = []
+    for header_candidate in header_candidates:
+        candidate = header_candidate.strip().removeprefix("v1=")
+        if (
+            header_candidate.strip().startswith("v1=")
+            and len(candidate) == 64
+            and all(character in "0123456789abcdefABCDEF" for character in candidate)
+        ):
+            candidates.append(candidate.lower())
+    if not candidates:
+        return False
+
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    valid = False
+    for candidate in candidates:
+        matches = hmac.compare_digest(expected, candidate)
+        valid = matches or valid
+    return valid
 
 
 def _parse_webhook(body: bytes) -> PagerDutyV3Webhook:
@@ -67,33 +87,6 @@ def _parse_webhook(body: bytes) -> PagerDutyV3Webhook:
 
 def _stream_name(org_id: str, provider_instance_id: str) -> str:
     return f"pagerduty-webhooks:{org_id}:{provider_instance_id}"
-
-
-def _replay_key(org_id: str, provider_instance_id: str, event_id: str) -> str:
-    return f"pagerduty-webhook:{org_id}:{provider_instance_id}:{event_id}"
-
-
-def _claim_event(org_id: str, provider_instance_id: str, event_id: str) -> bool:
-    client = get_redis_client()
-    if client is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Webhook queue unavailable",
-        )
-    try:
-        return bool(
-            client.set(
-                _replay_key(org_id, provider_instance_id, event_id),
-                "received",
-                nx=True,
-                ex=REPLAY_TTL_SECONDS,
-            )
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Webhook queue unavailable",
-        ) from exc
 
 
 def _enqueue_event(
@@ -134,18 +127,6 @@ def _enqueue_event(
         ) from exc
 
 
-def _release_claim(org_id: str, provider_instance_id: str, event_id: str) -> None:
-    client = get_redis_client()
-    if client is None:
-        return
-    try:
-        client.delete(_replay_key(org_id, provider_instance_id, event_id))
-    except Exception:
-        logger.warning(
-            "pagerduty_webhook.audit claim_release_failed event_id=%s", event_id
-        )
-
-
 @router.get("/configuration", response_model=PagerDutyWebhookConfiguration)
 def pagerduty_configuration() -> PagerDutyWebhookConfiguration:
     secret, org_id, provider_instance_id = _configuration()
@@ -166,13 +147,7 @@ async def _validated_webhook(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Webhook unconfigured",
         )
-    body = await request.body()
-    if len(body) > MAX_WEBHOOK_BODY_BYTES:
-        logger.warning("pagerduty_webhook.audit rejected reason=oversized")
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail="Payload too large",
-        )
+    body = await _read_body_limited(request)
     if not _verify_signature(body, signature, secret):
         logger.warning("pagerduty_webhook.audit rejected reason=invalid_signature")
         raise HTTPException(
@@ -180,6 +155,35 @@ async def _validated_webhook(
         )
     webhook = _parse_webhook(body)
     return webhook, org_id, provider_instance_id
+
+
+async def _read_body_limited(request: Request) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Content-Length",
+            ) from exc
+        if declared_size < 0 or declared_size > MAX_WEBHOOK_BODY_BYTES:
+            logger.warning("pagerduty_webhook.audit rejected reason=oversized")
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="Payload too large",
+            )
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_WEBHOOK_BODY_BYTES:
+            logger.warning("pagerduty_webhook.audit rejected reason=oversized")
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="Payload too large",
+            )
+        body.extend(chunk)
+    return bytes(body)
 
 
 @router.post(
@@ -193,15 +197,6 @@ async def pagerduty_webhook(
     webhook, org_id, provider_instance_id = await _validated_webhook(
         request, x_pagerduty_signature
     )
-    if not _claim_event(org_id, provider_instance_id, webhook.event.id):
-        logger.info(
-            "pagerduty_webhook.audit accepted duplicate event_id=%s", webhook.event.id
-        )
-        return PagerDutyWebhookResponse(
-            status="accepted",
-            event_id=webhook.event.id,
-            message="Duplicate event accepted",
-        )
     received_at = datetime.now(UTC)
     try:
         stream_entry_id = _enqueue_event(
@@ -216,10 +211,8 @@ async def pagerduty_webhook(
             stream_entry_id=stream_entry_id,
         )
     except HTTPException:
-        _release_claim(org_id, provider_instance_id, webhook.event.id)
         raise
     except Exception as exc:
-        _release_claim(org_id, provider_instance_id, webhook.event.id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Webhook queue unavailable",

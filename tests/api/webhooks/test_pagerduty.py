@@ -50,25 +50,15 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
         yield test_client
 
 
-def test_accepts_a_valid_signed_event_once_and_enqueues_durably(
+def test_accepts_replayed_event_and_enqueues_for_idempotent_persistence(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from dev_health_ops.api.webhooks import pagerduty
 
     writes: list[tuple[str, dict[str, str]]] = []
     dispatched: list[dict[str, str]] = []
-    claims: set[str] = set()
 
     class Redis:
-        def set(self, key: str, value: str, *, nx: bool, ex: int) -> bool:
-            if key in claims:
-                return False
-            claims.add(key)
-            return True
-
-        def delete(self, key: str) -> None:
-            claims.discard(key)
-
         def xadd(self, stream: str, fields: dict[str, str], **_: object) -> str:
             writes.append((stream, fields))
             return "1-0"
@@ -91,13 +81,47 @@ def test_accepts_a_valid_signed_event_once_and_enqueues_durably(
     assert duplicate.status_code == 202
     assert response.json()["status"] == "accepted"
     assert duplicate.json()["status"] == "accepted"
-    assert duplicate.json()["message"] == "Duplicate event accepted"
-    assert len(writes) == 1
+    assert duplicate.json()["message"] == "Event accepted"
+    assert len(writes) == 2
     assert writes[0][0] == "pagerduty-webhooks:org-1:acme"
     assert datetime.fromisoformat(
         writes[0][1]["occurred_at"]
     ) == datetime.fromisoformat(OCCURRED_AT.replace("Z", "+00:00"))
-    assert len(dispatched) == 1
+    assert len(dispatched) == 2
+
+
+def test_dispatch_failure_does_not_suppress_a_replayed_event(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dev_health_ops.api.webhooks import pagerduty
+
+    writes: list[tuple[str, dict[str, str]]] = []
+
+    class Redis:
+        def xadd(self, stream: str, fields: dict[str, str], **_: object) -> str:
+            writes.append((stream, fields))
+            return f"{len(writes)}-0"
+
+    class Task:
+        attempts = 0
+
+        @classmethod
+        def delay(cls, **_: str) -> None:
+            cls.attempts += 1
+            if cls.attempts == 1:
+                raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
+    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
+    body = _payload()
+    headers = {"x-pagerduty-signature": _signature(body)}
+
+    failed = client.post("/api/v1/webhooks/pagerduty", content=body, headers=headers)
+    replayed = client.post("/api/v1/webhooks/pagerduty", content=body, headers=headers)
+
+    assert failed.status_code == 503
+    assert replayed.status_code == 202
+    assert len(writes) == 2
 
 
 def test_rejects_an_invalid_signature(client: TestClient) -> None:

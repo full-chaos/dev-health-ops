@@ -87,6 +87,7 @@ async def test_incident_alert_page_iterator_fetches_only_requested_pages() -> No
     first_page = await anext(pages)
 
     assert [alert.id for alert in first_page] == ["0"]
+    assert first_page.more is True
     assert [request.url.params["offset"] for request in requests] == ["0"]
 
 

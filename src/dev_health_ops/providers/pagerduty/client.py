@@ -28,7 +28,18 @@ from dev_health_ops.providers.pagerduty.models import (
 )
 
 T = TypeVar("T", bound=BaseModel)
+PageT = TypeVar("PageT")
 _ACCEPT = "application/vnd.pagerduty+json;version=2"
+
+
+class PagerDutyPage(list[PageT]):
+    """A mutable page of typed PagerDuty resources with completion metadata."""
+
+    more: bool
+
+    def __init__(self, values: list[PageT], *, more: bool) -> None:
+        super().__init__(values)
+        self.more = more
 
 
 def pagerduty_base_url(*, region: str) -> str:
@@ -99,7 +110,7 @@ class PagerDutyClient:
 
     async def iter_incident_alert_pages(
         self, incident_id: str
-    ) -> AsyncIterator[list[Alert]]:
+    ) -> AsyncIterator[PagerDutyPage[Alert]]:
         async for page in self._iter_many(
             f"/incidents/{incident_id}/alerts", "alerts", Alert, None
         ):
@@ -112,7 +123,7 @@ class PagerDutyClient:
 
     async def iter_incident_log_entry_pages(
         self, incident_id: str
-    ) -> AsyncIterator[list[LogEntry]]:
+    ) -> AsyncIterator[PagerDutyPage[LogEntry]]:
         async for page in self._iter_many(
             f"/incidents/{incident_id}/log_entries", "log_entries", LogEntry, None
         ):
@@ -123,7 +134,7 @@ class PagerDutyClient:
 
     async def iter_incident_note_pages(
         self, incident_id: str
-    ) -> AsyncIterator[list[Note]]:
+    ) -> AsyncIterator[PagerDutyPage[Note]]:
         async for page in self._iter_many(
             f"/incidents/{incident_id}/notes", "notes", Note, None
         ):
@@ -173,7 +184,7 @@ class PagerDutyClient:
 
     async def _iter_many(
         self, path: str, key: str, model: type[T], params: dict[str, str] | None
-    ) -> AsyncIterator[list[T]]:
+    ) -> AsyncIterator[PagerDutyPage[T]]:
         offset = 0
         while True:
             query = {**(params or {}), "limit": "100", "offset": str(offset)}
@@ -195,7 +206,9 @@ class PagerDutyClient:
                 raise PaginationException(
                     f"PagerDuty pagination envelope for {path} is malformed"
                 )
-            page = [model.model_validate(value) for value in raw_page]
+            page = PagerDutyPage(
+                [model.model_validate(value) for value in raw_page], more=more
+            )
             yield page
             if not more:
                 return

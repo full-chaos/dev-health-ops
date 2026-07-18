@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from dev_health_ops.exceptions import APIException, PaginationException
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.operational import OperationalIncident, OperationalService
+from dev_health_ops.providers.pagerduty.client import PagerDutyPage
 from dev_health_ops.providers.pagerduty.models import Alert, Incident, Service
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 from dev_health_ops.providers.pagerduty.sync import (
@@ -327,12 +328,17 @@ async def test_enrichment_cap_stops_child_stream_without_advancing_past_undraine
 
     async def alert_pages(incident_id: str):
         child_page_requests.append(incident_id)
-        yield [
-            Alert(id=f"{incident_id}-alert-{number}", created_at=SOURCE_TIME)
-            for number in range(2)
-        ]
+        yield PagerDutyPage(
+            [
+                Alert(id=f"{incident_id}-alert-{number}", created_at=SOURCE_TIME)
+                for number in range(2)
+            ],
+            more=True,
+        )
         child_page_requests.append(incident_id)
-        yield [Alert(id=f"{incident_id}-alert-2", created_at=SOURCE_TIME)]
+        yield PagerDutyPage(
+            [Alert(id=f"{incident_id}-alert-2", created_at=SOURCE_TIME)], more=False
+        )
 
     client.iter_incident_alert_pages = alert_pages
     client.drain_usage_observations.return_value = []
@@ -383,12 +389,15 @@ async def test_enrichment_cap_clamps_watermark_to_earliest_undrained_incident_ou
 
     async def alert_pages(incident_id: str):
         if incident_id == "newer-drained":
-            yield []
+            yield PagerDutyPage([], more=False)
             return
-        yield [
-            Alert(id=f"{incident_id}-alert-{number}", created_at=SOURCE_TIME)
-            for number in range(2)
-        ]
+        yield PagerDutyPage(
+            [
+                Alert(id=f"{incident_id}-alert-{number}", created_at=SOURCE_TIME)
+                for number in range(2)
+            ],
+            more=True,
+        )
 
     client = Mock()
     client.iter_incident_pages = pages
@@ -412,6 +421,63 @@ async def test_enrichment_cap_clamps_watermark_to_earliest_undrained_incident_ou
     )
 
     assert result.watermark_at == older_source_time
+
+
+@pytest.mark.asyncio
+async def test_enrichment_cap_on_complete_page_advances_watermark() -> None:
+    older_source_time = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+    newer_source_time = datetime(2026, 7, 17, 12, 1, tzinfo=timezone.utc)
+    incidents = [
+        Incident(
+            id="older-complete-at-cap",
+            created_at=older_source_time,
+            updated_at=older_source_time,
+        ),
+        Incident(
+            id="newer-drained",
+            created_at=newer_source_time,
+            updated_at=newer_source_time,
+        ),
+    ]
+
+    async def pages(*, params: dict[str, str] | None = None):
+        del params
+        yield incidents
+
+    async def alert_pages(incident_id: str):
+        if incident_id == "older-complete-at-cap":
+            yield PagerDutyPage(
+                [
+                    Alert(id=f"{incident_id}-alert-{number}", created_at=SOURCE_TIME)
+                    for number in range(2)
+                ],
+                more=False,
+            )
+            return
+        yield PagerDutyPage([], more=False)
+
+    client = Mock()
+    client.iter_incident_pages = pages
+    client.iter_incident_alert_pages = alert_pages
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    store.insert_operational_alerts = AsyncMock()
+    sync = PagerDutyOperationalSync(
+        client=client,
+        store=store,
+        normalizer=PagerDutyNormalizer("org-1", "acme", SOURCE_TIME),
+    )
+
+    result = await sync.run(
+        PagerDutySyncOptions(
+            dataset_key="incident-alerts",
+            window_start=older_source_time,
+            window_end=datetime(2026, 7, 17, 13, 0, tzinfo=timezone.utc),
+            enrichment_cap=2,
+        )
+    )
+
+    assert result.watermark_at == newer_source_time
 
 
 @pytest.mark.asyncio

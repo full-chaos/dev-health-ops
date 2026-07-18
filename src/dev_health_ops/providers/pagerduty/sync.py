@@ -15,7 +15,7 @@ from dev_health_ops.models.operational import (
     OperationalTeam,
     OperationalUser,
 )
-from dev_health_ops.providers.pagerduty.client import PagerDutyClient
+from dev_health_ops.providers.pagerduty.client import PagerDutyClient, PagerDutyPage
 from dev_health_ops.providers.pagerduty.degradation import (
     DATASET_FETCH_ERRORS,
     PagerDutyDatasetDegradedError,
@@ -266,7 +266,7 @@ class PagerDutyOperationalSync:
     async def _sync_enrichment(
         self,
         options: PagerDutySyncOptions,
-        fetch: Callable[[str], AsyncIterator[list[_Source]]],
+        fetch: Callable[[str], AsyncIterator[PagerDutyPage[_Source]]],
         normalize: Callable[[_Source, str], _Destination],
         persist: Callable[[list[_Destination]], Awaitable[None]],
     ) -> tuple[int, datetime | None]:
@@ -285,6 +285,7 @@ class PagerDutyOperationalSync:
         async for incident in iter_resumable_incidents(self._client, options):
             incident_id = self._normalizer.incident(incident).id
             child_count = 0
+            has_undrained_children = False
             async for page in fetch(incident.id):
                 remaining = options.enrichment_cap - child_count
                 for row in page[:remaining]:
@@ -295,8 +296,9 @@ class PagerDutyOperationalSync:
                         persisted += len(values)
                         values = []
                 if child_count == options.enrichment_cap:
+                    has_undrained_children = page.more or len(page) > remaining
                     break
-            if child_count == options.enrichment_cap:
+            if has_undrained_children:
                 source_time = incident_source_time(incident)
                 if source_time is not None and (
                     earliest_undrained_at is None or source_time < earliest_undrained_at

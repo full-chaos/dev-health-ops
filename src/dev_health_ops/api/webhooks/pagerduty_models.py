@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, field_validator
 
 
 class PagerDutyEventType(StrEnum):
@@ -17,10 +17,10 @@ class PagerDutyEventType(StrEnum):
     INCIDENT_RESOLVED = "incident.resolved"
     INCIDENT_REOPENED = "incident.reopened"
     INCIDENT_ANNOTATED = "incident.annotated"
-    RESPONDER_ADDED = "responder.added"
-    RESPONDER_REPLIED = "responder.replied"
-    SERVICE_UPDATED = "service_updated"
-    STATUS_UPDATE_PUBLISHED = "status_update_published"
+    RESPONDER_ADDED = "incident.responder.added"
+    RESPONDER_REPLIED = "incident.responder.replied"
+    SERVICE_UPDATED = "incident.service_updated"
+    STATUS_UPDATE_PUBLISHED = "incident.status_update_published"
     SERVICE_CREATED = "service.created"
     SERVICE_DELETED = "service.deleted"
     SERVICE_UPDATED_V3 = "service.updated"
@@ -33,6 +33,13 @@ class PagerDutyEvent(BaseModel):
     event_type: PagerDutyEventType
     occurred_at: datetime
     data: dict[str, JsonValue]
+
+    @field_validator("occurred_at")
+    @classmethod
+    def occurred_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("occurred_at must include a timezone offset")
+        return value.astimezone(UTC)
 
 
 class PagerDutyV3Webhook(BaseModel):

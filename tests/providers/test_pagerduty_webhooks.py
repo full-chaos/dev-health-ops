@@ -8,10 +8,13 @@ from dev_health_ops.api.webhooks.pagerduty_models import PagerDutyV3Webhook
 from dev_health_ops.models.operational import (
     CanonicalOperationalEntity,
     IncidentNote,
+    IncidentResponder,
     IncidentTimelineEvent,
     OperationalAlert,
     OperationalIncident,
     OperationalService,
+    OperationalTeam,
+    OperationalUser,
 )
 from dev_health_ops.providers.pagerduty.models import Incident
 from dev_health_ops.providers.pagerduty.webhooks import reconcile_pagerduty_webhook
@@ -56,6 +59,17 @@ class Store:
     async def insert_operational_incident_notes(
         self, values: list[IncidentNote]
     ) -> None:
+        return None
+
+    async def insert_operational_incident_responders(
+        self, values: list[IncidentResponder]
+    ) -> None:
+        return None
+
+    async def insert_operational_users(self, values: list[OperationalUser]) -> None:
+        return None
+
+    async def insert_operational_teams(self, values: list[OperationalTeam]) -> None:
         return None
 
 

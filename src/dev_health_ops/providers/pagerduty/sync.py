@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 from typing import TypeVar
 
-from dev_health_ops.models.operational import OperationalIncident
+from dev_health_ops.models.operational import (
+    EscalationPolicy,
+    OnCallSchedule,
+    OperationalIncident,
+    OperationalService,
+    OperationalTeam,
+    OperationalUser,
+)
 from dev_health_ops.providers.pagerduty.client import PagerDutyClient
 from dev_health_ops.providers.pagerduty.degradation import (
     DATASET_FETCH_ERRORS,
@@ -54,6 +61,14 @@ class PagerDutySyncResult:
 
 _Source = TypeVar("_Source")
 _Destination = TypeVar("_Destination")
+_ReferenceEntity = TypeVar(
+    "_ReferenceEntity",
+    OperationalService,
+    EscalationPolicy,
+    OnCallSchedule,
+    OperationalTeam,
+    OperationalUser,
+)
 
 
 class PagerDutyOperationalSync:
@@ -84,32 +99,40 @@ class PagerDutyOperationalSync:
             ) as dataset_key if not options.enrichment.enabled(dataset_key):
                 persisted = 0
             case "services":
-                persisted = await self._sync(
+                persisted = await self._sync_reference(
                     self._client.list_services,
                     self._normalizer.service,
                     self._store.insert_operational_services,
                     options.batch_size,
+                    OperationalService,
+                    "service",
                 )
             case "business-services":
-                persisted = await self._sync(
+                persisted = await self._sync_reference(
                     self._client.list_business_services,
                     self._normalizer.business_service,
                     self._store.insert_operational_services,
                     options.batch_size,
+                    OperationalService,
+                    "business_service",
                 )
             case "escalation-policies":
-                persisted = await self._sync(
+                persisted = await self._sync_reference(
                     self._client.list_escalation_policies,
                     self._normalizer.escalation_policy,
                     self._store.insert_operational_escalation_policies,
                     options.batch_size,
+                    EscalationPolicy,
+                    "escalation_policy",
                 )
             case "schedules":
-                persisted = await self._sync(
+                persisted = await self._sync_reference(
                     self._client.list_schedules,
                     self._normalizer.schedule,
                     self._store.insert_operational_on_call_schedules,
                     options.batch_size,
+                    OnCallSchedule,
+                    "schedule",
                 )
             case "on-calls":
                 persisted = await self._sync(
@@ -119,18 +142,22 @@ class PagerDutyOperationalSync:
                     options.batch_size,
                 )
             case "users":
-                persisted = await self._sync(
+                persisted = await self._sync_reference(
                     self._client.list_users,
                     self._normalizer.user,
                     self._store.insert_operational_users,
                     options.batch_size,
+                    OperationalUser,
+                    "user",
                 )
             case "teams":
-                persisted = await self._sync(
+                persisted = await self._sync_reference(
                     self._client.list_teams,
                     self._normalizer.team,
                     self._store.insert_operational_teams,
                     options.batch_size,
+                    OperationalTeam,
+                    "team",
                 )
             case "incidents":
                 persisted, watermark_at = await self._sync_incidents(options)
@@ -176,6 +203,37 @@ class PagerDutyOperationalSync:
         values = [normalize(row) for row in rows]
         for start in range(0, len(values), batch_size):
             await persist(values[start : start + batch_size])
+        return len(values)
+
+    async def _sync_reference(
+        self,
+        fetch: Callable[[], Awaitable[list[_Source]]],
+        normalize: Callable[[_Source], _ReferenceEntity],
+        persist: Callable[[list[_ReferenceEntity]], Awaitable[None]],
+        batch_size: int,
+        entity_type: type[_ReferenceEntity],
+        source_entity_type: str,
+    ) -> int:
+        rows = await fetch()
+        values = [normalize(row) for row in rows]
+        for start in range(0, len(values), batch_size):
+            await persist(values[start : start + batch_size])
+
+        active_entities = await self._store.load_active_operational_entities(
+            entity_type,
+            org_id=self._normalizer.org_id,
+            provider="pagerduty",
+            provider_instance_id=self._normalizer.provider_instance_id,
+            source_entity_type=source_entity_type,
+        )
+        seen_ids = {value.id for value in values}
+        tombstones = [
+            _reference_tombstone(entity, self._normalizer.observed_at)
+            for entity in active_entities
+            if entity.id not in seen_ids
+        ]
+        if tombstones:
+            await persist(tombstones)
         return len(values)
 
     async def _sync_incidents(
@@ -251,3 +309,19 @@ class PagerDutyOperationalSync:
             await persist(values)
             persisted += len(values)
         return persisted, watermark_at
+
+
+def _reference_tombstone(
+    entity: _ReferenceEntity, observed_at: datetime
+) -> _ReferenceEntity:
+    source_version_at = max(
+        observed_at, entity.source_version_at + timedelta(microseconds=1)
+    )
+    return replace(
+        entity,
+        source_version_at=source_version_at,
+        observed_at=source_version_at,
+        last_synced=source_version_at,
+        is_deleted=True,
+        deleted_at=source_version_at,
+    )

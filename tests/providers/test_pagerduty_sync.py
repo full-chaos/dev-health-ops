@@ -7,11 +7,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from dev_health_ops.exceptions import APIException
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.operational import OperationalIncident
-from dev_health_ops.providers.pagerduty.models import Alert, Incident
+from dev_health_ops.models.operational import OperationalIncident, OperationalService
+from dev_health_ops.providers.pagerduty.models import Alert, Incident, Service
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 from dev_health_ops.providers.pagerduty.sync import (
+    PagerDutyDatasetDegradedError,
     PagerDutyEnrichmentToggles,
     PagerDutyOperationalSync,
     PagerDutySyncOptions,
@@ -343,3 +345,58 @@ async def test_zero_enrichment_cap_skips_child_calls_and_completes_window() -> N
     assert result.persisted == 0
     assert child_page_requests == []
     assert result.watermark_at == latest_source_time
+
+
+@pytest.mark.asyncio
+async def test_complete_service_snapshot_tombstones_missing_reference() -> None:
+    normalizer = PagerDutyNormalizer("org-1", "acme", SOURCE_TIME)
+    missing = normalizer.service(
+        Service(id="service-missing", name="Missing", updated_at=SOURCE_TIME)
+    )
+    client = Mock()
+    client.list_services = AsyncMock(
+        return_value=[
+            Service(id="service-current", name="Current", updated_at=SOURCE_TIME)
+        ]
+    )
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    store.load_active_operational_entities = AsyncMock(return_value=[missing])
+    store.insert_operational_services = AsyncMock()
+
+    await PagerDutyOperationalSync(
+        client=client,
+        store=store,
+        normalizer=normalizer,
+    ).run(PagerDutySyncOptions("services", None, None))
+
+    inserted = [
+        row
+        for call in store.insert_operational_services.await_args_list
+        for row in call.args[0]
+    ]
+    tombstone = next(row for row in inserted if row.external_id == "service-missing")
+    assert isinstance(tombstone, OperationalService)
+    assert tombstone.is_deleted is True
+    assert tombstone.deleted_at == tombstone.source_version_at
+    assert tombstone.source_version_at > missing.source_version_at
+
+
+@pytest.mark.asyncio
+async def test_failed_service_snapshot_emits_no_reference_tombstones() -> None:
+    client = Mock()
+    client.list_services = AsyncMock(side_effect=APIException("PagerDuty unavailable"))
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    store.load_active_operational_entities = AsyncMock()
+    store.insert_operational_services = AsyncMock()
+
+    with pytest.raises(PagerDutyDatasetDegradedError):
+        await PagerDutyOperationalSync(
+            client=client,
+            store=store,
+            normalizer=PagerDutyNormalizer("org-1", "acme", SOURCE_TIME),
+        ).run(PagerDutySyncOptions("services", None, None))
+
+    store.load_active_operational_entities.assert_not_awaited()
+    store.insert_operational_services.assert_not_awaited()

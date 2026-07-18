@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from dev_health_ops.models.operational import (
+    CanonicalOperationalEntity,
     EscalationPolicy,
     IncidentNote,
     IncidentTimelineEvent,
@@ -15,8 +16,20 @@ from dev_health_ops.models.operational import (
     OperationalUser,
 )
 
+T = TypeVar("T", bound=CanonicalOperationalEntity)
+
 
 class PagerDutyOperationalStore(Protocol):
+    async def load_active_operational_entities(
+        self,
+        entity_type: type[T],
+        *,
+        org_id: str,
+        provider: str,
+        provider_instance_id: str,
+        source_entity_type: str,
+    ) -> list[T]: ...
+
     async def insert_operational_services(
         self, values: list[OperationalService]
     ) -> None: ...

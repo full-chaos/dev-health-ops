@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from dev_health_ops.metrics.schemas import (
     FileComplexitySnapshot,
@@ -33,6 +33,7 @@ from dev_health_ops.models.git import (
     Repo,
 )
 from dev_health_ops.models.operational import (
+    OPERATIONAL_ENTITY_TABLES,
     CanonicalOperationalEntity,
     OperationalContractError,
     OperationalIncident,
@@ -48,6 +49,7 @@ from dev_health_ops.models.work_items import (
 from .utils import _parse_date_value, _parse_datetime_value
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T", bound=CanonicalOperationalEntity)
 
 if TYPE_CHECKING:
     from dev_health_ops.models.atlassian_ops import (
@@ -2334,6 +2336,44 @@ class ClickHouseStore:
         self, services: list[OperationalService]
     ) -> None:
         await self._insert_operational_rows("operational_services", services)
+
+    async def load_active_operational_entities(
+        self,
+        entity_type: type[T],
+        *,
+        org_id: str,
+        provider: str,
+        provider_instance_id: str,
+        source_entity_type: str,
+    ) -> list[T]:
+        assert self.client is not None
+        columns = operational_columns(entity_type)
+        table = OPERATIONAL_ENTITY_TABLES[entity_type]
+        query = f"""
+        SELECT {", ".join(columns)}
+        FROM {table} FINAL
+        WHERE org_id = {{org_id:String}}
+          AND provider = {{provider:String}}
+          AND provider_instance_id = {{provider_instance_id:String}}
+          AND source_entity_type = {{source_entity_type:String}}
+          AND is_deleted = 0
+        """
+        parameters = {
+            "org_id": org_id,
+            "provider": provider,
+            "provider_instance_id": provider_instance_id,
+            "source_entity_type": source_entity_type,
+        }
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters=parameters
+            )
+        entities: list[T] = []
+        for row in result.result_rows or []:
+            values = dict(zip(columns, row, strict=True))
+            values.pop("id")
+            entities.append(entity_type(**values))
+        return entities
 
     async def insert_operational_incidents(
         self, incidents: list[OperationalIncident]

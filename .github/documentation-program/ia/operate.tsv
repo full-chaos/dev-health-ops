@@ -1,0 +1,47 @@
+id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
+operate	home	/operate/	Install and operate	landing	true	public	planned	false	Deployment, lifecycle maintenance, observability, and recovery.
+op-plan	operate	/operate/plan/	Plan a deployment	landing	true	public	planned	false	
+op-models	op-plan	/operate/plan/deployment-models/	Supported deployment models	concept	true	public	planned	false	
+op-arch	op-plan	/operate/plan/architecture/	Architecture and service dependencies	concept	true	public	planned	false	
+op-sizing	op-plan	/operate/plan/capacity-and-sizing/	Capacity and sizing	reference	true	public	planned	false	
+op-prereq	op-plan	/operate/plan/prerequisites/	Installation prerequisites	task-guide	true	public	planned	false	
+op-install	operate	/operate/install/	Install Dev Health	landing	true	public	planned	false	
+op-local	op-install	/operate/install/local-evaluation/	Evaluate locally	tutorial	true	public	planned	false	
+op-production	op-install	/operate/install/production/	Install a production environment	task-guide	true	public	planned	false	
+op-health	op-install	/operate/install/verify-health/	Verify first health	task-guide	true	public	planned	false	
+op-configure	operate	/operate/configure/	Configure the platform	landing	true	public	planned	false	
+op-env	op-configure	/operate/configure/environment-and-secrets/	Environment and secrets	task-guide	true	public	planned	false	
+op-db	op-configure	/operate/configure/databases-and-storage/	Databases and storage	task-guide	true	public	planned	false	
+op-network	op-configure	/operate/configure/network-and-tls/	Network, TLS, proxy, and domains	task-guide	true	public	planned	false	
+op-workers-config	op-configure	/operate/configure/workers-and-schedules/	Workers, schedules, and queues	task-guide	true	public	planned	false	
+op-external	op-configure	/operate/configure/external-services/	Model and external-service configuration	task-guide	true	public	planned	false	
+op-maintain	operate	/operate/maintain/	Upgrade, back up, and maintain	landing	true	public	planned	false	
+op-compat	op-maintain	/operate/maintain/compatibility/	Compatibility and release planning	concept	true	public	planned	false	
+op-upgrade	op-maintain	/operate/maintain/upgrade/	Upgrade Dev Health	task-guide	true	public	planned	false	
+op-migrations	op-maintain	/operate/maintain/migrations/	Run database migrations	task-guide	true	public	planned	false	
+op-backup	op-maintain	/operate/maintain/backup-and-restore/	Back up and restore	task-guide	true	public	planned	false	
+op-routine	op-maintain	/operate/maintain/routine-maintenance/	Routine maintenance	task-guide	true	public	planned	false	
+op-decommission	op-maintain	/operate/maintain/decommission/	Decommission or replace an environment	task-guide	true	public	planned	false	
+op-run	operate	/operate/run/	Run the platform	landing	true	public	planned	false	
+op-services	op-run	/operate/run/services/	Service and process responsibilities	concept	true	public	planned	false	
+op-workers	op-run	/operate/run/workers-and-jobs/	Workers, jobs, retries, and schedules	task-guide	true	public	planned	false	
+op-ingestion	op-run	/operate/run/ingestion-and-backfills/	Ingestion and backfill operations	task-guide	true	public	planned	false	
+op-controls	op-run	/operate/run/operational-controls/	Safe operational controls	task-guide	true	public	planned	false	
+op-observe	operate	/operate/observe/	Observe the platform	landing	true	public	planned	false	
+op-healthchecks	op-observe	/operate/observe/health-checks/	Health checks	reference	true	public	planned	false	
+op-logs	op-observe	/operate/observe/logs/	Logs	reference	true	public	planned	false	
+op-metrics	op-observe	/operate/observe/metrics-and-traces/	Metrics and traces	reference	true	public	planned	false	
+op-alerts	op-observe	/operate/observe/dashboards-and-alerts/	Dashboards and alerts	task-guide	true	public	planned	false	
+op-security	operate	/operate/security/	Security operations	landing	true	public	planned	false	
+op-hardening	op-security	/operate/security/hardening/	Production hardening	task-guide	true	public	planned	false	
+op-credential-inc	op-security	/operate/security/credential-incidents/	Credential and access incidents	runbook	true	public	planned	false	
+op-security-inc	op-security	/operate/security/incident-response/	Security incident response	runbook	true	public	planned	false	
+op-runbooks	operate	/operate/runbooks/	Runbooks	troubleshooting-index	true	public	planned	false	
+op-rb-ingestion	op-runbooks	/operate/runbooks/ingestion-failure/	Ingestion failure	runbook	true	public	planned	false	
+op-rb-worker	op-runbooks	/operate/runbooks/worker-or-queue-failure/	Worker or queue failure	runbook	true	public	planned	false	
+op-rb-sync	op-runbooks	/operate/runbooks/sync-or-backfill-failure/	Sync coverage or backfill failure	runbook	true	public	planned	false	
+op-rb-db	op-runbooks	/operate/runbooks/database-or-migration-failure/	Database, storage, or migration failure	runbook	true	public	planned	false	
+op-rb-auth	op-runbooks	/operate/runbooks/provider-authentication-failure/	Provider authentication failure	runbook	true	public	planned	false	
+op-rb-perf	op-runbooks	/operate/runbooks/performance-or-rate-limit/	Performance, rate limit, or saturation	runbook	true	public	planned	false	
+op-rb-backup	op-runbooks	/operate/runbooks/backup-or-restore-failure/	Backup or restore failure	runbook	true	public	planned	false	
+op-rb-dr	op-runbooks	/operate/runbooks/disaster-recovery/	Disaster recovery	runbook	true	public	planned	false	

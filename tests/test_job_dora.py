@@ -114,6 +114,50 @@ def test_run_dora_metrics_job_github_org_no_gitlab_token(monkeypatch):
     assert by_metric["time_to_restore_service"] == pytest.approx(3600.0)
 
 
+def test_run_dora_metrics_job_uses_mapped_pagerduty_projection_once(monkeypatch):
+    """A canonical PagerDuty incident joins its mapped repo without double counting."""
+    repo_id = uuid.uuid4()
+    deployment = {
+        "repo_id": repo_id,
+        "deployment_id": "d1",
+        "status": "success",
+        "environment": "production",
+        "started_at": datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc),
+        "finished_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+        "deployed_at": datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+        "merged_at": None,
+        "pull_request_number": None,
+    }
+    canonical_projection = {
+        "repo_id": repo_id,
+        "incident_id": "pd-incident",
+        "status": "resolved",
+        "started_at": datetime(2025, 1, 1, 13, 0, tzinfo=timezone.utc),
+        "resolved_at": datetime(2025, 1, 1, 14, 0, tzinfo=timezone.utc),
+        "last_synced": datetime(2025, 1, 1, 14, 0, tzinfo=timezone.utc),
+    }
+    sink = _CapturingClickHouseSink(
+        deployments=[deployment],
+        incidents=[canonical_projection, canonical_projection],
+    )
+    monkeypatch.setattr(job_dora, "ClickHouseMetricsSink", lambda _db_url: sink)
+
+    job_dora.run_dora_metrics_job(
+        db_url="clickhouse://localhost:8123/default",
+        day=date(2025, 1, 1),
+        backfill_days=1,
+        org_id="a78c1a6a-0000-0000-0000-000000000000",
+    )
+
+    by_metric = {row.metric_name: row.value for row in sink.written}
+    assert by_metric["time_to_restore_service"] == pytest.approx(3600.0)
+    incident_query = next(
+        query for query, _params in sink.queries if "FROM incidents" in query
+    )
+    assert "operational_incidents" in incident_query
+    assert "operational_service_repository_mappings" in incident_query
+
+
 def test_run_dora_metrics_job_no_deployments_writes_nothing(monkeypatch):
     monkeypatch.delenv("GITLAB_TOKEN", raising=False)
     sink = _FakeClickHouseSink(deployments=[], incidents=[])

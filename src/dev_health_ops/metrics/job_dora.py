@@ -8,6 +8,11 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.metrics.active_incidents import (
+    IncidentWindow,
+    active_incidents_query,
+    deduplicate_active_incidents,
+)
 from dev_health_ops.metrics.compute_dora import compute_dora_metrics_daily
 from dev_health_ops.metrics.schemas import (
     DeploymentRow,
@@ -126,22 +131,25 @@ def _load_incidents(
     repo_name: str | None = None,
 ) -> list[IncidentRow]:
     """Read incidents resolved in the day window from ClickHouse."""
-    params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
+    params: dict[str, Any] = {
+        "org_id": org_id,
+        "start": start,
+        "end": end,
+        "as_of": datetime.now(timezone.utc),
+    }
     repo_filter = _repo_filter(
         params, org_id=org_id, repo_id=repo_id, repo_name=repo_name
     )
 
     rows = primary_sink.query_dicts(
-        "SELECT repo_id, incident_id, status, started_at, resolved_at"
-        " FROM incidents FINAL"
-        " WHERE org_id = {org_id:String}"
-        "   AND resolved_at IS NOT NULL"
-        "   AND resolved_at >= {start:DateTime64(3, 'UTC')}"
-        "   AND resolved_at < {end:DateTime64(3, 'UTC')}"
-        f"{repo_filter}",
+        active_incidents_query(
+            window=IncidentWindow.RESOLVED,
+            org_id=org_id,
+            repo_filter=repo_filter,
+        ),
         params,
     )
-    return [r for r in rows if _has_valid_repo(r)]
+    return deduplicate_active_incidents([r for r in rows if _has_valid_repo(r)])
 
 
 def _has_valid_repo(row: dict[str, Any]) -> bool:

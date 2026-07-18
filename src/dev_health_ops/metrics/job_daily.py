@@ -14,6 +14,11 @@ from typing import Any
 
 from dev_health_ops.audit.ai_governance.loaders import build_governance_rows_for_day
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.metrics.active_incidents import (
+    IncidentWindow,
+    active_incidents_query,
+    deduplicate_active_incidents,
+)
 from dev_health_ops.metrics.ai_impact import compute_ai_impact_metrics_daily
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
@@ -266,7 +271,12 @@ def _extract_ai_workflow_for_day(
         logger.debug("AI workflow extraction skipped: org_id %r is not a UUID", org_id)
         return [], [], [], [], [], []
 
-    wf_params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
+    wf_params: dict[str, Any] = {
+        "org_id": org_id,
+        "start": start,
+        "end": end,
+        "as_of": datetime.now(timezone.utc),
+    }
     wf_repo_filter = ""
     if repo_id is not None:
         wf_params["repo_id"] = str(repo_id)
@@ -400,14 +410,14 @@ def _extract_ai_workflow_for_day(
     )
 
     wf_incident_rows = primary_sink.query_dicts(
-        "SELECT repo_id, incident_id, started_at, last_synced"
-        " FROM incidents FINAL"
-        " WHERE org_id = {org_id:String}"
-        "   AND started_at >= {start:DateTime64(3, 'UTC')}"
-        "   AND started_at < {end:DateTime64(3, 'UTC')}"
-        f"{wf_repo_filter}",
+        active_incidents_query(
+            window=IncidentWindow.STARTED,
+            org_id=org_id,
+            repo_filter=wf_repo_filter,
+        ),
         wf_params,
     )
+    wf_incident_rows = deduplicate_active_incidents(wf_incident_rows)
     wf_incident_rows = _valid_id_rows(wf_incident_rows, "incident_id", "incidents")
 
     def _by_provider(

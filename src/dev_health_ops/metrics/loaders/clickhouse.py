@@ -7,6 +7,11 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.metrics.active_incidents import (
+    IncidentWindow,
+    active_incidents_query,
+    deduplicate_active_incidents,
+)
 from dev_health_ops.metrics.compute_work_items import (
     ManualFallbackRule,
     TeamAttributionCandidate,
@@ -631,17 +636,25 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             params["repo_id"] = str(repo_id)
             repo_filter = " AND repo_id = {repo_id:UUID}"
 
-        org_filter = self._org_filter()
         params = self._inject_org_id(params)
-
-        query = f"""
-        SELECT * FROM incidents
-        WHERE started_at >= {{start:DateTime}} AND started_at < {{end:DateTime}}
-        {repo_filter}
-        {org_filter}
-        """
+        params["as_of"] = naive_utc(datetime.now(timezone.utc))
+        query = active_incidents_query(
+            window=IncidentWindow.STARTED,
+            org_id=self.org_id,
+            repo_filter=repo_filter,
+        )
         dicts = await _clickhouse_query_dicts(self.client, query, params)
-        return [dict(d) for d in dicts]  # type: ignore
+        incidents: list[IncidentRow] = [
+            {
+                "repo_id": row["repo_id"],
+                "incident_id": row["incident_id"],
+                "status": row.get("status"),
+                "started_at": row["started_at"],
+                "resolved_at": row.get("resolved_at"),
+            }
+            for row in dicts
+        ]
+        return deduplicate_active_incidents(incidents)
 
     async def load_testops_pipeline_data(
         self,

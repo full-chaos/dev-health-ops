@@ -155,24 +155,15 @@ def _incident_label(status: str) -> str:
 
 
 def _map_node_type(value: str) -> WorkGraphNodeType:
-    try:
-        return WorkGraphNodeType(value.lower())
-    except ValueError:
-        return WorkGraphNodeType.ISSUE
+    return WorkGraphNodeType(value.lower())
 
 
 def _map_edge_type(value: str) -> WorkGraphEdgeType:
-    try:
-        return WorkGraphEdgeType(value.lower())
-    except ValueError:
-        return WorkGraphEdgeType.RELATES
+    return WorkGraphEdgeType(value.lower())
 
 
 def _map_provenance(value: str) -> WorkGraphProvenance:
-    try:
-        return WorkGraphProvenance(value.lower())
-    except ValueError:
-        return WorkGraphProvenance.HEURISTIC
+    return WorkGraphProvenance(value.lower())
 
 
 def _dependency_edge_type_sql() -> str:

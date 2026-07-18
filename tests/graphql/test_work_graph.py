@@ -275,7 +275,7 @@ class TestResolveWorkGraphEdges:
             assert result.page_info.end_cursor == "e99"
 
     @pytest.mark.asyncio
-    async def test_handles_unknown_enum_values_gracefully(self, mock_context):
+    async def test_raises_for_unknown_persisted_enum_values(self, mock_context):
         rows = [
             make_edge_row(
                 source_type="unknown_type",
@@ -291,14 +291,8 @@ class TestResolveWorkGraphEdges:
         ) as mock_query:
             mock_query.return_value = rows
 
-            result = await resolve_work_graph_edges(mock_context)
-
-            assert len(result.edges) == 1
-            edge = result.edges[0]
-            assert edge.source_type == WorkGraphNodeType.ISSUE
-            assert edge.target_type == WorkGraphNodeType.ISSUE
-            assert edge.edge_type == WorkGraphEdgeType.RELATES
-            assert edge.provenance == WorkGraphProvenance.HEURISTIC
+            with pytest.raises(ValueError, match="unknown_type"):
+                await resolve_work_graph_edges(mock_context)
 
     @pytest.mark.asyncio
     async def test_raises_when_client_missing(self):

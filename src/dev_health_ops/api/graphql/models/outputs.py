@@ -466,6 +466,14 @@ class WorkGraphNodeType(Enum):
     REVIEW_OUTCOME = "review_outcome"
     DEPLOYMENT = "deployment"
     INCIDENT = "incident"
+    OPERATIONAL_SERVICE = "operational_service"
+    OPERATIONAL_ALERT = "operational_alert"
+    INCIDENT_TIMELINE_EVENT = "incident_timeline_event"
+    INCIDENT_RESPONDER = "incident_responder"
+    ESCALATION_POLICY = "escalation_policy"
+    REPOSITORY = "repository"
+    USER = "user"
+    TEAM = "team"
 
 
 @strawberry.enum
@@ -507,6 +515,14 @@ class WorkGraphEdgeType(Enum):
     HAS_REVIEW_OUTCOME = "has_review_outcome"
     DEPLOYS = "deploys"
     LINKED_INCIDENT = "linked_incident"
+    MAPS_TO_REPOSITORY = "maps_to_repository"
+    HAS_INCIDENT = "has_incident"
+    HAS_ALERT = "has_alert"
+    HAS_TIMELINE_EVENT = "has_timeline_event"
+    HAS_RESPONDER = "has_responder"
+    ASSIGNED_TO = "assigned_to"
+    ESCALATES_WITH = "escalates_with"
+    REMEDIATED_BY = "remediated_by"
 
 
 @strawberry.enum

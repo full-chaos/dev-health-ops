@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Build a deterministic inventory of the Dev Health documentation system.
-
-This script is intentionally a reporting tool, not a publication framework. It
-walks the repository, records public-documentation sources and supporting
-artifacts, and emits one JSON document for human disposition work.
-"""
+"""Build a deterministic inventory of the Dev Health documentation system."""
 
 from __future__ import annotations
 
@@ -15,7 +10,7 @@ import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import cast
 from urllib.parse import urlparse
 
 import yaml
@@ -69,45 +64,44 @@ class InventoryRow:
     notes: str | None
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
+def _load_yaml(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return loaded if isinstance(loaded, dict) else {}
+    return cast(dict[str, object], loaded) if isinstance(loaded, dict) else {}
 
 
 def _normalise_doc_path(path: str) -> str:
     value = path.strip().lstrip("/")
-    if value.endswith("/"):
-        value += "index.md"
-    return value
+    return f"{value}index.md" if value.endswith("/") else value
 
 
-def _flatten_nav(node: Any, trail: tuple[str, ...] = ()) -> dict[str, list[str]]:
+def _flatten_nav(node: object, trail: tuple[str, ...] = ()) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     if isinstance(node, list):
         for child in node:
             result.update(_flatten_nav(child, trail))
         return result
-    if isinstance(node, dict):
-        for label, child in node.items():
-            next_trail = (*trail, str(label))
-            if isinstance(child, str):
-                result[_normalise_doc_path(child)] = list(next_trail)
-            else:
-                result.update(_flatten_nav(child, next_trail))
+    if not isinstance(node, dict):
+        return result
+    for label, child in node.items():
+        next_trail = (*trail, str(label))
+        if isinstance(child, str):
+            result[_normalise_doc_path(child)] = list(next_trail)
+        else:
+            result.update(_flatten_nav(child, next_trail))
     return result
 
 
-def _extract_front_matter(text: str) -> dict[str, Any]:
+def _extract_front_matter(text: str) -> dict[str, object]:
     match = FRONT_MATTER_RE.match(text)
     if not match:
         return {}
     parsed = yaml.safe_load(match.group(1))
-    return parsed if isinstance(parsed, dict) else {}
+    return cast(dict[str, object], parsed) if isinstance(parsed, dict) else {}
 
 
-def _pattern_lines(value: Any) -> list[str]:
+def _pattern_lines(value: object) -> list[str]:
     if isinstance(value, str):
         return [
             line.strip()
@@ -134,25 +128,20 @@ def _publication_classification(
     rel_doc_path: str,
     nav_paths: set[str],
     excluded_patterns: list[str],
-    manifest: dict[str, Any],
+    manifest: dict[str, object],
 ) -> str:
     if rel_doc_path in nav_paths:
         return "public-nav"
     if _matches_any(rel_doc_path, excluded_patterns):
         return "excluded-internal"
-
-    manifest_excluded = _pattern_lines(manifest.get("excluded_internal"))
-    if _matches_any(rel_doc_path, manifest_excluded):
+    if _matches_any(rel_doc_path, _pattern_lines(manifest.get("excluded_internal"))):
         return "excluded-internal"
-
-    manifest_reference = _pattern_lines(manifest.get("public_reference"))
-    if _matches_any(rel_doc_path, manifest_reference):
+    if _matches_any(rel_doc_path, _pattern_lines(manifest.get("public_reference"))):
         return "public-reference"
-
     return "unclassified"
 
 
-def _infer_content_type(path: str, front_matter: dict[str, Any]) -> str:
+def _infer_content_type(path: str, front_matter: dict[str, object]) -> str:
     explicit = front_matter.get("content_type") or front_matter.get("template")
     if explicit:
         return str(explicit).removesuffix(".html")
@@ -175,77 +164,71 @@ def _infer_content_type(path: str, front_matter: dict[str, Any]) -> str:
         return "reference"
     if "user-guide" in lowered or "journey" in lowered:
         return "task-guide"
-    if "index.md" == name:
-        return "landing"
-    return "explanation"
+    return "landing" if name == "index.md" else "explanation"
 
 
 def _infer_product_area(path: str) -> str | None:
     parts = Path(path).parts
     if not parts:
         return None
-    first = parts[0]
-    if first in {"user-guide", "product", "ops", "api", "architecture", "providers"}:
-        return first
-    if first == "customer-push-ingestion":
+    if parts[0] == "customer-push-ingestion":
         return "integrations"
-    return first
+    return parts[0]
 
 
 def _resolve_local_link(source: str, href: str) -> str | None:
     parsed = urlparse(href.strip())
-    if parsed.scheme or parsed.netloc or href.startswith("#") or href.startswith("mailto:"):
+    if parsed.scheme or parsed.netloc or href.startswith(("#", "mailto:")):
         return None
-
-    raw = parsed.path
-    if not raw:
+    if not parsed.path:
         return None
 
     source_dir = Path(source).parent
-    target = Path(raw.lstrip("/")) if raw.startswith("/") else source_dir / raw
-    target = Path(*[part for part in target.parts if part not in {"."}])
-
+    target = (
+        Path(parsed.path.lstrip("/"))
+        if parsed.path.startswith("/")
+        else source_dir / parsed.path
+    )
     collapsed: list[str] = []
     for part in target.parts:
+        if part == ".":
+            continue
         if part == "..":
             if collapsed:
                 collapsed.pop()
-        else:
-            collapsed.append(part)
+            continue
+        collapsed.append(part)
     target = Path(*collapsed)
 
     if target.suffix == "":
-        target = target / "index.md"
+        target /= "index.md"
     elif target.suffix.lower() in {".html", ".htm"}:
         target = target.with_suffix(".md")
-
     return target.as_posix()
 
 
 def _extract_links(source: str, text: str) -> list[str]:
-    resolved = {
+    links = {
         target
         for href in MARKDOWN_LINK_RE.findall(text)
         if (target := _resolve_local_link(source, href)) is not None
     }
-    return sorted(resolved)
+    return sorted(links)
 
 
 def _doc_url(site_url: str | None, rel_doc_path: str) -> str | None:
     if not site_url:
         return None
-    path = rel_doc_path
-    if path == "index.md":
+    if rel_doc_path == "index.md":
         suffix = ""
-    elif path.endswith("/index.md"):
-        suffix = path[: -len("index.md")]
+    elif rel_doc_path.endswith("/index.md"):
+        suffix = rel_doc_path[: -len("index.md")]
     else:
-        suffix = path.removesuffix(".md") + "/"
-    return site_url.rstrip("/") + "/" + suffix
+        suffix = f"{rel_doc_path.removesuffix('.md')}/"
+    return f"{site_url.rstrip('/')}/{suffix}"
 
 
 def _is_generated(path: str, text: str) -> bool:
-    lowered = path.lower()
     markers = (
         "generated file",
         "do not edit",
@@ -253,70 +236,69 @@ def _is_generated(path: str, text: str) -> bool:
         "auto-generated",
         "autogenerated",
     )
+    lowered = path.lower()
     return any(marker in text[:2000].lower() for marker in markers) or any(
         token in lowered for token in ("generated", ".golden.", "fixture")
     )
 
 
 def _docs_artifacts(repo_root: Path) -> list[Path]:
-    candidates: set[Path] = set()
-
-    for config in CONFIG_PATHS:
-        path = repo_root / config
-        if path.exists() and path.is_file():
-            candidates.add(path)
+    candidates = {
+        repo_root / path for path in CONFIG_PATHS if (repo_root / path).is_file()
+    }
 
     overrides = repo_root / "docs" / "overrides"
     if overrides.exists():
-        for path in overrides.rglob("*"):
-            if path.is_file() and path.suffix.lower() in OVERRIDE_SUFFIXES:
-                candidates.add(path)
+        candidates.update(
+            path
+            for path in overrides.rglob("*")
+            if path.is_file() and path.suffix.lower() in OVERRIDE_SUFFIXES
+        )
 
     docs_qa = repo_root / "docs-qa"
     if docs_qa.exists():
-        for path in docs_qa.rglob("*"):
-            if path.is_file() and "node_modules" not in path.parts:
-                candidates.add(path)
+        candidates.update(
+            path
+            for path in docs_qa.rglob("*")
+            if path.is_file() and "node_modules" not in path.parts
+        )
 
     scripts = repo_root / "scripts"
     if scripts.exists():
-        for path in scripts.iterdir():
-            if not path.is_file():
-                continue
-            lowered = path.name.lower()
-            if any(hint in lowered for hint in DOC_TOOL_HINTS):
-                candidates.add(path)
+        candidates.update(
+            path
+            for path in scripts.iterdir()
+            if path.is_file()
+            and any(hint in path.name.lower() for hint in DOC_TOOL_HINTS)
+        )
 
     workflows = repo_root / ".github" / "workflows"
     if workflows.exists():
-        for path in workflows.iterdir():
-            if path.is_file() and "docs" in path.name.lower():
-                candidates.add(path)
-
+        candidates.update(
+            path
+            for path in workflows.iterdir()
+            if path.is_file() and "docs" in path.name.lower()
+        )
     return sorted(candidates)
 
 
-def build_inventory(repo_root: Path, repository_name: str) -> dict[str, Any]:
+def build_inventory(repo_root: Path, repository_name: str) -> dict[str, object]:
     repo_root = repo_root.resolve()
     mkdocs = _load_yaml(repo_root / "mkdocs.yml")
     manifest = _load_yaml(repo_root / "docs" / "publication.yml")
     nav = _flatten_nav(mkdocs.get("nav", []))
-    nav_paths = set(nav)
-    site_url = str(mkdocs.get("site_url") or "").strip() or None
+    site_url_value = str(mkdocs.get("site_url") or "").strip()
+    site_url = site_url_value or None
     excluded_patterns = _pattern_lines(mkdocs.get("exclude_docs"))
 
     docs_root = repo_root / "docs"
     markdown_paths = sorted(docs_root.rglob("*.md")) if docs_root.exists() else []
-
-    page_text: dict[str, str] = {}
-    page_links: dict[str, list[str]] = {}
-    for path in markdown_paths:
-        rel = path.relative_to(docs_root).as_posix()
-        text = path.read_text(encoding="utf-8")
-        page_text[rel] = text
-        page_links[rel] = _extract_links(rel, text)
-
-    inbound: dict[str, set[str]] = defaultdict(set)
+    page_text = {
+        path.relative_to(docs_root).as_posix(): path.read_text(encoding="utf-8")
+        for path in markdown_paths
+    }
+    page_links = {path: _extract_links(path, text) for path, text in page_text.items()}
+    inbound: defaultdict[str, set[str]] = defaultdict(set)
     for source, targets in page_links.items():
         for target in targets:
             inbound[target].add(source)
@@ -327,15 +309,22 @@ def build_inventory(repo_root: Path, repository_name: str) -> dict[str, Any]:
         text = page_text[rel]
         front_matter = _extract_front_matter(text)
         classification = _publication_classification(
-            rel, nav_paths, excluded_patterns, manifest
+            rel,
+            set(nav),
+            excluded_patterns,
+            manifest,
         )
-        audience = front_matter.get("audience")
         secondary = front_matter.get("secondary_audiences", [])
         if isinstance(secondary, str):
-            secondary = [secondary]
-        if not isinstance(secondary, list):
-            secondary = []
+            secondary_audiences = [secondary]
+        elif isinstance(secondary, list):
+            secondary_audiences = [str(value) for value in secondary]
+        else:
+            secondary_audiences = []
 
+        audience = front_matter.get("audience")
+        owner = front_matter.get("owner")
+        last_reviewed = front_matter.get("last-reviewed")
         rows.append(
             InventoryRow(
                 source_repo=repository_name,
@@ -345,14 +334,10 @@ def build_inventory(repo_root: Path, repository_name: str) -> dict[str, Any]:
                 current_nav_location=nav.get(rel, []),
                 content_type=_infer_content_type(rel, front_matter),
                 primary_audience=str(audience) if audience else None,
-                secondary_audiences=[str(value) for value in secondary],
+                secondary_audiences=secondary_audiences,
                 product_area=_infer_product_area(rel),
-                owner=str(front_matter.get("owner")) if front_matter.get("owner") else None,
-                last_meaningful_review=(
-                    str(front_matter.get("last-reviewed"))
-                    if front_matter.get("last-reviewed")
-                    else None
-                ),
+                owner=str(owner) if owner else None,
+                last_meaningful_review=str(last_reviewed) if last_reviewed else None,
                 generated=_is_generated(rel, text),
                 public_today=classification in {"public-nav", "public-reference"},
                 publication_classification=classification,
@@ -371,19 +356,18 @@ def build_inventory(repo_root: Path, repository_name: str) -> dict[str, Any]:
         if rel.startswith("docs/") and rel.endswith(".md"):
             continue
         suffix = path.suffix.lower()
-        artifact_type = (
-            "visual-asset"
-            if suffix in ASSET_SUFFIXES
-            else "theme-override"
-            if rel.startswith("docs/overrides/")
-            else "browser-qa"
-            if rel.startswith("docs-qa/")
-            else "workflow"
-            if rel.startswith(".github/workflows/")
-            else "configuration"
-            if rel in CONFIG_PATHS
-            else "tooling"
-        )
+        if suffix in ASSET_SUFFIXES:
+            artifact_type = "visual-asset"
+        elif rel.startswith("docs/overrides/"):
+            artifact_type = "theme-override"
+        elif rel.startswith("docs-qa/"):
+            artifact_type = "browser-qa"
+        elif rel.startswith(".github/workflows/"):
+            artifact_type = "workflow"
+        elif rel in CONFIG_PATHS:
+            artifact_type = "configuration"
+        else:
+            artifact_type = "tooling"
         rows.append(
             InventoryRow(
                 source_repo=repository_name,
@@ -410,11 +394,15 @@ def build_inventory(repo_root: Path, repository_name: str) -> dict[str, Any]:
             )
         )
 
-    serialised = [asdict(row) for row in sorted(rows, key=lambda item: item.source_path)]
-    counts = defaultdict(int)
+    serialised = [
+        asdict(row) for row in sorted(rows, key=lambda item: item.source_path)
+    ]
+    counts: defaultdict[str, int] = defaultdict(int)
     for row in serialised:
-        counts[row["publication_classification"]] += 1
-        counts[f"artifact:{row['artifact_type']}"] += 1
+        classification = cast(str, row["publication_classification"])
+        artifact_type = cast(str, row["artifact_type"])
+        counts[classification] += 1
+        counts[f"artifact:{artifact_type}"] += 1
 
     return {
         "schema_version": 1,
@@ -429,11 +417,7 @@ def build_inventory(repo_root: Path, repository_name: str) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path("."))
-    parser.add_argument(
-        "--repository",
-        default="full-chaos/dev-health-ops",
-        help="Repository name recorded in each inventory row.",
-    )
+    parser.add_argument("--repository", default="full-chaos/dev-health-ops")
     parser.add_argument(
         "--output",
         type=Path,
@@ -443,13 +427,8 @@ def main() -> int:
 
     inventory = build_inventory(args.root, args.repository)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(inventory, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
-    print(
-        f"wrote {inventory['row_count']} documentation inventory rows "
-        f"to {args.output}"
-    )
+    args.output.write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {inventory['row_count']} rows to {args.output}")
     return 0
 
 

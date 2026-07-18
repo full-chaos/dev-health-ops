@@ -14,6 +14,7 @@ from dev_health_ops.models.operational import (
     OperationalService,
     OperationalTeam,
     OperationalUser,
+    ServiceRepositoryMapping,
 )
 
 T = TypeVar("T", bound=CanonicalOperationalEntity)
@@ -36,6 +37,11 @@ class PagerDutyOperationalStore(Protocol):
         self, values: list[OperationalService]
     ) -> None:
         """Persist operational services."""
+
+    async def insert_operational_service_repository_mappings(
+        self, values: list[ServiceRepositoryMapping]
+    ) -> None:
+        """Persist service-to-repository mapping evidence."""
 
     async def insert_operational_incidents(
         self, values: list[OperationalIncident]

@@ -29,7 +29,6 @@ from dev_health_ops.providers.pagerduty.models import (
     LogEntry,
     Note,
     Service,
-    Team,
     User,
 )
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
@@ -211,11 +210,7 @@ async def reconcile_pagerduty_webhook(
     normalizer = PagerDutyNormalizer(org_id, provider_instance_id, received_at)
     occurred_at = webhook.event.occurred_at
     match webhook.event.event_type:
-        case (
-            PagerDutyEventType.SERVICE_CREATED
-            | PagerDutyEventType.SERVICE_UPDATED
-            | PagerDutyEventType.SERVICE_UPDATED_V3
-        ):
+        case PagerDutyEventType.SERVICE_CREATED | PagerDutyEventType.SERVICE_UPDATED_V3:
             service_entity = _versioned(
                 normalizer.service(Service.model_validate(webhook.event.data)),
                 event_id=webhook.event.id,
@@ -245,6 +240,7 @@ async def reconcile_pagerduty_webhook(
             | PagerDutyEventType.RESPONDER_ADDED
             | PagerDutyEventType.RESPONDER_REPLIED
             | PagerDutyEventType.STATUS_UPDATE_PUBLISHED
+            | PagerDutyEventType.SERVICE_UPDATED
         ):
             incident = Incident.model_validate(_incident_payload(webhook))
             if _needs_incident_hydration(incident):
@@ -258,7 +254,7 @@ async def reconcile_pagerduty_webhook(
             entities: list[CanonicalOperationalEntity] = [incident_entity]
             match webhook.event.event_type:
                 case PagerDutyEventType.INCIDENT_ANNOTATED:
-                    note_payload = _payload_mapping(webhook.event.data.get("note"))
+                    note_payload = webhook.event.data
                     if note_payload:
                         entities.append(
                             _versioned(
@@ -275,11 +271,8 @@ async def reconcile_pagerduty_webhook(
                     PagerDutyEventType.RESPONDER_ADDED
                     | PagerDutyEventType.RESPONDER_REPLIED
                 ):
-                    responder_payload = _payload_mapping(
-                        webhook.event.data.get("responder")
-                    )
+                    responder_payload = webhook.event.data
                     user_payload = _payload_mapping(responder_payload.get("user"))
-                    team_payload = _payload_mapping(responder_payload.get("team"))
                     user_entity = (
                         _versioned(
                             normalizer.user(User.model_validate(user_payload)),
@@ -290,20 +283,8 @@ async def reconcile_pagerduty_webhook(
                         if user_payload
                         else None
                     )
-                    team_entity = (
-                        _versioned(
-                            normalizer.team(Team.model_validate(team_payload)),
-                            event_id=webhook.event.id,
-                            occurred_at=occurred_at,
-                            received_at=received_at,
-                        )
-                        if team_payload
-                        else None
-                    )
                     if user_entity is not None:
                         entities.append(user_entity)
-                    if team_entity is not None:
-                        entities.append(team_entity)
                     if responder_payload:
                         coordinates = operational_source_coordinates(
                             IncidentResponder,
@@ -336,9 +317,7 @@ async def reconcile_pagerduty_webhook(
                             )
                         )
                 case PagerDutyEventType.STATUS_UPDATE_PUBLISHED:
-                    update_payload = _payload_mapping(
-                        webhook.event.data.get("status_update")
-                    )
+                    update_payload = webhook.event.data
                     if update_payload:
                         entities.append(
                             replace(

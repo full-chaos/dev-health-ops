@@ -160,7 +160,7 @@ class PagerDutyNormalizer:
             **self._common(IncidentTimelineEvent, row, "log_entry"),
             incident_id=incident_id,
             event_type=row.type or "pagerduty_log_entry",
-            body=row.summary,
+            body=row.summary or row.message,
             actor_type="pagerduty",
             occurred_at=row.created_at,
         )

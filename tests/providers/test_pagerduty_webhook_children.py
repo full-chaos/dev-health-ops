@@ -97,7 +97,7 @@ def _webhook(event_type: str, data: dict[str, object]) -> PagerDutyV3Webhook:
     )
 
 
-def _incident() -> dict[str, str]:
+def _incident() -> dict[str, object]:
     return {
         "id": "incident-1",
         "title": "Payments unavailable",
@@ -112,14 +112,10 @@ async def test_responder_webhook_materializes_responder_user_and_team() -> None:
     webhook = _webhook(
         "incident.responder.added",
         {
+            "type": "incident_responder",
+            "state": "pending",
+            "user": {"id": "user-1", "name": "Ava"},
             "incident": _incident(),
-            "responder": {
-                "id": "responder-1",
-                "name": "Ava",
-                "role": "responder",
-                "user": {"id": "user-1", "name": "Ava"},
-                "team": {"id": "team-1", "name": "Operations"},
-            },
         },
     )
 
@@ -136,7 +132,6 @@ async def test_responder_webhook_materializes_responder_user_and_team() -> None:
     assert store.responders[0].source_event_id == webhook.event.id
     assert store.responders[0].source_version_at == _OCCURRED_AT
     assert store.users[0].source_event_id == webhook.event.id
-    assert store.teams[0].source_event_id == webhook.event.id
 
 
 @pytest.mark.anyio
@@ -145,13 +140,11 @@ async def test_annotation_webhook_materializes_incident_note() -> None:
     webhook = _webhook(
         "incident.annotated",
         {
+            "id": "note-1",
+            "type": "incident_note",
+            "content": "Investigating the outage",
+            "created_at": _OCCURRED_AT.isoformat(),
             "incident": _incident(),
-            "note": {
-                "id": "note-1",
-                "content": "Investigating the outage",
-                "created_at": _OCCURRED_AT.isoformat(),
-                "user": {"id": "user-1", "name": "Ava"},
-            },
         },
     )
 
@@ -176,12 +169,11 @@ async def test_status_update_webhook_materializes_timeline_event() -> None:
     webhook = _webhook(
         "incident.status_update_published",
         {
+            "id": "status-update-1",
+            "type": "incident_status_update",
+            "message": "Mitigation is in progress",
+            "created_at": _OCCURRED_AT.isoformat(),
             "incident": _incident(),
-            "status_update": {
-                "id": "status-update-1",
-                "summary": "Mitigation is in progress",
-                "created_at": _OCCURRED_AT.isoformat(),
-            },
         },
     )
 
@@ -198,3 +190,21 @@ async def test_status_update_webhook_materializes_timeline_event() -> None:
     assert store.timeline_events[0].source_event_id == webhook.event.id
     assert store.timeline_events[0].source_version_at == _OCCURRED_AT
     assert store.timeline_events[0].body == "Mitigation is in progress"
+
+
+@pytest.mark.anyio
+async def test_service_updated_webhook_reconciles_incident() -> None:
+    store = _Store()
+    webhook = _webhook("incident.service_updated", _incident())
+
+    processed = await reconcile_pagerduty_webhook(
+        webhook=webhook,
+        org_id="org-1",
+        provider_instance_id="acme",
+        received_at=_OCCURRED_AT,
+        store=store,
+        client=_Client(),
+    )
+
+    assert processed is True
+    assert store.incidents[0].source_event_id == webhook.event.id

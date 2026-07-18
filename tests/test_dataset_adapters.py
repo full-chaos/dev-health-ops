@@ -462,6 +462,49 @@ def test_pagerduty_dataset_passes_persisted_resume_cursor_and_returns_source_wat
     assert result["watermark_at"] == WINDOW_END.isoformat()
 
 
+def test_pagerduty_dataset_rejects_source_id_without_verified_account_identity() -> (
+    None
+):
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        source_external_id="not-a-verified-account",
+        credentials={"api_token": "secret-token"},
+    )
+
+    with pytest.raises(ValueError, match="requires an account subdomain"):
+        run_dataset_unit(ctx, _runtime())
+
+
+def test_pagerduty_client_uses_verified_account_subdomain_not_source_id() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        source_external_id="untrusted-source-id",
+        credentials={"api_token": "secret-token", "subdomain": "verified-acme"},
+    )
+
+    with patch("dev_health_ops.providers.pagerduty.client.PagerDutyClient"):
+        _, provider_instance_id = _pagerduty_client(ctx)
+
+    assert provider_instance_id == "verified-acme"
+
+
+def test_pagerduty_client_rejects_blank_account_subdomain() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={"api_token": "secret-token", "subdomain": "  "},
+    )
+
+    with pytest.raises(ValueError, match="requires an account subdomain"):
+        _pagerduty_client(ctx)
+
+
 def test_unsupported_provider_dataset_pair_raises_value_error() -> None:
     ctx = _context(provider="jira", dataset_key="commits", source_external_id="OPS")
 

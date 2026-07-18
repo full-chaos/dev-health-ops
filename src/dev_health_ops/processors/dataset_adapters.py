@@ -173,7 +173,9 @@ def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
         auth = ApiTokenAuth(credentials.api_token)
     else:
         raise ValueError("PagerDuty dataset unit requires an access token or API token")
-    provider_instance_id = credentials.subdomain or context.source_external_id
+    provider_instance_id = (
+        credentials.subdomain.strip() if credentials.subdomain else ""
+    )
     if not provider_instance_id:
         raise ValueError("PagerDuty dataset unit requires an account subdomain")
     return PagerDutyClient(auth, region=credentials.region), provider_instance_id

@@ -29,6 +29,9 @@ from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 from dev_health_ops.providers.pagerduty.operational_store import (
     PagerDutyOperationalStore,
 )
+from dev_health_ops.providers.pagerduty.service_repository_mapping import (
+    mappings_from_service_metadata,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,14 +103,7 @@ class PagerDutyOperationalSync:
             ) as dataset_key if not options.enrichment.enabled(dataset_key):
                 persisted = 0
             case "services":
-                persisted = await self._sync_reference(
-                    self._client.list_services,
-                    self._normalizer.service,
-                    self._store.insert_operational_services,
-                    options.batch_size,
-                    OperationalService,
-                    "service",
-                )
+                persisted = await self._sync_services(options.batch_size)
             case "business-services":
                 persisted = await self._sync_reference(
                     self._client.list_business_services,
@@ -192,6 +188,44 @@ class PagerDutyOperationalSync:
             degraded=False,
             observations=tuple(self._client.drain_usage_observations()),
         )
+
+    async def _sync_services(self, batch_size: int) -> int:
+        """Sync services and retain exact repository metadata as mapping evidence."""
+        rows = await self._client.list_services()
+        values = [self._normalizer.service(row) for row in rows]
+        for start in range(0, len(values), batch_size):
+            await self._store.insert_operational_services(
+                values[start : start + batch_size]
+            )
+
+        mappings = [
+            mapping
+            for row, service in zip(rows, values, strict=True)
+            for mapping in mappings_from_service_metadata(
+                service, row.raw, self._normalizer.observed_at
+            )
+        ]
+        for start in range(0, len(mappings), batch_size):
+            await self._store.insert_operational_service_repository_mappings(
+                mappings[start : start + batch_size]
+            )
+
+        active_entities = await self._store.load_active_operational_entities(
+            OperationalService,
+            org_id=self._normalizer.org_id,
+            provider="pagerduty",
+            provider_instance_id=self._normalizer.provider_instance_id,
+            source_entity_type="service",
+        )
+        seen_ids = {value.id for value in values}
+        tombstones = [
+            _reference_tombstone(entity, self._normalizer.observed_at)
+            for entity in active_entities
+            if entity.id not in seen_ids
+        ]
+        if tombstones:
+            await self._store.insert_operational_services(tombstones)
+        return len(values)
 
     async def _sync(
         self,

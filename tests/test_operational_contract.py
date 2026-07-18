@@ -14,6 +14,7 @@ from dev_health_ops.models.operational import (
     OPERATIONAL_ENTITY_TABLES,
     OperationalIncident,
     OperationalService,
+    ServiceRepositoryMapping,
     canonical_operational_id,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
@@ -283,3 +284,53 @@ def test_store_hides_the_latest_incident_tombstone() -> None:
 
     # Then: the current tombstone is absent from the canonical read result.
     assert actual == []
+
+
+def test_store_loads_active_mapping_by_org_service_and_repository() -> None:
+    service = equivalent_operational_lifecycles()[0].service
+    mapping = ServiceRepositoryMapping(
+        org_id=service.org_id,
+        provider=service.provider,
+        provider_instance_id=service.provider_instance_id,
+        source_entity_type="admin_configuration",
+        external_id="svc:github:full-chaos/payments:admin.v1",
+        source_version_at=service.observed_at,
+        service_id=service.id,
+        repo_full_name="full-chaos/payments",
+        repo_provider="github",
+        mapping_kind="admin_configuration_exact",
+        rule_id="service_repository_mapping.admin.v1",
+        relationship_provenance="admin_configuration",
+        relationship_confidence=1.0,
+    )
+    row = tuple(
+        getattr(mapping, field.name) for field in fields(ServiceRepositoryMapping)
+    )
+
+    class QueryResult:
+        result_rows = [row]
+
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.parameters: dict[str, str] | None = None
+
+        def query(self, query: str, parameters: dict[str, str]) -> QueryResult:
+            assert "operational_service_repository_mappings FINAL" in query
+            self.parameters = parameters
+            return QueryResult()
+
+    store = ClickHouseStore("clickhouse://unused")
+    store.client = RecordingClient()
+
+    actual = asyncio.run(
+        store.load_operational_service_repository_mappings(
+            service.org_id,
+            service_id=service.id,
+        )
+    )
+
+    assert actual == [mapping]
+    assert store.client.parameters == {
+        "org_id": service.org_id,
+        "service_id": service.id,
+    }

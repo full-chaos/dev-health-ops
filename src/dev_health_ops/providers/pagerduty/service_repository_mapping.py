@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
+from uuid import UUID
 
 from pydantic import JsonValue
 
@@ -65,6 +66,28 @@ class RepositoryReference:
     full_name: str
 
 
+@dataclass(frozen=True, slots=True)
+class HeuristicRepositoryReference:
+    """A bounded repository inference with a stable, auditable rule identifier."""
+
+    repository: RepositoryReference
+    rule_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PagerDutyServiceRepositoryMappingInputs:
+    """Explicit mapping inputs keyed by PagerDuty service external ID."""
+
+    admin: dict[str, tuple[RepositoryReference, ...]]
+    compass: dict[str, tuple[RepositoryReference, ...]]
+    heuristic: dict[str, tuple[HeuristicRepositoryReference, ...]]
+
+    @classmethod
+    def empty(cls) -> PagerDutyServiceRepositoryMappingInputs:
+        """Return an input collection with no configured mappings."""
+        return cls(admin={}, compass={}, heuristic={})
+
+
 def mapping_from_repository_reference(
     service: OperationalService,
     reference: RepositoryReference,
@@ -119,6 +142,87 @@ def mappings_from_service_metadata(
         for reference in sorted(
             references, key=lambda item: (item.provider, item.full_name)
         )
+    )
+
+
+def mappings_from_service_sources(
+    service: OperationalService,
+    metadata: dict[str, JsonValue],
+    observed_at: datetime,
+    inputs: PagerDutyServiceRepositoryMappingInputs,
+) -> tuple[ServiceRepositoryMapping, ...]:
+    """Collect configured and metadata evidence, retaining only preferred mappings."""
+    mappings = [*mappings_from_service_metadata(service, metadata, observed_at)]
+    mappings.extend(
+        mapping_from_repository_reference(
+            service,
+            reference,
+            PagerDutyServiceRepositoryMappingSource.ADMIN_CONFIGURATION,
+            observed_at,
+        )
+        for reference in inputs.admin.get(service.external_id, ())
+    )
+    mappings.extend(
+        mapping_from_repository_reference(
+            service,
+            reference,
+            PagerDutyServiceRepositoryMappingSource.COMPASS,
+            observed_at,
+        )
+        for reference in inputs.compass.get(service.external_id, ())
+    )
+    mappings.extend(
+        mapping_from_repository_reference(
+            service,
+            heuristic.repository,
+            PagerDutyServiceRepositoryMappingSource.HEURISTIC,
+            observed_at,
+            rule_id=heuristic.rule_id,
+        )
+        for heuristic in inputs.heuristic.get(service.external_id, ())
+    )
+    return select_preferred_mappings(tuple(mappings))
+
+
+def select_preferred_mappings(
+    mappings: tuple[ServiceRepositoryMapping, ...],
+) -> tuple[ServiceRepositoryMapping, ...]:
+    """Keep the highest-precedence evidence for each service-to-repository pair."""
+    preferred: dict[tuple[str, str | None, str | None], ServiceRepositoryMapping] = {}
+    for mapping in mappings:
+        key = (mapping.service_id, mapping.repo_provider, mapping.repo_full_name)
+        current = preferred.get(key)
+        if current is None or (mapping.relationship_confidence or 0.0) > (
+            current.relationship_confidence or 0.0
+        ):
+            preferred[key] = mapping
+    return tuple(
+        preferred[key]
+        for key in sorted(
+            preferred, key=lambda item: (item[0], item[1] or "", item[2] or "")
+        )
+    )
+
+
+def resolve_repository_mappings(
+    mappings: tuple[ServiceRepositoryMapping, ...],
+    repositories: tuple[tuple[UUID, str, str], ...],
+) -> tuple[ServiceRepositoryMapping, ...]:
+    """Resolve mapping evidence against repositories already owned by the organization."""
+    repository_ids = {
+        (provider, full_name): repository_id
+        for repository_id, provider, full_name in repositories
+    }
+    return tuple(
+        replace(
+            mapping,
+            repo_id=(
+                repository_ids.get((mapping.repo_provider, mapping.repo_full_name))
+                if mapping.repo_provider and mapping.repo_full_name
+                else mapping.repo_id
+            ),
+        )
+        for mapping in mappings
     )
 
 

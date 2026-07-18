@@ -318,3 +318,65 @@ def test_deployment_correlation_excludes_same_repo_id_from_another_org() -> None
         ("deploy-a", "inc-a")
     ]
     assert all("WHERE org_id = {org_id:String}" in query for query in queries)
+
+
+def test_repo_scoped_build_rejects_cross_repo_pr_edges_from_note_body() -> None:
+    now = datetime(2026, 7, 17, tzinfo=timezone.utc)
+    requested_repo_id = uuid4()
+    other_repo_id = uuid4()
+    sink = MagicMock()
+
+    def query(q: str, _params: dict[str, object]) -> list[dict[str, object]]:
+        if "operational_service_repository_mappings" in q:
+            return [
+                {
+                    "service_id": "svc-1",
+                    "repo_id": requested_repo_id,
+                    "relationship_provenance": "admin_configuration",
+                    "relationship_confidence": 1.0,
+                    "mapping_kind": "admin_configuration_exact",
+                    "rule_id": "admin.v1",
+                    "source_url": None,
+                }
+            ]
+        if "operational_incidents" in q:
+            return [
+                {
+                    "id": "inc-1",
+                    "service_id": "svc-1",
+                    "escalation_policy_id": None,
+                    "started_at": now,
+                    "source_url": None,
+                }
+            ]
+        if "operational_incident_notes" in q:
+            return [
+                {
+                    "id": "note-1",
+                    "incident_id": "inc-1",
+                    "body": (
+                        "Fixed via https://github.com/req-org/req-repo/pull/7 "
+                        "and https://github.com/other-org/other-repo/pull/42"
+                    ),
+                    "author_user_id": None,
+                    "source_url": None,
+                    "created_at": now,
+                }
+            ]
+        if "FROM repos FINAL" in q:
+            return [
+                {"id": requested_repo_id, "repo": "req-org/req-repo"},
+                {"id": other_repo_id, "repo": "other-org/other-repo"},
+            ]
+        return []
+
+    sink.query_dicts.side_effect = query
+
+    edges = build_operational_incident_edges(
+        sink, "org-a", now, 7, 0.3, repo_id=requested_repo_id
+    )
+
+    pr_edges = [edge for edge in edges if "pull/" in edge.evidence]
+    assert len(pr_edges) == 1
+    assert "pull/7" in pr_edges[0].evidence
+    assert pr_edges[0].repo_id == requested_repo_id

@@ -308,19 +308,21 @@ def build_operational_incident_edges(
                     )
                 )
         for owner, repo, number in _GITHUB_PR_URL.findall(body):
-            repo_id = repo_ids.get(f"{owner}/{repo}")
-            if repo_id is not None:
+            pr_repo_id = repo_ids.get(f"{owner}/{repo}")
+            # A repo-scoped build must not emit PR edges for another of the
+            # org's repos that a note/timeline body happens to reference.
+            if pr_repo_id is not None and (repo_id is None or pr_repo_id == repo_id):
                 edges.append(
                     _edge(
                         NodeType.INCIDENT,
                         incident_id,
                         EdgeType.REFERENCES,
                         NodeType.PR,
-                        generate_pr_id(repo_id, int(number)),
+                        generate_pr_id(pr_repo_id, int(number)),
                         Provenance.EXPLICIT_TEXT,
                         0.9,
                         f"incident_evidence:https://github.com/{owner}/{repo}/pull/{number}",
-                        repo_id,
+                        pr_repo_id,
                         event_at,
                     )
                 )

@@ -65,6 +65,7 @@ _IDENTIFIER_KEYS: tuple[str, ...] = (
     "organization_id",
     "workspace_id",
     "team_id",
+    "oauth_binding_id",
 )
 
 # Secret-bearing fields. Each present value is SHA-256 hashed into a
@@ -83,6 +84,8 @@ _SECRET_KEYS: tuple[str, ...] = (
     "apiKey",
     "private_key",
     "privateKey",
+    "client_secret",
+    "clientSecret",
 )
 
 

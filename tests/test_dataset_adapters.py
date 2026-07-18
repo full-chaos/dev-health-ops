@@ -575,6 +575,176 @@ def test_pagerduty_client_rejects_blank_account_subdomain() -> None:
         _pagerduty_client(ctx)
 
 
+def test_pagerduty_client_uses_oauth_bearer_auth_for_hydrated_oauth() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+    from dev_health_ops.providers.pagerduty.auth import OAuthBearerAuth
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={
+            "auth_mode": "oauth",
+            "access_token": "hydrated-oauth-token",
+            "subdomain": "acme",
+        },
+    )
+
+    with patch(
+        "dev_health_ops.providers.pagerduty.client.PagerDutyClient"
+    ) as pagerduty_client:
+        _pagerduty_client(ctx)
+
+    auth = pagerduty_client.call_args.args[0]
+    assert isinstance(auth, OAuthBearerAuth)
+    assert auth.access_token == "hydrated-oauth-token"
+
+
+def test_pagerduty_client_uses_oauth_bearer_auth_for_hydrated_client_credentials() -> (
+    None
+):
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+    from dev_health_ops.providers.pagerduty.auth import OAuthBearerAuth
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={
+            "auth_mode": "client_credentials",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "access_token": "hydrated-client-token",
+            "subdomain": "acme",
+        },
+    )
+
+    with patch(
+        "dev_health_ops.providers.pagerduty.client.PagerDutyClient"
+    ) as pagerduty_client:
+        _pagerduty_client(ctx)
+
+    auth = pagerduty_client.call_args.args[0]
+    assert isinstance(auth, OAuthBearerAuth)
+    assert auth.access_token == "hydrated-client-token"
+
+
+def test_pagerduty_client_uses_api_token_auth_for_api_token_mode() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+    from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={
+            "auth_mode": "api_token",
+            "api_token": "api-token",
+            "subdomain": "acme",
+        },
+    )
+
+    with patch(
+        "dev_health_ops.providers.pagerduty.client.PagerDutyClient"
+    ) as pagerduty_client:
+        _pagerduty_client(ctx)
+
+    auth = pagerduty_client.call_args.args[0]
+    assert isinstance(auth, ApiTokenAuth)
+    assert auth.api_token == "api-token"
+
+
+def test_pagerduty_client_rejects_oauth_mode_without_hydrated_access_token() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={"auth_mode": "oauth", "subdomain": "acme"},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="PagerDuty oauth credential is missing a hydrated access token",
+    ):
+        _pagerduty_client(ctx)
+
+
+def test_pagerduty_credentials_reject_api_token_mode_with_access_token() -> None:
+    from dev_health_ops.credentials.types import CredentialSource, PagerDutyCredentials
+
+    with pytest.raises(
+        ValueError,
+        match="api_token credentials must not carry an access token",
+    ):
+        PagerDutyCredentials(
+            source=CredentialSource.DATABASE,
+            auth_mode="api_token",
+            api_token="api-token",
+            access_token="hydrated-oauth-token",
+        )
+
+
+def test_pagerduty_client_keeps_legacy_access_token_fallback() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+    from dev_health_ops.providers.pagerduty.auth import OAuthBearerAuth
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={"access_token": "legacy-access-token", "subdomain": "acme"},
+    )
+
+    with patch(
+        "dev_health_ops.providers.pagerduty.client.PagerDutyClient"
+    ) as pagerduty_client:
+        _pagerduty_client(ctx)
+
+    auth = pagerduty_client.call_args.args[0]
+    assert isinstance(auth, OAuthBearerAuth)
+    assert auth.access_token == "legacy-access-token"
+
+
+def test_pagerduty_client_keeps_legacy_api_token_fallback() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+    from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={"api_token": "legacy-api-token", "subdomain": "acme"},
+    )
+
+    with patch(
+        "dev_health_ops.providers.pagerduty.client.PagerDutyClient"
+    ) as pagerduty_client:
+        _pagerduty_client(ctx)
+
+    auth = pagerduty_client.call_args.args[0]
+    assert isinstance(auth, ApiTokenAuth)
+    assert auth.api_token == "legacy-api-token"
+
+
+def test_pagerduty_mapping_preserves_auth_mode_metadata_and_ignores_unknown_keys() -> (
+    None
+):
+    from dev_health_ops.credentials.resolver import pagerduty_credentials_from_mapping
+
+    credentials = pagerduty_credentials_from_mapping(
+        {
+            "auth_mode": "oauth",
+            "oauth_credential_name": "pagerduty-oauth",
+            "oauth_binding_id": "binding-id",
+            "account_id": "account-id",
+            "subdomain": "acme",
+            "unknown": "ignored",
+        }
+    )
+
+    assert credentials is not None
+    assert credentials.auth_mode == "oauth"
+    assert credentials.oauth_credential_name == "pagerduty-oauth"
+    assert credentials.oauth_binding_id == "binding-id"
+    assert credentials.account_id == "account-id"
+
+
 def test_unsupported_provider_dataset_pair_raises_value_error() -> None:
     ctx = _context(provider="jira", dataset_key="commits", source_external_id="OPS")
 

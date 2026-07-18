@@ -26,8 +26,7 @@ READ_SCOPES = frozenset(
 DATASET_SCOPES = {
     "incidents": frozenset({"Incidents.read"}),
     "services": frozenset({"Services.read"}),
-    # PagerDuty's published scoped-OAuth list has no Business_services.read scope.
-    "business_services": frozenset(),
+    "business_services": frozenset({"Services.read"}),
     "escalation_policies": frozenset({"Escalation_policies.read"}),
     "schedules": frozenset({"Schedules.read"}),
     "oncalls": frozenset({"Oncalls.read"}),
@@ -35,6 +34,8 @@ DATASET_SCOPES = {
     "teams": frozenset({"Teams.read"}),
 }
 DEFAULT_RENEWAL_WINDOW: Final = timedelta(minutes=5)
+
+_HTTP_TIMEOUT: Final = httpx.Timeout(10.0)
 
 
 class OAuthTokens(BaseModel):
@@ -121,14 +122,18 @@ def build_authorization_request(
     )
 
 
-def validate_callback(
-    request: AuthorizationRequest, *, state: str, code: str, code_verifier: str
-) -> str:
-    """Validate callback state and its PKCE verifier before exchanging the code."""
-    if not secrets.compare_digest(request.state, state):
-        raise OAuthCallbackValidationError("PagerDuty OAuth callback state mismatch")
-    if not secrets.compare_digest(request.code_verifier, code_verifier):
-        raise OAuthCallbackValidationError("PagerDuty OAuth callback PKCE mismatch")
+def validate_callback(*, code: str, error: str | None = None) -> str:
+    """Reject an error/denied callback or an empty code before code exchange.
+
+    State/CSRF binding is enforced by the server-side authorization-request
+    store (one-time consume keyed by the state hash); the PKCE ``code_verifier``
+    is held server-side and never travels through the browser, so it is never
+    accepted from the caller here.
+    """
+    if error:
+        raise OAuthCallbackValidationError(
+            f"PagerDuty OAuth callback returned an error: {error}"
+        )
     if not code:
         raise OAuthCallbackValidationError("PagerDuty OAuth callback code is required")
     return code
@@ -137,17 +142,18 @@ def validate_callback(
 async def exchange_code(
     config: PagerDutyOAuthConfig, *, code: str, code_verifier: str
 ) -> OAuthTokens:
-    response = await httpx.AsyncClient().post(
-        config.token_url,
-        data={
-            "grant_type": "authorization_code",
-            "client_id": config.client_id,
-            "client_secret": config.client_secret or "",
-            "redirect_uri": config.redirect_uri,
-            "code": code,
-            "code_verifier": code_verifier,
-        },
-    )
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        response = await client.post(
+            config.token_url,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": config.client_id,
+                "client_secret": config.client_secret or "",
+                "redirect_uri": config.redirect_uri,
+                "code": code,
+                "code_verifier": code_verifier,
+            },
+        )
     response.raise_for_status()
     return _tokens(response.json())
 
@@ -155,15 +161,16 @@ async def exchange_code(
 async def refresh_tokens(
     config: PagerDutyOAuthConfig, refresh_token: str
 ) -> OAuthTokens:
-    response = await httpx.AsyncClient().post(
-        config.token_url,
-        data={
-            "grant_type": "refresh_token",
-            "client_id": config.client_id,
-            "client_secret": config.client_secret or "",
-            "refresh_token": refresh_token,
-        },
-    )
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        response = await client.post(
+            config.token_url,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": config.client_id,
+                "client_secret": config.client_secret or "",
+                "refresh_token": refresh_token,
+            },
+        )
     response.raise_for_status()
     return _tokens(response.json())
 
@@ -171,24 +178,25 @@ async def refresh_tokens(
 async def client_credentials(
     config: PagerDutyOAuthConfig, *, scopes: set[str], subdomain: str, region: str
 ) -> OAuthTokens:
-    response = await httpx.AsyncClient().post(
-        config.token_url,
-        data={
-            "grant_type": "client_credentials",
-            "client_id": config.client_id,
-            "client_secret": config.client_secret or "",
-            "scope": " ".join(sorted(scopes)),
-            "subdomain": subdomain,
-            "region": region,
-        },
-    )
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        response = await client.post(
+            config.token_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": config.client_id,
+                "client_secret": config.client_secret or "",
+                "scope": " ".join(sorted(scopes)),
+                "subdomain": subdomain,
+                "region": region,
+            },
+        )
     response.raise_for_status()
     return _tokens(response.json())
 
 
 async def revoke_token(config: PagerDutyOAuthConfig, token: str) -> None:
     """Best-effort OAuth revocation request; callers own local credential removal."""
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         response = await client.post(
             config.revoke_url,
             data={"token": token, "client_id": config.client_id},

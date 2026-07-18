@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,56 @@ from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from ._helpers import _normalize_credential_keys
 
 logger = logging.getLogger(__name__)
+
+_PAGERDUTY_FORBIDDEN_TOKEN_KEYS: Final = frozenset(
+    {"access_token", "refresh_token", "expires_at"}
+)
+_PAGERDUTY_DESCRIPTOR_KEYS: Final = {
+    "oauth": frozenset(
+        {
+            "auth_mode",
+            "oauth_credential_name",
+            "oauth_binding_id",
+            "subdomain",
+            "region",
+            "account_id",
+        }
+    ),
+    "client_credentials": frozenset(
+        {"auth_mode", "client_id", "client_secret", "subdomain", "region"}
+    ),
+    "api_token": frozenset({"auth_mode", "api_token", "subdomain", "region"}),
+}
+_PAGERDUTY_CONFIG_KEYS: Final = {
+    "oauth": frozenset(
+        {"auth_mode", "region", "subdomain", "account_id", "granted_scopes"}
+    ),
+    "client_credentials": frozenset({"auth_mode", "region", "subdomain"}),
+    "api_token": frozenset({"auth_mode", "region", "subdomain"}),
+}
+_PAGERDUTY_FORBIDDEN_CONFIG_KEYS: Final = _PAGERDUTY_FORBIDDEN_TOKEN_KEYS.union(
+    {"client_secret", "client_id", "api_token"}
+)
+
+
+def _validate_pagerduty_descriptor(
+    credentials: dict[str, Any], config: dict[str, Any] | None
+) -> None:
+    config_values = config or {}
+    if _PAGERDUTY_FORBIDDEN_TOKEN_KEYS.intersection(credentials) or (
+        _PAGERDUTY_FORBIDDEN_CONFIG_KEYS.intersection(config_values)
+    ):
+        raise ValueError("PagerDuty OAuth tokens must not be stored in descriptors")
+
+    auth_mode = credentials.get("auth_mode")
+    if not isinstance(auth_mode, str) or auth_mode not in _PAGERDUTY_DESCRIPTOR_KEYS:
+        raise ValueError("PagerDuty credentials require a recognized auth_mode")
+    if frozenset(credentials) != _PAGERDUTY_DESCRIPTOR_KEYS[auth_mode]:
+        raise ValueError("PagerDuty credentials do not match the auth_mode descriptor")
+    if not frozenset(config_values).issubset(_PAGERDUTY_CONFIG_KEYS[auth_mode]):
+        raise ValueError("PagerDuty config does not match the auth_mode descriptor")
+    if config_values.get("auth_mode") != auth_mode:
+        raise ValueError("PagerDuty config auth_mode must match credentials")
 
 
 class AmbiguousCredentialError(ValueError):
@@ -173,6 +223,8 @@ class IntegrationCredentialsService:
         is_active: bool = True,
     ) -> IntegrationCredential:
         """Set integration credentials (always encrypted)."""
+        if provider == "pagerduty":
+            _validate_pagerduty_descriptor(credentials, config)
         stmt = select(IntegrationCredential).where(
             IntegrationCredential.org_id == self.org_id,
             IntegrationCredential.provider == provider,

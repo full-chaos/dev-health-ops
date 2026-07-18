@@ -223,6 +223,45 @@ class ProviderOAuthCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    binding_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    granted_scopes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    has_refresh_token: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    account_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    account_display: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PagerDutyOAuthAuthorizationRequest(Base):
+    """Server-side PKCE authorization-request state for PagerDuty OAuth setup.
+
+    Persists the one-time authorization context between ``authorize`` and the
+    OAuth ``callback``. Keyed by the SHA-256 hash of the opaque ``state`` token
+    sent to PagerDuty (never the plaintext state), so a database reader cannot
+    forge a callback. Only the PKCE ``code_verifier`` is encrypted; it is used
+    server-side for the code exchange and never travels through the browser.
+    Rows are single-use (consumed on callback) and expire via ``expires_at``.
+    """
+
+    __tablename__ = "pagerduty_oauth_authorization_requests"
+
+    state_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    credential_name: Mapped[str] = mapped_column(Text, nullable=False)
+    code_verifier_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled_datasets: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    region: Mapped[str] = mapped_column(Text, nullable=False)
+    subdomain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    initiated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class GithubAppInstallation(Base):

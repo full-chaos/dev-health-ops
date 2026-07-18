@@ -167,12 +167,32 @@ def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
     if credentials is None:
         raise ValueError("Missing PagerDuty credentials for dataset unit")
     auth: PagerDutyAuth
-    if credentials.access_token:
-        auth = OAuthBearerAuth(credentials.access_token)
-    elif credentials.api_token:
-        auth = ApiTokenAuth(credentials.api_token)
-    else:
-        raise ValueError("PagerDuty dataset unit requires an access token or API token")
+    match credentials.auth_mode:
+        case "oauth" | "client_credentials" as auth_mode:
+            access_token = credentials.access_token
+            if not access_token:
+                raise ValueError(
+                    f"PagerDuty {auth_mode} credential is missing a hydrated access token"
+                )
+            auth = OAuthBearerAuth(access_token)
+        case "api_token":
+            api_token = credentials.api_token
+            if not api_token:
+                raise ValueError(
+                    "PagerDuty api_token credential is missing an API token"
+                )
+            auth = ApiTokenAuth(api_token)
+        case None:
+            if credentials.access_token:
+                auth = OAuthBearerAuth(credentials.access_token)
+            elif credentials.api_token:
+                auth = ApiTokenAuth(credentials.api_token)
+            else:
+                raise ValueError(
+                    "PagerDuty dataset unit requires an access token or API token"
+                )
+        case auth_mode:
+            raise ValueError(f"Unsupported PagerDuty auth mode: {auth_mode}")
     provider_instance_id = (
         credentials.subdomain.strip() if credentials.subdomain else ""
     )

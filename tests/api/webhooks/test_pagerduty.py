@@ -134,7 +134,17 @@ def test_rejects_an_invalid_signature(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("body", [b"{", b"x" * 1_048_577])
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"{", id="malformed"),
+        # Short explicit id: using the 1 MiB value as the param would make
+        # pytest generate a ~1 MB node id, which pytest-xdist pipes between the
+        # controller and workers during --dist loadscope collection and can
+        # deadlock the run in CI (CHAOS-2960).
+        pytest.param(b"x" * 1_048_577, id="oversized"),
+    ],
+)
 def test_rejects_malformed_or_oversized_payloads(
     client: TestClient, body: bytes
 ) -> None:

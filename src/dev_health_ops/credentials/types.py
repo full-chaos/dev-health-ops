@@ -137,6 +137,7 @@ class PagerDutyCredentials(ProviderCredentials):
     """PagerDuty OAuth, client-credentials, or API-token fallback credentials."""
 
     provider: str = "pagerduty"
+    auth_mode: str | None = None
     access_token: str | None = None
     refresh_token: str | None = None
     expires_at: str | None = None
@@ -144,11 +145,27 @@ class PagerDutyCredentials(ProviderCredentials):
     client_id: str | None = None
     client_secret: str | None = None
     api_token: str | None = None
+    oauth_credential_name: str | None = None
+    oauth_binding_id: str | None = None
+    account_id: str | None = None
     subdomain: str | None = None
     region: str = "us"
 
     def __post_init__(self) -> None:
-        if not any(
+        if self.auth_mode is not None:
+            if self.auth_mode not in {"oauth", "client_credentials", "api_token"}:
+                raise ValueError(
+                    "PagerDuty auth_mode must be 'oauth', 'client_credentials', or 'api_token'"
+                )
+            if self.auth_mode == "api_token" and self.access_token:
+                raise ValueError(
+                    "PagerDuty api_token credentials must not carry an access token"
+                )
+            if self.auth_mode in {"oauth", "client_credentials"} and self.api_token:
+                raise ValueError(
+                    "PagerDuty OAuth and client_credentials credentials must not carry an API token"
+                )
+        elif not any(
             (self.access_token, self.api_token, self.client_id and self.client_secret)
         ):
             raise ValueError(

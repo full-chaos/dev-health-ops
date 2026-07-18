@@ -250,6 +250,11 @@ async def create_credential(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
+    if payload.provider == "pagerduty":
+        raise HTTPException(
+            status_code=400,
+            detail="Use the dedicated PagerDuty setup endpoints",
+        )
     svc = IntegrationCredentialsService(session, org_id)
     cred = await svc.set(
         provider=payload.provider,
@@ -270,6 +275,11 @@ async def update_credential(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
+    if provider == "pagerduty":
+        raise HTTPException(
+            status_code=400,
+            detail="Use the dedicated PagerDuty setup endpoints",
+        )
     svc = IntegrationCredentialsService(session, org_id)
     existing = await svc.get(provider, name)
     if not existing:
@@ -713,7 +723,10 @@ async def _test_pagerduty_connection(
     """Preflight a minimal PagerDuty read without exposing credential material."""
     from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth, OAuthBearerAuth
     from dev_health_ops.providers.pagerduty.client import PagerDutyClient
-    from dev_health_ops.providers.pagerduty.oauth import missing_read_scopes
+    from dev_health_ops.providers.pagerduty.oauth import (
+        DATASET_SCOPES,
+        missing_read_scopes,
+    )
 
     access_token = creds.get("access_token")
     api_token = creds.get("api_token")
@@ -725,11 +738,44 @@ async def _test_pagerduty_connection(
         else ApiTokenAuth(str(api_token))
     )
     client = PagerDutyClient(auth, region=str(creds.get("region", "us")))
-    users = await client.list_users()
-    datasets = {str(value) for value in creds.get("enabled_datasets", [])}
+    datasets = [str(value) for value in creds.get("enabled_datasets", [])]
+    unknown = set(datasets).difference(DATASET_SCOPES)
+    if unknown:
+        await client.close()
+        return False, {
+            "error": f"Unknown PagerDuty datasets: {', '.join(sorted(unknown))}"
+        }
     granted = {str(value) for value in creds.get("granted_scopes", [])}
-    missing = sorted(missing_read_scopes(datasets, granted)) if access_token else []
-    return not missing, {"users_checked": len(users), "missing_scopes": missing}
+    missing = (
+        sorted(missing_read_scopes(set(datasets), granted)) if access_token else []
+    )
+    try:
+        if missing:
+            return False, {"records_checked": 0, "missing_scopes": missing}
+        if not datasets:
+            return False, {"error": "Select at least one PagerDuty dataset"}
+        match datasets[0]:
+            case "incidents":
+                records_count = len(await client.list_incidents())
+            case "services":
+                records_count = len(await client.list_services())
+            case "business_services":
+                records_count = len(await client.list_business_services())
+            case "escalation_policies":
+                records_count = len(await client.list_escalation_policies())
+            case "schedules":
+                records_count = len(await client.list_schedules())
+            case "oncalls":
+                records_count = len(await client.list_oncalls())
+            case "users":
+                records_count = len(await client.list_users())
+            case "teams":
+                records_count = len(await client.list_teams())
+            case unreachable:
+                raise RuntimeError(f"Unsupported PagerDuty dataset: {unreachable}")
+        return True, {"records_checked": records_count, "missing_scopes": []}
+    finally:
+        await client.close()
 
 
 async def _test_launchdarkly_connection(

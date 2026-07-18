@@ -168,29 +168,39 @@ def resolve_run_auth(
 
     auth_source = getattr(run, "auth_source", None) if run is not None else None
     if auth_source is None:
-        return _resolve_integration_auth(session, integration, provider, error_label)
-
-    stamped_credential_id = getattr(run, "credential_id", None)
-    if stamped_credential_id is None:
-        decrypted_credentials: Any = dict(_resolve_env_credentials(provider))
-        credential_id: Any = None
-    else:
-        credential = _load_credential(
-            session, stamped_credential_id, integration.org_id
+        credential_id, decrypted_credentials = _resolve_integration_auth(
+            session, integration, provider, error_label
         )
-        if credential is None:
-            # Stamped credential deleted mid-run: the intended, honest failure
-            # surface (the run was frozen against a now-absent credential).
-            raise ValueError(f"Credential not found for {error_label}")
-        decrypted_credentials = _credential_mapping(credential)
-        credential_id = stamped_credential_id
-    _verify_stamped_fingerprint(
-        run,
-        decrypted_credentials=decrypted_credentials,
-        credential_id=credential_id,
-        integration=integration,
-        error_label=error_label,
-    )
+    else:
+        stamped_credential_id = getattr(run, "credential_id", None)
+        if stamped_credential_id is None:
+            decrypted_credentials = dict(_resolve_env_credentials(provider))
+            credential_id = None
+        else:
+            credential = _load_credential(
+                session, stamped_credential_id, integration.org_id
+            )
+            if credential is None:
+                # Stamped credential deleted mid-run: the intended, honest failure
+                # surface (the run was frozen against a now-absent credential).
+                raise ValueError(f"Credential not found for {error_label}")
+            decrypted_credentials = _credential_mapping(credential)
+            credential_id = stamped_credential_id
+        _verify_stamped_fingerprint(
+            run,
+            decrypted_credentials=decrypted_credentials,
+            credential_id=credential_id,
+            integration=integration,
+            error_label=error_label,
+        )
+    if provider == "pagerduty" and isinstance(decrypted_credentials, dict):
+        from dev_health_ops.providers.pagerduty.sync_auth import (
+            hydrate_pagerduty_credentials,
+        )
+
+        decrypted_credentials = hydrate_pagerduty_credentials(
+            decrypted_credentials, org_id=integration.org_id
+        )
     return credential_id, decrypted_credentials
 
 

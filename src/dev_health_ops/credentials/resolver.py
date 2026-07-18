@@ -390,16 +390,36 @@ def pagerduty_credentials_from_mapping(
 ) -> PagerDutyCredentials | None:
     """Build PagerDuty credentials without logging secret-bearing validation errors."""
     aliases = {
+        "authMode": "auth_mode",
         "accessToken": "access_token",
         "refreshToken": "refresh_token",
         "apiToken": "api_token",
         "clientId": "client_id",
         "clientSecret": "client_secret",
+        "oauthCredentialName": "oauth_credential_name",
+        "oauthBindingId": "oauth_binding_id",
+        "accountId": "account_id",
         "grantedScopes": "granted_scopes",
     }
+    allowed_keys = {
+        "auth_mode",
+        "access_token",
+        "refresh_token",
+        "expires_at",
+        "granted_scopes",
+        "client_id",
+        "client_secret",
+        "api_token",
+        "oauth_credential_name",
+        "oauth_binding_id",
+        "account_id",
+        "subdomain",
+        "region",
+    }
     values = {
-        aliases.get(key, key): value
+        normalized_key: value
         for key, value in cred_dict.items()
+        if (normalized_key := aliases.get(key, key)) in allowed_keys
         if value is not None
     }
     values.update(source=source, credential_name=credential_name)

@@ -30,10 +30,12 @@ from .models import (
     map_gitlab_event,
     map_jira_event,
 )
+from .pagerduty import router as pagerduty_router
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
+router.include_router(pagerduty_router)
 
 
 def _dispatch_webhook_task(event: WebhookEvent) -> None:
@@ -44,7 +46,7 @@ def _dispatch_webhook_task(event: WebhookEvent) -> None:
     doesn't fail catastrophically).
     """
     try:
-        process_webhook_event.delay(
+        getattr(process_webhook_event, "delay")(
             provider=event.provider,
             event_type=event.event_type,
             delivery_id=event.delivery_id,

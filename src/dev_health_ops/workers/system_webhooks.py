@@ -166,6 +166,63 @@ def _record_delivery(provider: str, delivery_id: str) -> None:
         logger.warning("Failed to record webhook delivery: %s", e)
 
 
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="webhooks",
+    name="dev_health_ops.workers.tasks.process_pagerduty_webhook_event",
+)
+def process_pagerduty_webhook_event(
+    self,
+    *,
+    webhook: dict,
+    org_id: str,
+    provider_instance_id: str,
+    received_at: str,
+    stream_entry_id: str,
+) -> dict:
+    from datetime import datetime
+
+    from dev_health_ops.api.webhooks.pagerduty_models import PagerDutyV3Webhook
+    from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth
+    from dev_health_ops.providers.pagerduty.client import PagerDutyClient
+    from dev_health_ops.providers.pagerduty.webhooks import reconcile_pagerduty_webhook
+    from dev_health_ops.storage import run_with_store
+
+    token = os.getenv("PAGERDUTY_API_TOKEN")
+    clickhouse_url = os.getenv("CLICKHOUSE_URI")
+    if not token or not clickhouse_url:
+        return {"processed": False, "reason": "pagerduty_webhook_unconfigured"}
+    parsed = PagerDutyV3Webhook.model_validate(webhook)
+    processed_at = datetime.fromisoformat(received_at)
+
+    async def _process(store):
+        client = PagerDutyClient(ApiTokenAuth(token))
+        try:
+            return await reconcile_pagerduty_webhook(
+                webhook=parsed,
+                org_id=org_id,
+                provider_instance_id=provider_instance_id,
+                received_at=processed_at,
+                store=store,
+                client=client,
+            )
+        finally:
+            await client.close()
+
+    try:
+        processed = run_async(
+            run_with_store(clickhouse_url, "clickhouse", _process, org_id=org_id)
+        )
+        return {
+            "processed": processed,
+            "event_id": parsed.event.id,
+            "stream_entry_id": stream_entry_id,
+        }
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
+
+
 def _process_github_event(
     event_type: str,
     payload: dict | None,

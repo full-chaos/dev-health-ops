@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -19,3 +20,20 @@ class PagerDutyEnrichmentToggles:
                 return self.notes
             case _:
                 return True
+
+    @classmethod
+    def from_dataset_options(
+        cls, dataset_key: str, options: Mapping[str, object]
+    ) -> PagerDutyEnrichmentToggles:
+        enabled = options.get("enabled")
+        if not isinstance(enabled, bool):
+            return cls()
+        match dataset_key:
+            case "incident-alerts":
+                return cls(alerts=enabled)
+            case "incident-log-entries":
+                return cls(log_entries=enabled)
+            case "incident-notes":
+                return cls(notes=enabled)
+            case _:
+                return cls()

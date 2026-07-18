@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TypeVar
@@ -30,7 +30,6 @@ class PagerDutySyncOptions:
     window_start: datetime | None
     window_end: datetime | None
     resume_after: datetime | None = None
-    incident_cap: int = 100
     batch_size: int = 100
     enrichment_cap: int = 100
     enrichment: PagerDutyEnrichmentToggles = field(
@@ -40,8 +39,8 @@ class PagerDutySyncOptions:
     def __post_init__(self) -> None:
         if self.batch_size <= 0:
             raise ValueError("PagerDuty batch_size must be positive")
-        if self.incident_cap < 0 or self.enrichment_cap < 0:
-            raise ValueError("PagerDuty caps must not be negative")
+        if self.enrichment_cap < 0:
+            raise ValueError("PagerDuty enrichment_cap must not be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,21 +137,21 @@ class PagerDutyOperationalSync:
             case "incident-alerts":
                 persisted, watermark_at = await self._sync_enrichment(
                     options,
-                    self._client.list_incident_alerts,
+                    self._client.iter_incident_alert_pages,
                     self._normalizer.alert,
                     self._store.insert_operational_alerts,
                 )
             case "incident-log-entries":
                 persisted, watermark_at = await self._sync_enrichment(
                     options,
-                    self._client.list_incident_log_entries,
+                    self._client.iter_incident_log_entry_pages,
                     self._normalizer.log_entry,
                     self._store.insert_operational_incident_timeline_events,
                 )
             case "incident-notes":
                 persisted, watermark_at = await self._sync_enrichment(
                     options,
-                    self._client.list_incident_notes,
+                    self._client.iter_incident_note_pages,
                     self._normalizer.note,
                     self._store.insert_operational_incident_notes,
                 )
@@ -209,30 +208,45 @@ class PagerDutyOperationalSync:
     async def _sync_enrichment(
         self,
         options: PagerDutySyncOptions,
-        fetch: Callable[[str], Awaitable[list[_Source]]],
+        fetch: Callable[[str], AsyncIterator[list[_Source]]],
         normalize: Callable[[_Source, str], _Destination],
         persist: Callable[[list[_Destination]], Awaitable[None]],
     ) -> tuple[int, datetime | None]:
         values: list[_Destination] = []
         persisted = 0
-        watermark_at: datetime | None = None
-        enriched_incidents = 0
+        watermark_at = options.resume_after or options.window_start
+        if options.enrichment_cap == 0:
+            async for incident in iter_resumable_incidents(self._client, options):
+                source_time = incident_source_time(incident)
+                if source_time is not None and (
+                    watermark_at is None or source_time > watermark_at
+                ):
+                    watermark_at = source_time
+            return persisted, watermark_at
+        watermark_can_advance = True
         async for incident in iter_resumable_incidents(self._client, options):
-            if enriched_incidents >= options.enrichment_cap:
-                break
+            incident_id = self._normalizer.incident(incident).id
+            child_count = 0
+            async for page in fetch(incident.id):
+                remaining = options.enrichment_cap - child_count
+                for row in page[:remaining]:
+                    values.append(normalize(row, incident_id))
+                    child_count += 1
+                    if len(values) == options.batch_size:
+                        await persist(values)
+                        persisted += len(values)
+                        values = []
+                if child_count == options.enrichment_cap:
+                    break
+            if child_count == options.enrichment_cap:
+                watermark_can_advance = False
             source_time = incident_source_time(incident)
-            if source_time is not None and (
-                watermark_at is None or source_time > watermark_at
+            if (
+                watermark_can_advance
+                and source_time is not None
+                and (watermark_at is None or source_time > watermark_at)
             ):
                 watermark_at = source_time
-            incident_id = self._normalizer.incident(incident).id
-            for row in (await fetch(incident.id))[: options.enrichment_cap]:
-                values.append(normalize(row, incident_id))
-                if len(values) == options.batch_size:
-                    await persist(values)
-                    persisted += len(values)
-                    values = []
-            enriched_incidents += 1
         if values:
             await persist(values)
             persisted += len(values)

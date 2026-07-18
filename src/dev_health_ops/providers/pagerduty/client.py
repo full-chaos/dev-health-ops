@@ -82,13 +82,37 @@ class PagerDutyClient:
             f"/incidents/{incident_id}/alerts", "alerts", Alert, None
         )
 
+    async def iter_incident_alert_pages(
+        self, incident_id: str
+    ) -> AsyncIterator[list[Alert]]:
+        async for page in self._iter_many(
+            f"/incidents/{incident_id}/alerts", "alerts", Alert, None
+        ):
+            yield page
+
     async def list_incident_log_entries(self, incident_id: str) -> list[LogEntry]:
         return await self._many(
             f"/incidents/{incident_id}/log_entries", "log_entries", LogEntry, None
         )
 
+    async def iter_incident_log_entry_pages(
+        self, incident_id: str
+    ) -> AsyncIterator[list[LogEntry]]:
+        async for page in self._iter_many(
+            f"/incidents/{incident_id}/log_entries", "log_entries", LogEntry, None
+        ):
+            yield page
+
     async def list_incident_notes(self, incident_id: str) -> list[Note]:
         return await self._many(f"/incidents/{incident_id}/notes", "notes", Note, None)
+
+    async def iter_incident_note_pages(
+        self, incident_id: str
+    ) -> AsyncIterator[list[Note]]:
+        async for page in self._iter_many(
+            f"/incidents/{incident_id}/notes", "notes", Note, None
+        ):
+            yield page
 
     async def list_services(self) -> list[Service]:
         return await self._many("/services", "services", Service, None)

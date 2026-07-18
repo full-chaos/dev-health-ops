@@ -66,6 +66,28 @@ async def test_incident_page_iterator_preserves_window_at_each_resume_offset() -
 
 
 @pytest.mark.asyncio
+async def test_incident_alert_page_iterator_fetches_only_requested_pages() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        offset = request.url.params["offset"]
+        return httpx.Response(
+            200,
+            json={"alerts": [{"id": offset, "raw": {}}], "more": offset == "0"},
+        )
+
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"), transport=httpx.MockTransport(handler)
+    )
+    pages = client.iter_incident_alert_pages("incident-1")
+    first_page = await anext(pages)
+
+    assert [alert.id for alert in first_page] == ["0"]
+    assert [request.url.params["offset"] for request in requests] == ["0"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [429, 503])
 async def test_retries_transient_response_with_bounded_attempts(
     monkeypatch: pytest.MonkeyPatch, status: int

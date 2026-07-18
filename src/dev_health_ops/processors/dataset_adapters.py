@@ -378,6 +378,7 @@ def _run_gitlab_dataset(
 def _run_pagerduty_dataset(
     context: SyncTaskContext, runtime: ProviderRuntime
 ) -> dict[str, Any]:
+    from dev_health_ops.providers.pagerduty.enrichment import PagerDutyEnrichmentToggles
     from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
     from dev_health_ops.providers.pagerduty.sync import (
         PagerDutyOperationalSync,
@@ -386,6 +387,12 @@ def _run_pagerduty_dataset(
 
     client, provider_instance_id = _pagerduty_client(context)
     usage_sink: list[dict[str, Any]] = []
+    enrichment_cap = context.dataset_options.get("enrichment_cap", 100)
+    if not isinstance(enrichment_cap, int) or isinstance(enrichment_cap, bool):
+        enrichment_cap = 100
+    enrichment = PagerDutyEnrichmentToggles.from_dataset_options(
+        context.dataset_key, context.dataset_options
+    )
 
     async def _handler(store: Any) -> dict[str, Any]:
         result = await PagerDutyOperationalSync(
@@ -404,6 +411,8 @@ def _run_pagerduty_dataset(
                 window_start=context.window_start,
                 window_end=context.window_end,
                 resume_after=context.resume_cursor,
+                enrichment_cap=enrichment_cap,
+                enrichment=enrichment,
             )
         )
         usage_sink.extend(result.observations)

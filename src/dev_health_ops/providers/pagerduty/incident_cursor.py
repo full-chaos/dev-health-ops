@@ -22,34 +22,27 @@ class IncidentCursorOptions(Protocol):
     @property
     def resume_after(self) -> datetime | None: ...
 
-    @property
-    def incident_cap(self) -> int: ...
-
 
 async def iter_resumable_incidents(
     client: PagerDutyClient,
     options: IncidentCursorOptions,
 ) -> AsyncIterator[Incident]:
-    """Yield a fixed window without replaying records at its stored watermark."""
+    """Yield every incident in a fixed window, inclusively from its watermark."""
     params: dict[str, str] = {}
     if options.window_start is not None:
         params["since"] = options.window_start.isoformat()
     if options.window_end is not None:
         params["until"] = options.window_end.isoformat()
-    emitted = 0
     async for page in client.iter_incident_pages(params=params):
         for incident in page:
             source_time = incident_source_time(incident)
             if (
                 options.resume_after is not None
                 and source_time is not None
-                and source_time <= options.resume_after
+                and source_time < options.resume_after
             ):
                 continue
-            if emitted >= options.incident_cap:
-                return
             yield incident
-            emitted += 1
 
 
 def incident_source_time(incident: Incident) -> datetime | None:

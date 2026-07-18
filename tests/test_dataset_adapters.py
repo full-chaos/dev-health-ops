@@ -462,6 +462,46 @@ def test_pagerduty_dataset_passes_persisted_resume_cursor_and_returns_source_wat
     assert result["watermark_at"] == WINDOW_END.isoformat()
 
 
+def test_pagerduty_dataset_applies_persisted_enrichment_options() -> None:
+    from dev_health_ops.providers.pagerduty.sync import PagerDutySyncResult
+
+    ctx = replace(
+        _context(
+            provider="pagerduty",
+            dataset_key="incident-alerts",
+            source_external_id="acme",
+        ),
+        dataset_options={"enrichment_cap": 2, "enabled": False},
+    )
+    client = Mock()
+    client.drain_usage_observations.return_value = []
+    sync_result = PagerDutySyncResult(
+        dataset_key="incident-alerts",
+        persisted=0,
+        watermark_at=WINDOW_END,
+        degraded=False,
+        observations=(),
+    )
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.providers.pagerduty.sync.PagerDutyOperationalSync"
+        ) as sync,
+    ):
+        sync.return_value.run = AsyncMock(return_value=sync_result)
+        run_dataset_unit(ctx, _runtime())
+
+    await_args = sync.return_value.run.await_args
+    assert await_args is not None
+    options = await_args.args[0]
+    assert options.enrichment_cap == 2
+    assert options.enrichment.alerts is False
+
+
 def test_pagerduty_dataset_rejects_source_id_without_verified_account_identity() -> (
     None
 ):

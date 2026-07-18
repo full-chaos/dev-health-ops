@@ -37,6 +37,7 @@ from dev_health_ops.models import (
 )
 from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers import reference_discovery
 from dev_health_ops.workers.sync_bootstrap import (
     RunAuthFingerprintMismatchError,
@@ -139,29 +140,46 @@ def _make_source(
 
 
 def _make_dataset(
-    session: Session, integration: Integration, *, dataset_key: str = "commits"
+    session: Session,
+    integration: Integration,
+    *,
+    dataset_key: str = "commits",
+    options: dict[str, object] | None = None,
 ) -> IntegrationDataset:
     dataset = IntegrationDataset(
         org_id=ORG_ID,
         integration_id=integration.id,
         dataset_key=dataset_key,
         is_enabled=True,
-        options={},
+        options=options or {},
     )
     session.add(dataset)
     session.flush()
     return dataset
 
 
-def _plan(session: Session, integration: Integration) -> tuple[SyncRun, SyncRunUnit]:
-    _make_source(session, integration)
-    _make_dataset(session, integration)
+def _plan(
+    session: Session,
+    integration: Integration,
+    *,
+    mode: str = SyncRunMode.INCREMENTAL.value,
+    dataset_key: str = "commits",
+    dataset_options: dict[str, object] | None = None,
+    source_external_id: str = "full-chaos/dev-health",
+) -> tuple[SyncRun, SyncRunUnit]:
+    _make_source(session, integration, external_id=source_external_id)
+    _make_dataset(
+        session,
+        integration,
+        dataset_key=dataset_key,
+        options=dataset_options,
+    )
     plan = plan_sync_run(
         session,
         SyncPlanRequest(
             integration_id=str(integration.id),
             org_id=ORG_ID,
-            mode=SyncRunMode.INCREMENTAL.value,
+            mode=mode,
             triggered_by="manual",
         ),
     )
@@ -173,6 +191,53 @@ def _plan(session: Session, integration: Integration) -> tuple[SyncRun, SyncRunU
         .one()
     )
     return run, unit
+
+
+def test_full_resync_bootstrap_ignores_persisted_watermark(db_session: Session) -> None:
+    credential = _make_credential(db_session, token="tok-A", provider="pagerduty")
+    integration = _make_integration(
+        db_session,
+        provider="pagerduty",
+        credential_id=credential.id,
+    )
+    _run, unit = _plan(
+        db_session,
+        integration,
+        mode=SyncRunMode.FULL_RESYNC.value,
+        dataset_key="incidents",
+        source_external_id="acme",
+    )
+    historical_watermark = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    set_watermark(
+        db_session,
+        ORG_ID,
+        "acme",
+        "incidents",
+        historical_watermark,
+    )
+
+    context = SyncTaskBootstrap.load(db_session, str(unit.id))
+
+    assert context.resume_cursor is None
+
+
+def test_bootstrap_loads_persisted_dataset_options(db_session: Session) -> None:
+    credential = _make_credential(db_session, token="tok-A", provider="pagerduty")
+    integration = _make_integration(
+        db_session,
+        provider="pagerduty",
+        credential_id=credential.id,
+    )
+    _run, unit = _plan(
+        db_session,
+        integration,
+        dataset_key="incident-alerts",
+        dataset_options={"enrichment_cap": 2, "enabled": False},
+    )
+
+    context = SyncTaskBootstrap.load(db_session, str(unit.id))
+
+    assert context.dataset_options == {"enrichment_cap": 2, "enabled": False}
 
 
 def test_midrun_credential_repoint_does_not_change_stamped_run_auth(db_session):

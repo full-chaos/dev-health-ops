@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.operational import OperationalIncident
-from dev_health_ops.providers.pagerduty.models import Incident
+from dev_health_ops.providers.pagerduty.models import Alert, Incident
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 from dev_health_ops.providers.pagerduty.sync import (
     PagerDutyEnrichmentToggles,
@@ -31,7 +31,9 @@ def db_session():
 
 
 @pytest.mark.asyncio
-async def test_incident_sync_flushes_bounded_batches_without_boundary_loss() -> None:
+async def test_incident_sync_drains_window_beyond_legacy_cap_in_bounded_batches() -> (
+    None
+):
     incidents = tuple(
         Incident(
             id=f"incident-{number}",
@@ -70,7 +72,6 @@ async def test_incident_sync_flushes_bounded_batches_without_boundary_loss() -> 
             dataset_key="incidents",
             window_start=SOURCE_TIME,
             window_end=SOURCE_TIME,
-            incident_cap=5,
             batch_size=2,
         )
     )
@@ -179,12 +180,15 @@ async def test_incident_sync_resumes_from_persisted_watermark_without_boundary_l
         )
     )
 
-    # Then: the boundary incident is retained once and never re-emitted on resume.
+    # Then: the inclusive boundary is replayed and canonical FINAL state keeps one row.
     assert [incident.external_id for incident in persisted] == [
         "incident-1",
         "incident-2",
+        "incident-2",
         "incident-3",
     ]
+    final_incidents = {incident.external_id: incident for incident in persisted}
+    assert list(final_incidents) == ["incident-1", "incident-2", "incident-3"]
 
 
 @pytest.mark.asyncio
@@ -239,14 +243,16 @@ async def test_disabled_enrichment_dataset_makes_no_provider_calls(
 
 
 @pytest.mark.asyncio
-async def test_enrichment_cap_bounds_provider_calls_across_incidents() -> None:
+async def test_enrichment_cap_stops_child_stream_without_advancing_past_undrained_incident() -> (
+    None
+):
     incidents = [
         Incident(
             id=f"incident-{number}",
             created_at=SOURCE_TIME,
-            updated_at=SOURCE_TIME,
+            updated_at=datetime(2026, 7, 17, 12, number, tzinfo=timezone.utc),
         )
-        for number in range(3)
+        for number in range(2)
     ]
 
     async def pages(*, params: dict[str, str] | None = None):
@@ -255,7 +261,19 @@ async def test_enrichment_cap_bounds_provider_calls_across_incidents() -> None:
 
     client = Mock()
     client.iter_incident_pages = pages
-    client.list_incident_alerts = AsyncMock(return_value=[])
+
+    child_page_requests: list[str] = []
+
+    async def alert_pages(incident_id: str):
+        child_page_requests.append(incident_id)
+        yield [
+            Alert(id=f"{incident_id}-alert-{number}", created_at=SOURCE_TIME)
+            for number in range(2)
+        ]
+        child_page_requests.append(incident_id)
+        yield [Alert(id=f"{incident_id}-alert-2", created_at=SOURCE_TIME)]
+
+    client.iter_incident_alert_pages = alert_pages
     client.drain_usage_observations.return_value = []
     store = Mock()
     store.insert_operational_alerts = AsyncMock()
@@ -268,11 +286,60 @@ async def test_enrichment_cap_bounds_provider_calls_across_incidents() -> None:
     result = await sync.run(
         PagerDutySyncOptions(
             dataset_key="incident-alerts",
-            window_start=None,
-            window_end=None,
+            window_start=SOURCE_TIME,
+            window_end=datetime(2026, 7, 17, 13, 0, tzinfo=timezone.utc),
             enrichment_cap=2,
         )
     )
 
+    assert result.persisted == 4
+    assert child_page_requests == ["incident-0", "incident-1"]
+    assert result.watermark_at == SOURCE_TIME
+
+
+@pytest.mark.asyncio
+async def test_zero_enrichment_cap_skips_child_calls_and_completes_window() -> None:
+    latest_source_time = datetime(2026, 7, 17, 12, 1, tzinfo=timezone.utc)
+    incidents = [
+        Incident(id="incident-0", created_at=SOURCE_TIME, updated_at=SOURCE_TIME),
+        Incident(
+            id="incident-1",
+            created_at=latest_source_time,
+            updated_at=latest_source_time,
+        ),
+    ]
+
+    async def pages(*, params: dict[str, str] | None = None):
+        del params
+        yield incidents
+
+    child_page_requests: list[str] = []
+
+    async def alert_pages(incident_id: str):
+        child_page_requests.append(incident_id)
+        yield []
+
+    client = Mock()
+    client.iter_incident_pages = pages
+    client.iter_incident_alert_pages = alert_pages
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    store.insert_operational_alerts = AsyncMock()
+    sync = PagerDutyOperationalSync(
+        client=client,
+        store=store,
+        normalizer=PagerDutyNormalizer("org-1", "acme", SOURCE_TIME),
+    )
+
+    result = await sync.run(
+        PagerDutySyncOptions(
+            dataset_key="incident-alerts",
+            window_start=SOURCE_TIME,
+            window_end=latest_source_time,
+            enrichment_cap=0,
+        )
+    )
+
     assert result.persisted == 0
-    assert client.list_incident_alerts.await_count == 2
+    assert child_page_requests == []
+    assert result.watermark_at == latest_source_time

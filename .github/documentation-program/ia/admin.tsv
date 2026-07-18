@@ -1,0 +1,33 @@
+id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
+admin	home	/admin/	Administer Dev Health	landing	true	public	planned	false	Workspace, access, providers, sync, and administrative security.
+admin-workspace	admin	/admin/workspace/	Configure the workspace	landing	true	public	planned	false	
+admin-workspace-create	admin-workspace	/admin/workspace/create/	Create or initialize a workspace	task-guide	true	public	planned	false	
+admin-workspace-settings	admin-workspace	/admin/workspace/settings/	Configure workspace settings	task-guide	true	public	planned	false	
+admin-feature-availability	admin-workspace	/admin/workspace/feature-availability/	Understand feature availability	concept	true	public	planned	false	
+admin-licensing	admin-workspace	/admin/workspace/licensing-and-entitlements/	Manage licensing and entitlements	task-guide	true	public	planned	false	
+admin-identities	admin	/admin/teams-and-identities/	Manage teams, repositories, and identities	landing	true	public	planned	false	
+admin-teams-repos	admin-identities	/admin/teams-and-identities/teams-and-repositories/	Configure teams and repository scope	task-guide	true	public	planned	false	
+admin-users	admin-identities	/admin/teams-and-identities/users-and-memberships/	Manage users and memberships	task-guide	true	public	planned	false	
+admin-mapping	admin-identities	/admin/teams-and-identities/identity-mapping/	Review identity and membership mapping	task-guide	true	public	planned	false	
+admin-roles	admin-identities	/admin/teams-and-identities/roles-and-access/	Manage roles and access	task-guide	true	public	planned	false	
+admin-sources	admin	/admin/data-sources/	Connect data sources	landing	true	public	planned	false	
+admin-source-prereq	admin-sources	/admin/data-sources/prerequisites/	Data-source prerequisites	task-guide	true	public	planned	false	
+admin-github	admin-sources	/admin/data-sources/github/	Connect GitHub	task-guide	true	public	planned	false	
+admin-gitlab	admin-sources	/admin/data-sources/gitlab/	Connect GitLab	task-guide	true	public	planned	false	
+admin-jira	admin-sources	/admin/data-sources/jira-atlassian/	Connect Jira or Atlassian	task-guide	true	public	planned	false	
+admin-incidents	admin-sources	/admin/data-sources/incident-response/	Connect supported incident-response sources	task-guide	true	public	planned	false	
+admin-credentials	admin-sources	/admin/data-sources/credential-lifecycle/	Rotate or revoke provider credentials	task-guide	true	public	planned	false	
+admin-sync	admin	/admin/sync-and-coverage/	Manage synchronization and coverage	landing	true	public	planned	false	
+admin-sync-config	admin-sync	/admin/sync-and-coverage/configure-sync/	Configure sync	task-guide	true	public	planned	false	
+admin-sync-status	admin-sync	/admin/sync-and-coverage/status-and-freshness/	Check sync status and freshness	task-guide	true	public	planned	false	
+admin-backfills	admin-sync	/admin/sync-and-coverage/backfills/	Request and monitor backfills	task-guide	true	public	planned	false	
+admin-coverage	admin-sync	/admin/sync-and-coverage/coverage/	Understand coverage	concept	true	public	planned	false	
+admin-security	admin	/admin/security-and-audit/	Administration security and audit	landing	true	public	planned	false	
+admin-credential-resp	admin-security	/admin/security-and-audit/credentials/	Credential responsibilities	concept	true	public	planned	false	
+admin-audit	admin-security	/admin/security-and-audit/audit-events/	Audit administrative changes	task-guide	true	public	planned	false	
+admin-privacy	admin-security	/admin/security-and-audit/privacy/	Privacy and data-handling responsibilities	concept	true	public	planned	false	
+admin-troubleshooting	admin	/admin/troubleshooting/	Troubleshoot administration	troubleshooting-index	true	public	planned	false	
+admin-auth	admin-troubleshooting	/admin/troubleshooting/authentication-and-roles/	Authentication and role problems	troubleshooting	true	public	planned	false	
+admin-provider-fail	admin-troubleshooting	/admin/troubleshooting/provider-connections/	Provider connection failures	troubleshooting	true	public	planned	false	
+admin-sync-fail	admin-troubleshooting	/admin/troubleshooting/sync-and-coverage/	Sync and coverage problems	troubleshooting	true	public	planned	false	
+admin-identity-fail	admin-troubleshooting	/admin/troubleshooting/identity-and-membership/	Identity and membership problems	troubleshooting	true	public	planned	false	

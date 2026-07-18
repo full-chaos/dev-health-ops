@@ -288,12 +288,7 @@ class PagerDutyOperationalSync:
                 if mapping.source_entity_type == source.value
             }
             tombstones = [
-                replace(
-                    mapping,
-                    is_active=False,
-                    valid_to=self._normalizer.observed_at,
-                    source_version_at=self._normalizer.observed_at,
-                )
+                _mapping_tombstone(mapping, self._normalizer.observed_at)
                 for mapping in active_mappings
                 if mapping.id not in seen_ids
             ]
@@ -442,4 +437,23 @@ def _reference_tombstone(
         last_synced=source_version_at,
         is_deleted=True,
         deleted_at=source_version_at,
+    )
+
+
+def _mapping_tombstone(
+    mapping: ServiceRepositoryMapping, observed_at: datetime
+) -> ServiceRepositoryMapping:
+    # source_version_at is the ReplacingMergeTree version. Reusing observed_at
+    # ties an active row created in the same window (RMT keeps an arbitrary row,
+    # so the deactivation may not win); bump strictly above the prior version.
+    source_version_at = max(
+        observed_at, mapping.source_version_at + timedelta(microseconds=1)
+    )
+    return replace(
+        mapping,
+        is_active=False,
+        valid_to=observed_at,
+        source_version_at=source_version_at,
+        observed_at=observed_at,
+        last_synced=observed_at,
     )

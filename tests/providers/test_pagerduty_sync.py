@@ -626,6 +626,9 @@ async def test_complete_service_snapshot_deactivates_removed_metadata_mapping() 
     assert isinstance(tombstone, ServiceRepositoryMapping)
     assert tombstone.is_active is False
     assert tombstone.valid_to == SOURCE_TIME
+    # source_version_at (the RMT version) must be bumped strictly above the
+    # active row so the deactivation wins on a same-window retry (no tie).
+    assert tombstone.source_version_at > stale_mapping.source_version_at
 
 
 @pytest.mark.asyncio

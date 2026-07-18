@@ -92,7 +92,9 @@ def validate_nodes(nodes: list[dict[str, Any]]) -> list[str]:
         if lifecycle not in ALLOWED_LIFECYCLES:
             errors.append(f"{node_id}: unsupported lifecycle {lifecycle!r}")
         if public_state == "internal" and _as_bool(node.get("nav")):
-            errors.append(f"{node_id}: internal node may not appear in public navigation")
+            errors.append(
+                f"{node_id}: internal node may not appear in public navigation"
+            )
 
         lowered = url.lower()
         if lowered != url:
@@ -155,7 +157,9 @@ def load_nodes(path: Path) -> list[dict[str, str]]:
         if actual != EXPECTED_FILES:
             missing = sorted(EXPECTED_FILES - actual)
             extra = sorted(actual - EXPECTED_FILES)
-            raise ValueError(f"IA manifest files mismatch; missing={missing}, extra={extra}")
+            raise ValueError(
+                f"IA manifest files mismatch; missing={missing}, extra={extra}"
+            )
 
     nodes: list[dict[str, str]] = []
     for manifest_file in files:

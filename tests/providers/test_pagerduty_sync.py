@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
+from dev_health_ops.models.git import Base
 from dev_health_ops.models.operational import OperationalIncident
 from dev_health_ops.providers.pagerduty.models import Incident
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
@@ -12,8 +15,18 @@ from dev_health_ops.providers.pagerduty.sync import (
     PagerDutyOperationalSync,
     PagerDutySyncOptions,
 )
+from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
 SOURCE_TIME = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def db_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
+    engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -74,3 +87,100 @@ async def test_incident_sync_flushes_bounded_batches_without_boundary_loss() -> 
         "since": SOURCE_TIME.isoformat(),
         "until": SOURCE_TIME.isoformat(),
     }
+
+
+@pytest.mark.asyncio
+async def test_incident_sync_resumes_from_persisted_watermark_without_boundary_loss(
+    db_session,
+) -> None:
+    # Given: a completed fixed window ending at an incident timestamp boundary.
+    boundary = datetime(2026, 7, 17, 13, 0, tzinfo=timezone.utc)
+    next_source_time = datetime(2026, 7, 17, 14, 0, tzinfo=timezone.utc)
+    first_window = (
+        Incident(id="incident-1", created_at=SOURCE_TIME, updated_at=SOURCE_TIME),
+        Incident(id="incident-2", created_at=boundary, updated_at=boundary),
+    )
+    resumed_window = (
+        first_window[1],
+        Incident(
+            id="incident-3",
+            created_at=next_source_time,
+            updated_at=next_source_time,
+        ),
+    )
+    persisted: list[OperationalIncident] = []
+
+    async def persist(values: list[OperationalIncident]) -> None:
+        persisted.extend(values)
+
+    async def first_pages(*, params: dict[str, str] | None = None):
+        del params
+        yield list(first_window)
+
+    first_client = Mock()
+    first_client.iter_incident_pages = first_pages
+    first_client.drain_usage_observations.return_value = []
+    first_store = Mock()
+    first_store.insert_operational_incidents = AsyncMock(side_effect=persist)
+    first_sync = PagerDutyOperationalSync(
+        client=first_client,
+        store=first_store,
+        normalizer=PagerDutyNormalizer("org-1", "acme", next_source_time),
+    )
+
+    # When: the first window succeeds and advances the architecture's watermark.
+    first_result = await first_sync.run(
+        PagerDutySyncOptions(
+            dataset_key="incidents",
+            window_start=datetime(2026, 7, 17, 11, 0, tzinfo=timezone.utc),
+            window_end=next_source_time,
+        )
+    )
+    watermark_at = first_result.watermark_at
+    assert watermark_at is not None
+    assert watermark_at == boundary
+    set_watermark(
+        db_session,
+        "org-1",
+        "acme",
+        "incidents",
+        watermark_at,
+    )
+    resumed_from = get_watermark(db_session, "org-1", "acme", "incidents")
+    assert resumed_from == boundary.replace(tzinfo=None)
+    assert resumed_from is not None
+    resumed_from = resumed_from.replace(tzinfo=timezone.utc)
+
+    async def resumed_pages(*, params: dict[str, str] | None = None):
+        assert params == {
+            "since": boundary.isoformat(),
+            "until": next_source_time.isoformat(),
+        }
+        yield list(resumed_window)
+
+    resumed_client = Mock()
+    resumed_client.iter_incident_pages = resumed_pages
+    resumed_client.drain_usage_observations.return_value = []
+    resumed_store = Mock()
+    resumed_store.insert_operational_incidents = AsyncMock(side_effect=persist)
+    resumed_sync = PagerDutyOperationalSync(
+        client=resumed_client,
+        store=resumed_store,
+        normalizer=PagerDutyNormalizer("org-1", "acme", next_source_time),
+    )
+
+    await resumed_sync.run(
+        PagerDutySyncOptions(
+            dataset_key="incidents",
+            window_start=resumed_from,
+            window_end=next_source_time,
+            resume_after=resumed_from,
+        )
+    )
+
+    # Then: the boundary incident is retained once and never re-emitted on resume.
+    assert [incident.external_id for incident in persisted] == [
+        "incident-1",
+        "incident-2",
+        "incident-3",
+    ]

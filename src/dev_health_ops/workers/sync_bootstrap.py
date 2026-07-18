@@ -219,6 +219,7 @@ class SyncTaskContext:
     decrypted_credentials: Any
     db_url: str
     source_is_org_wide_placeholder: bool = False
+    resume_cursor: datetime | None = None
 
 
 _NON_GIT_SOURCE_SCOPE_KEYS = ("project_id", "project_key", "team_id", "repo")
@@ -356,6 +357,16 @@ class SyncTaskBootstrap:
             str(key): bool(value)
             for key, value in dict(unit.processor_flags or {}).items()
         }
+        resume_cursor = None
+        if unit.mode in {"incremental", "full_resync"}:
+            from dev_health_ops.sync.watermarks import get_watermark
+
+            resume_cursor = get_watermark(
+                session,
+                str(unit.org_id),
+                str(source.external_id),
+                str(unit.dataset_key),
+            )
         return SyncTaskContext(
             unit_id=str(unit.id),
             sync_run_id=str(unit.sync_run_id),
@@ -376,6 +387,7 @@ class SyncTaskBootstrap:
             source_is_org_wide_placeholder=_linear_org_wide_placeholder_source(
                 source, integration
             ),
+            resume_cursor=resume_cursor,
         )
 
 

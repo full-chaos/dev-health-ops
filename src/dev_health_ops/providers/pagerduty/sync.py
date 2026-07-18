@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, TypeVar
@@ -20,8 +20,9 @@ from dev_health_ops.models.operational import (
     OperationalUser,
 )
 from dev_health_ops.providers.pagerduty.client import PagerDutyClient
-from dev_health_ops.providers.pagerduty.models import (
-    Incident,
+from dev_health_ops.providers.pagerduty.incident_cursor import (
+    incident_source_time,
+    iter_resumable_incidents,
 )
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 
@@ -60,6 +61,7 @@ class PagerDutySyncOptions:
     dataset_key: str
     window_start: datetime | None
     window_end: datetime | None
+    resume_after: datetime | None = None
     incident_cap: int = 100
     batch_size: int = 100
     enrichment_cap: int = 100
@@ -75,6 +77,7 @@ class PagerDutySyncOptions:
 class PagerDutySyncResult:
     dataset_key: str
     persisted: int
+    watermark_at: datetime | None
     degraded: bool
     observations: tuple[dict[str, object], ...]
 
@@ -98,6 +101,7 @@ class PagerDutyOperationalSync:
         self._normalizer = normalizer
 
     async def run(self, options: PagerDutySyncOptions) -> PagerDutySyncResult:
+        watermark_at: datetime | None = None
         match options.dataset_key:
             case "services":
                 persisted = await self._sync(
@@ -149,23 +153,23 @@ class PagerDutyOperationalSync:
                     options.batch_size,
                 )
             case "incidents":
-                persisted = await self._sync_incidents(options)
+                persisted, watermark_at = await self._sync_incidents(options)
             case "incident-alerts":
-                persisted = await self._sync_enrichment(
+                persisted, watermark_at = await self._sync_enrichment(
                     options,
                     self._client.list_incident_alerts,
                     self._normalizer.alert,
                     self._store.insert_operational_alerts,
                 )
             case "incident-log-entries":
-                persisted = await self._sync_enrichment(
+                persisted, watermark_at = await self._sync_enrichment(
                     options,
                     self._client.list_incident_log_entries,
                     self._normalizer.log_entry,
                     self._store.insert_operational_incident_timeline_events,
                 )
             case "incident-notes":
-                persisted = await self._sync_enrichment(
+                persisted, watermark_at = await self._sync_enrichment(
                     options,
                     self._client.list_incident_notes,
                     self._normalizer.note,
@@ -176,6 +180,7 @@ class PagerDutyOperationalSync:
         return PagerDutySyncResult(
             dataset_key=options.dataset_key,
             persisted=persisted,
+            watermark_at=watermark_at,
             degraded=False,
             observations=tuple(self._client.drain_usage_observations()),
         )
@@ -193,10 +198,18 @@ class PagerDutyOperationalSync:
             await persist(values[start : start + batch_size])
         return len(values)
 
-    async def _sync_incidents(self, options: PagerDutySyncOptions) -> int:
+    async def _sync_incidents(
+        self, options: PagerDutySyncOptions
+    ) -> tuple[int, datetime | None]:
         values: list[OperationalIncident] = []
         persisted = 0
-        async for incident in self._iter_incidents(options):
+        watermark_at: datetime | None = None
+        async for incident in iter_resumable_incidents(self._client, options):
+            source_time = incident_source_time(incident)
+            if source_time is not None and (
+                watermark_at is None or source_time > watermark_at
+            ):
+                watermark_at = source_time
             values.append(self._normalizer.incident(incident))
             if len(values) == options.batch_size:
                 await self._store.insert_operational_incidents(values)
@@ -205,7 +218,7 @@ class PagerDutyOperationalSync:
         if values:
             await self._store.insert_operational_incidents(values)
             persisted += len(values)
-        return persisted
+        return persisted, watermark_at
 
     async def _sync_enrichment(
         self,
@@ -213,10 +226,16 @@ class PagerDutyOperationalSync:
         fetch: Callable[[str], Awaitable[list[_Source]]],
         normalize: Callable[[_Source, str], _Destination],
         persist: Callable[[list[_Destination]], Awaitable[None]],
-    ) -> int:
+    ) -> tuple[int, datetime | None]:
         values: list[_Destination] = []
         persisted = 0
-        async for incident in self._iter_incidents(options):
+        watermark_at: datetime | None = None
+        async for incident in iter_resumable_incidents(self._client, options):
+            source_time = incident_source_time(incident)
+            if source_time is not None and (
+                watermark_at is None or source_time > watermark_at
+            ):
+                watermark_at = source_time
             incident_id = self._normalizer.incident(incident).id
             for row in (await fetch(incident.id))[: options.enrichment_cap]:
                 values.append(normalize(row, incident_id))
@@ -227,20 +246,4 @@ class PagerDutyOperationalSync:
         if values:
             await persist(values)
             persisted += len(values)
-        return persisted
-
-    async def _iter_incidents(
-        self, options: PagerDutySyncOptions
-    ) -> AsyncIterator[Incident]:
-        params: dict[str, str] = {}
-        if options.window_start is not None:
-            params["since"] = options.window_start.isoformat()
-        if options.window_end is not None:
-            params["until"] = options.window_end.isoformat()
-        emitted = 0
-        async for page in self._client.iter_incident_pages(params=params):
-            for incident in page:
-                if emitted == options.incident_cap:
-                    return
-                yield incident
-                emitted += 1
+        return persisted, watermark_at

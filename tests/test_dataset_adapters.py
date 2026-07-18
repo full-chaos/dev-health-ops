@@ -420,6 +420,48 @@ def test_launchdarkly_feature_flags_threads_usage_observations_to_result() -> No
     assert result["observations"] == observations
 
 
+def test_pagerduty_dataset_passes_persisted_resume_cursor_and_returns_source_watermark() -> (
+    None
+):
+    from dev_health_ops.providers.pagerduty.sync import PagerDutySyncResult
+
+    ctx = replace(
+        _context(
+            provider="pagerduty",
+            dataset_key="incidents",
+            source_external_id="acme",
+        ),
+        resume_cursor=WINDOW_START,
+    )
+    client = Mock()
+    client.drain_usage_observations.return_value = []
+    sync_result = PagerDutySyncResult(
+        dataset_key="incidents",
+        persisted=2,
+        watermark_at=WINDOW_END,
+        degraded=False,
+        observations=(),
+    )
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.providers.pagerduty.sync.PagerDutyOperationalSync"
+        ) as sync,
+    ):
+        sync.return_value.run = AsyncMock(return_value=sync_result)
+        result = run_dataset_unit(ctx, _runtime())
+
+    await_args = sync.return_value.run.await_args
+    assert await_args is not None
+    options = await_args.args[0]
+    assert options.resume_after == WINDOW_START
+    assert result["watermark_at"] == WINDOW_END.isoformat()
+
+
 def test_unsupported_provider_dataset_pair_raises_value_error() -> None:
     ctx = _context(provider="jira", dataset_key="commits", source_external_id="OPS")
 

@@ -401,12 +401,16 @@ def _run_pagerduty_dataset(
                 dataset_key=context.dataset_key,
                 window_start=context.window_start,
                 window_end=context.window_end,
+                resume_after=context.resume_cursor,
             )
         )
         usage_sink.extend(result.observations)
         return {
             "persisted": result.persisted,
             "degraded": result.degraded,
+            "watermark_at": result.watermark_at.isoformat()
+            if result.watermark_at is not None
+            else None,
         }
 
     try:

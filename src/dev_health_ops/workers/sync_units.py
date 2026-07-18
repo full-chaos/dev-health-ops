@@ -1162,7 +1162,18 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
             SyncRunMode.INCREMENTAL.value,
             SyncRunMode.FULL_RESYNC.value,
         }:
-            watermark_at = ctx.window_end
+            raw_watermark = result_payload.get("watermark_at")
+            if raw_watermark is None:
+                watermark_at = ctx.window_end
+            elif isinstance(raw_watermark, str):
+                watermark_at = datetime.fromisoformat(raw_watermark)
+                if watermark_at.tzinfo is None:
+                    watermark_at = watermark_at.replace(tzinfo=timezone.utc)
+            else:
+                raise ValueError(
+                    "sync unit returned a non-string watermark_at: "
+                    f"unit_id={unit_id} watermark_at={raw_watermark!r}"
+                )
             if watermark_at is None:
                 raise ValueError(
                     "sync unit cannot stamp watermark without before_at: "

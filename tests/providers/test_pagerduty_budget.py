@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from dev_health_ops.providers.pagerduty.budget import PagerDutyBudgetEstimator
+from dev_health_ops.sync.budget import BudgetDimension, estimate_provider_budget
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
 
 
@@ -55,3 +56,19 @@ def test_incident_enrichment_budget_reserves_bounded_fan_out(
         "pagerduty_incidents": 2,
         route_family: expected_units,
     }
+
+
+def test_estimate_provider_budget_reserves_pagerduty_bounded_fan_out() -> None:
+    estimates = estimate_provider_budget(
+        _context(dataset_key="incident-alerts", enrichment_cap=3)
+    )
+
+    assert [
+        (estimate.route_family, estimate.estimated_units) for estimate in estimates
+    ] == [
+        ("pagerduty_incidents", 2),
+        ("pagerduty_alerts", 200),
+    ]
+    assert all(
+        estimate.bucket.dimension is BudgetDimension.REST_CORE for estimate in estimates
+    )

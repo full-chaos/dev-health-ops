@@ -1,0 +1,26 @@
+id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
+integrate	home	/integrate/	Integrate and extend	landing	true	public	planned	false	Supported data ingestion, APIs, webhooks, and integration work.
+int-push	integrate	/integrate/customer-push/	Send data with Customer Push	landing	true	public	planned	false	
+int-push-overview	int-push	/integrate/customer-push/overview/	Supported record families and prerequisites	concept	true	public	planned	false	
+int-source	int-push	/integrate/customer-push/register-source/	Register a source and credential	task-guide	true	public	planned	false	
+int-schema	int-push	/integrate/customer-push/schema-discovery/	Discover the supported schema	task-guide	true	public	planned	false	
+int-submit	int-push	/integrate/customer-push/submit-records/	Submit records	task-guide	true	public	planned	false	
+int-idempotency	int-push	/integrate/customer-push/idempotency-and-retries/	Use idempotency and retries	concept	true	public	planned	false	
+int-errors	int-push	/integrate/customer-push/errors/	Handle validation and delivery errors	troubleshooting	true	public	planned	false	
+int-observe	int-push	/integrate/customer-push/observability/	Observe source delivery	task-guide	true	public	planned	false	
+int-api	integrate	/integrate/api/	Use supported APIs	landing	true	public	planned	false	
+int-graphql	int-api	/integrate/api/graphql/	Query the GraphQL API	task-guide	true	public	planned	false	
+int-auth	int-api	/integrate/api/authentication/	Authenticate API clients	task-guide	true	public	planned	false	
+int-automation	int-api	/integrate/api/automation/	Automate supported workflows	task-guide	true	public	planned	false	
+int-webhooks	integrate	/integrate/webhooks/	Use webhooks	landing	true	public	planned	false	
+int-wh-config	int-webhooks	/integrate/webhooks/configure/	Configure a webhook	task-guide	true	public	planned	false	
+int-wh-verify	int-webhooks	/integrate/webhooks/verify-signatures/	Verify webhook signatures	task-guide	true	public	planned	false	
+int-wh-retry	int-webhooks	/integrate/webhooks/retries-and-replay/	Handle retries and replay	task-guide	true	public	planned	false	
+int-build	integrate	/integrate/build-an-integration/	Build a supported integration	landing	true	public	planned	false	
+int-provider	int-build	/integrate/build-an-integration/provider/	Build a provider integration	task-guide	true	public	planned	false	
+int-contracts	int-build	/integrate/build-an-integration/data-contracts/	Use canonical data contracts	concept	true	public	planned	false	
+int-test	int-build	/integrate/build-an-integration/testing/	Test an integration	task-guide	true	public	planned	false	
+int-troubleshoot	integrate	/integrate/troubleshooting/	Troubleshoot integrations	troubleshooting-index	true	public	planned	false	
+int-auth-fail	int-troubleshoot	/integrate/troubleshooting/authentication/	Authentication and authorization errors	troubleshooting	true	public	planned	false	
+int-validation-fail	int-troubleshoot	/integrate/troubleshooting/schema-and-validation/	Schema and validation errors	troubleshooting	true	public	planned	false	
+int-delivery-fail	int-troubleshoot	/integrate/troubleshooting/delivery-and-rate-limits/	Delivery, retry, and rate-limit problems	troubleshooting	true	public	planned	false	

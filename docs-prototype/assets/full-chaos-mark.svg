@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Full Chaos documentation prototype mark</title>
+  <desc id="desc">Two interlocking infinity ribbons, warm orange on the left and cyan on the right. Prototype abstraction only; it does not replace the supplied source logo.</desc>
+  <rect width="128" height="128" rx="18" fill="#101820"/>
+  <path d="M14 64c0-22 16-38 36-38 21 0 32 17 42 34 9 15 15 24 25 24 7 0 11-7 11-20s-4-20-11-20c-10 0-16 9-25 24C82 85 71 102 50 102 30 102 14 86 14 64Z" fill="none" stroke="#f36b05" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M114 64c0 22-16 38-36 38-21 0-32-17-42-34-9-15-15-24-25-24C4 44 0 51 0 64s4 20 11 20c10 0 16-9 25-24C46 43 57 26 78 26c20 0 36 16 36 38Z" fill="none" stroke="#09aec0" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" transform="translate(7 0)"/>
+  <path d="M24 35 41 29M18 46 37 39M87 95l18-7M96 105l15-8" stroke="#fdd149" stroke-width="3" stroke-linecap="round" opacity=".9"/>
+</svg>

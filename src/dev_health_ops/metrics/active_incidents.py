@@ -29,6 +29,11 @@ def active_incidents_query(
     Legacy rows appear first and win a same-repository identity collision until the
     legacy backfill is retired, preserving existing GitHub/GitLab behavior.
     """
+    # Initialize before the match so control-flow analysis sees a definite
+    # assignment; an unhandled window then yields an empty filter and a loud SQL
+    # error rather than a silent wrong result.
+    legacy_time_filter = ""
+    canonical_time_filter = ""
     match window:
         case IncidentWindow.RESOLVED:
             legacy_time_filter = (

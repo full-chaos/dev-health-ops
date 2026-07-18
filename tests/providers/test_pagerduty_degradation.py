@@ -74,7 +74,7 @@ class _Store(PagerDutyOperationalStore):
     async def insert_operational_service_repository_mappings(
         self, values: list[ServiceRepositoryMapping]
     ) -> None:
-        del values
+        """Accept mapping writes without recording them."""
 
     async def insert_operational_incidents(
         self, values: list[OperationalIncident]

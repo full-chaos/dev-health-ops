@@ -356,6 +356,30 @@ class ClickHouseStore:
                 )
         return repos
 
+    async def load_repository_catalog(
+        self, org_id: str
+    ) -> list[tuple[uuid.UUID, str, str]]:
+        """Load org-scoped (repo_id, provider, full_name) rows for correlation."""
+        assert self.client is not None
+        query = (
+            "SELECT id, provider, repo FROM repos FINAL WHERE org_id = {org_id:String}"
+        )
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters={"org_id": org_id}
+            )
+        catalog: list[tuple[uuid.UUID, str, str]] = []
+        for row in getattr(result, "result_rows", None) or []:
+            repository_id, provider, repo = row[0], row[1], row[2]
+            if not isinstance(provider, str) or not isinstance(repo, str):
+                continue
+            try:
+                normalized_id = self._normalize_uuid(repository_id)
+            except ValueError:
+                continue
+            catalog.append((normalized_id, provider, repo))
+        return catalog
+
     async def get_complexity_snapshots(
         self,
         *,

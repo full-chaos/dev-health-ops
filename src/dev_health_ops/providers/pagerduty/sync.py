@@ -85,17 +85,15 @@ _ReferenceEntity = TypeVar(
 class PagerDutyOperationalSyncStore(PagerDutyOperationalStore, Protocol):
     """Operational store capabilities required for PagerDuty catalog correlation."""
 
-    def query_dicts(
-        self, query: str, params: dict[str, str]
-    ) -> list[dict[str, object]]:
-        """Load organization-scoped repository catalog rows."""
+    async def load_repository_catalog(self, org_id: str) -> list[tuple[UUID, str, str]]:
+        """Load organization-scoped (repo_id, provider, full_name) catalog rows."""
         ...
 
 
 def _has_repository_catalog(
     store: PagerDutyOperationalStore,
 ) -> TypeGuard[PagerDutyOperationalSyncStore]:
-    return hasattr(store, "query_dicts")
+    return hasattr(store, "load_repository_catalog")
 
 
 class PagerDutyOperationalSync:
@@ -239,19 +237,8 @@ class PagerDutyOperationalSync:
             )
         ]
         if _has_repository_catalog(self._store):
-            repository_rows = self._store.query_dicts(
-                "SELECT id, provider, repo FROM repos FINAL WHERE org_id = {org_id:String}",
-                {"org_id": self._normalizer.org_id},
-            )
             repositories = tuple(
-                (repository_id, provider, repo)
-                for row in repository_rows
-                for repository_id, provider, repo in [
-                    (row.get("id"), row.get("provider"), row.get("repo"))
-                ]
-                if isinstance(repository_id, UUID)
-                and isinstance(provider, str)
-                and isinstance(repo, str)
+                await self._store.load_repository_catalog(self._normalizer.org_id)
             )
             mappings = resolve_repository_mappings(
                 tuple(mapping_evidence), repositories

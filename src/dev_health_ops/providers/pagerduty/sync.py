@@ -281,7 +281,7 @@ class PagerDutyOperationalSync:
                 ):
                     watermark_at = source_time
             return persisted, watermark_at
-        watermark_can_advance = True
+        earliest_undrained_at: datetime | None = None
         async for incident in iter_resumable_incidents(self._client, options):
             incident_id = self._normalizer.incident(incident).id
             child_count = 0
@@ -297,14 +297,20 @@ class PagerDutyOperationalSync:
                 if child_count == options.enrichment_cap:
                     break
             if child_count == options.enrichment_cap:
-                watermark_can_advance = False
+                source_time = incident_source_time(incident)
+                if source_time is not None and (
+                    earliest_undrained_at is None or source_time < earliest_undrained_at
+                ):
+                    earliest_undrained_at = source_time
             source_time = incident_source_time(incident)
-            if (
-                watermark_can_advance
-                and source_time is not None
-                and (watermark_at is None or source_time > watermark_at)
+            if source_time is not None and (
+                watermark_at is None or source_time > watermark_at
             ):
                 watermark_at = source_time
+        if earliest_undrained_at is not None and (
+            watermark_at is None or earliest_undrained_at < watermark_at
+        ):
+            watermark_at = earliest_undrained_at
         if values:
             await persist(values)
             persisted += len(values)

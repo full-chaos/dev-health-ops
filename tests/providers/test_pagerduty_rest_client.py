@@ -154,6 +154,27 @@ async def test_no_progress_pagination_raises_typed_exception() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"incidents": []},
+        {"more": False},
+        {"incidents": [], "more": "false"},
+    ],
+)
+async def test_malformed_pagination_envelope_raises_typed_exception(
+    payload: dict[str, bool | list[dict[str, str]]],
+) -> None:
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"),
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
+    )
+
+    with pytest.raises(PaginationException, match="pagination envelope"):
+        await client.list_incidents()
+
+
+@pytest.mark.asyncio
 async def test_close_forwards_to_instrumented_rest_core() -> None:
     client = PagerDutyClient(OAuthBearerAuth("oauth"))
     close = AsyncMock()

@@ -185,9 +185,19 @@ class PagerDutyClient:
                 headers=self._auth.headers(),
             )
             payload = response.json()
-            page = [model.model_validate(value) for value in payload.get(key, [])]
+            if not isinstance(payload, dict):
+                raise PaginationException(
+                    f"PagerDuty pagination envelope for {path} must be an object"
+                )
+            raw_page = payload.get(key)
+            more = payload.get("more")
+            if not isinstance(raw_page, list) or not isinstance(more, bool):
+                raise PaginationException(
+                    f"PagerDuty pagination envelope for {path} is malformed"
+                )
+            page = [model.model_validate(value) for value in raw_page]
             yield page
-            if not payload.get("more", False):
+            if not more:
                 return
             if not page:
                 raise PaginationException(

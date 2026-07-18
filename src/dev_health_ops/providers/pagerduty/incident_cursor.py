@@ -27,7 +27,9 @@ async def iter_resumable_incidents(
     client: PagerDutyClient,
     options: IncidentCursorOptions,
 ) -> AsyncIterator[Incident]:
-    """Yield every incident in a fixed window, inclusively from its watermark."""
+    """Yield every incident in a created-at window, inclusively from its watermark."""
+    # PagerDuty filters since/until by created_at; updates to older incidents are
+    # captured by Wave 3 webhooks and periodic full reconciliation.
     params: dict[str, str] = {}
     if options.window_start is not None:
         params["since"] = options.window_start.isoformat()
@@ -46,5 +48,5 @@ async def iter_resumable_incidents(
 
 
 def incident_source_time(incident: Incident) -> datetime | None:
-    """Return the provider event time used for PagerDuty incident cursors."""
-    return incident.updated_at or incident.created_at
+    """Return the created-at time used for PagerDuty incident cursors."""
+    return incident.created_at

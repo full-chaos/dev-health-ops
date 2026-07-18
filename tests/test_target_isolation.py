@@ -52,6 +52,16 @@ def test_dataset_key_contract_is_exact() -> None:
         "work-item-history",
         "work-item-comments",
         "feature-flags",
+        "services",
+        "business-services",
+        "escalation-policies",
+        "schedules",
+        "on-calls",
+        "users",
+        "teams",
+        "incident-alerts",
+        "incident-log-entries",
+        "incident-notes",
     ]
 
 

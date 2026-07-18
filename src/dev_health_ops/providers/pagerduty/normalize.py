@@ -92,12 +92,18 @@ class PagerDutyNormalizer:
 
     def oncall(self, row: Oncall) -> OnCallAssignment:
         return OnCallAssignment(
-            **self._common(OnCallAssignment, row, "oncall"),
+            **self._common(
+                OnCallAssignment,
+                row,
+                "oncall",
+                external_id=self._oncall_external_id(row),
+            ),
             schedule_id=self._reference_id(OnCallSchedule, row.schedule),
             user_id=self._reference_id(OperationalUser, row.user),
             escalation_policy_id=self._reference_id(
                 CanonicalEscalationPolicy, row.escalation_policy
             ),
+            escalation_level=row.escalation_level,
             starts_at=row.start,
             ends_at=row.end,
         )
@@ -123,13 +129,17 @@ class PagerDutyNormalizer:
             source_event_id=str(row.incident_number) if row.incident_number else None,
             raw_status=row.status,
             raw_severity=row.urgency,
+            raw_priority=_priority(row.priority),
             normalized_status=_incident_status(row.status),
             normalized_severity=_urgency_severity(row.urgency),
+            normalized_priority=_priority_level(row.priority),
             service_id=self._reference_id(OperationalService, row.service),
             service_external_id=row.service.id if row.service else None,
             title=row.title or row.summary or row.id,
             started_at=row.created_at,
-            resolved_at=self._source_time(row) if row.status == "resolved" else None,
+            resolved_at=self._incident_resolution_time(row)
+            if row.status == "resolved"
+            else None,
         )
 
     def alert(self, row: Alert, incident_id: str) -> OperationalAlert:
@@ -169,19 +179,14 @@ class PagerDutyNormalizer:
         entity_type: type[CanonicalOperationalEntity],
         row: PagerDutyModel,
         source_entity_type: str,
+        external_id: str | None = None,
     ) -> OperationalCommonKwargs:
+        source_external_id = external_id or row.id
         coordinates = operational_source_coordinates(
             entity_type,
             provider="pagerduty",
             provider_instance_id=self.provider_instance_id,
-            external_id=row.id,
-        )
-        canonical_operational_id(
-            self.org_id,
-            coordinates.provider,
-            coordinates.provider_instance_id,
-            coordinates.entity_family,
-            coordinates.external_id,
+            external_id=source_external_id,
         )
         return {
             "org_id": self.org_id,
@@ -221,6 +226,33 @@ class PagerDutyNormalizer:
             coordinates.external_id,
         )
 
+    def _oncall_external_id(self, row: Oncall) -> str:
+        if (
+            row.escalation_policy is None
+            or row.schedule is None
+            or row.user is None
+            or not row.escalation_policy.id
+            or not row.schedule.id
+            or not row.user.id
+            or row.escalation_level is None
+            or row.start is None
+            or row.end is None
+        ):
+            raise ValueError("PagerDuty on-call assignment requires stable dimensions")
+        return "|".join(
+            (
+                row.escalation_policy.id,
+                row.schedule.id,
+                row.user.id,
+                str(row.escalation_level),
+                row.start.isoformat(),
+                row.end.isoformat(),
+            )
+        )
+
+    def _incident_resolution_time(self, row: Incident) -> datetime | None:
+        return row.resolved_at or row.last_status_change_at
+
     def _source_time(self, row: PagerDutyModel) -> datetime:
         return row.updated_at or row.created_at or self.observed_at
 
@@ -243,6 +275,21 @@ def _alert_status(raw_status: str | None) -> str | None:
 
 def _urgency_severity(raw_urgency: str | None) -> str | None:
     return {"high": "high", "low": "low"}.get(raw_urgency or "")
+
+
+def _priority(priority: PagerDutyModel | None) -> str | None:
+    if priority is None:
+        return None
+    return priority.summary or priority.id
+
+
+def _priority_level(priority: PagerDutyModel | None) -> str | None:
+    return {
+        "P1": "high",
+        "P2": "medium",
+        "P3": "low",
+        "P4": "low",
+    }.get(_priority(priority) or "")
 
 
 def _severity(raw_severity: str | None) -> str | None:

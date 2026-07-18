@@ -3,11 +3,13 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import yaml
 
 
-def _load_inventory_module():
+def _load_inventory_module() -> ModuleType:
     script = Path(__file__).parents[2] / "scripts" / "docs_inventory_v2.py"
     spec = importlib.util.spec_from_file_location("docs_inventory_v2", script)
     assert spec and spec.loader
@@ -17,8 +19,10 @@ def _load_inventory_module():
     return module
 
 
-def test_inventory_classifies_nav_reference_and_internal_pages(tmp_path: Path) -> None:
-    module = _load_inventory_module()
+def test_inventory_classifies_nav_reference_and_internal_pages(
+    tmp_path: Path,
+) -> None:
+    module: Any = _load_inventory_module()
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "plans").mkdir()
@@ -55,7 +59,10 @@ def test_inventory_classifies_nav_reference_and_internal_pages(tmp_path: Path) -
 
     assert by_path["docs/index.md"]["publication_classification"] == "public-nav"
     assert by_path["docs/guide.md"]["publication_classification"] == "public-reference"
-    assert by_path["docs/plans/internal.md"]["publication_classification"] == "excluded-internal"
+    assert (
+        by_path["docs/plans/internal.md"]["publication_classification"]
+        == "excluded-internal"
+    )
     assert by_path["docs/index.md"]["links_out"] == ["guide.md"]
     assert by_path["docs/guide.md"]["links_in"] == ["index.md"]
     assert by_path["docs/index.md"]["current_url"] == "https://docs.example.test/"

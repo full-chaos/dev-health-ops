@@ -255,8 +255,16 @@ def test_pagerduty_operational_rows_round_trip_and_deduplicate(
                 coordinates.entity_family,
                 coordinates.external_id,
             )
+            source_version = row.source_version_at
+            delta = source_version.astimezone(timezone.utc) - datetime(
+                1970, 1, 1, tzinfo=timezone.utc
+            )
+            expected_epoch_us = (
+                delta.days * 86_400 + delta.seconds
+            ) * 1_000_000 + delta.microseconds
             result = client.query(
-                f"SELECT id, org_id, provider_instance_id, source_version_at "
+                f"SELECT id, org_id, provider_instance_id, "
+                f"toUnixTimestamp64Micro(source_version_at) "
                 f"FROM {table} FINAL WHERE org_id = {{org_id:String}}",
                 parameters={"org_id": ORG_ID},
             )
@@ -265,7 +273,7 @@ def test_pagerduty_operational_rows_round_trip_and_deduplicate(
                     expected_id,
                     ORG_ID,
                     PROVIDER_INSTANCE_ID,
-                    row.source_version_at.replace(tzinfo=None),
+                    expected_epoch_us,
                 )
             ]
             count = client.query(

@@ -420,6 +420,161 @@ def test_launchdarkly_feature_flags_threads_usage_observations_to_result() -> No
     assert result["observations"] == observations
 
 
+def test_pagerduty_dataset_passes_persisted_resume_cursor_and_returns_source_watermark() -> (
+    None
+):
+    from dev_health_ops.providers.pagerduty.sync import PagerDutySyncResult
+
+    ctx = replace(
+        _context(
+            provider="pagerduty",
+            dataset_key="incidents",
+            source_external_id="acme",
+        ),
+        resume_cursor=WINDOW_START,
+    )
+    client = Mock()
+    client.close = AsyncMock()
+    client.drain_usage_observations.return_value = []
+    sync_result = PagerDutySyncResult(
+        dataset_key="incidents",
+        persisted=2,
+        watermark_at=WINDOW_END,
+        degraded=False,
+        observations=(),
+    )
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.providers.pagerduty.sync.PagerDutyOperationalSync"
+        ) as sync,
+    ):
+        sync.return_value.run = AsyncMock(return_value=sync_result)
+        result = run_dataset_unit(ctx, _runtime())
+
+    await_args = sync.return_value.run.await_args
+    assert await_args is not None
+    options = await_args.args[0]
+    assert options.resume_after == WINDOW_START
+    assert result["watermark_at"] == WINDOW_END.isoformat()
+    client.close.assert_awaited_once()
+
+
+def test_pagerduty_dataset_applies_persisted_enrichment_options() -> None:
+    from dev_health_ops.providers.pagerduty.sync import PagerDutySyncResult
+
+    ctx = replace(
+        _context(
+            provider="pagerduty",
+            dataset_key="incident-alerts",
+            source_external_id="acme",
+        ),
+        dataset_options={"enrichment_cap": 2, "enabled": False},
+    )
+    client = Mock()
+    client.close = AsyncMock()
+    client.drain_usage_observations.return_value = []
+    sync_result = PagerDutySyncResult(
+        dataset_key="incident-alerts",
+        persisted=0,
+        watermark_at=WINDOW_END,
+        degraded=False,
+        observations=(),
+    )
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.providers.pagerduty.sync.PagerDutyOperationalSync"
+        ) as sync,
+    ):
+        sync.return_value.run = AsyncMock(return_value=sync_result)
+        run_dataset_unit(ctx, _runtime())
+
+    await_args = sync.return_value.run.await_args
+    assert await_args is not None
+    options = await_args.args[0]
+    assert options.enrichment_cap == 2
+    assert options.enrichment.alerts is False
+
+
+def test_pagerduty_dataset_closes_client_when_store_setup_fails() -> None:
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="services",
+        source_external_id="acme",
+    )
+    client = Mock()
+    client.close = AsyncMock()
+    client.drain_usage_observations.return_value = []
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._run_with_reused_or_new_store",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("store setup failed"),
+        ),
+        pytest.raises(RuntimeError, match="store setup failed"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    client.close.assert_awaited_once()
+
+
+def test_pagerduty_dataset_rejects_source_id_without_verified_account_identity() -> (
+    None
+):
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        source_external_id="not-a-verified-account",
+        credentials={"api_token": "secret-token"},
+    )
+
+    with pytest.raises(ValueError, match="requires an account subdomain"):
+        run_dataset_unit(ctx, _runtime())
+
+
+def test_pagerduty_client_uses_verified_account_subdomain_not_source_id() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        source_external_id="untrusted-source-id",
+        credentials={"api_token": "secret-token", "subdomain": "verified-acme"},
+    )
+
+    with patch("dev_health_ops.providers.pagerduty.client.PagerDutyClient"):
+        _, provider_instance_id = _pagerduty_client(ctx)
+
+    assert provider_instance_id == "verified-acme"
+
+
+def test_pagerduty_client_rejects_blank_account_subdomain() -> None:
+    from dev_health_ops.processors.dataset_adapters import _pagerduty_client
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="incidents",
+        credentials={"api_token": "secret-token", "subdomain": "  "},
+    )
+
+    with pytest.raises(ValueError, match="requires an account subdomain"):
+        _pagerduty_client(ctx)
+
+
 def test_unsupported_provider_dataset_pair_raises_value_error() -> None:
     ctx = _context(provider="jira", dataset_key="commits", source_external_id="OPS")
 

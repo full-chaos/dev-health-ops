@@ -219,6 +219,8 @@ class SyncTaskContext:
     decrypted_credentials: Any
     db_url: str
     source_is_org_wide_placeholder: bool = False
+    resume_cursor: datetime | None = None
+    dataset_options: dict[str, Any] = field(default_factory=dict)
 
 
 _NON_GIT_SOURCE_SCOPE_KEYS = ("project_id", "project_key", "team_id", "repo")
@@ -300,6 +302,7 @@ class SyncTaskBootstrap:
 
         from dev_health_ops.models import (
             Integration,
+            IntegrationDataset,
             IntegrationSource,
             SyncRun,
             SyncRunUnit,
@@ -336,6 +339,17 @@ class SyncTaskBootstrap:
         if source is None:
             raise ValueError(f"Integration source not found for unit: {unit_id}")
 
+        dataset = (
+            session.query(IntegrationDataset)
+            .filter(
+                IntegrationDataset.org_id == unit.org_id,
+                IntegrationDataset.integration_id == integration.id,
+                IntegrationDataset.dataset_key == unit.dataset_key,
+            )
+            .one_or_none()
+        )
+        dataset_options = dict(dataset.options or {}) if dataset is not None else {}
+
         # Prefer the run-stamped credential frozen at plan time (CHAOS-2755). A
         # NULL-stamped (legacy/in-flight) run falls back to the mutable
         # integration.credential_id path inside resolve_run_auth.
@@ -356,6 +370,16 @@ class SyncTaskBootstrap:
             str(key): bool(value)
             for key, value in dict(unit.processor_flags or {}).items()
         }
+        resume_cursor = None
+        if unit.mode == "incremental":
+            from dev_health_ops.sync.watermarks import get_watermark
+
+            resume_cursor = get_watermark(
+                session,
+                str(unit.org_id),
+                str(source.external_id),
+                str(unit.dataset_key),
+            )
         return SyncTaskContext(
             unit_id=str(unit.id),
             sync_run_id=str(unit.sync_run_id),
@@ -376,6 +400,8 @@ class SyncTaskBootstrap:
             source_is_org_wide_placeholder=_linear_org_wide_placeholder_source(
                 source, integration
             ),
+            resume_cursor=resume_cursor,
+            dataset_options=dataset_options,
         )
 
 

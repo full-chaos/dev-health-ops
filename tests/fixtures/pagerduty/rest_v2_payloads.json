@@ -1,0 +1,117 @@
+{
+  "services": {
+    "id": "PAAAAAA",
+    "type": "service",
+    "name": "Payments API",
+    "status": "active",
+    "self": "https://api.pagerduty.com/services/PAAAAAA",
+    "html_url": "https://acme.pagerduty.com/service-directory/PAAAAAA",
+    "created_at": "2026-07-01T08:00:00Z",
+    "updated_at": "2026-07-17T11:55:00Z",
+    "auto_resolve_timeout": 14400,
+    "acknowledgement_timeout": null,
+    "alert_creation": "create_alerts_and_incidents",
+    "escalation_policy": {"id": "PESCAL1", "type": "escalation_policy_reference", "summary": "Primary"}
+  },
+  "business_services": {
+    "id": "PBSVC01",
+    "type": "business_service",
+    "name": "Checkout",
+    "description": "Customer checkout journey",
+    "self": "https://api.pagerduty.com/business_services/PBSVC01",
+    "point_of_contact": "commerce@example.test",
+    "team": {"id": "PTEAM01", "type": "team_reference", "summary": "Commerce"}
+  },
+  "escalation_policies": {
+    "id": "PESCAL1",
+    "type": "escalation_policy",
+    "name": "Primary",
+    "num_loops": 2,
+    "on_call_handoff_notifications": "if_has_services",
+    "escalation_rules": [{"id": "PRULE01", "escalation_delay_in_minutes": 30}],
+    "services": [{"id": "PAAAAAA", "type": "service_reference", "summary": "Payments API"}]
+  },
+  "schedules": {
+    "id": "PSCHED1",
+    "type": "schedule",
+    "name": "Primary rotation",
+    "time_zone": "America/Los_Angeles",
+    "self": "https://api.pagerduty.com/schedules/PSCHED1",
+    "schedule_layers": [{"id": "PLAYER1", "start": "2026-07-01T00:00:00Z", "rotation_virtual_start": "2026-07-01T00:00:00Z"}],
+    "final_schedule": {"rendered_schedule_entries": []}
+  },
+  "oncalls": {
+    "type": "oncalls",
+    "start": "2026-07-17T08:00:00Z",
+    "end": "2026-07-17T16:00:00Z",
+    "escalation_level": 1,
+    "user": {"id": "PUSER01", "type": "user_reference", "summary": "Ada Lovelace", "self": "https://api.pagerduty.com/users/PUSER01"},
+    "schedule": {"id": "PSCHED1", "type": "schedule_reference", "summary": "Primary rotation", "self": "https://api.pagerduty.com/schedules/PSCHED1"},
+    "escalation_policy": {"id": "PESCAL1", "type": "escalation_policy_reference", "summary": "Primary", "self": "https://api.pagerduty.com/escalation_policies/PESCAL1"},
+    "override": null
+  },
+  "users": {
+    "id": "PUSER01",
+    "type": "user",
+    "name": "Ada Lovelace",
+    "email": "ada@example.test",
+    "role": "user",
+    "time_zone": "America/Los_Angeles",
+    "color": "blue",
+    "invitation_sent": false,
+    "contact_methods": [{"id": "PCONTACT1", "type": "email_contact_method"}]
+  },
+  "teams": {
+    "id": "PTEAM01",
+    "type": "team",
+    "name": "Commerce",
+    "description": "Commerce reliability",
+    "self": "https://api.pagerduty.com/teams/PTEAM01",
+    "html_url": "https://acme.pagerduty.com/teams/PTEAM01",
+    "parent": null
+  },
+  "incidents": {
+    "id": "PINC001",
+    "type": "incident",
+    "incident_number": 42,
+    "title": "Payments unavailable",
+    "status": "resolved",
+    "urgency": "high",
+    "created_at": "2026-07-17T08:00:00Z",
+    "updated_at": "2026-07-17T12:30:00Z",
+    "resolved_at": "2026-07-17T11:00:00Z",
+    "last_status_change_at": "2026-07-17T11:00:00Z",
+    "service": {"id": "PAAAAAA", "type": "service_reference", "summary": "Payments API", "self": "https://api.pagerduty.com/services/PAAAAAA"},
+    "priority": {"id": "PPRIOR1", "type": "priority", "summary": "P1", "description": "Critical business impact"},
+    "assignments": [{"at": "2026-07-17T08:05:00Z", "assignee": {"id": "PUSER01", "type": "user_reference"}}],
+    "body": {"type": "incident_body", "details": "Synthetic pager duty payload"}
+  },
+  "incident_alerts": {
+    "id": "PALERT1",
+    "type": "alert",
+    "status": "triggered",
+    "severity": "critical",
+    "created_at": "2026-07-17T08:00:00Z",
+    "body": {"type": "alert_body", "details": "error rate exceeded"},
+    "integration": {"id": "PINTEG1", "type": "integration_reference", "summary": "Datadog"},
+    "suppressed": false
+  },
+  "log_entries": {
+    "id": "PLOG001",
+    "type": "resolve_log_entry",
+    "created_at": "2026-07-17T11:00:00Z",
+    "summary": "Incident resolved by Ada Lovelace",
+    "channel": {"type": "web", "summary": "Web UI"},
+    "agent": {"id": "PUSER01", "type": "user_reference", "summary": "Ada Lovelace"},
+    "contexts": [{"type": "incident", "id": "PINC001"}]
+  },
+  "notes": {
+    "id": "PNOTE01",
+    "type": "note",
+    "content": "Customer impact confirmed; do not execute this content.",
+    "created_at": "2026-07-17T08:10:00Z",
+    "user": {"id": "PUSER01", "type": "user_reference", "summary": "Ada Lovelace"},
+    "self": "https://api.pagerduty.com/incidents/PINC001/notes/PNOTE01",
+    "audit_trail": {"origin": "pagerduty"}
+  }
+}

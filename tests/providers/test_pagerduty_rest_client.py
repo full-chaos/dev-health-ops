@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from dev_health_ops.exceptions import AuthenticationException
+from dev_health_ops.exceptions import AuthenticationException, PaginationException
 from dev_health_ops.providers.pagerduty.auth import OAuthBearerAuth
 from dev_health_ops.providers.pagerduty.client import (
     PagerDutyClient,
     pagerduty_base_url,
+)
+from dev_health_ops.providers.pagerduty.degradation import (
+    PagerDutyInsufficientScopeError,
 )
 
 
@@ -37,6 +40,58 @@ async def test_incident_pagination_honors_more_and_uses_bearer_auth() -> None:
 
 
 @pytest.mark.asyncio
+async def test_incident_page_iterator_preserves_window_at_each_resume_offset() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        offset = request.url.params["offset"]
+        return httpx.Response(
+            200,
+            json={"incidents": [{"id": offset, "raw": {}}], "more": offset == "0"},
+        )
+
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"), transport=httpx.MockTransport(handler)
+    )
+    pages = [
+        page
+        async for page in client.iter_incident_pages(
+            params={"since": "a", "until": "b"}
+        )
+    ]
+
+    assert [[incident.id for incident in page] for page in pages] == [["0"], ["1"]]
+    assert [
+        (request.url.params["since"], request.url.params["until"])
+        for request in requests
+    ] == [("a", "b"), ("a", "b")]
+
+
+@pytest.mark.asyncio
+async def test_incident_alert_page_iterator_fetches_only_requested_pages() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        offset = request.url.params["offset"]
+        return httpx.Response(
+            200,
+            json={"alerts": [{"id": offset, "raw": {}}], "more": offset == "0"},
+        )
+
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"), transport=httpx.MockTransport(handler)
+    )
+    pages = client.iter_incident_alert_pages("incident-1")
+    first_page = await anext(pages)
+
+    assert [alert.id for alert in first_page] == ["0"]
+    assert first_page.more is True
+    assert [request.url.params["offset"] for request in requests] == ["0"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [429, 503])
 async def test_retries_transient_response_with_bounded_attempts(
     monkeypatch: pytest.MonkeyPatch, status: int
@@ -59,11 +114,10 @@ async def test_retries_transient_response_with_bounded_attempts(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [401, 403])
-async def test_does_not_retry_auth_failures(
-    monkeypatch: pytest.MonkeyPatch, status: int
+async def test_does_not_retry_401_authentication_failure(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    transport = httpx.MockTransport(lambda _: httpx.Response(status))
+    transport = httpx.MockTransport(lambda _: httpx.Response(401))
     sleep = AsyncMock()
     monkeypatch.setattr("dev_health_ops.providers._http.asyncio.sleep", sleep)
     client = PagerDutyClient(OAuthBearerAuth("oauth"), transport=transport)
@@ -71,6 +125,65 @@ async def test_does_not_retry_auth_failures(
     with pytest.raises(AuthenticationException):
         await client.list_users()
     assert sleep.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_403_insufficient_scope_has_dataset_degradation_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = httpx.MockTransport(lambda _: httpx.Response(403))
+    sleep = AsyncMock()
+    monkeypatch.setattr("dev_health_ops.providers._http.asyncio.sleep", sleep)
+    client = PagerDutyClient(OAuthBearerAuth("oauth"), transport=transport)
+
+    with pytest.raises(PagerDutyInsufficientScopeError):
+        await client.list_users()
+    assert sleep.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_no_progress_pagination_raises_typed_exception() -> None:
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"),
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"incidents": [], "more": True})
+        ),
+    )
+
+    with pytest.raises(PaginationException, match="made no progress"):
+        await client.list_incidents()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"incidents": []},
+        {"more": False},
+        {"incidents": [], "more": "false"},
+    ],
+)
+async def test_malformed_pagination_envelope_raises_typed_exception(
+    payload: dict[str, bool | list[dict[str, str]]],
+) -> None:
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"),
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
+    )
+
+    with pytest.raises(PaginationException, match="pagination envelope"):
+        await client.list_incidents()
+
+
+@pytest.mark.asyncio
+async def test_close_forwards_to_instrumented_rest_core() -> None:
+    client = PagerDutyClient(OAuthBearerAuth("oauth"))
+    close = AsyncMock()
+
+    with patch.object(client._core, "close", new=close):
+        await client.close()
+
+    close.assert_awaited_once()
 
 
 def test_client_has_no_public_mutation_methods_and_region_is_explicit() -> None:

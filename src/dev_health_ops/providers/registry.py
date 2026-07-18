@@ -108,6 +108,13 @@ def _register_builtins() -> None:
 
     register_provider("linear", _linear_factory)
 
+    def _pagerduty_factory() -> Provider:
+        from dev_health_ops.providers.pagerduty.provider import PagerDutyProvider
+
+        return PagerDutyProvider()
+
+    register_provider("pagerduty", _pagerduty_factory)
+
     # Stub providers — connectors not yet implemented
     def _launchdarkly_factory() -> Provider:
         raise NotImplementedError(

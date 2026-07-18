@@ -380,6 +380,9 @@ def _run_pagerduty_dataset(
 ) -> dict[str, Any]:
     from dev_health_ops.providers.pagerduty.enrichment import PagerDutyEnrichmentToggles
     from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
+    from dev_health_ops.providers.pagerduty.service_repository_mapping import (
+        PagerDutyServiceRepositoryMappingInputs,
+    )
     from dev_health_ops.providers.pagerduty.sync import (
         PagerDutyOperationalSync,
         PagerDutySyncOptions,
@@ -393,6 +396,9 @@ def _run_pagerduty_dataset(
     enrichment = PagerDutyEnrichmentToggles.from_dataset_options(
         context.dataset_key, context.dataset_options
     )
+    mapping_inputs = PagerDutyServiceRepositoryMappingInputs.from_dataset_options(
+        context.dataset_options
+    )
 
     async def _handler(store: Any) -> dict[str, Any]:
         result = await PagerDutyOperationalSync(
@@ -405,6 +411,7 @@ def _run_pagerduty_dataset(
                 or context.window_start
                 or datetime.now(timezone.utc),
             ),
+            mapping_inputs=mapping_inputs,
         ).run(
             PagerDutySyncOptions(
                 dataset_key=context.dataset_key,

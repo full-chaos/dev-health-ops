@@ -149,6 +149,39 @@ def test_extracts_runs_and_all_edge_kinds() -> None:
     assert deploy_incident_edges[0].source == "heuristic"
 
 
+def test_mapped_canonical_incident_is_deduplicated_before_ai_linkage() -> None:
+    class _CanonicalIncidentSink(_Sink):
+        def query_dicts(
+            self, query: str, parameters: dict[str, Any]
+        ) -> list[dict[str, Any]]:
+            if "operational_incidents" in query:
+                assert parameters["org_id"] == ORG_ID
+                assert "mapping.repo_id IS NOT NULL" in query
+                assert "mapping.org_id = {org_id:String}" in query
+                canonical_row = {
+                    "repo_id": REPO_ID,
+                    "incident_id": "pd-1",
+                    "status": "resolved",
+                    "started_at": START,
+                    "resolved_at": END,
+                    "last_synced": END,
+                }
+                return [canonical_row, canonical_row]
+            return super().query_dicts(query, parameters)
+
+    result = _extract_ai_workflow_for_day(
+        primary_sink=_CanonicalIncidentSink(),
+        org_id=ORG_ID,
+        start=START,
+        end=END,
+        repo_id=None,
+        repo_provider_by_id={str(REPO_ID): "github"},
+    )
+
+    assert len(result[-1]) == 1
+    assert result[-1][0].incident_id == "pd-1"
+
+
 def test_non_uuid_org_skips_extraction_without_queries() -> None:
     sink = _Sink()
     result = _extract_ai_workflow_for_day(

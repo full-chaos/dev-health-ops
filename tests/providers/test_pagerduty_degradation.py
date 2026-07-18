@@ -25,6 +25,7 @@ from dev_health_ops.models.operational import (
     OperationalService,
     OperationalTeam,
     OperationalUser,
+    ServiceRepositoryMapping,
 )
 from dev_health_ops.providers.pagerduty.degradation import (
     PagerDutyInsufficientScopeError,
@@ -69,6 +70,11 @@ class _Store(PagerDutyOperationalStore):
         self, values: list[OperationalService]
     ) -> None:
         self.services.extend(values)
+
+    async def insert_operational_service_repository_mappings(
+        self, values: list[ServiceRepositoryMapping]
+    ) -> None:
+        """Accept mapping writes without recording them."""
 
     async def insert_operational_incidents(
         self, values: list[OperationalIncident]

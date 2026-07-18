@@ -37,6 +37,7 @@ from dev_health_ops.models.operational import (
     CanonicalOperationalEntity,
     OperationalContractError,
     OperationalIncident,
+    ServiceRepositoryMapping,
     operational_columns,
 )
 from dev_health_ops.models.work_items import (
@@ -354,6 +355,30 @@ class ClickHouseStore:
                     )
                 )
         return repos
+
+    async def load_repository_catalog(
+        self, org_id: str
+    ) -> list[tuple[uuid.UUID, str, str]]:
+        """Load org-scoped (repo_id, provider, full_name) rows for correlation."""
+        assert self.client is not None
+        query = (
+            "SELECT id, provider, repo FROM repos FINAL WHERE org_id = {org_id:String}"
+        )
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query, query, parameters={"org_id": org_id}
+            )
+        catalog: list[tuple[uuid.UUID, str, str]] = []
+        for row in getattr(result, "result_rows", None) or []:
+            repository_id, provider, repo = row[0], row[1], row[2]
+            if not isinstance(provider, str) or not isinstance(repo, str):
+                continue
+            try:
+                normalized_id = self._normalize_uuid(repository_id)
+            except ValueError:
+                continue
+            catalog.append((normalized_id, provider, repo))
+        return catalog
 
     async def get_complexity_snapshots(
         self,
@@ -1178,6 +1203,7 @@ class ClickHouseStore:
                         "release_ref_confidence": float(
                             item.get("release_ref_confidence") or 0.0
                         ),
+                        "org_id": str(item.get("org_id") or self.org_id or ""),
                         "last_synced": self._normalize_datetime(
                             item.get("last_synced") or synced_at_default
                         ),
@@ -1209,6 +1235,9 @@ class ClickHouseStore:
                         "release_ref_confidence": float(
                             getattr(item, "release_ref_confidence", 0.0) or 0.0
                         ),
+                        "org_id": str(
+                            getattr(item, "org_id", None) or self.org_id or ""
+                        ),
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -1229,6 +1258,7 @@ class ClickHouseStore:
                 "pull_request_number",
                 "release_ref",
                 "release_ref_confidence",
+                "org_id",
                 "last_synced",
             ],
             rows,
@@ -2345,10 +2375,22 @@ class ClickHouseStore:
         provider: str,
         provider_instance_id: str,
         source_entity_type: str,
+        include_deleted: bool = False,
     ) -> list[T]:
         assert self.client is not None
         columns = operational_columns(entity_type)
         table = OPERATIONAL_ENTITY_TABLES[entity_type]
+        # Entities carry either is_deleted (services/incidents/...) or is_active
+        # (service->repo mappings); pick the column the table actually has so the
+        # generated SQL never references a non-existent column.
+        if include_deleted:
+            active_filter = ""
+        elif "is_deleted" in columns:
+            active_filter = "AND is_deleted = 0"
+        elif "is_active" in columns:
+            active_filter = "AND is_active = 1"
+        else:
+            active_filter = ""
         query = f"""
         SELECT {", ".join(columns)}
         FROM {table} FINAL
@@ -2356,7 +2398,7 @@ class ClickHouseStore:
           AND provider = {{provider:String}}
           AND provider_instance_id = {{provider_instance_id:String}}
           AND source_entity_type = {{source_entity_type:String}}
-          AND is_deleted = 0
+          {active_filter}
         """
         parameters = {
             "org_id": org_id,
@@ -2431,6 +2473,42 @@ class ClickHouseStore:
         await self._insert_operational_rows(
             "operational_service_repository_mappings", mappings
         )
+
+    async def load_operational_service_repository_mappings(
+        self,
+        org_id: str,
+        *,
+        service_id: str | None = None,
+        repo_id: uuid.UUID | None = None,
+    ) -> list[ServiceRepositoryMapping]:
+        """Load active mapping evidence scoped to an organization and optional endpoint."""
+        assert self.client is not None
+        columns = operational_columns(ServiceRepositoryMapping)
+        predicates = ["org_id = {org_id:String}", "is_active = 1"]
+        parameters: dict[str, str] = {"org_id": org_id}
+        if service_id is not None:
+            predicates.append("service_id = {service_id:String}")
+            parameters["service_id"] = service_id
+        if repo_id is not None:
+            predicates.append("repo_id = {repo_id:UUID}")
+            parameters["repo_id"] = str(repo_id)
+        query = f"""
+        SELECT {", ".join(columns)}
+        FROM operational_service_repository_mappings FINAL
+        WHERE {" AND ".join(predicates)}
+        """
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query,
+                query,
+                parameters=parameters,
+            )
+        mappings: list[ServiceRepositoryMapping] = []
+        for row in result.result_rows or []:
+            values = dict(zip(columns, row, strict=True))
+            values.pop("id")
+            mappings.append(ServiceRepositoryMapping(**values))
+        return mappings
 
     async def load_operational_incidents(
         self,

@@ -1219,6 +1219,29 @@ def _non_git_source_rows(
     ]
 
 
+def _planner_dataset_options(
+    provider: str,
+    dataset_key: str,
+    sync_targets: list[str],
+    parent_options: dict[str, Any],
+) -> dict[str, Any]:
+    """Seed a planner dataset's options, propagating supported sync config.
+
+    ``service_repository_mappings`` from the integration's sync configuration is
+    forwarded onto the PagerDuty ``services`` dataset so the adapter can build
+    admin/Compass mapping inputs; the read side validates it defensively.
+    """
+    options: dict[str, Any] = {"legacy_targets": list(sync_targets)}
+    mappings = parent_options.get("service_repository_mappings")
+    if (
+        provider == "pagerduty"
+        and dataset_key == "services"
+        and isinstance(mappings, dict)
+    ):
+        options["service_repository_mappings"] = mappings
+    return options
+
+
 async def _create_planner_managed_config(
     session: AsyncSession,
     org_id: str,
@@ -1280,7 +1303,9 @@ async def _create_planner_managed_config(
             integration_id=integration.id,
             dataset_key=dataset_key,
             is_enabled=True,
-            options={"legacy_targets": list(sync_targets)},
+            options=_planner_dataset_options(
+                provider, dataset_key, sync_targets, parent_options
+            ),
         )
         for dataset_key in _planner_dataset_keys(provider, sync_targets)
     ]

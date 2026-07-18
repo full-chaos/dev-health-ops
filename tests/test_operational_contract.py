@@ -14,6 +14,7 @@ from dev_health_ops.models.operational import (
     OPERATIONAL_ENTITY_TABLES,
     OperationalIncident,
     OperationalService,
+    ServiceRepositoryMapping,
     canonical_operational_id,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
@@ -283,3 +284,104 @@ def test_store_hides_the_latest_incident_tombstone() -> None:
 
     # Then: the current tombstone is absent from the canonical read result.
     assert actual == []
+
+
+def test_store_loads_active_mapping_by_org_service_and_repository() -> None:
+    service = equivalent_operational_lifecycles()[0].service
+    mapping = ServiceRepositoryMapping(
+        org_id=service.org_id,
+        provider=service.provider,
+        provider_instance_id=service.provider_instance_id,
+        source_entity_type="admin_configuration",
+        external_id="svc:github:full-chaos/payments:admin.v1",
+        source_version_at=service.observed_at,
+        service_id=service.id,
+        repo_full_name="full-chaos/payments",
+        repo_provider="github",
+        mapping_kind="admin_configuration_exact",
+        rule_id="service_repository_mapping.admin.v1",
+        relationship_provenance="admin_configuration",
+        relationship_confidence=1.0,
+    )
+    row = tuple(
+        getattr(mapping, field.name) for field in fields(ServiceRepositoryMapping)
+    )
+
+    class QueryResult:
+        result_rows = [row]
+
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.parameters: dict[str, str] | None = None
+
+        def query(self, query: str, parameters: dict[str, str]) -> QueryResult:
+            assert "operational_service_repository_mappings FINAL" in query
+            self.parameters = parameters
+            return QueryResult()
+
+    store = ClickHouseStore("clickhouse://unused")
+    store.client = RecordingClient()
+
+    actual = asyncio.run(
+        store.load_operational_service_repository_mappings(
+            service.org_id,
+            service_id=service.id,
+        )
+    )
+
+    assert actual == [mapping]
+    assert store.client.parameters == {
+        "org_id": service.org_id,
+        "service_id": service.id,
+    }
+
+
+def test_store_load_active_mappings_filters_by_is_active_not_is_deleted() -> None:
+    # Given: an active mapping row; the mapping table has is_active, not is_deleted.
+    mapping = ServiceRepositoryMapping(
+        org_id="org-a",
+        provider="pagerduty",
+        provider_instance_id="pd-a",
+        source_entity_type="pagerduty_service_metadata",
+        external_id="svc:github:full-chaos/api:metadata.v1",
+        source_version_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
+        service_id="svc-1",
+        repo_full_name="full-chaos/api",
+        repo_provider="github",
+        relationship_provenance="pagerduty_service_metadata",
+        relationship_confidence=0.95,
+    )
+    row = tuple(
+        getattr(mapping, field.name) for field in fields(ServiceRepositoryMapping)
+    )
+
+    class QueryResult:
+        result_rows = [row]
+
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.query_text: str | None = None
+
+        def query(self, query: str, parameters: dict[str, str]) -> QueryResult:
+            self.query_text = query
+            return QueryResult()
+
+    store = ClickHouseStore("clickhouse://unused")
+    store.client = RecordingClient()
+
+    # When: reconciliation loads active mapping evidence via the generic reader.
+    actual = asyncio.run(
+        store.load_active_operational_entities(
+            ServiceRepositoryMapping,
+            org_id="org-a",
+            provider="pagerduty",
+            provider_instance_id="pd-a",
+            source_entity_type="pagerduty_service_metadata",
+        )
+    )
+
+    # Then: the SQL filters on the real is_active column, never is_deleted.
+    assert actual == [mapping]
+    assert store.client.query_text is not None
+    assert "is_active = 1" in store.client.query_text
+    assert "is_deleted" not in store.client.query_text

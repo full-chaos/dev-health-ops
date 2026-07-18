@@ -155,24 +155,15 @@ def _incident_label(status: str) -> str:
 
 
 def _map_node_type(value: str) -> WorkGraphNodeType:
-    try:
-        return WorkGraphNodeType(value.lower())
-    except ValueError:
-        return WorkGraphNodeType.ISSUE
+    return WorkGraphNodeType(value.lower())
 
 
 def _map_edge_type(value: str) -> WorkGraphEdgeType:
-    try:
-        return WorkGraphEdgeType(value.lower())
-    except ValueError:
-        return WorkGraphEdgeType.RELATES
+    return WorkGraphEdgeType(value.lower())
 
 
 def _map_provenance(value: str) -> WorkGraphProvenance:
-    try:
-        return WorkGraphProvenance(value.lower())
-    except ValueError:
-        return WorkGraphProvenance.HEURISTIC
+    return WorkGraphProvenance(value.lower())
 
 
 def _dependency_edge_type_sql() -> str:
@@ -304,6 +295,9 @@ async def _batch_resolve_display_names(
             is_bare_uuid = looks_like_uuid(entity_id)
             is_opaque_hex = bool(_OPAQUE_HEX_ID_RE.match(entity_id))
 
+            if entity_type == "incident" and (is_opaque_hex or is_bare_uuid):
+                incident_ids.add(entity_id)
+                continue
             # Opaque hex ids (feature_flag hashes, etc.) are not resolvable.
             if is_opaque_hex:
                 continue
@@ -315,8 +309,6 @@ async def _batch_resolve_display_names(
                 pr_ids.add(entity_id)
             elif entity_type == "deployment" and is_bare_uuid:
                 deployment_ids.add(entity_id)
-            elif entity_type == "incident" and is_bare_uuid:
-                incident_ids.add(entity_id)
 
     # --- PRs: one query against git_pull_requests -------------------------
     if pr_ids:
@@ -399,7 +391,13 @@ async def _batch_resolve_display_names(
             inc_rows = await query_dicts(
                 client,
                 """
-                SELECT incident_id, status
+                SELECT id AS incident_id, normalized_status AS status, title
+                FROM operational_incidents FINAL
+                WHERE org_id = %(org_id)s
+                  AND is_deleted = 0
+                  AND id IN %(inc_ids)s
+                UNION ALL
+                SELECT incident_id, status, '' AS title
                 FROM incidents FINAL
                 WHERE org_id = %(org_id)s
                   AND incident_id IN %(inc_ids)s
@@ -409,11 +407,16 @@ async def _batch_resolve_display_names(
             for r in inc_rows:
                 inc_id = str(r.get("incident_id") or "")
                 status = str(r.get("status") or "").strip()
+                title = str(r.get("title") or "").strip()
                 # Empty status → omit from resolved (→ Unresolved badge, not raw UUID).
                 # Known statuses are normalised to customer-facing labels; unknown
                 # statuses map to the neutral "Incident" label via _incident_label().
                 if inc_id and status:
-                    resolved[inc_id] = f"incident ({_incident_label(status)})"
+                    resolved[inc_id] = (
+                        f"{title} ({_incident_label(status)})"
+                        if title
+                        else f"incident ({_incident_label(status)})"
+                    )
         except Exception:
             logger.warning("Incident display-name lookup failed", exc_info=True)
 

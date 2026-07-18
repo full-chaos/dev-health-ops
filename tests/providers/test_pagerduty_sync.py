@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -9,10 +10,19 @@ from sqlalchemy.orm import Session
 
 from dev_health_ops.exceptions import APIException, PaginationException
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.operational import OperationalIncident, OperationalService
+from dev_health_ops.models.operational import (
+    OperationalIncident,
+    OperationalService,
+    ServiceRepositoryMapping,
+)
 from dev_health_ops.providers.pagerduty.client import PagerDutyPage
 from dev_health_ops.providers.pagerduty.models import Alert, Incident, Service
 from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
+from dev_health_ops.providers.pagerduty.service_repository_mapping import (
+    PagerDutyServiceRepositoryMappingSource,
+    RepositoryReference,
+    mapping_from_repository_reference,
+)
 from dev_health_ops.providers.pagerduty.sync import (
     PagerDutyDatasetDegradedError,
     PagerDutyEnrichmentToggles,
@@ -542,7 +552,12 @@ async def test_complete_service_snapshot_tombstones_missing_reference() -> None:
     )
     client.drain_usage_observations.return_value = []
     store = Mock()
-    store.load_active_operational_entities = AsyncMock(return_value=[missing])
+    store.load_active_operational_entities = AsyncMock(
+        side_effect=lambda entity_type, **_kwargs: (
+            [missing] if entity_type is OperationalService else []
+        )
+    )
+    store.load_repository_catalog = AsyncMock(return_value=[])
     store.insert_operational_services = AsyncMock()
 
     await PagerDutyOperationalSync(
@@ -564,12 +579,66 @@ async def test_complete_service_snapshot_tombstones_missing_reference() -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_service_snapshot_deactivates_removed_metadata_mapping() -> None:
+    normalizer = PagerDutyNormalizer("org-1", "acme", SOURCE_TIME)
+    service = normalizer.service(
+        Service(id="service-current", name="Current", updated_at=SOURCE_TIME)
+    )
+    stale_mapping = mapping_from_repository_reference(
+        service,
+        RepositoryReference("github", "full-chaos/removed"),
+        PagerDutyServiceRepositoryMappingSource.METADATA,
+        SOURCE_TIME,
+    )
+    client = Mock()
+    client.list_services = AsyncMock(
+        return_value=[
+            Service(id="service-current", name="Current", updated_at=SOURCE_TIME)
+        ]
+    )
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    store.load_active_operational_entities = AsyncMock(return_value=[])
+    store.load_active_operational_entities = AsyncMock(
+        side_effect=lambda entity_type, **kwargs: (
+            [stale_mapping]
+            if kwargs["source_entity_type"]
+            == PagerDutyServiceRepositoryMappingSource.METADATA.value
+            else []
+        )
+    )
+    store.load_repository_catalog = AsyncMock(return_value=[])
+    store.insert_operational_services = AsyncMock()
+    store.insert_operational_service_repository_mappings = AsyncMock()
+
+    await PagerDutyOperationalSync(
+        client=client,
+        store=store,
+        normalizer=normalizer,
+    ).run(PagerDutySyncOptions("services", None, None))
+
+    inserted = [
+        row
+        for call in store.insert_operational_service_repository_mappings.await_args_list
+        for row in call.args[0]
+    ]
+    tombstone = next(row for row in inserted if row.id == stale_mapping.id)
+    assert isinstance(tombstone, ServiceRepositoryMapping)
+    assert tombstone.is_active is False
+    assert tombstone.valid_to == SOURCE_TIME
+    # source_version_at (the RMT version) must be bumped strictly above the
+    # active row so the deactivation wins on a same-window retry (no tie).
+    assert tombstone.source_version_at > stale_mapping.source_version_at
+
+
+@pytest.mark.asyncio
 async def test_failed_service_snapshot_emits_no_reference_tombstones() -> None:
     client = Mock()
     client.list_services = AsyncMock(side_effect=APIException("PagerDuty unavailable"))
     client.drain_usage_observations.return_value = []
     store = Mock()
     store.load_active_operational_entities = AsyncMock()
+    store.load_repository_catalog = AsyncMock(return_value=[])
     store.insert_operational_services = AsyncMock()
 
     with pytest.raises(PagerDutyDatasetDegradedError):
@@ -592,6 +661,7 @@ async def test_malformed_service_snapshot_emits_no_reference_tombstones() -> Non
     client.drain_usage_observations.return_value = []
     store = Mock()
     store.load_active_operational_entities = AsyncMock()
+    store.load_repository_catalog = AsyncMock(return_value=[])
     store.insert_operational_services = AsyncMock()
 
     with pytest.raises(PagerDutyDatasetDegradedError):
@@ -603,3 +673,44 @@ async def test_malformed_service_snapshot_emits_no_reference_tombstones() -> Non
 
     store.load_active_operational_entities.assert_not_awaited()
     store.insert_operational_services.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_service_repository_mapping_resolves_repo_id_from_catalog() -> None:
+    normalizer = PagerDutyNormalizer("org-1", "acme", SOURCE_TIME)
+    repo_id = uuid4()
+    client = Mock()
+    client.list_services = AsyncMock(
+        return_value=[
+            Service(
+                id="service-current",
+                name="Current",
+                html_url="https://github.com/full-chaos/app",
+                updated_at=SOURCE_TIME,
+            )
+        ]
+    )
+    client.drain_usage_observations.return_value = []
+    store = Mock()
+    store.load_active_operational_entities = AsyncMock(return_value=[])
+    store.load_repository_catalog = AsyncMock(
+        return_value=[(repo_id, "github", "full-chaos/app")]
+    )
+    store.insert_operational_services = AsyncMock()
+    store.insert_operational_service_repository_mappings = AsyncMock()
+
+    await PagerDutyOperationalSync(
+        client=client,
+        store=store,
+        normalizer=normalizer,
+    ).run(PagerDutySyncOptions("services", None, None))
+
+    store.load_repository_catalog.assert_awaited_once_with("org-1")
+    inserted = [
+        row
+        for call in store.insert_operational_service_repository_mappings.await_args_list
+        for row in call.args[0]
+    ]
+    mapping = next(row for row in inserted if row.repo_full_name == "full-chaos/app")
+    assert mapping.repo_id == repo_id
+    assert mapping.repo_provider == "github"

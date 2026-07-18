@@ -62,6 +62,7 @@ class LogEntry(PagerDutyModel):
     created_at: datetime | None = None
     channel: dict[str, JsonValue] | None = None
     summary: str | None = None
+    message: str | None = None
 
 
 class Note(PagerDutyModel):

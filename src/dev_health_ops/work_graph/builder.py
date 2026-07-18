@@ -48,6 +48,7 @@ from dev_health_ops.work_graph.models import (
     WorkGraphIssuePR,
     WorkGraphPRCommit,
 )
+from dev_health_ops.work_graph.operational_edges import build_operational_incident_edges
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +413,7 @@ class WorkGraphBuilder:
             "commit_file_edges": 0,
             "heuristic_edges": 0,
             "flag_guards_edges": 0,
+            "operational_incident_edges": 0,
         }
 
         logger.info("Starting work graph build...")
@@ -457,12 +459,30 @@ class WorkGraphBuilder:
         #    source of flag associations; registry-validated + confidence-gated.
         stats["flag_guards_edges"] = self._build_flag_guards_edges()
 
+        stats["operational_incident_edges"] = self._build_operational_incident_edges()
+
         logger.info(
             "Work graph build complete: %s",
             ", ".join(f"{k}={v}" for k, v in stats.items()),
         )
 
         return stats
+
+    def _build_operational_incident_edges(self) -> int:
+        if not self.config.org_id:
+            return 0
+        return self._write_edges(
+            build_operational_incident_edges(
+                self.sink,
+                self.config.org_id,
+                self._now,
+                self.config.heuristic_days_window,
+                self.config.heuristic_confidence,
+                self.config.from_date,
+                self.config.to_date,
+                self.config.repo_id,
+            )
+        )
 
     def _build_flag_guards_edges(self) -> int:
         """Build GUARDS edges (feature_flag -> issue) from real flag-key text refs.

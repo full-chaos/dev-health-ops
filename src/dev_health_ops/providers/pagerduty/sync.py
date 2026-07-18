@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import TypeVar
+from typing import Protocol, TypeGuard, TypeVar
+from uuid import UUID
 
 from dev_health_ops.models.operational import (
     EscalationPolicy,
@@ -14,6 +16,7 @@ from dev_health_ops.models.operational import (
     OperationalService,
     OperationalTeam,
     OperationalUser,
+    ServiceRepositoryMapping,
 )
 from dev_health_ops.providers.pagerduty.client import PagerDutyClient, PagerDutyPage
 from dev_health_ops.providers.pagerduty.degradation import (
@@ -29,6 +32,14 @@ from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 from dev_health_ops.providers.pagerduty.operational_store import (
     PagerDutyOperationalStore,
 )
+from dev_health_ops.providers.pagerduty.service_repository_mapping import (
+    PagerDutyServiceRepositoryMappingInputs,
+    PagerDutyServiceRepositoryMappingSource,
+    mappings_from_service_sources,
+    resolve_repository_mappings,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,20 @@ _ReferenceEntity = TypeVar(
 )
 
 
+class PagerDutyOperationalSyncStore(PagerDutyOperationalStore, Protocol):
+    """Operational store capabilities required for PagerDuty catalog correlation."""
+
+    async def load_repository_catalog(self, org_id: str) -> list[tuple[UUID, str, str]]:
+        """Load organization-scoped (repo_id, provider, full_name) catalog rows."""
+        ...
+
+
+def _has_repository_catalog(
+    store: PagerDutyOperationalStore,
+) -> TypeGuard[PagerDutyOperationalSyncStore]:
+    return hasattr(store, "load_repository_catalog")
+
+
 class PagerDutyOperationalSync:
     """Sync one PagerDuty dataset without crossing account or sink boundaries."""
 
@@ -80,10 +105,16 @@ class PagerDutyOperationalSync:
         client: PagerDutyClient,
         store: PagerDutyOperationalStore,
         normalizer: PagerDutyNormalizer,
+        mapping_inputs: PagerDutyServiceRepositoryMappingInputs | None = None,
     ) -> None:
         self._client = client
         self._store = store
         self._normalizer = normalizer
+        self._mapping_inputs = (
+            mapping_inputs
+            if mapping_inputs is not None
+            else PagerDutyServiceRepositoryMappingInputs.empty()
+        )
 
     async def run(self, options: PagerDutySyncOptions) -> PagerDutySyncResult:
         try:
@@ -100,14 +131,7 @@ class PagerDutyOperationalSync:
             ) as dataset_key if not options.enrichment.enabled(dataset_key):
                 persisted = 0
             case "services":
-                persisted = await self._sync_reference(
-                    self._client.list_services,
-                    self._normalizer.service,
-                    self._store.insert_operational_services,
-                    options.batch_size,
-                    OperationalService,
-                    "service",
-                )
+                persisted = await self._sync_services(options.batch_size)
             case "business-services":
                 persisted = await self._sync_reference(
                     self._client.list_business_services,
@@ -192,6 +216,86 @@ class PagerDutyOperationalSync:
             degraded=False,
             observations=tuple(self._client.drain_usage_observations()),
         )
+
+    async def _sync_services(self, batch_size: int) -> int:
+        """Sync services and retain exact repository metadata as mapping evidence."""
+        rows = await self._client.list_services()
+        values = [self._normalizer.service(row) for row in rows]
+        for start in range(0, len(values), batch_size):
+            await self._store.insert_operational_services(
+                values[start : start + batch_size]
+            )
+
+        mapping_evidence = [
+            mapping
+            for row, service in zip(rows, values, strict=True)
+            for mapping in mappings_from_service_sources(
+                service,
+                row.raw,
+                self._normalizer.observed_at,
+                self._mapping_inputs,
+            )
+        ]
+        if _has_repository_catalog(self._store):
+            repositories = tuple(
+                await self._store.load_repository_catalog(self._normalizer.org_id)
+            )
+            mappings = resolve_repository_mappings(
+                tuple(mapping_evidence), repositories
+            )
+            for start in range(0, len(mappings), batch_size):
+                await self._store.insert_operational_service_repository_mappings(
+                    list(mappings[start : start + batch_size])
+                )
+            await self._reconcile_service_repository_mappings(mappings)
+        else:
+            logger.info(
+                "PagerDuty repository catalog unavailable; skipping service repository mapping population"
+            )
+
+        active_entities = await self._store.load_active_operational_entities(
+            OperationalService,
+            org_id=self._normalizer.org_id,
+            provider="pagerduty",
+            provider_instance_id=self._normalizer.provider_instance_id,
+            source_entity_type="service",
+        )
+        seen_ids = {value.id for value in values}
+        tombstones = [
+            _reference_tombstone(entity, self._normalizer.observed_at)
+            for entity in active_entities
+            if entity.id not in seen_ids
+        ]
+        if tombstones:
+            await self._store.insert_operational_services(tombstones)
+        return len(values)
+
+    async def _reconcile_service_repository_mappings(
+        self, mappings: tuple[ServiceRepositoryMapping, ...]
+    ) -> None:
+        """Deactivate mapping evidence absent from a complete successful source snapshot."""
+        for source in PagerDutyServiceRepositoryMappingSource:
+            active_mappings = await self._store.load_active_operational_entities(
+                ServiceRepositoryMapping,
+                org_id=self._normalizer.org_id,
+                provider="pagerduty",
+                provider_instance_id=self._normalizer.provider_instance_id,
+                source_entity_type=source.value,
+            )
+            seen_ids = {
+                mapping.id
+                for mapping in mappings
+                if mapping.source_entity_type == source.value
+            }
+            tombstones = [
+                _mapping_tombstone(mapping, self._normalizer.observed_at)
+                for mapping in active_mappings
+                if mapping.id not in seen_ids
+            ]
+            if tombstones:
+                await self._store.insert_operational_service_repository_mappings(
+                    tombstones
+                )
 
     async def _sync(
         self,
@@ -333,4 +437,23 @@ def _reference_tombstone(
         last_synced=source_version_at,
         is_deleted=True,
         deleted_at=source_version_at,
+    )
+
+
+def _mapping_tombstone(
+    mapping: ServiceRepositoryMapping, observed_at: datetime
+) -> ServiceRepositoryMapping:
+    # source_version_at is the ReplacingMergeTree version. Reusing observed_at
+    # ties an active row created in the same window (RMT keeps an arbitrary row,
+    # so the deactivation may not win); bump strictly above the prior version.
+    source_version_at = max(
+        observed_at, mapping.source_version_at + timedelta(microseconds=1)
+    )
+    return replace(
+        mapping,
+        is_active=False,
+        valid_to=observed_at,
+        source_version_at=source_version_at,
+        observed_at=observed_at,
+        last_synced=observed_at,
     )

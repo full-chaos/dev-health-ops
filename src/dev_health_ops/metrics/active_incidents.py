@@ -53,14 +53,14 @@ def active_incidents_query(
 
     legacy_org_filter = "org_id = {org_id:String} AND" if org_id else ""
     legacy_projection = f"""
-        SELECT repo_id, incident_id, status, started_at, resolved_at, last_synced, 1 AS source_priority
+        SELECT repo_id, incident_id, status, started_at, resolved_at, last_synced AS synced_at, 1 AS source_priority
         FROM incidents FINAL
         WHERE {legacy_org_filter}
               {legacy_time_filter}
     """
     if not org_id:
         return f"""
-            SELECT repo_id, incident_id, status, started_at, resolved_at, last_synced
+            SELECT repo_id, incident_id, status, started_at, resolved_at, synced_at AS last_synced
             FROM ({legacy_projection})
             WHERE 1 = 1{repo_filter}
         """
@@ -72,7 +72,7 @@ def active_incidents_query(
             incident.normalized_status AS status,
             incident.started_at,
             incident.resolved_at,
-            incident.last_synced,
+            incident.last_synced AS synced_at,
             0 AS source_priority
         FROM operational_incidents AS incident FINAL
         INNER JOIN operational_service_repository_mappings AS mapping FINAL
@@ -99,10 +99,10 @@ def active_incidents_query(
         SELECT
             repo_id,
             incident_id,
-            argMax(status, (source_priority, last_synced)) AS status,
-            argMax(started_at, (source_priority, last_synced)) AS started_at,
-            argMax(resolved_at, (source_priority, last_synced)) AS resolved_at,
-            argMax(last_synced, (source_priority, last_synced)) AS last_synced
+            argMax(status, (source_priority, synced_at)) AS status,
+            argMax(started_at, (source_priority, synced_at)) AS started_at,
+            argMax(resolved_at, (source_priority, synced_at)) AS resolved_at,
+            argMax(synced_at, (source_priority, synced_at)) AS last_synced
         FROM projected_incidents
         WHERE 1 = 1{repo_filter}
         GROUP BY repo_id, incident_id

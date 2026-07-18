@@ -233,3 +233,88 @@ def test_operational_edges_apply_repository_and_time_scope() -> None:
     assert mapping_params["repo_id"] == repo_id
     assert incident_params["from_date"] == from_date
     assert incident_params["to_date"] == to_date
+
+
+def test_deployment_correlation_excludes_same_repo_id_from_another_org() -> None:
+    now = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+    shared_repo_id = uuid4()
+    sink = MagicMock()
+    queries: list[str] = []
+
+    datasets: dict[str, list[dict[str, object]]] = {
+        "operational_service_repository_mappings": [
+            {
+                "org_id": "org-a",
+                "service_id": "svc-a",
+                "repo_id": shared_repo_id,
+                "relationship_provenance": "admin_configuration",
+                "relationship_confidence": 1.0,
+                "mapping_kind": "admin_configuration_exact",
+                "rule_id": "admin.v1",
+                "source_url": None,
+            },
+            {
+                "org_id": "org-b",
+                "service_id": "svc-b",
+                "repo_id": shared_repo_id,
+                "relationship_provenance": "admin_configuration",
+                "relationship_confidence": 1.0,
+                "mapping_kind": "admin_configuration_exact",
+                "rule_id": "admin.v1",
+                "source_url": None,
+            },
+        ],
+        "operational_incidents": [
+            {
+                "org_id": "org-a",
+                "id": "inc-a",
+                "service_id": "svc-a",
+                "escalation_policy_id": None,
+                "started_at": now,
+                "source_url": None,
+            },
+            {
+                "org_id": "org-b",
+                "id": "inc-b",
+                "service_id": "svc-b",
+                "escalation_policy_id": None,
+                "started_at": now,
+                "source_url": None,
+            },
+        ],
+        "deployments": [
+            {
+                "org_id": "org-a",
+                "repo_id": shared_repo_id,
+                "deployment_id": "deploy-a",
+                "environment": "production",
+                "deployed_at": now - timedelta(hours=1),
+            },
+            {
+                "org_id": "org-b",
+                "repo_id": shared_repo_id,
+                "deployment_id": "deploy-b",
+                "environment": "production",
+                "deployed_at": now - timedelta(hours=1),
+            },
+        ],
+    }
+
+    def query(query: str, params: dict[str, object]) -> list[dict[str, object]]:
+        queries.append(query)
+        dataset = next((rows for table, rows in datasets.items() if table in query), [])
+        if "WHERE org_id = {org_id:String}" not in query:
+            return dataset
+        return [row for row in dataset if row["org_id"] == params["org_id"]]
+
+    sink.query_dicts.side_effect = query
+
+    edges = build_operational_incident_edges(sink, "org-a", now, 7, 0.3)
+
+    deployment_edges = [
+        edge for edge in edges if edge.edge_type.value == "linked_incident"
+    ]
+    assert [(edge.source_id, edge.target_id) for edge in deployment_edges] == [
+        ("deploy-a", "inc-a")
+    ]
+    assert all("WHERE org_id = {org_id:String}" in query for query in queries)

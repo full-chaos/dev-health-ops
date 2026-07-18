@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -37,6 +38,8 @@ from dev_health_ops.providers.pagerduty.service_repository_mapping import (
     mappings_from_service_sources,
     resolve_repository_mappings,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,25 +238,27 @@ class PagerDutyOperationalSync:
                 self._mapping_inputs,
             )
         ]
-        if not _has_repository_catalog(self._store):
-            raise TypeError(
-                "PagerDuty service correlation requires repository catalog access"
+        mappings = tuple(mapping_evidence)
+        if _has_repository_catalog(self._store):
+            repository_rows = self._store.query_dicts(
+                "SELECT id, provider, repo FROM repos FINAL WHERE org_id = {org_id:String}",
+                {"org_id": self._normalizer.org_id},
             )
-        repository_rows = self._store.query_dicts(
-            "SELECT id, provider, repo FROM repos FINAL WHERE org_id = {org_id:String}",
-            {"org_id": self._normalizer.org_id},
-        )
-        repositories = tuple(
-            (repository_id, provider, repo)
-            for row in repository_rows
-            for repository_id, provider, repo in [
-                (row.get("id"), row.get("provider"), row.get("repo"))
-            ]
-            if isinstance(repository_id, UUID)
-            and isinstance(provider, str)
-            and isinstance(repo, str)
-        )
-        mappings = resolve_repository_mappings(tuple(mapping_evidence), repositories)
+            repositories = tuple(
+                (repository_id, provider, repo)
+                for row in repository_rows
+                for repository_id, provider, repo in [
+                    (row.get("id"), row.get("provider"), row.get("repo"))
+                ]
+                if isinstance(repository_id, UUID)
+                and isinstance(provider, str)
+                and isinstance(repo, str)
+            )
+            mappings = resolve_repository_mappings(mappings, repositories)
+        else:
+            logger.info(
+                "PagerDuty repository catalog unavailable; retaining unresolved mapping evidence"
+            )
         for start in range(0, len(mappings), batch_size):
             await self._store.insert_operational_service_repository_mappings(
                 list(mappings[start : start + batch_size])

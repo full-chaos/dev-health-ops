@@ -284,8 +284,8 @@ def test_run_dora_metrics_job_no_repo_scope_omits_filter(monkeypatch):
     )
 
     for query, params in sink.queries:
-        assert "repo_id =" not in query
-        assert "FROM repos" not in query
+        assert "AND repo_id = {repo_id:UUID}" not in query
+        assert "repo = {repo_name:String}" not in query
         assert "repo_id" not in params
         assert "repo_name" not in params
 

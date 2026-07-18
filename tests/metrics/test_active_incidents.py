@@ -24,6 +24,9 @@ def test_active_incidents_query_projects_mapped_canonical_rows_with_org_scope() 
     assert "FROM incidents FINAL" in query
     assert "FROM operational_incidents AS incident FINAL" in query
     assert "operational_service_repository_mappings AS mapping FINAL" in query
+    assert "INNER JOIN repos AS repo FINAL" in query
+    assert "mapping.repo_id = repo.id" in query
+    assert "mapping.org_id = repo.org_id" in query
     assert "incident.org_id = {org_id:String}" in query
     assert "mapping.org_id = {org_id:String}" in query
     assert "incident.service_id = mapping.service_id" in query
@@ -31,6 +34,7 @@ def test_active_incidents_query_projects_mapped_canonical_rows_with_org_scope() 
     assert "mapping.is_active = 1" in query
     assert "mapping.valid_from <= {as_of:DateTime64(6, 'UTC')}" in query
     assert "resolved_at IS NOT NULL" in query
+    assert "incident.id AS incident_id" in query
 
 
 def test_active_incidents_query_does_not_project_canonical_rows_without_org_scope() -> (
@@ -86,3 +90,19 @@ def test_deduplicate_active_incidents_keeps_mapped_repositories_separate() -> No
     rows = deduplicate_active_incidents([row, {**row, "repo_id": second_repo_id}])
 
     assert {item["repo_id"] for item in rows} == {REPO_ID, second_repo_id}
+
+
+def test_deduplicate_active_incidents_keeps_distinct_canonical_identities() -> None:
+    first = {
+        "repo_id": REPO_ID,
+        "incident_id": "canonical-provider-instance-one",
+        "status": "resolved",
+        "started_at": START,
+        "resolved_at": START,
+        "last_synced": START,
+    }
+    second = {**first, "incident_id": "canonical-provider-instance-two"}
+
+    rows = deduplicate_active_incidents([first, second])
+
+    assert rows == [first, second]

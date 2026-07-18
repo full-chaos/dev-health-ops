@@ -68,7 +68,7 @@ def active_incidents_query(
     canonical_projection = f"""
         SELECT
             mapping.repo_id,
-            incident.external_id AS incident_id,
+            incident.id AS incident_id,
             incident.normalized_status AS status,
             incident.started_at,
             incident.resolved_at,
@@ -78,6 +78,9 @@ def active_incidents_query(
         INNER JOIN operational_service_repository_mappings AS mapping FINAL
             ON incident.org_id = mapping.org_id
            AND incident.service_id = mapping.service_id
+        INNER JOIN repos AS repo FINAL
+            ON mapping.org_id = repo.org_id
+           AND mapping.repo_id = repo.id
         WHERE incident.org_id = {{org_id:String}}
           AND mapping.org_id = {{org_id:String}}
           AND incident.is_deleted = 0

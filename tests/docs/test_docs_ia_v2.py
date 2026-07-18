@@ -3,9 +3,11 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 
-def _load_validator():
+def _load_validator() -> ModuleType:
     script = Path(__file__).parents[2] / "scripts" / "validate_docs_ia_v2.py"
     spec = importlib.util.spec_from_file_location("validate_docs_ia_v2", script)
     assert spec and spec.loader
@@ -16,14 +18,14 @@ def _load_validator():
 
 
 def test_committed_manifest_is_valid() -> None:
-    module = _load_validator()
+    module: Any = _load_validator()
     root = Path(__file__).parents[2]
     nodes = module.load_nodes(root / ".github/documentation-program/ia")
     assert module.validate_nodes(nodes) == []
 
 
 def test_validator_rejects_duplicate_url_and_reused_onboarding_title() -> None:
-    module = _load_validator()
+    module: Any = _load_validator()
     nodes = [
         {
             "id": "home",

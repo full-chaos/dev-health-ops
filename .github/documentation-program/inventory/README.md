@@ -1,0 +1,81 @@
+# Documentation inventory and disposition
+
+This directory is the reviewed Phase 1 inventory for the **User Guides & Development Documentation** remediation.
+
+It covers the current `dev-health-ops` documentation system, the isolated v2 prototype, internal remediation artifacts, relevant `dev-health-web` documentation/help/publication sources, and the live Workers preview as an explicit runtime baseline.
+
+## Source snapshots
+
+- `full-chaos/dev-health-ops` main: `dde247972ea9d798b4a56809b7efb172861203f4`
+- `full-chaos/dev-health-web` main: `a2ffbcb9afea26bbf7e4f2b2b93220deb259bb2a`
+
+The web snapshot was exported through now-closed review PR [full-chaos/dev-health-web#794](https://github.com/full-chaos/dev-health-web/pull/794). No temporary export workflow is retained.
+
+## Inventory result
+
+- Total reviewed rows: **449**
+- `dev-health-ops` rows: **313**
+- `dev-health-web` rows: **136**
+- Current-site Markdown pages: **216**
+- Prototype pages: **12**
+- Web documentation pages: **38**
+- Visual/static assets reviewed: **90**
+- Current pages classified as public today: **165**
+- Rows assigned to duplicate groups: **72**
+- Unclassified current sources: **0**
+
+## Validation
+
+- Current public pages with a canonical locked-IA target: **136**
+- Current public pages explicitly archived, internalized, or removed: **29**
+- Current public pages without a target or explicit non-public disposition: **0**
+- Target URLs outside the locked 198-node IA: **0**
+- Rows missing a disposition, reason, migration phase, or reviewer: **0**
+
+## Disposition totals
+
+| Disposition | Rows |
+| --- | ---: |
+| Move and rewrite | 108 |
+| Archive or recapture visual evidence | 90 |
+| Internal only | 80 |
+| Remove or replace | 34 |
+| Merge and rewrite | 28 |
+| Retain internal | 22 |
+| Archive | 13 |
+| Internal source evidence | 10 |
+| Other explicit dispositions | 64 |
+
+## Durable source and review output
+
+`docs_inventory_review.py`, `validate_docs_inventory_review.py`, and the read-only `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on relevant pull requests and changes to `main`.
+
+The reviewed disposition is split by source and target domain so GitHub can render and review ordinary TSV diffs:
+
+- `ops-home.tsv`
+- `ops-get-started.tsv`
+- `ops-use-dev-health.tsv`
+- `ops-administer-dev-health.tsv`
+- `ops-install-and-operate.tsv`
+- `ops-integrate-and-extend.tsv`
+- `ops-reference.tsv`
+- `ops-contribute.tsv`
+- `ops-documentation-system.tsv`
+- `ops-documentation-system-supporting.tsv`
+- `ops-internal-project-records.tsv`
+- `ops-internal-project-records-supporting.tsv`
+- `web-canonical-and-entry-points.tsv`
+- `web-internal-docs.tsv`
+- `web-visual-assets.tsv`
+
+The directory also contains the generated factual inventory, a consolidated disposition matrix, the cross-repository web snapshot, and a page-only current-to-target report.
+
+Every disposition row includes its source, current classification, proposed outcome, locked-IA target where public, canonical owner, source of truth, duplicate group, redirect requirement, migration phase, reason, and reviewer.
+
+## Interpretation
+
+The matrix does not make the current site canonical. It says what is retained, rewritten, merged, generated, internalized, archived, removed, or used as source evidence. Every public target URL is a node in the locked IA; the matrix creates no new navigation branches.
+
+The live Workers preview remains a non-canonical baseline. Its host-level crawl, headers, indexing, redirects, and final retirement or redirect behavior are intentionally handled in Phase 11.
+
+With the validation counts above at zero, this source and disposition inventory satisfies the Phase 1 inventory gate and is the source map for Phase 5. Phase 6 implementation remains gated by the recorded Phase 5 vertical-slice approval.

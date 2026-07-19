@@ -1,0 +1,82 @@
+name: Documentation inventory review
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'docs-prototype/**'
+      - 'docs-qa/**'
+      - '.github/documentation-program/**'
+      - 'scripts/docs_inventory_v2.py'
+      - 'scripts/docs_inventory_review.py'
+      - 'scripts/validate_docs_inventory_review.py'
+      - 'mkdocs.yml'
+      - 'mkdocs.prototype.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/**'
+      - 'Makefile'
+      - '*.md'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'docs-prototype/**'
+      - 'docs-qa/**'
+      - '.github/documentation-program/**'
+      - 'scripts/docs_inventory_v2.py'
+      - 'scripts/docs_inventory_review.py'
+      - 'scripts/validate_docs_inventory_review.py'
+      - 'mkdocs.yml'
+      - 'mkdocs.prototype.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/**'
+      - 'Makefile'
+      - '*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install inventory dependency
+        run: python -m pip install 'PyYAML>=6.0.3'
+
+      - name: Regenerate factual inventory
+        run: |
+          mkdir -p .build
+          set -o pipefail
+          python scripts/docs_inventory_review.py \
+            --repository full-chaos/dev-health-ops \
+            --output .build/documentation-inventory.json \
+            2>&1 | tee .build/inventory-command.log
+
+      - name: Validate factual snapshot and reviewed disposition
+        run: |
+          python scripts/validate_docs_inventory_review.py \
+            --generated-json .build/documentation-inventory.json \
+            --inventory-dir .github/documentation-program/inventory \
+            --ia-dir .github/documentation-program/ia
+
+      - name: Upload inventory review evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: documentation-inventory-review
+          path: |
+            .build/**
+            .github/documentation-program/inventory/**
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

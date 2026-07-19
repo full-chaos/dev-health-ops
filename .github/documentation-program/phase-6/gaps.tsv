@@ -1,0 +1,7 @@
+topic	current_product_state	documentation_state	next_gate
+AI Attribution	preview route at /ai/attribution	excluded from public v2 navigation	Add only after supported availability is confirmed
+Flame diagrams	legacy documentation; current canonical route not verified	excluded from public v2 navigation	Verify current equivalent or archive at Phase 9
+Report Weekly Review	preview route	not documented as current	Verify implementation before adding
+Report Executive Summary	preview route	not documented as current	Verify implementation before adding
+Report Export History	preview route	not documented as current	Verify implementation before adding
+Context Fabric	feature-gated product destination	reserved, no customer docs node yet	Add validated customer tasks in a later IA amendment

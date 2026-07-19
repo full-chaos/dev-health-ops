@@ -13,21 +13,21 @@ lifecycle: active
 
 Choose the workflow that matches the question you need to answer. Set scope and time once, preserve them as you move between views, and follow a result to evidence before choosing an action.
 
-## Set context first
+## Start with context
 
-- Select the intended workspace, repository or team, and time window.
-- Apply only filters that belong to the question.
-- Check whether the data is current and sufficiently complete.
-- Compare like-for-like scopes and periods.
+- [Set scope and time](navigate/scope-and-time.md)
+- [Use filters and comparisons](navigate/filters-and-comparisons.md)
+- [Distinguish loading, empty, stale, and partial states](navigate/data-states.md)
 
-## Investigate investment
+## Product workflows
 
-- [Investigate where effort appears to be going](investment/investigate-effort.md)
-- [Read Investment Mix](investment/investment-mix.md)
-- [Follow investment evidence](investment/follow-evidence.md)
+- [Understand investment](investment/index.md)
+- [Diagnose delivery flow](delivery-flow/index.md)
+- [Diagnose code and work relationships](code-and-relationships/index.md)
+- [Plan and improve](plan-and-improve/index.md)
+- [Use AI workflow views](ai-workflows/index.md)
+- [Create and read reports](reports/index.md)
 
 ## Recover from a problem
 
-Start from the visible symptom. Use [No or incomplete data](troubleshooting/no-or-incomplete-data.md) before changing configuration or treating an absence as zero.
-
-Other workflow families are added only after their source packets are verified against the current product and the Phase 5 pattern is approved.
+Start from the symptom in [Troubleshoot product use](troubleshooting/index.md). Do not treat unavailable, incomplete, or delayed data as a measured zero.

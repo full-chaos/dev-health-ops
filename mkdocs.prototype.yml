@@ -43,13 +43,49 @@ nav:
       - Check prerequisites: get-started/prerequisites.md
   - Use Dev Health:
       - use/index.md
+      - Navigate and set context:
+          - use/navigate/index.md
+          - Set scope and time: use/navigate/scope-and-time.md
+          - Use filters and comparisons: use/navigate/filters-and-comparisons.md
+          - Understand data states: use/navigate/data-states.md
       - Understand investment:
           - use/investment/index.md
           - Investigate where effort goes: use/investment/investigate-effort.md
           - Read Investment Mix: use/investment/investment-mix.md
+          - Read Investment Flows: use/investment/investment-flows.md
+          - Read Investment Expense: use/investment/investment-expense.md
           - Follow investment evidence: use/investment/follow-evidence.md
+      - Diagnose delivery flow:
+          - use/delivery-flow/index.md
+          - Read PR Flow: use/delivery-flow/pr-flow.md
+          - Read Quadrants: use/delivery-flow/quadrants.md
+          - Investigate review pressure: use/delivery-flow/review-pressure.md
+      - Diagnose code and work relationships:
+          - use/code-and-relationships/index.md
+          - Read Code Hotspots: use/code-and-relationships/code-hotspots.md
+          - Follow Work Graph relationships: use/code-and-relationships/work-graph.md
+      - Plan and improve:
+          - use/plan-and-improve/index.md
+          - Use Completion Forecast: use/plan-and-improve/capacity-planning.md
+          - Compare trends responsibly: use/plan-and-improve/compare-trends.md
+          - Prepare a team conversation: use/plan-and-improve/team-conversations.md
+      - Use AI workflow views:
+          - use/ai-workflows/index.md
+          - Read AI Impact: use/ai-workflows/impact.md
+          - Read AI Review Load: use/ai-workflows/review-load.md
+          - Read AI Governance Risk: use/ai-workflows/risk.md
+      - Create and read reports:
+          - use/reports/index.md
+          - Create or clone a report: use/reports/create-or-clone.md
+          - Run and monitor a report: use/reports/run-and-schedule.md
+          - Read output and provenance: use/reports/read-output-and-provenance.md
       - Troubleshoot product use:
+          - use/troubleshooting/index.md
           - No or incomplete data: use/troubleshooting/no-or-incomplete-data.md
+          - Unexpected scope or filters: use/troubleshooting/scope-and-filters.md
+          - Missing permission or unavailable view: use/troubleshooting/permissions-and-availability.md
+          - Stale or delayed results: use/troubleshooting/stale-or-delayed-results.md
+          - Report problems: use/troubleshooting/reports.md
   - Administer Dev Health:
       - admin/index.md
       - Synchronization and coverage:

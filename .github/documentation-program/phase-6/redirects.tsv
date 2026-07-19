@@ -1,0 +1,13 @@
+source_path	target_path	status
+/user-guide/views/investment-flows/	/use/investment/investment-flows/	planned
+/user-guide/views/investment-expense/	/use/investment/investment-expense/	planned
+/user-guide/views/pr-flow/	/use/delivery-flow/pr-flow/	planned
+/user-guide/views/quadrants/	/use/delivery-flow/quadrants/	planned
+/user-guide/views/code-hotspots/	/use/code-and-relationships/code-hotspots/	planned
+/user-guide/views/work-graph/	/use/code-and-relationships/work-graph/	planned
+/user-guide/work-graph/	/use/code-and-relationships/work-graph/	planned
+/user-guide/views/capacity-planning/	/use/plan-and-improve/capacity-planning/	planned
+/user-guide/views/ai-impact/	/use/ai-workflows/impact/	planned
+/user-guide/views/ai-review-load/	/use/ai-workflows/review-load/	planned
+/user-guide/views/ai-risk/	/use/ai-workflows/risk/	planned
+/user-guide/reports/	/use/reports/	planned

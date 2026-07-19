@@ -7,6 +7,97 @@
 
 Repository code configures and validates the delivery mechanism. Account-level Cloudflare Access, DNS, API-token scope, and GitHub environment approvals must be reviewed in their respective control planes before production is enabled.
 
+## Local development
+
+### Prerequisites
+
+Use Python 3.12 and a currently supported Node.js release. From a clean checkout:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements-docs.txt
+```
+
+On PowerShell, activate the environment with `.venv\Scripts\Activate.ps1`.
+
+### Fast authoring loop
+
+Use MkDocs directly for content, navigation, layout, and theme work:
+
+```bash
+make docs:v2-serve
+```
+
+Open `http://127.0.0.1:8000`. This mode has live reload and is the normal authoring loop. It does not emulate Cloudflare redirects, headers, indexing controls, or static-asset routing.
+
+The equivalent command without Make is:
+
+```bash
+python -m mkdocs serve \
+  --strict \
+  --config-file mkdocs.prototype.yml \
+  --dev-addr 127.0.0.1:8000
+```
+
+### Full reader-critical validation
+
+Run the same deterministic gate used by documentation CI:
+
+```bash
+make docs:v2-check
+```
+
+This validates the publication inventory and IA, performs a strict build, checks rendered links and assets, runs task-language search acceptance, audits structural accessibility invariants, and verifies selected canonical facts.
+
+### Cloudflare-shaped local preview
+
+Build and prepare the exact preview asset tree, then serve it through the local Workers runtime:
+
+```bash
+make docs:cloudflare-dev
+```
+
+Open `http://localhost:8787`. The target first creates `.build/docs-cloudflare` with preview redirects, security headers, `noindex`, `robots.txt`, and a source-revision manifest, then runs the pinned Wrangler version against `wrangler.jsonc`.
+
+The equivalent commands without Make are:
+
+```bash
+python scripts/validate_docs_v2_publication.py
+python -m mkdocs build --strict --config-file mkdocs.prototype.yml
+python scripts/check_built_site_links.py --site-dir .build/docs-prototype
+python scripts/check_docs_candidate_search.py \
+  --site-dir .build/docs-prototype \
+  --queries .github/documentation-program/phase-10/search-acceptance.json
+python scripts/check_docs_candidate_accessibility.py \
+  --site-dir .build/docs-prototype \
+  --css docs-prototype/stylesheets/extra.css
+python scripts/check_docs_candidate_facts.py
+python scripts/prepare_docs_cloudflare.py \
+  --source .build/docs-prototype \
+  --output .build/docs-cloudflare \
+  --mode preview \
+  --redirects .github/documentation-program/phase-9/redirects.tsv \
+  --source-revision "$(git rev-parse HEAD)"
+npx --yes wrangler@4.112.0 dev --config wrangler.jsonc
+```
+
+Local development does not require the remote `dev-health-docs` Worker to exist. Static assets are served from the local `.build/docs-cloudflare` directory.
+
+## Recreating the deleted Worker identity
+
+The repository already declares the Worker name as `dev-health-docs`. Deleting the old Worker removed its versions, deployment history, preview aliases, and account-side settings; it did not require a repository rename.
+
+Before enabling pull-request preview uploads:
+
+1. Create or bootstrap a Worker named `dev-health-docs` in the Full Chaos account.
+2. Enable Preview URLs and protect them with Cloudflare Access.
+3. Add the least-privilege token and account ID to GitHub.
+4. Set `DOCS_CLOUDFLARE_PREVIEWS_ENABLED=true` only after anonymous access is denied.
+
+A production `wrangler deploy` will create a new version and make it the active deployment. Keep the custom domain and production variable disabled until the Phase 12 go/no-go process authorizes cutover.
+
 ## One-time account setup
 
 ### 1. Protect Worker preview URLs

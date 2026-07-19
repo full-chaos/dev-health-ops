@@ -26,7 +26,9 @@ def _literal_set(path: Path, name: str) -> set[str]:
             )
             value = node.value
         elif isinstance(node, ast.AnnAssign):
-            target_matches = isinstance(node.target, ast.Name) and node.target.id == name
+            target_matches = (
+                isinstance(node.target, ast.Name) and node.target.id == name
+            )
             value = node.value
         if not target_matches or value is None:
             continue
@@ -58,11 +60,7 @@ def main() -> int:
     documented = set(KEY_RE.findall(DOCUMENT.read_text(encoding="utf-8")))
     expected = themes | subcategories
     missing = expected - documented
-    unknown = {
-        key
-        for key in documented - expected
-        if "." in key or key in themes
-    }
+    unknown = {key for key in documented - expected if "." in key or key in themes}
 
     errors: list[str] = []
     if missing:

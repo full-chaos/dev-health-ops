@@ -115,9 +115,7 @@ def _load_documents(path: Path) -> list[SearchDocument]:
         title = str(raw.get("title") or "")
         text = str(raw.get("text") or "")
         if location:
-            documents.append(
-                SearchDocument(location=location, title=title, text=text)
-            )
+            documents.append(SearchDocument(location=location, title=title, text=text))
     return documents
 
 

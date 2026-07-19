@@ -1,0 +1,83 @@
+site_name: Dev Health documentation — v2 prototype
+site_description: GitLab-inspired task documentation with the Full Chaos visual identity.
+repo_name: Full Chaos / Dev Health
+repo_url: https://github.com/full-chaos/dev-health-ops
+edit_uri: edit/main/docs-prototype/
+
+docs_dir: docs-prototype
+site_dir: .build/docs-prototype
+
+theme:
+  name: material
+  logo: assets/full-chaos-mark.svg
+  favicon: assets/full-chaos-mark.svg
+  font: false
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - navigation.path
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.action.edit
+    - content.action.view
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Use dark theme
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Use light theme
+
+nav:
+  - Documentation home: index.md
+  - Get started:
+      - get-started/index.md
+  - Use Dev Health:
+      - use/index.md
+      - Understand investment:
+          - Investigate where effort goes: use/investment/investigate-effort.md
+      - Troubleshoot product use:
+          - No or incomplete data: use/troubleshooting/no-or-incomplete-data.md
+  - Administer Dev Health:
+      - admin/index.md
+  - Install and operate:
+      - operate/index.md
+  - Integrate and extend:
+      - integrate/index.md
+  - Reference:
+      - reference/index.md
+      - Metrics and computations:
+          - Investment distribution: reference/metrics/investment-distribution.md
+  - Contribute:
+      - contribute/index.md
+  - Prototype review:
+      - Design directions: design-directions.md
+
+plugins:
+  - search
+
+extra_css:
+  - stylesheets/extra.css
+  - stylesheets/home.css
+  - stylesheets/home-sections.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+copyright: Prototype only — the current production documentation remains the WIP baseline until cutover.

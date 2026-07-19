@@ -1,0 +1,131 @@
+.fc-home-card__tasks {
+  border-top: 1px solid var(--fc-doc-border);
+  color: var(--fc-doc-text-muted);
+  list-style: none;
+  margin: 1rem 0 0 !important;
+  padding: 0.85rem 0 0 !important;
+}
+
+.fc-home-card__tasks li {
+  margin: 0 !important;
+  padding: 0.3rem 0 0.3rem 1rem;
+  position: relative;
+}
+
+.fc-home-card__tasks li::before {
+  color: var(--fc-doc-active);
+  content: "•";
+  left: 0;
+  position: absolute;
+}
+
+.fc-home-card {
+  min-height: 22rem;
+}
+
+.fc-home-feature-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0 0 3rem;
+}
+
+.fc-home-feature {
+  background: var(--fc-doc-surface);
+  border: 1px solid var(--fc-doc-border);
+  border-radius: 0.65rem;
+  padding: 1.4rem 1.5rem;
+}
+
+.fc-home-feature h2 {
+  border: 0;
+  font-size: 1.3rem;
+  margin: 0 0 0.85rem;
+  padding: 0;
+}
+
+.fc-home-feature ul {
+  list-style: none;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.fc-home-feature li {
+  border-top: 1px solid var(--fc-doc-border);
+  margin: 0 !important;
+  padding: 0.75rem 0;
+}
+
+.fc-home-feature li:first-child {
+  border-top: 0;
+}
+
+.fc-home-feature a {
+  text-decoration: none;
+}
+
+.fc-home-troubleshooting {
+  align-items: center;
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--fc-crimson), transparent 88%), transparent 50%),
+    var(--fc-ink);
+  border: 1px solid var(--fc-surface);
+  border-left: 0.32rem solid var(--fc-flame);
+  border-radius: 0.65rem;
+  color: var(--fc-silver);
+  display: flex;
+  gap: 2rem;
+  justify-content: space-between;
+  margin: 0 0 1rem;
+  padding: 1.6rem 1.75rem;
+}
+
+.fc-home-troubleshooting h2 {
+  border: 0;
+  color: var(--fc-white);
+  font-size: 1.35rem;
+  margin: 0 0 0.4rem;
+  padding: 0;
+}
+
+.fc-home-troubleshooting p {
+  color: var(--fc-mist);
+  margin: 0;
+}
+
+.fc-home-troubleshooting .md-button {
+  background: var(--fc-flame);
+  border-color: var(--fc-flame);
+  color: var(--fc-void);
+  flex: none;
+  margin: 0;
+  text-decoration: none;
+}
+
+.fc-home-troubleshooting .md-button:hover,
+.fc-home-troubleshooting .md-button:focus-visible {
+  background: var(--fc-amber);
+  border-color: var(--fc-amber);
+  color: var(--fc-void);
+}
+
+@media screen and (max-width: 54rem) {
+  .fc-home-feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media screen and (max-width: 38rem) {
+  .fc-home-card {
+    min-height: 0;
+  }
+
+  .fc-home-troubleshooting {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fc-home-troubleshooting .md-button {
+    text-align: center;
+  }
+}

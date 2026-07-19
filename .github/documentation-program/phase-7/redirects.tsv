@@ -1,0 +1,16 @@
+source_path	target_path	status
+/team-configuration/	/admin/teams-and-identities/teams-and-repositories/	planned
+/sso-setup/	/admin/teams-and-identities/roles-and-access/	planned
+/user-guide/github-app-setup/	/admin/data-sources/github/	planned
+/user-guide/github-app-auth/	/admin/data-sources/github/	planned
+/connectors/gitlab-permissions/	/admin/data-sources/gitlab/	planned
+/user-guide/product-telemetry/	/admin/security-and-audit/privacy/	planned
+/self-hosted-quickstart/	/operate/install/local-evaluation/	planned
+/ops/deployment-guide/	/operate/install/production/	planned
+/ops/workers/	/operate/run/workers-and-jobs/	planned
+/ops/observability-tooling/	/operate/observe/	planned
+/alerting/	/operate/observe/dashboards-and-alerts/	planned
+/slos/	/operate/observe/dashboards-and-alerts/	planned
+/ops/runbook-ingestion-failures/	/operate/runbooks/ingestion-failure/	planned
+/ops/runbook-report-failures/	/operate/runbooks/worker-or-queue-failure/	planned
+/security/credential-encryption-rotation/	/operate/security/hardening/	planned

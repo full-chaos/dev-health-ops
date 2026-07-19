@@ -1,0 +1,9 @@
+source_path	target_path	status
+/customer-push-ingestion/overview/	/integrate/customer-push/	planned
+/customer-push-ingestion/setup-guide/	/integrate/customer-push/register-source/	planned
+/customer-push-ingestion/examples/	/integrate/customer-push/submit-records/	planned
+/customer-push-ingestion/ci-cd/	/integrate/customer-push/submit-records/	planned
+/customer-push-ingestion/troubleshooting/	/integrate/troubleshooting/delivery-and-rate-limits/	planned
+/webhooks/	/integrate/webhooks/	planned
+/examples/webhook-relay/	/integrate/webhooks/configure/	planned
+/api/web-graphql-client/	/integrate/api/graphql/	planned

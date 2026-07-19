@@ -1,0 +1,46 @@
+name: Fix documentation inventory typing once
+
+on:
+  push:
+    branches:
+      - agent/docs-phase-1-inventory-disposition
+    paths:
+      - '.github/workflows/docs-inventory-fix-types-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/docs-phase-1-inventory-disposition
+
+      - name: Add the required Counter annotation and remove diagnostics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/docs_inventory_review.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    counts = Counter()\n'
+          new = '    counts: Counter[str] = Counter()\n'
+          if text.count(old) != 1:
+              raise SystemExit('Expected exactly one untyped Counter declaration')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          rm .github/workflows/docs-inventory-mypy-report.yml
+          rm .github/workflows/docs-inventory-fix-types-once.yml
+
+      - name: Commit the final type fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/docs_inventory_review.py
+          git add -A .github/workflows/docs-inventory-mypy-report.yml
+          git add -A .github/workflows/docs-inventory-fix-types-once.yml
+          git commit -m 'fix: type the documentation inventory counters'
+          git push

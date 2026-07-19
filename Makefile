@@ -47,16 +47,13 @@ docs\:v2-check:
 	python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs-prototype --css docs-prototype/stylesheets/extra.css
 	python scripts/check_docs_candidate_facts.py
 
-docs\:cloudflare-preview: docs\:v2-check
-	rm -rf .build/docs-cloudflare
-	python scripts/prepare_docs_cloudflare.py \
-		--source .build/docs-prototype \
-		--output .build/docs-cloudflare \
-		--mode preview \
-		--redirects .github/documentation-program/phase-9/redirects.tsv \
-		--source-revision "$$(git rev-parse HEAD)"
+# Prepare an explicit, fully validated preview asset tree without starting a server.
+docs\:cloudflare-preview:
+	DOCS_CLOUDFLARE_MODE=preview python scripts/build_docs_cloudflare.py --full-check
 
-docs\:cloudflare-dev: docs\:cloudflare-preview
+# Wrangler runs its configured custom build before starting and rebuilds when the
+# watched documentation sources change.
+docs\:cloudflare-dev:
 	npx --yes wrangler@4.112.0 dev --config wrangler.jsonc
 
 test\:unit:

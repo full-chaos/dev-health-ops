@@ -2010,6 +2010,27 @@ async def update_sync_config(
         for key in cleared_keys:
             merged_options.pop(key, None)
         mutable_config.sync_options = merged_options
+    if (
+        str(getattr(config, "provider", "")).lower() == "pagerduty"
+        and "service_repository_mappings" in sync_options
+        and isinstance(sync_options["service_repository_mappings"], dict)
+        and (integration_id := getattr(config, "integration_id", None)) is not None
+    ):
+        dataset_result = await session.execute(
+            select(IntegrationDataset).where(
+                IntegrationDataset.org_id == org_id,
+                IntegrationDataset.integration_id == integration_id,
+                IntegrationDataset.dataset_key == "services",
+            )
+        )
+        services_dataset = dataset_result.scalar_one_or_none()
+        if services_dataset is not None:
+            services_dataset.options = {
+                **dict(services_dataset.options or {}),
+                "service_repository_mappings": sync_options[
+                    "service_repository_mappings"
+                ],
+            }
     if payload.is_active is not None:
         mutable_config.is_active = payload.is_active
     await session.flush()

@@ -41,114 +41,114 @@ nav:
   - Get started:
       - get-started/index.md
       - Choose a task: get-started/choose-a-task.md
-      - Check prerequisites: get-started/prerequisites.md
+      - Prerequisites: get-started/prerequisites.md
   - Use Dev Health:
       - use/index.md
-      - Navigate and set context:
+      - Context and filters:
           - use/navigate/index.md
-          - Set scope and time: use/navigate/scope-and-time.md
-          - Use filters and comparisons: use/navigate/filters-and-comparisons.md
-          - Understand data states: use/navigate/data-states.md
-      - Understand investment:
+          - Scope and time: use/navigate/scope-and-time.md
+          - Filters and comparisons: use/navigate/filters-and-comparisons.md
+          - Data states: use/navigate/data-states.md
+      - Investment:
           - use/investment/index.md
-          - Investigate where effort goes: use/investment/investigate-effort.md
-          - Read Investment Mix: use/investment/investment-mix.md
-          - Read Investment Flows: use/investment/investment-flows.md
-          - Read Investment Expense: use/investment/investment-expense.md
-          - Follow investment evidence: use/investment/follow-evidence.md
-      - Diagnose delivery flow:
+          - Investigate effort: use/investment/investigate-effort.md
+          - Investment Mix: use/investment/investment-mix.md
+          - Investment Flows: use/investment/investment-flows.md
+          - Investment Expense: use/investment/investment-expense.md
+          - Evidence: use/investment/follow-evidence.md
+      - Delivery flow:
           - use/delivery-flow/index.md
-          - Read PR Flow: use/delivery-flow/pr-flow.md
-          - Read Quadrants: use/delivery-flow/quadrants.md
-          - Investigate review pressure: use/delivery-flow/review-pressure.md
-      - Diagnose code and work relationships:
+          - PR Flow: use/delivery-flow/pr-flow.md
+          - Quadrants: use/delivery-flow/quadrants.md
+          - Review pressure: use/delivery-flow/review-pressure.md
+      - Code and relationships:
           - use/code-and-relationships/index.md
-          - Read Code Hotspots: use/code-and-relationships/code-hotspots.md
-          - Follow Work Graph relationships: use/code-and-relationships/work-graph.md
-      - Plan and improve:
+          - Code Hotspots: use/code-and-relationships/code-hotspots.md
+          - Work Graph: use/code-and-relationships/work-graph.md
+      - Planning:
           - use/plan-and-improve/index.md
-          - Use Completion Forecast: use/plan-and-improve/capacity-planning.md
-          - Compare trends responsibly: use/plan-and-improve/compare-trends.md
-          - Prepare a team conversation: use/plan-and-improve/team-conversations.md
-      - Use AI workflow views:
+          - Completion Forecast: use/plan-and-improve/capacity-planning.md
+          - Compare trends: use/plan-and-improve/compare-trends.md
+          - Team conversations: use/plan-and-improve/team-conversations.md
+      - AI workflows:
           - use/ai-workflows/index.md
-          - Read AI Impact: use/ai-workflows/impact.md
-          - Read AI Review Load: use/ai-workflows/review-load.md
-          - Read AI Governance Risk: use/ai-workflows/risk.md
-      - Create and read reports:
+          - AI Impact: use/ai-workflows/impact.md
+          - AI Review Load: use/ai-workflows/review-load.md
+          - AI Governance Risk: use/ai-workflows/risk.md
+      - Reports:
           - use/reports/index.md
-          - Create or clone a report: use/reports/create-or-clone.md
-          - Run and monitor a report: use/reports/run-and-schedule.md
-          - Read output and provenance: use/reports/read-output-and-provenance.md
-      - Troubleshoot product use:
+          - Create or clone: use/reports/create-or-clone.md
+          - Run and schedule: use/reports/run-and-schedule.md
+          - Output and provenance: use/reports/read-output-and-provenance.md
+      - Troubleshooting:
           - use/troubleshooting/index.md
           - No or incomplete data: use/troubleshooting/no-or-incomplete-data.md
-          - Unexpected scope or filters: use/troubleshooting/scope-and-filters.md
-          - Missing permission or unavailable view: use/troubleshooting/permissions-and-availability.md
+          - Scope and filters: use/troubleshooting/scope-and-filters.md
+          - Permissions and availability: use/troubleshooting/permissions-and-availability.md
           - Stale or delayed results: use/troubleshooting/stale-or-delayed-results.md
           - Report problems: use/troubleshooting/reports.md
   - Administer Dev Health:
       - admin/index.md
-      - Configure the workspace:
+      - Workspace:
           - admin/workspace/index.md
-          - Workspace settings: admin/workspace/settings.md
-      - Manage teams and access:
+          - Settings: admin/workspace/settings.md
+      - Teams and access:
           - admin/teams-and-identities/index.md
           - Teams and repositories: admin/teams-and-identities/teams-and-repositories.md
           - Roles and access: admin/teams-and-identities/roles-and-access.md
-      - Connect data sources:
+      - Data sources:
           - admin/data-sources/index.md
           - GitHub: admin/data-sources/github.md
           - GitLab: admin/data-sources/gitlab.md
           - Credential lifecycle: admin/data-sources/credential-lifecycle.md
-      - Synchronization and coverage:
+      - Sync and coverage:
           - admin/sync-and-coverage/index.md
-          - Check status and freshness: admin/sync-and-coverage/status-and-freshness.md
-          - Understand coverage: admin/sync-and-coverage/coverage.md
-      - Security and privacy:
+          - Status and freshness: admin/sync-and-coverage/status-and-freshness.md
+          - Coverage: admin/sync-and-coverage/coverage.md
+      - Security:
           - admin/security-and-audit/index.md
-          - Credential responsibilities: admin/security-and-audit/credentials.md
+          - Credentials: admin/security-and-audit/credentials.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
-      - Troubleshoot administration:
+      - Troubleshooting:
           - admin/troubleshooting/index.md
           - Authentication and roles: admin/troubleshooting/authentication-and-roles.md
           - Provider connections: admin/troubleshooting/provider-connections.md
-          - Synchronization and coverage: admin/troubleshooting/sync-and-coverage.md
+          - Sync and coverage: admin/troubleshooting/sync-and-coverage.md
   - Install and operate:
       - operate/index.md
-      - Plan a deployment:
+      - Plan:
           - operate/plan/index.md
           - Prerequisites: operate/plan/prerequisites.md
           - Capacity and sizing: operate/plan/capacity-and-sizing.md
-      - Install Dev Health:
+      - Install:
           - operate/install/index.md
-          - Evaluate locally: operate/install/local-evaluation.md
-          - Install production: operate/install/production.md
-          - Verify first health: operate/install/verify-health.md
-      - Configure the platform:
+          - Local evaluation: operate/install/local-evaluation.md
+          - Production: operate/install/production.md
+          - Verify health: operate/install/verify-health.md
+      - Configure:
           - operate/configure/index.md
           - Environment and secrets: operate/configure/environment-and-secrets.md
           - Databases and storage: operate/configure/databases-and-storage.md
           - Network and TLS: operate/configure/network-and-tls.md
           - Workers and schedules: operate/configure/workers-and-schedules.md
           - External services: operate/configure/external-services.md
-      - Upgrade, back up, and maintain:
+      - Maintain:
           - operate/maintain/index.md
           - Upgrade: operate/maintain/upgrade.md
           - Backup and restore: operate/maintain/backup-and-restore.md
           - Decommission: operate/maintain/decommission.md
-      - Run the platform:
+      - Run:
           - operate/run/index.md
           - Workers and jobs: operate/run/workers-and-jobs.md
           - Ingestion and backfills: operate/run/ingestion-and-backfills.md
           - Operational controls: operate/run/operational-controls.md
-      - Observe the platform:
+      - Observe:
           - operate/observe/index.md
           - Health checks: operate/observe/health-checks.md
           - Logs: operate/observe/logs.md
           - Metrics and traces: operate/observe/metrics-and-traces.md
           - Dashboards and alerts: operate/observe/dashboards-and-alerts.md
-      - Security operations:
+      - Security:
           - operate/security/index.md
           - Production hardening: operate/security/hardening.md
       - Runbooks:
@@ -162,21 +162,21 @@ nav:
           - Disaster recovery: operate/runbooks/disaster-recovery.md
   - Integrate and extend:
       - integrate/index.md
-      - Send data with Customer Push:
+      - Customer Push:
           - integrate/customer-push/index.md
           - Supported boundary: integrate/customer-push/overview.md
-          - Register a source and credential: integrate/customer-push/register-source.md
+          - Register a source: integrate/customer-push/register-source.md
           - Discover the schema: integrate/customer-push/schema-discovery.md
           - Submit records: integrate/customer-push/submit-records.md
           - Idempotency and retries: integrate/customer-push/idempotency-and-retries.md
-          - Validation and delivery errors: integrate/customer-push/errors.md
-          - Observe source delivery: integrate/customer-push/observability.md
-      - Use supported APIs:
+          - Validation errors: integrate/customer-push/errors.md
+          - Delivery observability: integrate/customer-push/observability.md
+      - APIs:
           - integrate/api/index.md
-          - Query GraphQL: integrate/api/graphql.md
-          - Authenticate clients: integrate/api/authentication.md
-          - Automate workflows: integrate/api/automation.md
-      - Use webhooks:
+          - GraphQL: integrate/api/graphql.md
+          - Authentication: integrate/api/authentication.md
+          - Automation: integrate/api/automation.md
+      - Webhooks:
           - integrate/webhooks/index.md
           - Configure: integrate/webhooks/configure.md
           - Verify signatures: integrate/webhooks/verify-signatures.md
@@ -184,57 +184,57 @@ nav:
       - Build an integration:
           - integrate/build-an-integration/index.md
           - Provider integration: integrate/build-an-integration/provider.md
-          - Canonical data contracts: integrate/build-an-integration/data-contracts.md
-          - Test an integration: integrate/build-an-integration/testing.md
-      - Troubleshoot integrations:
+          - Data contracts: integrate/build-an-integration/data-contracts.md
+          - Testing: integrate/build-an-integration/testing.md
+      - Troubleshooting:
           - integrate/troubleshooting/index.md
           - Authentication: integrate/troubleshooting/authentication.md
           - Schema and validation: integrate/troubleshooting/schema-and-validation.md
           - Delivery and rate limits: integrate/troubleshooting/delivery-and-rate-limits.md
   - Reference:
       - reference/index.md
-      - API reference:
+      - API:
           - reference/api/index.md
           - Authentication and authorization: reference/api/authentication.md
           - Errors, pagination, and limits: reference/api/errors-pagination-rate-limits.md
-      - GraphQL reference:
+      - GraphQL:
           - reference/graphql/index.md
           - Schema and fields: reference/graphql/schema.md
           - Filters and scope: reference/graphql/filters.md
           - Nullability and errors: reference/graphql/nullability-and-errors.md
-      - CLI reference: reference/cli/index.md
-      - Configuration reference:
+      - CLI: reference/cli/index.md
+      - Configuration:
           - reference/configuration/index.md
           - Environment variables: reference/configuration/environment.md
-          - Feature flags and availability: reference/configuration/feature-flags.md
-      - Schemas and contracts:
+          - Feature flags: reference/configuration/feature-flags.md
+      - Schemas:
           - reference/schemas/index.md
           - Record kinds and enums: reference/schemas/record-kinds-and-enums.md
       - Data models:
           - reference/data-models/index.md
-          - Work Graph model: reference/data-models/work-graph.md
-          - Investment data model: reference/data-models/investment.md
-      - Metrics and computations:
+          - Work Graph: reference/data-models/work-graph.md
+          - Investment: reference/data-models/investment.md
+      - Metrics:
           - reference/metrics/index.md
-          - Canonical metric definitions: reference/metrics/definitions.md
+          - Definitions: reference/metrics/definitions.md
           - Weighting and aggregation: reference/metrics/weighting-and-aggregation.md
-      - Product taxonomies:
+      - Taxonomies:
           - reference/taxonomies/index.md
-          - Investment taxonomy: reference/taxonomies/investment.md
+          - Investment: reference/taxonomies/investment.md
       - Limits and compatibility:
           - reference/limits-and-compatibility/index.md
           - Provider limits: reference/limits-and-compatibility/provider-limits.md
           - Version compatibility: reference/limits-and-compatibility/compatibility.md
-      - Deprecations and replacements: reference/deprecations/index.md
+      - Deprecations: reference/deprecations/index.md
   - Contribute:
       - contribute/index.md
-      - Start contributing:
+      - Get started:
           - contribute/start/index.md
           - Repository map: contribute/start/repository-map.md
           - Development environment: contribute/start/development-environment.md
-      - Architecture and boundaries:
+      - Architecture:
           - contribute/architecture/index.md
-          - Platform architecture: contribute/architecture/platform.md
+          - Platform: contribute/architecture/platform.md
           - Data and storage: contribute/architecture/data-and-storage.md
           - Stable contracts: contribute/architecture/contracts.md
       - Develop and test:
@@ -248,7 +248,7 @@ nav:
           - contribute/review-and-release/index.md
           - Pull requests: contribute/review-and-release/pull-requests.md
           - Releases and rollback: contribute/review-and-release/releases.md
-      - Contribute documentation:
+      - Documentation:
           - contribute/documentation/index.md
           - Classify and place: contribute/documentation/classify-and-place.md
           - Write and review: contribute/documentation/write-and-review.md

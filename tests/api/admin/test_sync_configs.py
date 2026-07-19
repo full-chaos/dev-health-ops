@@ -937,6 +937,464 @@ async def test_update_sync_config_changes_is_active(client):
 
 
 @pytest.mark.asyncio
+async def test_update_pagerduty_service_mappings_propagates_to_services_dataset(
+    client, session_maker
+):
+    ac, _ = client
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "pagerduty-service-mappings",
+            "provider": "pagerduty",
+            "sync_targets": ["operational"],
+            "sync_options": {
+                "service_repository_mappings": {
+                    "admin": {
+                        "svc-before": [
+                            {"provider": "github", "full_name": "acme/before"}
+                        ]
+                    },
+                    "compass": {
+                        "svc-before": [
+                            {
+                                "provider": "github",
+                                "full_name": "acme/component-before",
+                            }
+                        ]
+                    },
+                },
+            },
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+        dataset.options = {
+            **dataset.options,
+            "unrelated_dataset_option": "preserve-me",
+        }
+        await session.commit()
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={
+            "sync_options": {
+                "service_repository_mappings": {
+                    "admin": {
+                        "svc-after": [{"provider": "github", "full_name": "acme/after"}]
+                    },
+                    "compass": {
+                        "svc-after": [
+                            {
+                                "provider": "github",
+                                "full_name": "acme/component-after",
+                            }
+                        ]
+                    },
+                },
+            },
+        },
+    )
+
+    assert update_resp.status_code == 200, update_resp.text
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+        users_dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "users",
+                )
+            )
+        ).scalar_one()
+
+    assert config.sync_options["service_repository_mappings"] == {
+        "admin": {"svc-after": [{"provider": "github", "full_name": "acme/after"}]},
+        "compass": {
+            "svc-after": [{"provider": "github", "full_name": "acme/component-after"}]
+        },
+    }
+    assert dataset.options["service_repository_mappings"] == {
+        "admin": {"svc-after": [{"provider": "github", "full_name": "acme/after"}]},
+        "compass": {
+            "svc-after": [{"provider": "github", "full_name": "acme/component-after"}]
+        },
+    }
+    assert dataset.options["legacy_targets"] == ["operational"]
+    assert dataset.options["unrelated_dataset_option"] == "preserve-me"
+    assert users_dataset.options == {"legacy_targets": ["operational"]}
+
+
+@pytest.mark.asyncio
+async def test_update_pagerduty_without_service_mappings_leaves_dataset_options_unchanged(
+    client, session_maker
+):
+    ac, _ = client
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "pagerduty-service-mappings-omit",
+            "provider": "pagerduty",
+            "sync_targets": ["operational"],
+            "sync_options": {
+                "service_repository_mappings": {
+                    "admin": {
+                        "svc-before": [
+                            {"provider": "github", "full_name": "acme/before"}
+                        ]
+                    },
+                    "compass": {
+                        "svc-before": [
+                            {
+                                "provider": "github",
+                                "full_name": "acme/component-before",
+                            }
+                        ]
+                    },
+                },
+            },
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+        options_before_update = dict(dataset.options)
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"is_active": False},
+    )
+
+    assert update_resp.status_code == 200, update_resp.text
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+
+    assert config.is_active is False
+    assert dataset.options == options_before_update
+
+
+@pytest.mark.asyncio
+async def test_update_pagerduty_mappings_updates_disabled_services_dataset_before_reenable(
+    client, session_maker
+):
+    ac, _ = client
+    before_mappings = {
+        "admin": {"svc-before": [{"provider": "github", "full_name": "acme/before"}]},
+        "compass": {
+            "svc-before": [{"provider": "github", "full_name": "acme/component-before"}]
+        },
+    }
+    after_mappings = {
+        "admin": {"svc-after": [{"provider": "github", "full_name": "acme/after"}]},
+        "compass": {
+            "svc-after": [{"provider": "github", "full_name": "acme/component-after"}]
+        },
+    }
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "pagerduty-disabled-services",
+            "provider": "pagerduty",
+            "sync_targets": ["operational"],
+            "sync_options": {"service_repository_mappings": before_mappings},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+        dataset.is_enabled = False
+        dataset.options = {**dataset.options, "unrelated_dataset_option": "keep"}
+        await session.commit()
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_options": {"service_repository_mappings": after_mappings}},
+    )
+
+    assert update_resp.status_code == 200, update_resp.text
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+
+    assert config.sync_options["service_repository_mappings"] == after_mappings
+    assert dataset.is_enabled is False
+    assert dataset.options["service_repository_mappings"] == after_mappings
+    assert dataset.options["unrelated_dataset_option"] == "keep"
+
+    reenable_resp = await ac.patch(
+        f"/api/v1/admin/integrations/{config.integration_id}/datasets",
+        json={"datasets": [{"dataset_key": "services", "is_enabled": True}]},
+    )
+
+    assert reenable_resp.status_code == 200, reenable_resp.text
+    async with session_maker() as session:
+        reenabled_dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+
+    assert reenabled_dataset.is_enabled is True
+    assert reenabled_dataset.options["service_repository_mappings"] == after_mappings
+    assert reenabled_dataset.options["unrelated_dataset_option"] == "keep"
+
+
+@pytest.mark.asyncio
+async def test_update_pagerduty_empty_mappings_preserves_services_options(
+    client, session_maker
+):
+    ac, _ = client
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "pagerduty-clear-service-mappings",
+            "provider": "pagerduty",
+            "sync_targets": ["operational"],
+            "sync_options": {
+                "service_repository_mappings": {
+                    "admin": {
+                        "svc-before": [
+                            {"provider": "github", "full_name": "acme/before"}
+                        ]
+                    },
+                    "compass": {
+                        "svc-before": [
+                            {
+                                "provider": "github",
+                                "full_name": "acme/component-before",
+                            }
+                        ]
+                    },
+                },
+            },
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+        dataset.options = {**dataset.options, "unrelated_dataset_option": "keep"}
+        await session.commit()
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_options": {"service_repository_mappings": {}}},
+    )
+
+    assert update_resp.status_code == 200, update_resp.text
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+
+    assert config.sync_options["service_repository_mappings"] == {}
+    assert dataset.options["service_repository_mappings"] == {}
+    assert dataset.options["legacy_targets"] == ["operational"]
+    assert dataset.options["unrelated_dataset_option"] == "keep"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mapping_value", [None, ["not-a-mapping"]])
+async def test_update_pagerduty_non_dict_mappings_leave_services_options_unchanged(
+    client, session_maker, mapping_value
+):
+    ac, _ = client
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": f"pagerduty-invalid-mappings-{uuid.uuid4()}",
+            "provider": "pagerduty",
+            "sync_targets": ["operational"],
+            "sync_options": {
+                "service_repository_mappings": {
+                    "admin": {
+                        "svc-before": [
+                            {"provider": "github", "full_name": "acme/before"}
+                        ]
+                    }
+                }
+            },
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+        options_before_update = dict(dataset.options)
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_options": {"service_repository_mappings": mapping_value}},
+    )
+
+    assert update_resp.status_code == 200, update_resp.text
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+
+    assert config.sync_options["service_repository_mappings"] == mapping_value
+    assert dataset.options == options_before_update
+
+
+@pytest.mark.asyncio
+async def test_update_non_pagerduty_mappings_leaves_services_dataset_unchanged(
+    client, session_maker
+):
+    ac, seeded_state = client
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "github-mapping-noop",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"all_repos": True},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = uuid.UUID(create_resp.json()["id"])
+    before_options = {"unrelated_dataset_option": "keep"}
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        session.add(
+            IntegrationDataset(
+                org_id=seeded_state["org_id"],
+                integration_id=config.integration_id,
+                dataset_key="services",
+                is_enabled=True,
+                options=before_options,
+            )
+        )
+        await session.commit()
+
+    update_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={
+            "sync_options": {
+                "service_repository_mappings": {
+                    "admin": {
+                        "svc-after": [{"provider": "github", "full_name": "acme/after"}]
+                    }
+                }
+            }
+        },
+    )
+
+    assert update_resp.status_code == 200, update_resp.text
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, config_id)
+        assert config is not None and config.integration_id is not None
+        dataset = (
+            await session.execute(
+                select(IntegrationDataset).where(
+                    IntegrationDataset.integration_id == config.integration_id,
+                    IntegrationDataset.dataset_key == "services",
+                )
+            )
+        ).scalar_one()
+
+    assert dataset.options == before_options
+
+
+@pytest.mark.asyncio
 async def test_update_sync_config_merges_top_level_schedule_fields(
     client, session_maker
 ):

@@ -23,6 +23,10 @@ def _docs_steps() -> list[dict[str, object]]:
     return [step for step in steps if isinstance(step, dict)]
 
 
+def _step_by_name(name: str) -> dict[str, object]:
+    return next(step for step in _docs_steps() if step.get("name") == name)
+
+
 def _aggregate_script() -> str:
     workflow = _load_workflow()
     jobs = workflow["jobs"]
@@ -67,6 +71,23 @@ def test_docs_guards_runs_the_reader_critical_checks() -> None:
         "Check structural accessibility invariants",
         "Check objective candidate facts",
     }.issubset(names)
+
+
+def test_streamed_docs_checks_propagate_checker_failures() -> None:
+    streamed_steps = {
+        "Validate publication inventory, IA placement, redirects, and source links",
+        "Strict candidate build",
+        "Check rendered internal links, anchors, and assets",
+        "Check task-based search acceptance",
+        "Check structural accessibility invariants",
+        "Check objective candidate facts",
+    }
+
+    for name in streamed_steps:
+        run_script = _step_by_name(name).get("run")
+        assert isinstance(run_script, str)
+        assert "set -o pipefail" in run_script
+        assert "| tee " in run_script
 
 
 def test_docs_guards_does_not_run_external_network_or_visual_contracts() -> None:

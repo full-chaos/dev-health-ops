@@ -34,6 +34,35 @@
   min-width: 0;
 }
 
+/* Material's default outlined button inherits a dark primary color in slate mode. */
+.fc-home-onramp .md-button,
+.fc-home-onramp .md-button:visited {
+  background: transparent;
+  border-color: var(--fc-doc-link);
+  color: var(--fc-doc-link);
+  opacity: 1;
+}
+
+.fc-home-onramp .md-button:hover,
+.fc-home-onramp .md-button:focus-visible {
+  background: var(--fc-doc-link);
+  border-color: var(--fc-doc-link);
+  color: var(--fc-doc-canvas);
+}
+
+[data-md-color-scheme="slate"] .fc-home-onramp .md-button,
+[data-md-color-scheme="slate"] .fc-home-onramp .md-button:visited {
+  border-color: var(--fc-glacier);
+  color: var(--fc-glacier);
+}
+
+[data-md-color-scheme="slate"] .fc-home-onramp .md-button:hover,
+[data-md-color-scheme="slate"] .fc-home-onramp .md-button:focus-visible {
+  background: var(--fc-glacier);
+  border-color: var(--fc-glacier);
+  color: var(--fc-void);
+}
+
 /* Brand the footer without competing with the document content. */
 .md-footer-meta {
   background: var(--fc-ink);

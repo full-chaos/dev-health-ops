@@ -6,10 +6,10 @@ It covers the current `dev-health-ops` documentation system, the isolated v2 pro
 
 ## Source snapshots
 
-- `full-chaos/dev-health-ops` main: `30176cd030349db67c9c55df7a8a6c67f4102299`
+- `full-chaos/dev-health-ops` main: `dde247972ea9d798b4a56809b7efb172861203f4`
 - `full-chaos/dev-health-web` main: `a2ffbcb9afea26bbf7e4f2b2b93220deb259bb2a`
 
-The web snapshot was exported through temporary review PR `full-chaos/dev-health-web#794`. The temporary export workflow itself is not part of the inventory.
+The web snapshot was exported through now-closed review PR `full-chaos/dev-health-web#794`. No temporary export workflow is retained.
 
 ## Inventory result
 
@@ -39,18 +39,18 @@ The web snapshot was exported through temporary review PR `full-chaos/dev-health
 | Move and rewrite | 108 |
 | Archive or recapture visual evidence | 90 |
 | Internal only | 80 |
-| Remove or replace | 27 |
-| Merge and rewrite | 25 |
+| Remove or replace | 34 |
+| Merge and rewrite | 28 |
 | Retain internal | 22 |
 | Archive | 13 |
 | Internal source evidence | 10 |
-| Other explicit dispositions | 74 |
+| Other explicit dispositions | 64 |
 
 ## Durable source and review output
 
 `docs_inventory_review.py`, `validate_docs_inventory_review.py`, and the read-only `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on demand.
 
-The reviewed disposition is split here by source and target domain so GitHub can render and review ordinary TSV diffs:
+The reviewed disposition is split by source and target domain so GitHub can render and review ordinary TSV diffs:
 
 - `ops-home.tsv`
 - `ops-get-started.tsv`
@@ -78,4 +78,4 @@ The matrix does not make the current site canonical. It says what is retained, r
 
 The live Workers preview remains a non-canonical baseline. Its host-level crawl, headers, indexing, redirects, and final retirement or redirect behavior are intentionally handled in Phase 11.
 
-With the validation counts above at zero, this source and disposition inventory satisfies the Phase 1 inventory gate and can be used as the input to Phase 5.
+With the validation counts above at zero, this source and disposition inventory satisfies the Phase 1 inventory gate and is the source map for Phase 5 and the gated Phase 6 migration.

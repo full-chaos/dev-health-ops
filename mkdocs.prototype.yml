@@ -1,5 +1,5 @@
-site_name: Dev Health documentation — v2 prototype
-site_description: GitLab-inspired task documentation with the Full Chaos visual identity.
+site_name: Dev Health documentation — v2 review
+site_description: Task-oriented Dev Health documentation with the Full Chaos visual identity.
 repo_name: Full Chaos / Dev Health
 repo_url: https://github.com/full-chaos/dev-health-ops
 edit_uri: edit/main/docs-prototype/
@@ -39,26 +39,37 @@ nav:
   - Documentation home: index.md
   - Get started:
       - get-started/index.md
+      - Choose a task: get-started/choose-a-task.md
+      - Check prerequisites: get-started/prerequisites.md
   - Use Dev Health:
       - use/index.md
       - Understand investment:
+          - use/investment/index.md
           - Investigate where effort goes: use/investment/investigate-effort.md
+          - Read Investment Mix: use/investment/investment-mix.md
+          - Follow investment evidence: use/investment/follow-evidence.md
       - Troubleshoot product use:
           - No or incomplete data: use/troubleshooting/no-or-incomplete-data.md
   - Administer Dev Health:
       - admin/index.md
+      - Synchronization and coverage:
+          - admin/sync-and-coverage/index.md
+          - Check status and freshness: admin/sync-and-coverage/status-and-freshness.md
   - Install and operate:
       - operate/index.md
+      - Runbooks:
+          - operate/runbooks/index.md
+          - Recover from ingestion failure: operate/runbooks/ingestion-failure.md
   - Integrate and extend:
       - integrate/index.md
   - Reference:
       - reference/index.md
       - Metrics and computations:
-          - Investment distribution: reference/metrics/investment-distribution.md
+          - Weighting and aggregation: reference/metrics/weighting-and-aggregation.md
+      - Taxonomies:
+          - Investment taxonomy: reference/taxonomies/investment.md
   - Contribute:
       - contribute/index.md
-  - Prototype review:
-      - Design directions: design-directions.md
 
 plugins:
   - search
@@ -80,4 +91,4 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
 
-copyright: Prototype only — the current production documentation remains the WIP baseline until cutover.
+copyright: Review build — the current production documentation remains the WIP baseline until the publication and cutover gates are approved.

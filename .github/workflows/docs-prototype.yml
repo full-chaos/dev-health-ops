@@ -1,4 +1,4 @@
-name: Documentation v2 prototype
+name: Documentation v2 review build
 
 on:
   pull_request:
@@ -6,6 +6,9 @@ on:
       - 'docs-prototype/**'
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
+      - 'scripts/validate_docs_v2_publication.py'
+      - '.github/documentation-program/ia/**'
+      - '.github/documentation-program/phase-9/**'
       - '.github/workflows/docs-prototype.yml'
   workflow_dispatch:
 
@@ -22,12 +25,24 @@ jobs:
           python-version: '3.12'
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
-      - name: Build the v2 prototype
-        run: mkdocs build --strict --config-file mkdocs.prototype.yml
-      - name: Upload the v2 prototype site
+      - name: Validate publication inventory, IA placement, redirects and links
+        run: |
+          mkdir -p .build
+          set -o pipefail
+          python scripts/validate_docs_v2_publication.py \
+            2>&1 | tee .build/docs-v2-validation.log
+      - name: Build the v2 candidate
+        run: |
+          set -o pipefail
+          mkdocs build --strict --config-file mkdocs.prototype.yml \
+            2>&1 | tee .build/docs-v2-build.log
+      - name: Upload the v2 review evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: docs-v2-prototype-site
-          path: .build/docs-prototype
+          name: docs-v2-review-evidence
+          path: |
+            .build/**
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

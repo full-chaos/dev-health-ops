@@ -32,12 +32,12 @@ Use Dev Health, administer a workspace, operate the platform, integrate data, or
 
 - [Investigate where effort appears to be going](use/investment/investigate-effort.md)
 - [Diagnose no or incomplete data](use/troubleshooting/no-or-incomplete-data.md)
-- [Look up the Investment distribution calculation](reference/metrics/investment-distribution.md)
+- [Look up weighting and aggregation](reference/metrics/weighting-and-aggregation.md)
 
 </aside>
 </section>
 
-This is a layout and style prototype. The current WIP documentation remains non-canonical until the migration and cutover gates are approved.
+This candidate follows the approved information architecture and content model. The existing production documentation remains the WIP baseline until the publication and cutover gates are approved.
 {: .fc-prototype-note .fc-prototype-note--home }
 
 ## Choose what you need to do
@@ -77,7 +77,7 @@ Configure access, teams, sources, synchronization, coverage, and administrative 
 <li>Manage workspace access</li>
 <li>Connect and configure providers</li>
 <li>Check synchronization coverage</li>
-<li>Review security and audit settings</li>
+<li>Review security and privacy</li>
 </ul>
 
 [View all administration guides →](admin/index.md){ .fc-home-card__link }
@@ -174,8 +174,8 @@ Set up development, understand boundaries, test changes, release, and improve do
 
 - [Investigate where effort appears to be going](use/investment/investigate-effort.md)
 - [Diagnose no or incomplete data](use/troubleshooting/no-or-incomplete-data.md)
-- [Look up Investment distribution fields](reference/metrics/investment-distribution.md)
-- [Choose the right documentation domain](get-started/index.md)
+- [Look up weighting and aggregation](reference/metrics/weighting-and-aggregation.md)
+- [Choose the right documentation domain](get-started/choose-a-task.md)
 
 </div>
 
@@ -187,8 +187,8 @@ Set up development, understand boundaries, test changes, release, and improve do
   [Open the workflow guide →](use/investment/investigate-effort.md)
 - **Incomplete-data troubleshooting** — direct recovery path  
   [Open troubleshooting →](use/troubleshooting/no-or-incomplete-data.md)
-- **Investment distribution reference** — exact calculation contract  
-  [Open reference →](reference/metrics/investment-distribution.md)
+- **Investment weighting reference** — exact calculation contract  
+  [Open reference →](reference/metrics/weighting-and-aggregation.md)
 
 </div>
 
@@ -203,7 +203,7 @@ Start from the symptom. Check scope, freshness, coverage, and synchronization be
 
 </div>
 
-[Open troubleshooting](use/troubleshooting/no-or-incomplete-data.md){ .md-button .md-button--primary }
+[Open troubleshooting](use/troubleshooting/index.md){ .md-button .md-button--primary }
 </section>
 
 <section class="fc-home-onramp" aria-labelledby="fc-home-onramp-title" markdown>
@@ -211,16 +211,9 @@ Start from the symptom. Check scope, freshness, coverage, and synchronization be
 
 ## New to Dev Health? { #fc-home-onramp-title }
 
-`/get-started/` is provisional. It contains no reused onboarding sequence and exists only to prove whether a separate entry path reduces reader effort.
+Get Started is a small task router and prerequisite check. It does not duplicate the product guides.
 
 </div>
 
-[Check the minimum prerequisites](get-started/index.md){ .md-button }
+[Choose a task](get-started/choose-a-task.md){ .md-button }
 </section>
-
-## Review the prototype
-
-- [Compare the proposed layout and style directions](design-directions.md)
-- [Inspect the exact Investment distribution reference pattern](reference/metrics/investment-distribution.md)
-- [Test the incomplete-data recovery path](use/troubleshooting/no-or-incomplete-data.md)
-{: .fc-task-list }

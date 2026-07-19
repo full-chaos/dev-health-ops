@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Validate the v2 documentation candidate and emit the Phase 9 publication inventory."""
+
+from __future__ import annotations
+
+import csv
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = ROOT / "mkdocs.prototype.yml"
+PHASE9 = ROOT / ".github" / "documentation-program" / "phase-9"
+IA_DIR = ROOT / ".github" / "documentation-program" / "ia"
+BUILD = ROOT / ".build"
+LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+FRONT_MATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _front_matter(path: Path) -> dict[str, Any]:
+    match = FRONT_MATTER_RE.match(path.read_text(encoding="utf-8"))
+    if not match:
+        return {}
+    loaded = yaml.safe_load(match.group(1))
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _flatten_nav(node: Any, trail: tuple[str, ...] = ()) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    if isinstance(node, str):
+        label = trail[-1] if trail else Path(node).stem.replace("-", " ").title()
+        nav_path = " > ".join(trail) if trail else label
+        return [
+            {
+                "source_path": node.lstrip("/"),
+                "label": label,
+                "nav_path": nav_path,
+            }
+        ]
+    if isinstance(node, list):
+        for child in node:
+            records.extend(_flatten_nav(child, trail))
+        return records
+    if not isinstance(node, dict):
+        return records
+    for label, child in node.items():
+        next_trail = (*trail, str(label))
+        if isinstance(child, str):
+            records.append(
+                {
+                    "source_path": child.lstrip("/"),
+                    "label": str(label),
+                    "nav_path": " > ".join(next_trail),
+                }
+            )
+        else:
+            records.extend(_flatten_nav(child, next_trail))
+    return records
+
+
+def _canonical_url(source_path: str) -> str:
+    value = source_path.strip().lstrip("/")
+    if value == "index.md":
+        return "/"
+    if value.endswith("/index.md"):
+        return f"/{value[: -len('index.md')]}"
+    if value.endswith(".md"):
+        value = value[:-3]
+    return f"/{value.strip('/')}/"
+
+
+def _load_ia() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for path in sorted(IA_DIR.glob("*.tsv")):
+        with path.open(encoding="utf-8", newline="") as handle:
+            rows.extend(csv.DictReader(handle, delimiter="\t"))
+    return rows
+
+
+def _resolve_relative(page: Path, href: str, docs_dir: Path) -> bool:
+    parsed = urlparse(href)
+    if parsed.scheme or parsed.netloc or href.startswith(("#", "mailto:")):
+        return True
+    path_part = parsed.path
+    if not path_part:
+        return True
+    if path_part.startswith("/"):
+        relative = path_part.strip("/")
+        candidates = [docs_dir / relative]
+    else:
+        candidates = [(page.parent / path_part).resolve()]
+    expanded: list[Path] = []
+    for target in candidates:
+        expanded.append(target)
+        if target.suffix == "":
+            expanded.append(target.with_suffix(".md"))
+            expanded.append(target / "index.md")
+        elif target.suffix.lower() in {".html", ".htm"}:
+            expanded.append(target.with_suffix(".md"))
+    return any(candidate.exists() for candidate in expanded)
+
+
+def main() -> int:
+    errors: list[str] = []
+    config = _load_yaml(CONFIG_PATH)
+    docs_dir = (ROOT / str(config.get("docs_dir") or "docs-prototype")).resolve()
+    nav_records = _flatten_nav(config.get("nav", []))
+    nav_paths = [record["source_path"] for record in nav_records]
+
+    duplicate_paths = [path for path, count in Counter(nav_paths).items() if count > 1]
+    if duplicate_paths:
+        errors.append(f"duplicate navigation paths: {duplicate_paths}")
+
+    missing = [path for path in nav_paths if not (docs_dir / path).is_file()]
+    if missing:
+        errors.append(f"navigation targets do not exist: {missing[:30]}")
+
+    actual_markdown = {
+        path.relative_to(docs_dir).as_posix() for path in docs_dir.rglob("*.md")
+    }
+    off_nav = sorted(actual_markdown - set(nav_paths))
+    if off_nav:
+        errors.append(f"unclassified Markdown outside navigation: {off_nav[:30]}")
+
+    ia_rows = _load_ia()
+    ia_by_url = {row["url"]: row for row in ia_rows if row.get("url")}
+    nav_urls = {_canonical_url(path) for path in nav_paths}
+    non_ia = sorted(nav_urls - set(ia_by_url))
+    if non_ia:
+        errors.append(f"candidate URLs outside the approved IA: {non_ia[:30]}")
+
+    page_ids: dict[str, str] = {}
+    publication_rows: list[dict[str, str]] = []
+    for record in nav_records:
+        source_path = record["source_path"]
+        page = docs_dir / source_path
+        metadata = _front_matter(page) if page.is_file() else {}
+        url = _canonical_url(source_path)
+        ia = ia_by_url.get(url, {})
+        page_id = str(metadata.get("page_id") or ia.get("id") or "")
+        if page_id:
+            if page_id in page_ids:
+                errors.append(
+                    f"duplicate page_id {page_id}: {page_ids[page_id]} and {source_path}"
+                )
+            page_ids[page_id] = source_path
+        publication_rows.append(
+            {
+                "page_id": page_id,
+                "canonical_url": url,
+                "source_path": source_path,
+                "nav_path": record["nav_path"],
+                "label": record["label"],
+                "content_type": str(
+                    metadata.get("content_type") or ia.get("kind") or ""
+                ),
+                "owner": str(metadata.get("owner") or "documentation"),
+                "lifecycle": str(metadata.get("lifecycle") or "active"),
+                "publication_state": "public-candidate",
+            }
+        )
+
+    for source_path in sorted(actual_markdown):
+        page = docs_dir / source_path
+        text = page.read_text(encoding="utf-8")
+        for raw in LINK_RE.findall(text):
+            href = raw.strip().split()[0].strip("<>")
+            if not _resolve_relative(page, href, docs_dir):
+                errors.append(f"broken local link: {source_path} -> {raw}")
+
+    redirects_path = PHASE9 / "redirects.tsv"
+    redirects: list[dict[str, str]] = []
+    if redirects_path.is_file():
+        with redirects_path.open(encoding="utf-8", newline="") as handle:
+            redirects = list(csv.DictReader(handle, delimiter="\t"))
+        seen_sources: dict[str, str] = {}
+        for row in redirects:
+            source = row.get("source_path", "").strip()
+            target = row.get("target_path", "").strip()
+            if source in seen_sources and seen_sources[source] != target:
+                errors.append(
+                    f"redirect conflict for {source}: {seen_sources[source]} vs {target}"
+                )
+            seen_sources[source] = target
+            if target not in ia_by_url:
+                errors.append(
+                    f"redirect target outside approved IA: {source} -> {target}"
+                )
+
+    BUILD.mkdir(parents=True, exist_ok=True)
+    inventory_path = BUILD / "docs-v2-publication-inventory.tsv"
+    inventory_fields = [
+        "page_id",
+        "canonical_url",
+        "source_path",
+        "nav_path",
+        "label",
+        "content_type",
+        "owner",
+        "lifecycle",
+        "publication_state",
+    ]
+    with inventory_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=inventory_fields, delimiter="\t", lineterminator="\n"
+        )
+        writer.writeheader()
+        writer.writerows(sorted(publication_rows, key=lambda row: row["canonical_url"]))
+
+    coverage_path = BUILD / "docs-v2-ia-coverage.tsv"
+    with coverage_path.open("w", encoding="utf-8", newline="") as handle:
+        fields = ["page_id", "canonical_url", "label", "kind", "state"]
+        writer = csv.DictWriter(
+            handle, fieldnames=fields, delimiter="\t", lineterminator="\n"
+        )
+        writer.writeheader()
+        for row in sorted(ia_rows, key=lambda item: item.get("url", "")):
+            url = row.get("url", "")
+            writer.writerow(
+                {
+                    "page_id": row.get("id", ""),
+                    "canonical_url": url,
+                    "label": row.get("label", ""),
+                    "kind": row.get("kind", ""),
+                    "state": "implemented" if url in nav_urls else "withheld",
+                }
+            )
+
+    summary = [
+        "# Documentation v2 publication summary",
+        "",
+        f"- Public candidate pages: **{len(publication_rows)}**",
+        f"- Approved IA nodes: **{len(ia_rows)}**",
+        f"- Implemented IA nodes: **{len(nav_urls)}**",
+        f"- Withheld IA nodes: **{len(set(ia_by_url) - nav_urls)}**",
+        f"- Legacy redirect sources: **{len(redirects)}**",
+        f"- Unclassified Markdown pages: **{len(off_nav)}**",
+        f"- Validation errors: **{len(errors)}**",
+        "",
+        "The current production documentation remains the WIP baseline. This inventory is the Phase 9 publication candidate for later quality and cutover gates.",
+        "",
+    ]
+    (BUILD / "docs-v2-publication-summary.md").write_text(
+        "\n".join(summary), encoding="utf-8"
+    )
+
+    if errors:
+        print("\n".join(errors[:100]), file=sys.stderr)
+        return 1
+    print(
+        f"Validated {len(publication_rows)} candidate pages, {len(redirects)} redirects, "
+        f"and {len(ia_rows)} approved IA nodes."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

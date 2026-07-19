@@ -1,33 +1,55 @@
+---
+page_id: use-investment-investigate-effort
+summary: Determine where effort appears to be going and follow the result to supporting work.
+content_type: task-guide
+owner: product-analytics
+source_of_truth:
+  - src/dev_health_ops/api/services/investment.py
+  - src/dev_health_ops/api/queries/investment.py
+  - src/components/work/investment/charts/InvestmentMixSection.tsx
+applicability: current
+lifecycle: active
+---
+
 # Investigate where effort appears to be going
 
-Use the Investment workflow to inspect an effort-weighted distribution and follow it to supporting work. Do not interpret the result as a count of tickets or a verdict about an individual.
+Use this workflow to inspect an effort-weighted distribution for one scope and period, then follow a selected theme or subcategory to supporting work.
 
 ## Before you begin
 
-Confirm the repository or team scope, time window, and data coverage. A different scope or period can produce a different distribution.
+Confirm the workspace, repository or team, time window, and data coverage. Preserve that context while moving between the Mix view and evidence.
 
-## Read the distribution
+## Read the result
 
-1. Start with the largest theme, but keep the complete distribution visible.
-2. Compare the same scope across equivalent periods rather than comparing unrelated teams.
-3. Treat a small difference as a prompt to inspect evidence, not as a conclusion.
-4. Open the supporting work before choosing an action.
+1. Open the Investment area and start with **Investment Mix**.
+2. Keep the full distribution visible before focusing on a single theme.
+3. Read size as an effort-weighted contribution—not as a count of tickets, commits, or people.
+4. Select a theme or subcategory that materially affects the question.
+5. Check evidence quality and coverage before treating a difference as meaningful.
+6. Follow the selection to supporting work before choosing an action.
+7. For comparisons, use equivalent scopes and periods and state any coverage difference.
 
-## Follow the evidence
+## Distinguish the states
 
-Inspect the linked issues, pull requests, commits, and other available sources that contributed to the WorkUnit. Check coverage and confidence before relying on the interpretation.
+| State | Interpretation |
+| --- | --- |
+| Measured positive contribution | Supported source data produced a positive effort-weighted contribution. |
+| Measured zero | The supported calculation produced zero for the selected context. |
+| Empty response | Required tables, fields, scope, or matching rows may be absent; diagnose before interpreting. |
+| Incomplete or stale | Some expected input has not arrived or is older than the question requires. |
+| Low or unknown evidence quality | The categorization has weaker or missing corroboration; inspect supporting work. |
 
 ## What not to conclude
 
-- The percentage is not the percentage of tickets.
-- The result is not a manually assigned label.
+- A percentage is not the percentage of tickets.
+- A theme is not a provider-native label or a manual tag.
 - Missing or incomplete evidence is not zero.
 - A team-level signal is not a person-level judgment.
+- An association or concentration does not establish cause.
 
-## If the result is empty or surprising
+## Continue
 
-Use [No or incomplete data](../troubleshooting/no-or-incomplete-data.md) before changing scope or drawing a conclusion.
-
-## Exact calculation
-
-See [Investment distribution](../../reference/metrics/investment-distribution.md) for the weighting and aggregation contract.
+- [Read Investment Mix](investment-mix.md)
+- [Follow investment evidence](follow-evidence.md)
+- [Diagnose no or incomplete data](../troubleshooting/no-or-incomplete-data.md)
+- [Look up weighting and aggregation](../../reference/metrics/weighting-and-aggregation.md)

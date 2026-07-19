@@ -1,0 +1,8 @@
+source_path	target_path	phase	reason
+/user-guide/investment-view/	/use/investment/investigate-effort/	Phase 5	Merge the legacy overview into the canonical task guide.
+/user-guide/journeys/investment-view/	/use/investment/investigate-effort/	Phase 5	Merge the duplicate journey into the canonical task guide.
+/user-guide/views/investment-mix/	/use/investment/investment-mix/	Phase 5	Move and rewrite the workflow guide.
+/product/investment-taxonomy/	/reference/taxonomies/investment/	Phase 5	Move generated exact keys into canonical Reference.
+/reference/metrics/investment-distribution/	/reference/metrics/weighting-and-aggregation/	Phase 5	Replace the prototype calculation path.
+/user-guide/first-10-minutes/	/get-started/	Phase 5	Replace the old onboarding construct; do not reuse its sequence or prose.
+/user-guide/how-to-read-dev-health/	/get-started/concepts/signals-evidence-confidence/	Phase 6	Rewrite only the durable concept after the Phase 5 pattern is accepted.

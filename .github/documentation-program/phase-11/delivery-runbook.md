@@ -7,7 +7,7 @@
 
 Repository code configures and validates the delivery mechanism. Account-level Cloudflare Access, DNS, API-token scope, and GitHub environment approvals must be reviewed in their respective control planes before production is enabled.
 
-## Local development
+## Local development and deployment
 
 Install the documentation dependencies once:
 
@@ -18,44 +18,41 @@ python -m pip install --upgrade pip
 pip install -r requirements-docs.txt
 ```
 
-The Wrangler configuration owns the Cloudflare-shaped build. From the repository root, run:
+Three Make targets cover the normal workflow from the repository root:
 
 ```bash
-npx --yes wrangler@4.112.0 dev --config wrangler.jsonc
+# Fast MkDocs live reload for writing and styling
+make docs:serve
+
+# Build preview assets and run the local Workers runtime
+make docs:preview
+
+# Run the full publication gate, build production assets, and deploy
+make docs:deploy
 ```
 
-Wrangler runs `python scripts/build_docs_cloudflare.py` before starting. The build command:
+`make docs:serve` opens `http://127.0.0.1:8000`. It is the fastest content and theme loop, but it does not emulate Cloudflare headers or redirects.
 
-1. builds the strict MkDocs site into `.build/docs-prototype`;
-2. prepares `.build/docs-cloudflare` with preview redirects, headers, `noindex`, `robots.txt`, and source metadata;
-3. starts the local Workers runtime against that generated asset directory; and
-4. rebuilds when the configured documentation sources change.
+`make docs:preview` creates `.build/docs-cloudflare` with preview redirects, security headers, `noindex`, `robots.txt`, and source metadata, then opens the site through Wrangler at `http://localhost:8787`.
 
-Open `http://localhost:8787`.
+`make docs:deploy` always runs the complete reader-critical gate, prepares production assets without `noindex`, and then invokes the pinned Wrangler deployment. The first successful deployment recreates the `dev-health-docs` Worker and applies the `docs.fullchaos.dev` custom domain declared in `wrangler.jsonc`.
 
-For a faster content-and-style authoring loop that does not emulate Cloudflare headers or redirects, run MkDocs directly:
+The older names remain aliases:
 
 ```bash
-python -m mkdocs serve \
-  --strict \
-  --config-file mkdocs.prototype.yml \
-  --dev-addr 127.0.0.1:8000
+make docs:v2-serve
+make docs:cloudflare-dev
+make docs:cloudflare-deploy
 ```
 
-Open `http://127.0.0.1:8000`.
-
-To prepare a fully validated preview asset tree without starting Wrangler:
+The raw two-step deployment, useful for diagnosis, is:
 
 ```bash
-python scripts/build_docs_cloudflare.py --mode preview --full-check
+python scripts/build_docs_cloudflare.py --mode production
+npx --yes wrangler@4.112.0 deploy --config wrangler.jsonc
 ```
 
-To serve that exact prebuilt tree without rebuilding it:
-
-```bash
-DOCS_CLOUDFLARE_PREBUILT=true \
-  npx --yes wrangler@4.112.0 dev --config wrangler.jsonc
-```
+The explicit build step is intentional. Wrangler uploads the directory named by `assets.directory`; a clean checkout does not contain generated HTML, so `.build/docs-cloudflare` must be prepared before Wrangler starts or deploys.
 
 Local development does not require the remote Worker to exist. If MkDocs is unavailable, activate the documentation virtual environment and reinstall `requirements-docs.txt`.
 
@@ -110,9 +107,9 @@ For a same-repository pull request that changes documentation delivery inputs, t
 
 Fork pull requests never receive Cloudflare credentials or create Worker versions.
 
-## Production deploy
+## Production deploy through GitHub
 
-Production is manual. Use **Documentation Cloudflare delivery** → **Run workflow** with:
+Production can also be deployed through **Documentation Cloudflare delivery** → **Run workflow** with:
 
 - action: `deploy`
 - confirmation: `docs.fullchaos.dev`
@@ -170,6 +167,7 @@ A Content Security Policy is intentionally deferred until it is tested against M
 | Failure | Response |
 | --- | --- |
 | Quality check fails | Do not upload or deploy. Fix the source or gate. |
+| Generated asset directory is missing | Run `make docs:preview` or `make docs:deploy`; do not invoke Wrangler against a clean checkout. |
 | Cloudflare credential missing | Preview stays as a GitHub artifact; production fails closed. |
 | Preview inaccessible to approved reviewer | Review Access policy, not documentation code. |
 | Preview accessible anonymously | Disable preview uploads and fix Access immediately. |

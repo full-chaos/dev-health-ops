@@ -88,14 +88,77 @@ nav:
           - Report problems: use/troubleshooting/reports.md
   - Administer Dev Health:
       - admin/index.md
+      - Configure the workspace:
+          - admin/workspace/index.md
+          - Workspace settings: admin/workspace/settings.md
+      - Manage teams and access:
+          - admin/teams-and-identities/index.md
+          - Teams and repositories: admin/teams-and-identities/teams-and-repositories.md
+          - Roles and access: admin/teams-and-identities/roles-and-access.md
+      - Connect data sources:
+          - admin/data-sources/index.md
+          - GitHub: admin/data-sources/github.md
+          - GitLab: admin/data-sources/gitlab.md
+          - Credential lifecycle: admin/data-sources/credential-lifecycle.md
       - Synchronization and coverage:
           - admin/sync-and-coverage/index.md
           - Check status and freshness: admin/sync-and-coverage/status-and-freshness.md
+          - Understand coverage: admin/sync-and-coverage/coverage.md
+      - Security and privacy:
+          - admin/security-and-audit/index.md
+          - Credential responsibilities: admin/security-and-audit/credentials.md
+          - Privacy and telemetry: admin/security-and-audit/privacy.md
+      - Troubleshoot administration:
+          - admin/troubleshooting/index.md
+          - Authentication and roles: admin/troubleshooting/authentication-and-roles.md
+          - Provider connections: admin/troubleshooting/provider-connections.md
+          - Synchronization and coverage: admin/troubleshooting/sync-and-coverage.md
   - Install and operate:
       - operate/index.md
+      - Plan a deployment:
+          - operate/plan/index.md
+          - Prerequisites: operate/plan/prerequisites.md
+          - Capacity and sizing: operate/plan/capacity-and-sizing.md
+      - Install Dev Health:
+          - operate/install/index.md
+          - Evaluate locally: operate/install/local-evaluation.md
+          - Install production: operate/install/production.md
+          - Verify first health: operate/install/verify-health.md
+      - Configure the platform:
+          - operate/configure/index.md
+          - Environment and secrets: operate/configure/environment-and-secrets.md
+          - Databases and storage: operate/configure/databases-and-storage.md
+          - Network and TLS: operate/configure/network-and-tls.md
+          - Workers and schedules: operate/configure/workers-and-schedules.md
+          - External services: operate/configure/external-services.md
+      - Upgrade, back up, and maintain:
+          - operate/maintain/index.md
+          - Upgrade: operate/maintain/upgrade.md
+          - Backup and restore: operate/maintain/backup-and-restore.md
+          - Decommission: operate/maintain/decommission.md
+      - Run the platform:
+          - operate/run/index.md
+          - Workers and jobs: operate/run/workers-and-jobs.md
+          - Ingestion and backfills: operate/run/ingestion-and-backfills.md
+          - Operational controls: operate/run/operational-controls.md
+      - Observe the platform:
+          - operate/observe/index.md
+          - Health checks: operate/observe/health-checks.md
+          - Logs: operate/observe/logs.md
+          - Metrics and traces: operate/observe/metrics-and-traces.md
+          - Dashboards and alerts: operate/observe/dashboards-and-alerts.md
+      - Security operations:
+          - operate/security/index.md
+          - Production hardening: operate/security/hardening.md
       - Runbooks:
           - operate/runbooks/index.md
-          - Recover from ingestion failure: operate/runbooks/ingestion-failure.md
+          - Ingestion failure: operate/runbooks/ingestion-failure.md
+          - Worker or queue failure: operate/runbooks/worker-or-queue-failure.md
+          - Database or migration failure: operate/runbooks/database-or-migration-failure.md
+          - Provider authentication failure: operate/runbooks/provider-authentication-failure.md
+          - Performance or rate limit: operate/runbooks/performance-or-rate-limit.md
+          - Backup or restore failure: operate/runbooks/backup-or-restore-failure.md
+          - Disaster recovery: operate/runbooks/disaster-recovery.md
   - Integrate and extend:
       - integrate/index.md
   - Reference:

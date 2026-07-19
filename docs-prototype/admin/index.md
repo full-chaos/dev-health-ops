@@ -1,12 +1,21 @@
+---
+page_id: admin
+summary: Configure workspace access, teams, sources, synchronization, coverage, and administrative security.
+content_type: landing
+owner: platform-product
+applicability: current
+lifecycle: active
+---
+
 # Administer Dev Health
 
-Configure the workspace, teams, identities, access, providers, synchronization, coverage, and administrative security.
+Use this section for workspace-level configuration. Deployment, worker, database, and recovery procedures belong under **Install and operate**.
 
-## Common tasks
+- [Configure the workspace](workspace/index.md)
+- [Manage teams, repositories, and access](teams-and-identities/index.md)
+- [Connect data sources](data-sources/index.md)
+- [Manage synchronization and coverage](sync-and-coverage/index.md)
+- [Review administrative security and privacy](security-and-audit/index.md)
+- [Troubleshoot administration](troubleshooting/index.md)
 
-- Configure workspace settings.
-- Manage teams, repository scope, users, memberships, and roles.
-- Connect a supported data source with least-privilege credentials.
-- Check synchronization and coverage.
-- Rotate or revoke provider credentials.
-- Diagnose authentication, connection, identity, or coverage problems.
+Never paste provider tokens, private keys, session cookies, or customer-sensitive payloads into documentation evidence or issue comments.

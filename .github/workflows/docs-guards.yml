@@ -99,12 +99,14 @@ jobs:
 
       - name: Check rendered internal links, anchors, and assets
         run: |
+          set -o pipefail
           python scripts/check_built_site_links.py \
             --site-dir .build/docs-prototype \
             2>&1 | tee .build/docs-links.log
 
       - name: Check task-based search acceptance
         run: |
+          set -o pipefail
           python scripts/check_docs_candidate_search.py \
             --site-dir .build/docs-prototype \
             --queries .github/documentation-program/phase-10/search-acceptance.json \
@@ -112,6 +114,7 @@ jobs:
 
       - name: Check structural accessibility invariants
         run: |
+          set -o pipefail
           python scripts/check_docs_candidate_accessibility.py \
             --site-dir .build/docs-prototype \
             --css docs-prototype/stylesheets/extra.css \
@@ -119,6 +122,7 @@ jobs:
 
       - name: Check objective candidate facts
         run: |
+          set -o pipefail
           python scripts/check_docs_candidate_facts.py \
             2>&1 | tee .build/docs-facts.log
 

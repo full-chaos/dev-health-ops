@@ -150,7 +150,9 @@ class PageAuditParser(HTMLParser):
                         f"link has no accessible name: {record['href'] or '[no href]'}"
                     )
                 if text.lower() in GENERIC_LINK_TEXT:
-                    self.errors.append(f"generic link text is not descriptive: {text!r}")
+                    self.errors.append(
+                        f"generic link text is not descriptive: {text!r}"
+                    )
         elif tag == "button" and self._button_stack:
             record = self._button_stack.pop()
             text = " ".join(record["text"]).strip()

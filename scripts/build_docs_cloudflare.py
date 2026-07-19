@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Build the documentation asset tree expected by Wrangler.
-
-Wrangler runs this file through ``build.command`` before ``dev``, ``deploy``,
-and ``versions upload``. Local development uses a fast strict MkDocs build;
-upload and deployment commands run the complete reader-critical gate first.
-"""
+"""Build the MkDocs site and prepare the static asset tree used by Wrangler."""
 
 from __future__ import annotations
 
@@ -24,8 +19,8 @@ SEARCH_ACCEPTANCE = (
 
 
 def _run(args: list[str]) -> None:
-    printable = " ".join(args)
-    print(f"+ {printable}", flush=True)
+    """Run one repository command and stop immediately on failure."""
+    print(f"+ {' '.join(args)}", flush=True)
     subprocess.run(args, cwd=ROOT, check=True)
 
 
@@ -43,19 +38,7 @@ def _source_revision() -> str:
         return "unknown"
 
 
-def _truthy(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _resolve_mode(requested: str, wrangler_command: str) -> str:
-    override = os.environ.get("DOCS_CLOUDFLARE_MODE", "").strip().lower()
-    value = override or requested
-    if value in {"preview", "production"}:
-        return value
-    return "production" if wrangler_command == "deploy" else "preview"
-
-
-def _validate_prebuilt() -> None:
+def _validate_asset_tree() -> None:
     required = [
         ASSET_DIR / "index.html",
         ASSET_DIR / "404.html",
@@ -67,13 +50,11 @@ def _validate_prebuilt() -> None:
     missing = [path.relative_to(ROOT) for path in required if not path.is_file()]
     if missing:
         joined = ", ".join(str(path) for path in missing)
-        raise RuntimeError(
-            "DOCS_CLOUDFLARE_PREBUILT is set, but the prepared asset tree is "
-            f"incomplete: {joined}"
-        )
+        raise RuntimeError(f"prepared Cloudflare asset tree is incomplete: {joined}")
 
 
-def _build(*, mode: str, full_check: bool) -> None:
+def build(*, mode: str, full_check: bool) -> None:
+    """Build MkDocs, run the requested checks, and prepare Wrangler assets."""
     (ROOT / ".build").mkdir(parents=True, exist_ok=True)
 
     if full_check:
@@ -138,16 +119,18 @@ def _build(*, mode: str, full_check: bool) -> None:
             _source_revision(),
         ]
     )
+    _validate_asset_tree()
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Build the MkDocs output consumed by Cloudflare Workers Static Assets."
+        description="Build the static documentation asset tree consumed by Wrangler."
     )
     parser.add_argument(
         "--mode",
-        choices=("auto", "preview", "production"),
-        default="auto",
+        choices=("preview", "production"),
+        required=True,
+        help="Use preview indexing controls or production indexing controls.",
     )
     parser.add_argument(
         "--full-check",
@@ -156,23 +139,11 @@ def main(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
 
-    wrangler_command = os.environ.get("WRANGLER_COMMAND", "manual").strip().lower()
-    mode = _resolve_mode(args.mode, wrangler_command)
-    full_check = (
-        args.full_check
-        or _truthy("DOCS_CLOUDFLARE_FULL_CHECK")
-        or wrangler_command in {"deploy", "versions upload"}
-    )
+    # Production is never prepared without the full publication gate.
+    full_check = args.full_check or args.mode == "production"
 
     try:
-        if _truthy("DOCS_CLOUDFLARE_PREBUILT"):
-            _validate_prebuilt()
-            print(
-                "Using the existing prepared Cloudflare documentation asset tree.",
-                flush=True,
-            )
-            return 0
-        _build(mode=mode, full_check=full_check)
+        build(mode=args.mode, full_check=full_check)
     except FileNotFoundError as exc:
         print(f"ERROR: required command was not found: {exc}", file=sys.stderr)
         return 1
@@ -190,7 +161,7 @@ def main(argv: list[str]) -> int:
 
     print(
         "Cloudflare documentation assets are ready at "
-        f"{ASSET_DIR.relative_to(ROOT)} (mode={mode}, full_check={full_check}).",
+        f"{ASSET_DIR.relative_to(ROOT)} (mode={args.mode}, full_check={full_check}).",
         flush=True,
     )
     return 0

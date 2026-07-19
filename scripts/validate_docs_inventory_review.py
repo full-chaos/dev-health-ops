@@ -161,9 +161,9 @@ def validate(
 ) -> None:
     factual = json.loads(generated_json.read_text(encoding="utf-8"))
     factual_rows = factual["rows"]
-    if factual["row_count"] != 312 or len(factual_rows) != 312:
+    if factual["row_count"] != 313 or len(factual_rows) != 313:
         raise ValueError(
-            f"Expected 312 dev-health-ops rows, found {factual['row_count']}"
+            f"Expected 313 dev-health-ops rows, found {factual['row_count']}"
         )
 
     generated_tsv = generated_json.with_suffix(".tsv")
@@ -185,8 +185,8 @@ def validate(
     )
 
     disposition = _load_tsv(inventory_dir / "disposition-matrix.tsv")
-    if len(disposition) != 448:
-        raise ValueError(f"Expected 448 disposition rows, found {len(disposition)}")
+    if len(disposition) != 449:
+        raise ValueError(f"Expected 449 disposition rows, found {len(disposition)}")
 
     ops_rows = [
         row
@@ -198,8 +198,8 @@ def validate(
         for row in disposition
         if row["source_repo"] == "full-chaos/dev-health-web"
     ]
-    if len(ops_rows) != 312:
-        raise ValueError(f"Expected 312 ops disposition rows, found {len(ops_rows)}")
+    if len(ops_rows) != 313:
+        raise ValueError(f"Expected 313 ops disposition rows, found {len(ops_rows)}")
     if len(web_rows) != 136:
         raise ValueError(f"Expected 136 web disposition rows, found {len(web_rows)}")
 
@@ -254,7 +254,7 @@ def validate(
         raise ValueError("Inventory review failed:\n" + "\n".join(errors[:50]))
 
     print(
-        "Validated 312 factual ops rows and 448 reviewed dispositions "
+        "Validated 313 factual ops rows and 449 reviewed dispositions "
         "against the locked IA."
     )
 

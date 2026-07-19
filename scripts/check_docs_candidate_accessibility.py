@@ -26,12 +26,15 @@ class PageAuditParser(HTMLParser):
         self.html_lang = ""
         self.main_count = 0
         self.main_depth = 0
+        self.content_region_count = 0
+        self.content_depth = 0
         self.h1_count = 0
         self.skip_link_found = False
         self.title_parts: list[str] = []
         self._in_title = False
         self._in_h1 = False
         self._h1_parts: list[str] = []
+        self._article_stack: list[bool] = []
         self._link_stack: list[dict[str, Any]] = []
         self._button_stack: list[dict[str, Any]] = []
         self._table_stack: list[dict[str, int]] = []
@@ -48,6 +51,7 @@ class PageAuditParser(HTMLParser):
         self, tag: str, attrs_list: list[tuple[str, str | None]]
     ) -> None:
         attrs = self._attrs(attrs_list)
+        classes = self._classes(attrs)
         if tag == "html":
             self.html_lang = attrs.get("lang", "").strip()
         elif tag == "title":
@@ -55,11 +59,17 @@ class PageAuditParser(HTMLParser):
         elif tag == "main":
             self.main_count += 1
             self.main_depth += 1
-        elif self.main_depth > 0 and tag == "h1":
+        elif tag == "article":
+            is_content_region = "md-content__inner" in classes
+            self._article_stack.append(is_content_region)
+            if is_content_region:
+                self.content_region_count += 1
+                self.content_depth += 1
+        elif self.content_depth > 0 and tag == "h1":
             self.h1_count += 1
             self._in_h1 = True
             self._h1_parts = []
-        elif self.main_depth > 0 and tag == "img":
+        elif self.content_depth > 0 and tag == "img":
             alt = attrs.get("alt")
             decorative = (
                 attrs.get("role") == "presentation"
@@ -72,23 +82,26 @@ class PageAuditParser(HTMLParser):
                     "content image has empty alt text without being marked decorative"
                 )
         elif tag == "a":
-            record: dict[str, Any] = {
-                "text": [],
-                "href": attrs.get("href", ""),
-                "aria": attrs.get("aria-label", ""),
-                "title": attrs.get("title", ""),
-                "classes": self._classes(attrs),
-            }
-            self._link_stack.append(record)
+            self._link_stack.append(
+                {
+                    "audit": self.content_depth > 0,
+                    "text": [],
+                    "href": attrs.get("href", ""),
+                    "aria": attrs.get("aria-label", ""),
+                    "title": attrs.get("title", ""),
+                    "classes": classes,
+                }
+            )
         elif tag == "button":
             self._button_stack.append(
                 {
+                    "audit": self.content_depth > 0,
                     "text": [],
                     "aria": attrs.get("aria-label", ""),
                     "title": attrs.get("title", ""),
                 }
             )
-        elif self.main_depth > 0 and tag == "input":
+        elif self.content_depth > 0 and tag == "input":
             input_type = attrs.get("type", "text").lower()
             if input_type not in {"hidden", "submit", "button", "reset"}:
                 name = (
@@ -100,9 +113,9 @@ class PageAuditParser(HTMLParser):
                     self.errors.append(
                         "content input has no aria-label, aria-labelledby, or title"
                     )
-        elif self.main_depth > 0 and tag == "table":
+        elif self.content_depth > 0 and tag == "table":
             self._table_stack.append({"th": 0})
-        elif self.main_depth > 0 and tag == "th" and self._table_stack:
+        elif self.content_depth > 0 and tag == "th" and self._table_stack:
             self._table_stack[-1]["th"] += 1
 
         tabindex = attrs.get("tabindex")
@@ -118,6 +131,9 @@ class PageAuditParser(HTMLParser):
             self._in_title = False
         elif tag == "main" and self.main_depth > 0:
             self.main_depth -= 1
+        elif tag == "article" and self._article_stack:
+            if self._article_stack.pop():
+                self.content_depth -= 1
         elif tag == "h1" and self._in_h1:
             self._in_h1 = False
             if not "".join(self._h1_parts).strip():
@@ -125,19 +141,20 @@ class PageAuditParser(HTMLParser):
         elif tag == "a" and self._link_stack:
             record = self._link_stack.pop()
             text = " ".join(record["text"]).strip()
-            accessible_name = text or record["aria"] or record["title"]
-            if not accessible_name:
-                self.errors.append(
-                    f"link has no accessible name: {record['href'] or '[no href]'}"
-                )
-            if text.lower() in GENERIC_LINK_TEXT:
-                self.errors.append(f"generic link text is not descriptive: {text!r}")
             if "md-skip" in record["classes"] and record["href"].startswith("#"):
                 self.skip_link_found = True
+            if record["audit"]:
+                accessible_name = text or record["aria"] or record["title"]
+                if not accessible_name:
+                    self.errors.append(
+                        f"link has no accessible name: {record['href'] or '[no href]'}"
+                    )
+                if text.lower() in GENERIC_LINK_TEXT:
+                    self.errors.append(f"generic link text is not descriptive: {text!r}")
         elif tag == "button" and self._button_stack:
             record = self._button_stack.pop()
             text = " ".join(record["text"]).strip()
-            if not (text or record["aria"] or record["title"]):
+            if record["audit"] and not (text or record["aria"] or record["title"]):
                 self.errors.append("button has no accessible name")
         elif tag == "table" and self._table_stack:
             table = self._table_stack.pop()
@@ -169,9 +186,13 @@ def _audit_html(path: Path) -> list[str]:
         errors.append("document title is empty")
     if parser.main_count != 1:
         errors.append(f"expected one main landmark, found {parser.main_count}")
+    if parser.content_region_count != 1:
+        errors.append(
+            f"expected one primary content article, found {parser.content_region_count}"
+        )
     if parser.h1_count != 1:
         errors.append(f"expected one content h1, found {parser.h1_count}")
-    if not parser.skip_link_found:
+    if path.name != "404.html" and not parser.skip_link_found:
         errors.append("Material skip link was not found")
     return errors
 

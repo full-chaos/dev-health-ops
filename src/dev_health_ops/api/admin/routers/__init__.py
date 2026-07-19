@@ -16,6 +16,7 @@ from .identities import router as identities_router
 from .integrations import router as integrations_router
 from .orgs import router as orgs_router
 from .pagerduty import router as pagerduty_router
+from .pagerduty_services import router as pagerduty_services_router
 from .platform import router as platform_router
 from .settings import router as settings_router
 from .setup import router as setup_router
@@ -36,6 +37,7 @@ __all__ = [
     "integrations_router",
     "orgs_router",
     "pagerduty_router",
+    "pagerduty_services_router",
     "platform_router",
     "settings_router",
     "setup_router",

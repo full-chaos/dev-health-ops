@@ -39,11 +39,17 @@ class PagerDutyOAuthCredentialRepository:
     """Persists one encrypted PagerDuty OAuth payload per named organization credential."""
 
     def __init__(
-        self, session: AsyncSession, org_id: str, credential_name: str = "default"
+        self,
+        session: AsyncSession,
+        org_id: str,
+        credential_name: str = "default",
+        *,
+        expected_binding_id: str | None = None,
     ) -> None:
         self._session = session
         self._org_id = org_id
         self._credential_name = credential_name
+        self._expected_binding_id = expected_binding_id
 
     async def rotate(
         self,
@@ -89,17 +95,25 @@ class PagerDutyOAuthCredentialRepository:
         )
         if credential is None:
             return None
-        return VersionedOAuthTokens(
-            OAuthTokens.model_validate_json(decrypt_value(credential.token_encrypted)),
-            credential.version,
-            credential.binding_id,
-        )
+        return self._versioned_tokens(credential)
 
     async def get_for_update(self) -> VersionedOAuthTokens | None:
         """Load and lock this credential for a refresh transaction."""
         credential = await self._locked_credential()
         if credential is None:
             return None
+        return self._versioned_tokens(credential)
+
+    def _versioned_tokens(
+        self, credential: ProviderOAuthCredential
+    ) -> VersionedOAuthTokens:
+        if (
+            self._expected_binding_id is not None
+            and credential.binding_id != self._expected_binding_id
+        ):
+            raise OAuthRotationConflictError(
+                "PagerDuty OAuth credential binding mismatch"
+            )
         return VersionedOAuthTokens(
             OAuthTokens.model_validate_json(decrypt_value(credential.token_encrypted)),
             credential.version,

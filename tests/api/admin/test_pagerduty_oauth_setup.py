@@ -19,12 +19,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.api.admin.router import router as admin_router
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
+from dev_health_ops.exceptions import (
+    APIException,
+    AuthenticationException,
+    RateLimitException,
+)
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     PagerDutyOAuthAuthorizationRequest,
     ProviderOAuthCredential,
 )
+from dev_health_ops.providers.pagerduty.auth import PagerDutyAuth
+from dev_health_ops.providers.pagerduty.models import Service
 from dev_health_ops.providers.pagerduty.oauth import OAuthTokens, PagerDutyOAuthConfig
 from dev_health_ops.providers.pagerduty.oauth_storage import (
     PagerDutyOAuthCredentialRepository,
@@ -32,6 +39,9 @@ from dev_health_ops.providers.pagerduty.oauth_storage import (
 from tests._helpers import tables_of
 
 pagerduty_router = importlib.import_module("dev_health_ops.api.admin.routers.pagerduty")
+pagerduty_services_router = importlib.import_module(
+    "dev_health_ops.api.admin.routers.pagerduty_services"
+)
 credentials_router = importlib.import_module(
     "dev_health_ops.api.admin.routers.credentials"
 )
@@ -85,6 +95,7 @@ async def client(
 
     app = FastAPI()
     app.include_router(pagerduty_router.router, prefix="/api/v1/admin")
+    app.include_router(pagerduty_services_router.router, prefix="/api/v1/admin")
     app.include_router(credentials_router.router, prefix="/api/v1/admin")
 
     async def session_override() -> AsyncIterator[AsyncSession]:
@@ -94,6 +105,10 @@ async def client(
 
     app.dependency_overrides[pagerduty_router.get_session] = session_override
     app.dependency_overrides[pagerduty_router.get_admin_org_id] = lambda: _ORG_ID
+    app.dependency_overrides[pagerduty_services_router.get_session] = session_override
+    app.dependency_overrides[pagerduty_services_router.get_admin_org_id] = lambda: (
+        _ORG_ID
+    )
     app.dependency_overrides[pagerduty_router.get_admin_user] = lambda: (
         AuthenticatedUser(
             user_id=_USER_ID,
@@ -1390,3 +1405,398 @@ async def test_remove_oauth_binding_reraises_unexpected_error_after_delete(
             await pagerduty_router._remove_oauth_binding(repository, _CONFIG)
         # ...while the local row is still deleted via the finally clause.
         assert await repository.get_status_metadata() is None
+
+
+class _ServiceDiscoveryClient:
+    instances: list[_ServiceDiscoveryClient] = []
+    services: list[Service] = []
+    error: Exception | None = None
+    events: list[str] | None = None
+
+    def __init__(self, auth: PagerDutyAuth, *, region: str = "us") -> None:
+        self.auth = auth
+        self.region = region
+        self.closed = 0
+        type(self).instances.append(self)
+
+    async def list_services(self) -> list[Service]:
+        events = type(self).events
+        if events is not None:
+            events.append("list")
+        error = type(self).error
+        if error is not None:
+            raise error
+        return type(self).services
+
+    async def close(self) -> None:
+        self.closed += 1
+
+
+async def _save_api_token_credential(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    org_id: str = _ORG_ID,
+    name: str = "operations",
+) -> None:
+    async with session_maker() as session:
+        await IntegrationCredentialsService(session, org_id).set(
+            provider="pagerduty",
+            name=name,
+            credentials={
+                "auth_mode": "api_token",
+                "api_token": "secret-token",
+                "subdomain": "acme",
+                "region": "us",
+            },
+            config={
+                "auth_mode": "api_token",
+                "subdomain": "acme",
+                "region": "us",
+            },
+        )
+        await session.commit()
+
+
+async def _save_oauth_descriptor(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    name: str,
+    oauth_credential_name: str,
+    binding_id: str,
+) -> None:
+    async with session_maker() as session:
+        await IntegrationCredentialsService(session, _ORG_ID).set(
+            provider="pagerduty",
+            name=name,
+            credentials={
+                "auth_mode": "oauth",
+                "oauth_credential_name": oauth_credential_name,
+                "oauth_binding_id": binding_id,
+                "subdomain": "acme",
+                "region": "eu",
+                "account_id": "acme",
+            },
+            config={
+                "auth_mode": "oauth",
+                "subdomain": "acme",
+                "region": "eu",
+                "account_id": "acme",
+                "granted_scopes": ["Services.read"],
+            },
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_services_returns_resolved_names_sorted_and_closes_client(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _save_api_token_credential(session_maker)
+    _ServiceDiscoveryClient.instances.clear()
+    _ServiceDiscoveryClient.error = None
+    _ServiceDiscoveryClient.services = [
+        Service(id="P2", name=None, status="disabled"),
+        Service(id="P1", name="Checkout", status="active"),
+        Service(id="P3", name="Alerts", status="active"),
+    ]
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "credential_name": "operations",
+        "services": [
+            {
+                "external_id": "P3",
+                "display_name": "Alerts",
+                "name_resolved": True,
+                "status": "active",
+            },
+            {
+                "external_id": "P1",
+                "display_name": "Checkout",
+                "name_resolved": True,
+                "status": "active",
+            },
+            {
+                "external_id": "P2",
+                "display_name": "PagerDuty service P2",
+                "name_resolved": False,
+                "status": "disabled",
+            },
+        ],
+    }
+    instance = _ServiceDiscoveryClient.instances[-1]
+    assert instance.region == "us"
+    assert instance.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_services_are_scoped_to_current_org(
+    client: AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _save_api_token_credential(session_maker, org_id="another-org")
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_services_close_client_when_provider_fails(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _save_api_token_credential(session_maker)
+    _ServiceDiscoveryClient.instances.clear()
+    _ServiceDiscoveryClient.error = APIException("provider unavailable")
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "PagerDuty services are temporarily unavailable"
+    }
+    assert _ServiceDiscoveryClient.instances[-1].closed == 1
+
+
+@pytest.mark.asyncio
+async def test_services_maps_authentication_failure_to_reconnect_response(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _save_api_token_credential(session_maker)
+    monkeypatch.setattr(
+        _ServiceDiscoveryClient,
+        "error",
+        AuthenticationException("provider rejected secret-token"),
+    )
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "PagerDuty credential is no longer authorized"}
+    assert "secret-token" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_services_maps_rate_limit_with_retry_after(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _save_api_token_credential(session_maker)
+    monkeypatch.setattr(
+        _ServiceDiscoveryClient,
+        "error",
+        RateLimitException(retry_after_seconds=17.5),
+    )
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "18"
+    assert response.json() == {"detail": "PagerDuty rate limit exceeded"}
+
+
+@pytest.mark.asyncio
+async def test_services_oauth_uses_descriptor_referenced_credential(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _connect_oauth(
+        client,
+        monkeypatch,
+        datasets=["services"],
+        granted={"Services.read"},
+    )
+    async with session_maker() as session:
+        metadata = await PagerDutyOAuthCredentialRepository(
+            session, _ORG_ID, "operations"
+        ).get_status_metadata()
+    assert metadata is not None
+    assert metadata.binding_id is not None
+    await _save_oauth_descriptor(
+        session_maker,
+        name="service-catalog",
+        oauth_credential_name="operations",
+        binding_id=metadata.binding_id,
+    )
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+    monkeypatch.setattr(_ServiceDiscoveryClient, "error", None)
+    monkeypatch.setattr(_ServiceDiscoveryClient, "services", [])
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "service-catalog"},
+    )
+
+    assert response.status_code == 200
+    assert _ServiceDiscoveryClient.instances[-1].auth.headers() == {
+        "Authorization": "Bearer access-token"
+    }
+
+
+@pytest.mark.asyncio
+async def test_services_oauth_rejects_descriptor_binding_mismatch(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _connect_oauth(
+        client,
+        monkeypatch,
+        datasets=["services"],
+        granted={"Services.read"},
+    )
+    await _save_oauth_descriptor(
+        session_maker,
+        name="operations",
+        oauth_credential_name="operations",
+        binding_id="stale-binding",
+    )
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+    monkeypatch.setattr(_ServiceDiscoveryClient, "error", None)
+    monkeypatch.setattr(_ServiceDiscoveryClient, "services", [])
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "PagerDuty OAuth credential must be reconnected"
+    }
+
+
+@pytest.mark.asyncio
+async def test_services_commit_oauth_rotation_before_provider_io(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _connect_oauth(
+        client,
+        monkeypatch,
+        datasets=["services"],
+        granted={"Services.read"},
+    )
+    events: list[str] = []
+    original_commit = AsyncSession.commit
+
+    async def record_commit(session: AsyncSession) -> None:
+        events.append("commit")
+        await original_commit(session)
+
+    async def access_token(*_args: object, **_kwargs: object) -> str:
+        events.append("token")
+        return "rotated-access-token"
+
+    monkeypatch.setattr(AsyncSession, "commit", record_commit)
+    monkeypatch.setattr(
+        pagerduty_services_router, "get_valid_access_token", access_token
+    )
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+    _ServiceDiscoveryClient.instances.clear()
+    _ServiceDiscoveryClient.error = None
+    _ServiceDiscoveryClient.services = []
+    _ServiceDiscoveryClient.events = events
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 200
+    assert events[:3] == ["token", "commit", "list"]
+    assert _ServiceDiscoveryClient.instances[-1].closed == 1
+    _ServiceDiscoveryClient.events = None
+
+
+@pytest.mark.asyncio
+async def test_services_materializes_client_credentials_without_exposing_secret(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_maker() as session:
+        await IntegrationCredentialsService(session, _ORG_ID).set(
+            provider="pagerduty",
+            name="automation",
+            credentials={
+                "auth_mode": "client_credentials",
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+                "subdomain": "acme",
+                "region": "eu",
+            },
+            config={
+                "auth_mode": "client_credentials",
+                "subdomain": "acme",
+                "region": "eu",
+            },
+        )
+        await session.commit()
+    token_exchange = AsyncMock(
+        return_value=OAuthTokens(
+            access_token="machine-access-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    monkeypatch.setattr(pagerduty_services_router, "client_credentials", token_exchange)
+    monkeypatch.setattr(
+        pagerduty_services_router, "PagerDutyClient", _ServiceDiscoveryClient
+    )
+    _ServiceDiscoveryClient.instances.clear()
+    _ServiceDiscoveryClient.error = None
+    _ServiceDiscoveryClient.services = []
+
+    response = await client.get(
+        "/api/v1/admin/integrations/pagerduty/services",
+        params={"credential_name": "automation"},
+    )
+
+    assert response.status_code == 200
+    instance = _ServiceDiscoveryClient.instances[-1]
+    assert instance.region == "eu"
+    assert instance.auth.headers() == {"Authorization": "Bearer machine-access-token"}
+    assert "client-secret" not in response.text

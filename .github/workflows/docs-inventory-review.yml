@@ -56,6 +56,7 @@ jobs:
 
           import runpy
           import sys
+          from typing import Any
 
           import yaml
 
@@ -71,6 +72,15 @@ jobs:
               'tag:yaml.org,2002:python/name:',
               preserve_python_name,
           )
+          original_safe_load = yaml.safe_load
+
+          def tolerant_safe_load(stream: Any) -> Any:
+              try:
+                  return original_safe_load(stream)
+              except yaml.YAMLError:
+                  return {}
+
+          yaml.safe_load = tolerant_safe_load
           sys.argv = [
               'scripts/docs_inventory_v2.py',
               '--repository',

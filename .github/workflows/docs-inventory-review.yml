@@ -51,10 +51,35 @@ jobs:
         run: |
           mkdir -p .build
           set +e
-          python scripts/docs_inventory_v2.py \
-            --repository full-chaos/dev-health-ops \
-            --output .build/documentation-inventory.json \
-            > .build/inventory-command.log 2>&1
+          python - <<'PY' > .build/inventory-command.log 2>&1
+          from __future__ import annotations
+
+          import runpy
+          import sys
+
+          import yaml
+
+          def preserve_python_name(
+              loader: yaml.SafeLoader,
+              suffix: str,
+              node: yaml.Node,
+          ) -> str:
+              del loader, node
+              return suffix
+
+          yaml.SafeLoader.add_multi_constructor(
+              'tag:yaml.org,2002:python/name:',
+              preserve_python_name,
+          )
+          sys.argv = [
+              'scripts/docs_inventory_v2.py',
+              '--repository',
+              'full-chaos/dev-health-ops',
+              '--output',
+              '.build/documentation-inventory.json',
+          ]
+          runpy.run_path('scripts/docs_inventory_v2.py', run_name='__main__')
+          PY
           status=$?
           cat .build/inventory-command.log
           echo "status=${status}" >> "$GITHUB_OUTPUT"

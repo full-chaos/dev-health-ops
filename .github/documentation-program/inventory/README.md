@@ -46,7 +46,7 @@ It covers the current `dev-health-ops` documentation system, the isolated v2 pro
 
 ## Durable source and review output
 
-`docs_inventory_review.py` and the `Documentation inventory review` workflow generate the factual JSON/TSV inventory and a complete row-level review artifact on demand.
+`docs_inventory_review.py` and the `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on demand.
 
 The reviewed disposition is split here by source and target domain so GitHub can render and review ordinary TSV diffs:
 
@@ -66,10 +66,14 @@ The reviewed disposition is split here by source and target domain so GitHub can
 - `web-internal-docs.tsv`
 - `web-visual-assets.tsv`
 
-Every row includes its source, current classification, proposed disposition, locked-IA target where public, canonical owner, source of truth, duplicate group, redirect requirement, migration phase, reason, and reviewer.
+The directory also contains the generated factual inventory, a consolidated disposition matrix, the cross-repository web snapshot, and a page-only current-to-target report.
+
+Every disposition row includes its source, current classification, proposed outcome, locked-IA target where public, canonical owner, source of truth, duplicate group, redirect requirement, migration phase, reason, and reviewer.
 
 ## Interpretation
 
 The matrix does not make the current site canonical. It says what is retained, rewritten, merged, generated, internalized, archived, removed, or used as source evidence. Every public target URL is a node in the locked IA; the matrix creates no new navigation branches.
 
 The live Workers preview remains a non-canonical baseline. Its host-level crawl, headers, indexing, redirects, and final retirement or redirect behavior are intentionally handled in Phase 11.
+
+With the validation counts above at zero, this source and disposition inventory satisfies the Phase 1 inventory gate and can be used as the input to Phase 5.

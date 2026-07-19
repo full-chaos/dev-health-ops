@@ -1,0 +1,14 @@
+duplicate_group	source_count	canonical_targets	resolution
+canonical-metrics	7	/reference/metrics/ | /reference/metrics/definitions/	split into the metrics landing and generated exact definitions
+customer-push-ingestion	23	/integrate/customer-push/ | /integrate/webhooks/ | /reference/api/ | /reference/schemas/record-kinds-and-enums/ | contributor architecture targets	split by validated reader outcome; no repository-history wrapper survives
+documentation-design-system	7		internal design evidence; no public primitive showcase or design-system page
+github-app-connection	3	/admin/data-sources/github/	one canonical administration task
+graphql-client	3	/integrate/api/graphql/	one canonical integration task
+graphql-investment	3	/reference/graphql/schema/	one generated schema destination
+investment-workflow-guide	4	/use/investment/investigate-effort/	one canonical task guide
+onboarding	2	/get-started/ | /contribute/start/development-environment/	split product task routing from contributor environment setup
+provider-integration	1	/admin/data-sources/	provider administration landing; implementation guidance stays under Integrate/Contribute
+reports-guide	2	/use/reports/	one canonical report workflow family
+team-attribution	2	/reference/data-models/work-graph/	one canonical data-model reference
+testops	12	/use/plan-and-improve/compare-trends/ | /reference/data-models/ | contributor architecture targets	split supported reader outcomes; rollout and screenshot evidence internal
+work-graph	3	/use/code-and-relationships/work-graph/	one canonical workflow guide

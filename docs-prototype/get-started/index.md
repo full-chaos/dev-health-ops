@@ -24,8 +24,7 @@ This is **not** a product tour, a timed onboarding sequence, or a second copy of
 ## What this section intentionally omits
 
 - feature-by-feature tours;
-- the old “first ten minutes” sequence;
 - copied procedures that belong under **Use**, **Administer**, or **Operate**;
 - speculative Context Fabric navigation before validated customer tasks exist.
 
-The Phase 5 review compares this route with direct task routing from the documentation home. The section may remain small, collapse into the home or **Use Dev Health**, or be removed.
+Keep this section small. It remains provisional and can still collapse into the documentation home or **Use Dev Health** after task testing.

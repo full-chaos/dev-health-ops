@@ -1,0 +1,16 @@
+schema_version: 1
+public_candidate:
+  config: mkdocs.prototype.yml
+  source: docs-prototype/
+  rule: every Markdown page appears exactly once in navigation
+legacy_baseline:
+  - docs/
+  - dev-health-docs.fullchaos.workers.dev
+internal_only:
+  - .github/documentation-program/
+  - docs-qa/
+  - docs/superpowers/
+  - issue and pull-request implementation evidence
+  - screenshot manifests, hashes, browser receipts, and fixtures
+  - temporary design explorations and generated review artifacts
+runtime_cutover_owner: Phase 11

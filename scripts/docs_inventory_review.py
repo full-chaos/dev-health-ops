@@ -292,7 +292,7 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
     )
 
     rows = [rows_by_path[path] for path in sorted(rows_by_path)]
-    counts = Counter()
+    counts: Counter[str] = Counter()
     for row in rows:
         counts[row["publication_classification"]] += 1
         counts[f"artifact:{row['artifact_type']}"] += 1

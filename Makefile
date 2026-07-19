@@ -79,8 +79,7 @@ docs\:version:
 	$(WRANGLER) versions upload \
 		--config wrangler.jsonc \
 		--preview-alias "$(PREVIEW_ALIAS)" \
-		--message "Documentation preview $(PREVIEW_ALIAS) at $(DOCS_REVISION)" \
-		--tag "docs-preview-$(PREVIEW_ALIAS)-$(DOCS_TAG)"
+		--message "Documentation preview $(PREVIEW_ALIAS) at $(DOCS_REVISION)"
 
 docs\:upload-preview: docs\:version
 

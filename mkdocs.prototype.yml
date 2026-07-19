@@ -161,14 +161,97 @@ nav:
           - Disaster recovery: operate/runbooks/disaster-recovery.md
   - Integrate and extend:
       - integrate/index.md
+      - Send data with Customer Push:
+          - integrate/customer-push/index.md
+          - Supported boundary: integrate/customer-push/overview.md
+          - Register a source and credential: integrate/customer-push/register-source.md
+          - Discover the schema: integrate/customer-push/schema-discovery.md
+          - Submit records: integrate/customer-push/submit-records.md
+          - Idempotency and retries: integrate/customer-push/idempotency-and-retries.md
+          - Validation and delivery errors: integrate/customer-push/errors.md
+          - Observe source delivery: integrate/customer-push/observability.md
+      - Use supported APIs:
+          - integrate/api/index.md
+          - Query GraphQL: integrate/api/graphql.md
+          - Authenticate clients: integrate/api/authentication.md
+          - Automate workflows: integrate/api/automation.md
+      - Use webhooks:
+          - integrate/webhooks/index.md
+          - Configure: integrate/webhooks/configure.md
+          - Verify signatures: integrate/webhooks/verify-signatures.md
+          - Retries and replay: integrate/webhooks/retries-and-replay.md
+      - Build an integration:
+          - integrate/build-an-integration/index.md
+          - Provider integration: integrate/build-an-integration/provider.md
+          - Canonical data contracts: integrate/build-an-integration/data-contracts.md
+          - Test an integration: integrate/build-an-integration/testing.md
+      - Troubleshoot integrations:
+          - integrate/troubleshooting/index.md
+          - Authentication: integrate/troubleshooting/authentication.md
+          - Schema and validation: integrate/troubleshooting/schema-and-validation.md
+          - Delivery and rate limits: integrate/troubleshooting/delivery-and-rate-limits.md
   - Reference:
       - reference/index.md
+      - API reference:
+          - reference/api/index.md
+          - Authentication and authorization: reference/api/authentication.md
+          - Errors, pagination, and limits: reference/api/errors-pagination-rate-limits.md
+      - GraphQL reference:
+          - reference/graphql/index.md
+          - Schema and fields: reference/graphql/schema.md
+          - Filters and scope: reference/graphql/filters.md
+          - Nullability and errors: reference/graphql/nullability-and-errors.md
+      - CLI reference: reference/cli/index.md
+      - Configuration reference:
+          - reference/configuration/index.md
+          - Environment variables: reference/configuration/environment.md
+          - Feature flags and availability: reference/configuration/feature-flags.md
+      - Schemas and contracts:
+          - reference/schemas/index.md
+          - Record kinds and enums: reference/schemas/record-kinds-and-enums.md
+      - Data models:
+          - reference/data-models/index.md
+          - Work Graph model: reference/data-models/work-graph.md
+          - Investment data model: reference/data-models/investment.md
       - Metrics and computations:
+          - reference/metrics/index.md
+          - Canonical metric definitions: reference/metrics/definitions.md
           - Weighting and aggregation: reference/metrics/weighting-and-aggregation.md
-      - Taxonomies:
+      - Product taxonomies:
+          - reference/taxonomies/index.md
           - Investment taxonomy: reference/taxonomies/investment.md
+      - Limits and compatibility:
+          - reference/limits-and-compatibility/index.md
+          - Provider limits: reference/limits-and-compatibility/provider-limits.md
+          - Version compatibility: reference/limits-and-compatibility/compatibility.md
+      - Deprecations and replacements: reference/deprecations/index.md
   - Contribute:
       - contribute/index.md
+      - Start contributing:
+          - contribute/start/index.md
+          - Repository map: contribute/start/repository-map.md
+          - Development environment: contribute/start/development-environment.md
+      - Architecture and boundaries:
+          - contribute/architecture/index.md
+          - Platform architecture: contribute/architecture/platform.md
+          - Data and storage: contribute/architecture/data-and-storage.md
+          - Stable contracts: contribute/architecture/contracts.md
+      - Develop and test:
+          - contribute/development/index.md
+          - Commands: contribute/development/commands.md
+          - Testing: contribute/development/testing.md
+          - Fixtures and live validation: contribute/development/fixtures-and-live-validation.md
+          - Migrations: contribute/development/migrations.md
+          - Debugging: contribute/development/debugging.md
+      - Review and release:
+          - contribute/review-and-release/index.md
+          - Pull requests: contribute/review-and-release/pull-requests.md
+          - Releases and rollback: contribute/review-and-release/releases.md
+      - Contribute documentation:
+          - contribute/documentation/index.md
+          - Classify and place: contribute/documentation/classify-and-place.md
+          - Write and review: contribute/documentation/write-and-review.md
+          - Preview and validate: contribute/documentation/preview-and-validate.md
 
 plugins:
   - search

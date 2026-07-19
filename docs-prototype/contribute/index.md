@@ -1,14 +1,18 @@
+---
+page_id: contribute
+summary: Choose the correct repository, understand stable boundaries, develop, test, review, release, and contribute documentation.
+content_type: landing
+owner: engineering
+applicability: current
+lifecycle: active
+---
+
 # Contribute
 
-Change Dev Health or its documentation without inferring repository boundaries from internal project files.
+- [Start contributing](start/index.md)
+- [Understand architecture and boundaries](architecture/index.md)
+- [Develop and test](development/index.md)
+- [Review and release](review-and-release/index.md)
+- [Contribute documentation](documentation/index.md)
 
-## Common tasks
-
-- Choose the correct repository.
-- Set up a supported development environment.
-- Understand stable architecture and data boundaries.
-- Run the appropriate validation.
-- Create and verify migrations.
-- Prepare and review a pull request.
-- Release and roll back a change.
-- Classify, write, preview, and review documentation.
+Public contributor guidance explains durable supported workflows. Agent prompts, issue-specific plans, QA evidence, browser receipts, and implementation notes remain internal.

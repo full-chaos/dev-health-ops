@@ -1,0 +1,11 @@
+source_path	target_path	status
+/getting-started/	/contribute/start/development-environment/	planned
+/architecture/	/contribute/architecture/	planned
+/architecture/repo-layout/	/contribute/start/repository-map/	planned
+/architecture/frontend-architecture/	/contribute/architecture/platform/	planned
+/architecture/database-architecture/	/contribute/architecture/data-and-storage/	planned
+/architecture/data-pipeline/	/contribute/architecture/data-and-storage/	planned
+/architecture/dispatch-outbox/	/contribute/architecture/data-and-storage/	planned
+/contributing/platform-contract/	/contribute/architecture/contracts/	planned
+/connectors/private-repo-testing/	/contribute/development/testing/	planned
+/visualizations/patterns/	/contribute/documentation/write-and-review/	planned

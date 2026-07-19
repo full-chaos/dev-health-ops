@@ -1,13 +1,25 @@
+---
+page_id: reference
+summary: Look up exact supported API, GraphQL, CLI, configuration, schema, data-model, metric, taxonomy, limit, compatibility, and deprecation facts.
+content_type: landing
+owner: documentation
+applicability: current
+lifecycle: active
+---
+
 # Reference
 
-Look up exact supported facts. Use task documentation when you need a procedure or interpretation.
+Use Reference for exact facts. Use task guides under **Use**, **Administer**, **Operate**, or **Integrate** for procedures.
 
-## Reference families
+- [API reference](api/index.md)
+- [GraphQL reference](graphql/index.md)
+- [CLI reference](cli/index.md)
+- [Configuration reference](configuration/index.md)
+- [Schemas and contracts](schemas/index.md)
+- [Data models](data-models/index.md)
+- [Metrics and computations](metrics/index.md)
+- [Product taxonomies](taxonomies/index.md)
+- [Provider limits and compatibility](limits-and-compatibility/index.md)
+- [Deprecations and replacements](deprecations/index.md)
 
-- API authentication, errors, pagination, and rate limits
-- GraphQL schema, fields, filters, nullability, and errors
-- CLI commands, arguments, defaults, output, and exit behavior
-- Configuration keys, types, defaults, secrets, and reload behavior
-- Schemas, record kinds, enums, and data models
-- Metrics, weighting, aggregation, taxonomies, and limits
-- Compatibility, deprecations, and replacements
+Generated facts must identify the code or schema revision that produced them.

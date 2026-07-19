@@ -8,12 +8,15 @@ on:
       - 'docs/**'
       - 'docs-prototype/**'
       - 'docs-qa/**'
+      - '.github/documentation-program/**'
       - 'scripts/docs_inventory_v2.py'
+      - 'scripts/docs_inventory_review.py'
       - 'mkdocs.yml'
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
       - '.github/workflows/**'
       - 'Makefile'
+      - '*.md'
   pull_request:
     branches:
       - main
@@ -21,12 +24,15 @@ on:
       - 'docs/**'
       - 'docs-prototype/**'
       - 'docs-qa/**'
+      - '.github/documentation-program/**'
       - 'scripts/docs_inventory_v2.py'
+      - 'scripts/docs_inventory_review.py'
       - 'mkdocs.yml'
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
       - '.github/workflows/**'
       - 'Makefile'
+      - '*.md'
   workflow_dispatch:
 
 permissions:
@@ -51,45 +57,10 @@ jobs:
         run: |
           mkdir -p .build
           set +e
-          python - <<'PY' > .build/inventory-command.log 2>&1
-          from __future__ import annotations
-
-          import runpy
-          import sys
-          from typing import Any
-
-          import yaml
-
-          def preserve_python_name(
-              loader: yaml.SafeLoader,
-              suffix: str,
-              node: yaml.Node,
-          ) -> str:
-              del loader, node
-              return suffix
-
-          yaml.SafeLoader.add_multi_constructor(
-              'tag:yaml.org,2002:python/name:',
-              preserve_python_name,
-          )
-          original_safe_load = yaml.safe_load
-
-          def tolerant_safe_load(stream: Any) -> Any:
-              try:
-                  return original_safe_load(stream)
-              except yaml.YAMLError:
-                  return {}
-
-          yaml.safe_load = tolerant_safe_load
-          sys.argv = [
-              'scripts/docs_inventory_v2.py',
-              '--repository',
-              'full-chaos/dev-health-ops',
-              '--output',
-              '.build/documentation-inventory.json',
-          ]
-          runpy.run_path('scripts/docs_inventory_v2.py', run_name='__main__')
-          PY
+          python scripts/docs_inventory_review.py \
+            --repository full-chaos/dev-health-ops \
+            --output .build/documentation-inventory.json \
+            > .build/inventory-command.log 2>&1
           status=$?
           cat .build/inventory-command.log
           echo "status=${status}" >> "$GITHUB_OUTPUT"
@@ -172,8 +143,9 @@ jobs:
 
           classifications = Counter(row['publication_classification'] for row in rows)
           artifact_types = Counter(row['artifact_type'] for row in rows)
-          missing_owner = sum(1 for row in rows if row['artifact_type'] == 'markdown-page' and not row.get('owner'))
+          missing_owner = sum(1 for row in rows if row['artifact_type'] in {'markdown-page', 'prototype-page'} and not row.get('owner'))
           unclassified = [row for row in rows if row['publication_classification'] == 'unclassified']
+          gaps = [row for row in rows if row['publication_classification'] == 'gap-unverified']
           public_pages = [row for row in rows if row.get('public_today') and row['artifact_type'] == 'markdown-page']
 
           lines = [
@@ -182,10 +154,12 @@ jobs:
               f"Generated from commit `{__import__('os').environ.get('GITHUB_SHA', 'unknown')}`.",
               '',
               f"- Inventory rows: **{len(rows)}**",
-              f"- Markdown pages: **{artifact_types.get('markdown-page', 0)}**",
+              f"- Current-site Markdown pages: **{artifact_types.get('markdown-page', 0)}**",
+              f"- Prototype pages: **{artifact_types.get('prototype-page', 0)}**",
               f"- Pages treated as public today: **{len(public_pages)}**",
               f"- Unclassified pages: **{len(unclassified)}**",
-              f"- Markdown pages without an owner: **{missing_owner}**",
+              f"- Explicit external/runtime gaps: **{len(gaps)}**",
+              f"- Current/prototype Markdown pages without an owner: **{missing_owner}**",
               '',
               '## Publication classifications',
               '',
@@ -200,6 +174,8 @@ jobs:
               lines.extend(f"- `{row['source_path']}`" for row in unclassified)
           else:
               lines.append('- None')
+          lines.extend(['', '## Explicit gaps', ''])
+          lines.extend(f"- `{row['source_path']}` — {row.get('notes') or ''}" for row in gaps)
           lines.extend([
               '',
               '## Review rule',

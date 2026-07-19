@@ -1,0 +1,93 @@
+/* Review-driven refinements that sit after the shared documentation styles. */
+
+/* Keep the primary navigation title aligned with the links below it. */
+.md-sidebar--primary .md-sidebar__inner,
+.md-sidebar--primary .md-nav--primary {
+  inline-size: 100%;
+}
+
+.md-sidebar--primary .md-nav--primary > .md-nav__title {
+  background: var(--fc-doc-surface) !important;
+  border: 1px solid var(--fc-doc-border);
+  border-radius: var(--fc-radius);
+  box-shadow: none;
+  box-sizing: border-box;
+  inline-size: calc(100% - 1rem);
+  margin: 0.5rem 0.5rem 0.35rem;
+  min-height: auto;
+  padding: 0.55rem 0.6rem;
+}
+
+.md-sidebar--primary .md-nav--primary > .md-nav__title .md-logo {
+  display: none;
+}
+
+.md-sidebar--primary .md-nav--primary > .md-nav__list {
+  box-sizing: border-box;
+  inline-size: calc(100% - 1rem);
+  margin-inline: 0.5rem;
+}
+
+.md-sidebar--primary .md-nav__container,
+.md-sidebar--primary .md-nav__container > .md-nav__link {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* Brand the footer without competing with the document content. */
+.md-footer-meta {
+  background: var(--fc-ink);
+  border-top: 1px solid var(--fc-surface);
+}
+
+.md-footer-meta__inner {
+  min-height: 3rem;
+  padding-block: 0.8rem;
+}
+
+.md-copyright {
+  color: var(--fc-mist);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.md-copyright a,
+.md-social__link {
+  color: var(--fc-glacier);
+}
+
+.md-copyright a:hover,
+.md-copyright a:focus-visible,
+.md-social__link:hover,
+.md-social__link:focus-visible {
+  color: var(--fc-white);
+}
+
+/* Shared treatment for sanitized product captures added during content review. */
+.md-typeset figure.fc-product-figure {
+  margin: 1.25rem 0 1.75rem;
+  max-width: 100%;
+}
+
+.md-typeset figure.fc-product-figure img {
+  background: var(--fc-doc-surface);
+  border: 1px solid var(--fc-doc-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 0.35rem 1.25rem rgb(0 0 0 / 12%);
+  display: block;
+  inline-size: 100%;
+}
+
+.md-typeset figure.fc-product-figure figcaption {
+  color: var(--fc-doc-text-muted);
+  font-size: 0.7rem;
+  line-height: 1.45;
+  margin-top: 0.45rem;
+  text-align: left;
+}
+
+@media screen and (max-width: 76.24em) {
+  .md-sidebar--primary .md-nav--primary > .md-nav__title {
+    margin-top: 0.35rem;
+  }
+}

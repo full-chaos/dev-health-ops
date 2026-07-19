@@ -41,6 +41,15 @@ Key files:
 - `src/dev_health_ops/logging_config.py` — JSON log configuration
 - `src/dev_health_ops/api/middleware/correlation_id.py` — Request ID propagation
 
+### Telemetry privacy boundary
+
+Sentry sets `send_default_pii=False` and passes every event through a non-mutating
+recursive `before_send` scrubber. The scrubber redacts nested credential-bearing
+keys (PagerDuty, OAuth, API token, client secret, authorization, cookies, and
+CSRF) and credential-shaped URL or query values while retaining ordinary
+diagnostic fields. This is an event-emission boundary: it does not claim that
+FastAPI automatically captures request bodies or local variables.
+
 ### Frontend (Next.js) — dev-health-web
 
 | Layer | Tool | Config |

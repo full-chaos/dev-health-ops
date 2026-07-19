@@ -12,7 +12,7 @@ Dev Health documentation
 
 # Find the answer. Do the work. { #fc-home-title }
 
-Use Dev Health, administer a workspace, operate the platform, integrate data, or look up an exact contract—without learning the repository first.
+Understand what each Dev Health view shows, what data it needs, how to interpret the result, and where to follow the evidence. Separate guides cover workspace administration, platform operations, integrations, and the codebase.
 {: .fc-home-lede }
 
 <div class="fc-home-actions" markdown>
@@ -25,8 +25,6 @@ Use Dev Health, administer a workspace, operate the platform, integrate data, or
 
 <aside class="fc-home-hero__routes" aria-label="Common documentation tasks" markdown>
 
-![Full Chaos infinity mark](assets/full-chaos-mark.svg){ .fc-home-hero__mark }
-
 **Start with a common task**
 {: .fc-home-routes__label }
 
@@ -36,9 +34,6 @@ Use Dev Health, administer a workspace, operate the platform, integrate data, or
 
 </aside>
 </section>
-
-This candidate follows the approved information architecture and content model. The existing production documentation remains the WIP baseline until the publication and cutover gates are approved.
-{: .fc-prototype-note .fc-prototype-note--home }
 
 ## Choose what you need to do
 
@@ -51,16 +46,16 @@ Product workflows
 
 ### [Use Dev Health](use/index.md)
 
-Interpret views, create reports, follow evidence, and recover from user-visible problems.
+Learn what each view is for, how its controls and visualizations work, and how to follow a result to supporting work.
 
 <ul class="fc-home-card__tasks">
-<li>Investigate investment and effort</li>
+<li>Interpret investment and effort</li>
 <li>Read delivery-flow signals</li>
 <li>Explore code and relationships</li>
-<li>Create and share reports</li>
+<li>Create and read reports</li>
 </ul>
 
-[View all product guides →](use/index.md){ .fc-home-card__link }
+[View product guides →](use/index.md){ .fc-home-card__link }
 
 </article>
 
@@ -71,16 +66,16 @@ Workspace setup
 
 ### [Administer Dev Health](admin/index.md)
 
-Configure access, teams, sources, synchronization, coverage, and administrative security.
+Configure access, teams, providers, synchronization, coverage, security, and privacy for a workspace.
 
 <ul class="fc-home-card__tasks">
 <li>Manage workspace access</li>
-<li>Connect and configure providers</li>
+<li>Connect GitHub or GitLab</li>
 <li>Check synchronization coverage</li>
 <li>Review security and privacy</li>
 </ul>
 
-[View all administration guides →](admin/index.md){ .fc-home-card__link }
+[View administration guides →](admin/index.md){ .fc-home-card__link }
 
 </article>
 
@@ -91,16 +86,16 @@ Platform operations
 
 ### [Install and operate](operate/index.md)
 
-Deploy, upgrade, monitor, maintain, troubleshoot, back up, and recover the platform.
+Deploy the service, configure its stores and workers, observe health, perform maintenance, and recover from failures.
 
 <ul class="fc-home-card__tasks">
 <li>Plan and install a deployment</li>
-<li>Configure the runtime</li>
+<li>Configure databases and workers</li>
 <li>Monitor platform health</li>
 <li>Upgrade, back up, and recover</li>
 </ul>
 
-[View all operations guides →](operate/index.md){ .fc-home-card__link }
+[View operations guides →](operate/index.md){ .fc-home-card__link }
 
 </article>
 
@@ -111,16 +106,16 @@ Data and APIs
 
 ### [Integrate and extend](integrate/index.md)
 
-Send data, use supported APIs and webhooks, and build supported integrations.
+Send canonical records, use supported APIs and webhooks, or implement a provider against the platform contracts.
 
 <ul class="fc-home-card__tasks">
 <li>Send Customer Push data</li>
-<li>Use supported APIs</li>
+<li>Query supported APIs</li>
 <li>Configure webhooks</li>
-<li>Build and validate an integration</li>
+<li>Build and test an integration</li>
 </ul>
 
-[View all integration guides →](integrate/index.md){ .fc-home-card__link }
+[View integration guides →](integrate/index.md){ .fc-home-card__link }
 
 </article>
 
@@ -131,7 +126,7 @@ Exact facts
 
 ### [Reference](reference/index.md)
 
-Look up API, CLI, configuration, schema, metric, taxonomy, limit, and compatibility details.
+Look up API and GraphQL contracts, configuration keys, schemas, metrics, taxonomies, limits, and compatibility details.
 
 <ul class="fc-home-card__tasks">
 <li>API and GraphQL contracts</li>
@@ -140,7 +135,7 @@ Look up API, CLI, configuration, schema, metric, taxonomy, limit, and compatibil
 <li>Metrics, schemas, and taxonomies</li>
 </ul>
 
-[View all reference →](reference/index.md){ .fc-home-card__link }
+[Browse reference →](reference/index.md){ .fc-home-card__link }
 
 </article>
 
@@ -151,7 +146,7 @@ Change the product
 
 ### [Contribute](contribute/index.md)
 
-Set up development, understand boundaries, test changes, release, and improve documentation.
+Set up the repository, understand the runtime and data boundaries, run the correct checks, and ship a reviewed change.
 
 <ul class="fc-home-card__tasks">
 <li>Set up a development environment</li>
@@ -160,7 +155,7 @@ Set up development, understand boundaries, test changes, release, and improve do
 <li>Review, release, and document changes</li>
 </ul>
 
-[View all contributor guides →](contribute/index.md){ .fc-home-card__link }
+[View contributor guides →](contribute/index.md){ .fc-home-card__link }
 
 </article>
 
@@ -174,21 +169,19 @@ Set up development, understand boundaries, test changes, release, and improve do
 
 - [Investigate where effort appears to be going](use/investment/investigate-effort.md)
 - [Diagnose no or incomplete data](use/troubleshooting/no-or-incomplete-data.md)
-- [Look up weighting and aggregation](reference/metrics/weighting-and-aggregation.md)
-- [Choose the right documentation domain](get-started/choose-a-task.md)
+- [Set scope and time](use/navigate/scope-and-time.md)
+- [Set up a development environment](contribute/start/development-environment.md)
 
 </div>
 
 <div class="fc-home-feature" markdown>
 
-## Recently updated
+## Read results responsibly
 
-- **Investment workflow guidance** — clearer task and evidence path  
-  [Open the workflow guide →](use/investment/investigate-effort.md)
-- **Incomplete-data troubleshooting** — direct recovery path  
-  [Open troubleshooting →](use/troubleshooting/no-or-incomplete-data.md)
-- **Investment weighting reference** — exact calculation contract  
-  [Open reference →](reference/metrics/weighting-and-aggregation.md)
+- [Understand loading, empty, stale, and partial states](use/navigate/data-states.md)
+- [Use filters and comparisons](use/navigate/filters-and-comparisons.md)
+- [Follow investment evidence](use/investment/follow-evidence.md)
+- [Look up the exact metric definitions](reference/metrics/index.md)
 
 </div>
 
@@ -199,7 +192,7 @@ Set up development, understand boundaries, test changes, release, and improve do
 
 ## Something is not working? { #fc-home-troubleshooting-title }
 
-Start from the symptom. Check scope, freshness, coverage, and synchronization before changing configuration.
+Start with the visible symptom. The troubleshooting guides separate user checks from workspace administration and platform operations.
 
 </div>
 
@@ -211,7 +204,7 @@ Start from the symptom. Check scope, freshness, coverage, and synchronization be
 
 ## New to Dev Health? { #fc-home-onramp-title }
 
-Get Started is a small task router and prerequisite check. It does not duplicate the product guides.
+Choose the question you need to answer, then check the minimum workspace, source, and permission prerequisites for that workflow.
 
 </div>
 

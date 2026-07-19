@@ -11,8 +11,6 @@ on:
       - '.github/documentation-program/**'
       - 'scripts/docs_inventory_v2.py'
       - 'scripts/docs_inventory_review.py'
-      - 'scripts/write_reviewed_disposition.py'
-      - 'scripts/.disposition-payload-*.b64'
       - 'mkdocs.yml'
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
@@ -162,16 +160,9 @@ jobs:
           )
           PY
 
-      - name: Expand reviewed disposition
-        if: steps.generate.outcome == 'success' && hashFiles('scripts/write_reviewed_disposition.py') != ''
-        run: |
-          python scripts/write_reviewed_disposition.py \
-            --output-dir .github/documentation-program/inventory
-
       - name: Copy factual inventory snapshot
         if: steps.generate.outcome == 'success'
         run: |
-          mkdir -p .github/documentation-program/inventory
           cp .build/documentation-inventory.json \
             .github/documentation-program/inventory/documentation-inventory.json
           cp .build/documentation-inventory.tsv \
@@ -186,12 +177,18 @@ jobs:
           from __future__ import annotations
 
           import csv
+          import json
           from pathlib import Path
 
           inventory_dir = Path('.github/documentation-program/inventory')
-          disposition = inventory_dir / 'disposition-matrix.tsv'
-          if not disposition.exists():
-              raise SystemExit('Missing reviewed disposition-matrix.tsv')
+          with (inventory_dir / 'documentation-inventory.json').open(
+              encoding='utf-8'
+          ) as handle:
+              factual = json.load(handle)
+          if factual['row_count'] != 312:
+              raise SystemExit(
+                  f"Expected 312 dev-health-ops rows, found {factual['row_count']}"
+              )
 
           approved_urls = set()
           for path in sorted(Path('.github/documentation-program/ia').glob('*.tsv')):
@@ -202,10 +199,16 @@ jobs:
                       if row.get('url', '').strip()
                   )
 
-          with disposition.open(encoding='utf-8', newline='') as handle:
+          with (inventory_dir / 'disposition-matrix.tsv').open(
+              encoding='utf-8', newline=''
+          ) as handle:
               rows = list(csv.DictReader(handle, delimiter='\t'))
           if len(rows) != 448:
               raise SystemExit(f'Expected 448 disposition rows, found {len(rows)}')
+          if sum(row['source_repo'] == 'full-chaos/dev-health-ops' for row in rows) != 312:
+              raise SystemExit('The reviewed ops disposition no longer matches the factual inventory')
+          if sum(row['source_repo'] == 'full-chaos/dev-health-web' for row in rows) != 136:
+              raise SystemExit('The reviewed web snapshot no longer contains 136 rows')
 
           required = {
               'proposed_disposition', 'target_section', 'target_page_type',
@@ -227,7 +230,8 @@ jobs:
               if target_url and target_url not in approved_urls:
                   errors.append(f'{key} targets non-IA URL {target_url}')
               if (
-                  row.get('publication_classification') in {'public-nav', 'public-reference'}
+                  row.get('publication_classification')
+                  in {'public-nav', 'public-reference'}
                   and not target_url
                   and row.get('proposed_disposition') not in explicit_nonpublic
               ):
@@ -237,16 +241,20 @@ jobs:
           print('Validated 448 reviewed disposition rows against the locked IA')
           PY
 
-      - name: Commit expanded review files
-        if: github.event_name == 'push' && hashFiles('scripts/write_reviewed_disposition.py') != ''
+      - name: Commit refreshed factual snapshot
+        if: github.event_name == 'push'
         run: |
-          rm -f scripts/write_reviewed_disposition.py
-          rm -f scripts/.disposition-payload-*.b64
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/documentation-program/inventory scripts
-          git commit -m 'docs: commit the reviewed inventory and disposition matrix'
-          git push
+          git add .github/documentation-program/inventory/documentation-inventory.json
+          git add .github/documentation-program/inventory/documentation-inventory.tsv
+          git add .github/documentation-program/inventory/generated-summary.md
+          if git diff --cached --quiet; then
+            echo 'Factual inventory snapshot is current.'
+          else
+            git commit -m 'docs: refresh the stable factual inventory snapshot'
+            git push
+          fi
 
       - name: Upload inventory review artifact
         if: always()

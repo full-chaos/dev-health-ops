@@ -1,6 +1,13 @@
 name: Documentation inventory mypy report
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/docs-inventory-mypy-report.yml'
+      - 'scripts/docs_inventory_review.py'
+      - 'scripts/validate_docs_inventory_review.py'
   push:
     branches:
       - agent/docs-phase-1-inventory-disposition
@@ -19,8 +26,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install type-check dependencies
-        run: |
-          python -m pip install mypy types-PyYAML
+        run: python -m pip install mypy types-PyYAML
       - name: Capture diagnostics
         run: |
           set +e

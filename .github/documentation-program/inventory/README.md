@@ -9,7 +9,7 @@ It covers the current `dev-health-ops` documentation system, the isolated v2 pro
 - `full-chaos/dev-health-ops` main: `dde247972ea9d798b4a56809b7efb172861203f4`
 - `full-chaos/dev-health-web` main: `a2ffbcb9afea26bbf7e4f2b2b93220deb259bb2a`
 
-The web snapshot was exported through now-closed review PR `full-chaos/dev-health-web#794`. No temporary export workflow is retained.
+The web snapshot was exported through now-closed review PR [full-chaos/dev-health-web#794](https://github.com/full-chaos/dev-health-web/pull/794). No temporary export workflow is retained.
 
 ## Inventory result
 

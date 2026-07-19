@@ -1,0 +1,165 @@
+name: Documentation inventory review
+
+on:
+  push:
+    branches:
+      - agent/docs-phase-1-inventory-disposition
+    paths:
+      - 'docs/**'
+      - 'docs-prototype/**'
+      - 'docs-qa/**'
+      - 'scripts/docs_inventory_v2.py'
+      - 'mkdocs.yml'
+      - 'mkdocs.prototype.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/**'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install inventory dependency
+        run: python -m pip install 'PyYAML>=6.0.3'
+
+      - name: Generate complete inventory
+        run: |
+          python scripts/docs_inventory_v2.py \
+            --repository full-chaos/dev-health-ops \
+            --output .build/documentation-inventory.json
+
+      - name: Create review formats
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import csv
+          import json
+          from collections import Counter
+          from pathlib import Path
+
+          build = Path('.build')
+          inventory = json.loads((build / 'documentation-inventory.json').read_text())
+          rows = inventory['rows']
+
+          inventory_fields = [
+              'source_repo', 'source_path', 'artifact_type', 'current_url',
+              'current_nav_location', 'content_type', 'primary_audience',
+              'secondary_audiences', 'product_area', 'owner',
+              'last_meaningful_review', 'generated', 'public_today',
+              'publication_classification', 'duplicate_group',
+              'known_accuracy_risk', 'known_usability_risk',
+              'build_dependencies', 'links_in', 'links_out', 'notes',
+          ]
+          with (build / 'documentation-inventory.tsv').open('w', encoding='utf-8', newline='') as handle:
+              writer = csv.DictWriter(handle, fieldnames=inventory_fields, delimiter='\t')
+              writer.writeheader()
+              for row in rows:
+                  normalized = dict(row)
+                  for key in ('current_nav_location', 'secondary_audiences', 'build_dependencies', 'links_in', 'links_out'):
+                      normalized[key] = ' | '.join(str(value) for value in (normalized.get(key) or []))
+                  writer.writerow({field: normalized.get(field) for field in inventory_fields})
+
+          review_fields = [
+              'source_path', 'artifact_type', 'publication_classification',
+              'current_url', 'current_nav_location', 'content_type',
+              'product_area', 'owner', 'generated', 'public_today',
+              'links_in_count', 'links_out_count', 'review_status',
+              'proposed_disposition', 'target_section', 'target_url',
+              'target_page_type', 'canonical_owner', 'source_of_truth',
+              'duplicate_group', 'redirect_required', 'asset_status',
+              'migration_phase', 'reason', 'reviewer',
+          ]
+          with (build / 'documentation-disposition-review.tsv').open('w', encoding='utf-8', newline='') as handle:
+              writer = csv.DictWriter(handle, fieldnames=review_fields, delimiter='\t')
+              writer.writeheader()
+              for row in rows:
+                  writer.writerow({
+                      'source_path': row['source_path'],
+                      'artifact_type': row['artifact_type'],
+                      'publication_classification': row['publication_classification'],
+                      'current_url': row.get('current_url') or '',
+                      'current_nav_location': ' > '.join(row.get('current_nav_location') or []),
+                      'content_type': row.get('content_type') or '',
+                      'product_area': row.get('product_area') or '',
+                      'owner': row.get('owner') or '',
+                      'generated': str(bool(row.get('generated'))).lower(),
+                      'public_today': str(bool(row.get('public_today'))).lower(),
+                      'links_in_count': len(row.get('links_in') or []),
+                      'links_out_count': len(row.get('links_out') or []),
+                      'review_status': 'unreviewed',
+                      'proposed_disposition': '',
+                      'target_section': '',
+                      'target_url': '',
+                      'target_page_type': '',
+                      'canonical_owner': '',
+                      'source_of_truth': '',
+                      'duplicate_group': row.get('duplicate_group') or '',
+                      'redirect_required': '',
+                      'asset_status': '',
+                      'migration_phase': '',
+                      'reason': '',
+                      'reviewer': '',
+                  })
+
+          classifications = Counter(row['publication_classification'] for row in rows)
+          artifact_types = Counter(row['artifact_type'] for row in rows)
+          missing_owner = sum(1 for row in rows if row['artifact_type'] == 'markdown-page' and not row.get('owner'))
+          unclassified = [row for row in rows if row['publication_classification'] == 'unclassified']
+          public_pages = [row for row in rows if row.get('public_today') and row['artifact_type'] == 'markdown-page']
+
+          lines = [
+              '# Documentation inventory review summary',
+              '',
+              f"Generated from commit `{__import__('os').environ.get('GITHUB_SHA', 'unknown')}`.",
+              '',
+              f"- Inventory rows: **{len(rows)}**",
+              f"- Markdown pages: **{artifact_types.get('markdown-page', 0)}**",
+              f"- Pages treated as public today: **{len(public_pages)}**",
+              f"- Unclassified pages: **{len(unclassified)}**",
+              f"- Markdown pages without an owner: **{missing_owner}**",
+              '',
+              '## Publication classifications',
+              '',
+          ]
+          for name, count in sorted(classifications.items()):
+              lines.append(f'- `{name}`: {count}')
+          lines.extend(['', '## Artifact types', ''])
+          for name, count in sorted(artifact_types.items()):
+              lines.append(f'- `{name}`: {count}')
+          lines.extend(['', '## Unclassified source paths', ''])
+          if unclassified:
+              lines.extend(f"- `{row['source_path']}`" for row in unclassified)
+          else:
+              lines.append('- None')
+          lines.extend([
+              '',
+              '## Review rule',
+              '',
+              'The inventory is factual. `documentation-disposition-review.tsv` remains incomplete until every row has an explicit reviewed disposition, canonical target or non-public state, reason, and reviewer.',
+              '',
+          ])
+          (build / 'documentation-inventory-summary.md').write_text('\n'.join(lines), encoding='utf-8')
+          PY
+
+      - name: Upload inventory review artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: documentation-inventory-review
+          path: |
+            .build/documentation-inventory.json
+            .build/documentation-inventory.tsv
+            .build/documentation-disposition-review.tsv
+            .build/documentation-inventory-summary.md
+          if-no-files-found: error
+          retention-days: 14

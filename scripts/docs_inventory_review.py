@@ -4,8 +4,13 @@
 The existing ``docs_inventory_v2`` module remains the factual scanner for the
 current MkDocs site. This wrapper adds sources that are intentionally outside
 ``docs/``—the v2 prototype, internal program evidence, repository entry
-points, visual assets, and known cross-repository/publication gaps—without
-turning the inventory into a publishing framework.
+points, visual assets, and the known runtime publication gap—without turning
+the inventory into a publishing framework.
+
+Committed inventory output is excluded from subsequent scans so the inventory
+cannot recursively inventory itself. The reviewed ``dev-health-web`` snapshot
+is committed separately in the inventory directory and therefore no longer
+appears as an unresolved external gap.
 """
 
 from __future__ import annotations
@@ -172,32 +177,39 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
             )
 
     program_root = repo_root / ".github" / "documentation-program"
+    inventory_output_root = program_root / "inventory"
     if program_root.exists():
         for path in sorted(program_root.rglob("*")):
-            if path.is_file():
-                _add_file(
-                    rows_by_path,
-                    repository,
-                    repo_root,
-                    path,
-                    "internal-program",
-                    "excluded-internal",
-                    product_area="documentation-program",
-                    notes="Internal remediation evidence; must never enter the public build.",
-                )
-
-    for path in sorted((repo_root / "docs").rglob("*")):
-        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
+            if not path.is_file() or path.is_relative_to(inventory_output_root):
+                continue
             _add_file(
                 rows_by_path,
                 repository,
                 repo_root,
                 path,
-                "visual-asset",
-                "supporting-artifact",
-                product_area="documentation-assets",
-                notes="Published or candidate documentation visual; disposition follows its owning page.",
+                "internal-program",
+                "excluded-internal",
+                product_area="documentation-program",
+                notes="Internal remediation evidence; must never enter the public build.",
             )
+
+    docs_root = repo_root / "docs"
+    if docs_root.exists():
+        for path in sorted(docs_root.rglob("*")):
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
+                _add_file(
+                    rows_by_path,
+                    repository,
+                    repo_root,
+                    path,
+                    "visual-asset",
+                    "supporting-artifact",
+                    product_area="documentation-assets",
+                    notes=(
+                        "Published or candidate documentation visual; "
+                        "disposition follows its owning page."
+                    ),
+                )
 
     for path in sorted(repo_root.iterdir()):
         if path.is_file() and path.name in ENTRY_POINT_NAMES:
@@ -209,12 +221,15 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                 "repository-entry-point",
                 "external-entry-point",
                 product_area="repository-guidance",
-                notes="Public repository entry point; links into documentation must be inventoried and updated at cutover.",
+                notes=(
+                    "Public repository entry point; links into documentation "
+                    "must be inventoried and updated at cutover."
+                ),
             )
 
     for pattern in ("**/AGENTS*.md", "**/CONTRIBUTING*.md"):
         for path in sorted(repo_root.glob(pattern)):
-            if path.is_file() and not path.is_relative_to(repo_root / "docs"):
+            if path.is_file() and not path.is_relative_to(docs_root):
                 _add_file(
                     rows_by_path,
                     repository,
@@ -223,7 +238,10 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                     "repository-guidance",
                     "excluded-internal",
                     product_area="contributor-guidance",
-                    notes="Repository or agent guidance; evaluate for one canonical contributor source.",
+                    notes=(
+                        "Repository or agent guidance; evaluate for one "
+                        "canonical contributor source."
+                    ),
                 )
 
     prototype_config = repo_root / "mkdocs.prototype.yml"
@@ -250,35 +268,28 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                     "publication-configuration",
                     "supporting-artifact",
                     product_area="documentation-publication",
-                    notes="Cloudflare/publication configuration requiring an explicit Phase 11 disposition.",
+                    notes=(
+                        "Cloudflare/publication configuration requiring an "
+                        "explicit Phase 11 disposition."
+                    ),
                 )
 
-    known_gaps = [
-        (
-            "external://full-chaos/dev-health-web/docs",
-            "Documentation sources, help routes, screenshots, static demo exports, and publication workflows in dev-health-web were not available in this repository checkout.",
-        ),
-        (
-            "external://full-chaos/dev-health-web/help-links",
-            "Application help links including NEXT_PUBLIC_DOCS_URL require a cross-repository inventory before cutover.",
-        ),
-        (
-            "external://dev-health-docs.fullchaos.workers.dev",
-            "The live Workers preview requires a URL, header, redirect, search, and publication-state crawl outside the repository inventory.",
-        ),
-    ]
-    for source_path, notes in known_gaps:
-        rows_by_path.setdefault(
-            source_path,
-            _blank_row(
-                repository,
-                source_path,
-                "external-gap",
-                "gap-unverified",
-                product_area="cross-repository-or-runtime",
-                notes=notes,
+    live_preview_path = "external://dev-health-docs.fullchaos.workers.dev"
+    rows_by_path.setdefault(
+        live_preview_path,
+        _blank_row(
+            repository,
+            live_preview_path,
+            "external-gap",
+            "gap-unverified",
+            product_area="cross-repository-or-runtime",
+            notes=(
+                "The live Workers preview requires a URL, header, redirect, "
+                "search, and publication-state crawl outside the repository "
+                "inventory."
             ),
-        )
+        ),
+    )
 
     rows = [rows_by_path[path] for path in sorted(rows_by_path)]
     counts = Counter()

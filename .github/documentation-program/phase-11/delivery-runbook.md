@@ -9,8 +9,6 @@ Repository code configures and validates the delivery mechanism. Account-level C
 
 ## Local development
 
-The Wrangler configuration serves `.build/docs-cloudflare`. That directory is generated output and does not exist in a clean checkout, so running `wrangler dev` directly before a build fails by design.
-
 Install the documentation dependencies once:
 
 ```bash
@@ -20,51 +18,46 @@ python -m pip install --upgrade pip
 pip install -r requirements-docs.txt
 ```
 
-For the normal content and style authoring loop, run MkDocs directly:
+The Wrangler configuration owns the Cloudflare-shaped build. From the repository root, run:
 
 ```bash
-make docs:v2-serve
-```
-
-Open `http://127.0.0.1:8000`. This mode has live reload and is the fastest way to review content, navigation, layout, and theme changes.
-
-To build the strict candidate and run the reader-critical documentation checks:
-
-```bash
-make docs:v2-check
-```
-
-To prepare the exact preview asset tree and serve it through the local Workers runtime:
-
-```bash
-make docs:cloudflare-dev
-```
-
-Open `http://localhost:8787`. The target performs the strict build and checks, creates `.build/docs-cloudflare` with preview redirects, headers, `noindex`, `robots.txt`, and source metadata, then starts the pinned Wrangler version.
-
-The raw equivalent is:
-
-```bash
-python scripts/validate_docs_v2_publication.py
-python -m mkdocs build --strict --config-file mkdocs.prototype.yml
-python scripts/check_built_site_links.py --site-dir .build/docs-prototype
-python scripts/check_docs_candidate_search.py \
-  --site-dir .build/docs-prototype \
-  --queries .github/documentation-program/phase-10/search-acceptance.json
-python scripts/check_docs_candidate_accessibility.py \
-  --site-dir .build/docs-prototype \
-  --css docs-prototype/stylesheets/extra.css
-python scripts/check_docs_candidate_facts.py
-python scripts/prepare_docs_cloudflare.py \
-  --source .build/docs-prototype \
-  --output .build/docs-cloudflare \
-  --mode preview \
-  --redirects .github/documentation-program/phase-9/redirects.tsv \
-  --source-revision "$(git rev-parse HEAD)"
 npx --yes wrangler@4.112.0 dev --config wrangler.jsonc
 ```
 
-Local development does not require the remote Worker to exist.
+Wrangler runs `python scripts/build_docs_cloudflare.py` before starting. The build command:
+
+1. builds the strict MkDocs site into `.build/docs-prototype`;
+2. prepares `.build/docs-cloudflare` with preview redirects, headers, `noindex`, `robots.txt`, and source metadata;
+3. starts the local Workers runtime against that generated asset directory; and
+4. rebuilds when the configured documentation sources change.
+
+Open `http://localhost:8787`.
+
+For a faster content-and-style authoring loop that does not emulate Cloudflare headers or redirects, run MkDocs directly:
+
+```bash
+python -m mkdocs serve \
+  --strict \
+  --config-file mkdocs.prototype.yml \
+  --dev-addr 127.0.0.1:8000
+```
+
+Open `http://127.0.0.1:8000`.
+
+To prepare a fully validated preview asset tree without starting Wrangler:
+
+```bash
+python scripts/build_docs_cloudflare.py --mode preview --full-check
+```
+
+To serve that exact prebuilt tree without rebuilding it:
+
+```bash
+DOCS_CLOUDFLARE_PREBUILT=true \
+  npx --yes wrangler@4.112.0 dev --config wrangler.jsonc
+```
+
+Local development does not require the remote Worker to exist. If MkDocs is unavailable, activate the documentation virtual environment and reinstall `requirements-docs.txt`.
 
 ## One-time account setup
 

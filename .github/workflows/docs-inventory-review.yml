@@ -14,6 +14,19 @@ on:
       - 'requirements-docs.txt'
       - '.github/workflows/**'
       - 'Makefile'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'docs-prototype/**'
+      - 'docs-qa/**'
+      - 'scripts/docs_inventory_v2.py'
+      - 'mkdocs.yml'
+      - 'mkdocs.prototype.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/**'
+      - 'Makefile'
   workflow_dispatch:
 
 permissions:

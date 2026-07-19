@@ -261,6 +261,17 @@ extra_css:
   - stylesheets/extra.css
   - stylesheets/home.css
   - stylesheets/home-sections.css
+  - stylesheets/review-fixes.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/solid/globe
+      link: https://fullchaos.dev
+      name: FullChaos Studios
+    - icon: fontawesome/brands/github
+      link: https://github.com/full-chaos/dev-health-ops
+      name: Dev Health source
 
 markdown_extensions:
   - admonition
@@ -274,4 +285,7 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
 
-copyright: Full Chaos · Dev Health documentation
+copyright: >-
+  © 2026 <a href="https://fullchaos.dev">FullChaos Studios</a> ·
+  <a href="https://github.com/full-chaos/dev-health-ops">Dev Health</a> ·
+  <a href="https://github.com/full-chaos/dev-health-ops/tree/main/docs-prototype">Documentation source</a>

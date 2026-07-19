@@ -48,7 +48,7 @@ The web snapshot was exported through now-closed review PR [full-chaos/dev-healt
 
 ## Durable source and review output
 
-`docs_inventory_review.py`, `validate_docs_inventory_review.py`, and the read-only `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on demand.
+`docs_inventory_review.py`, `validate_docs_inventory_review.py`, and the read-only `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on relevant pull requests and changes to `main`.
 
 The reviewed disposition is split by source and target domain so GitHub can render and review ordinary TSV diffs:
 

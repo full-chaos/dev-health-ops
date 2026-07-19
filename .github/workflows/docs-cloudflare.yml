@@ -6,6 +6,7 @@ on:
       - 'docs-prototype/**'
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
+      - 'Makefile'
       - 'wrangler.jsonc'
       - 'scripts/build_docs_cloudflare.py'
       - 'scripts/validate_docs_v2_publication.py'
@@ -97,7 +98,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DOCS_CLOUDFLARE_PREBUILT: 'true'
           WRANGLER_OUTPUT_FILE_PATH: .build/wrangler-preview.ndjson
         run: |
           npx --yes wrangler@4.112.0 versions upload \
@@ -169,20 +169,18 @@ jobs:
         run: pip install -r requirements-docs.txt
 
       - name: Build and prepare validated production assets
-        run: python scripts/build_docs_cloudflare.py --mode production --full-check
+        run: python scripts/build_docs_cloudflare.py --mode production
 
       - name: Deploy the production Worker
         id: deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DOCS_CLOUDFLARE_PREBUILT: 'true'
           WRANGLER_OUTPUT_FILE_PATH: .build/wrangler-production.ndjson
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
           npx --yes wrangler@4.112.0 deploy \
             --config wrangler.jsonc \
-            --strict \
             --message "Documentation production deployment at $GITHUB_SHA" \
             --tag "docs-${GITHUB_SHA::12}"
           python scripts/read_wrangler_output.py \

@@ -85,11 +85,7 @@ def _write_robots(path: Path, mode: str, canonical_origin: str) -> None:
     if mode == "preview":
         content = "User-agent: *\nDisallow: /\n"
     else:
-        content = (
-            "User-agent: *\n"
-            "Allow: /\n"
-            f"Sitemap: {canonical_origin}/sitemap.xml\n"
-        )
+        content = f"User-agent: *\nAllow: /\nSitemap: {canonical_origin}/sitemap.xml\n"
     path.write_text(content, encoding="utf-8")
 
 
@@ -143,9 +139,7 @@ def prepare(
 
     markdown_files = sorted(output.rglob("*.md"))
     if markdown_files:
-        paths = ", ".join(
-            str(path.relative_to(output)) for path in markdown_files[:10]
-        )
+        paths = ", ".join(str(path.relative_to(output)) for path in markdown_files[:10])
         raise ValueError(f"built output unexpectedly contains Markdown source: {paths}")
 
     files = _file_inventory(output)

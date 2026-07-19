@@ -70,9 +70,7 @@ def extract(path: Path) -> dict[str, str]:
     if preview_urls:
         result["preview_url"] = preview_urls[0]
     elif any("workers.dev" in url for url in other_urls):
-        result["preview_url"] = next(
-            url for url in other_urls if "workers.dev" in url
-        )
+        result["preview_url"] = next(url for url in other_urls if "workers.dev" in url)
     if version_ids:
         result["version_id"] = version_ids[0]
     return result

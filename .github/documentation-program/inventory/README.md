@@ -6,8 +6,10 @@ It covers the current `dev-health-ops` documentation system, the isolated v2 pro
 
 ## Source snapshots
 
-- `full-chaos/dev-health-ops`: `30176cd030349db67c9c55df7a8a6c67f4102299`
-- `full-chaos/dev-health-web`: `429023aee5525129353592354febbe57c88c31d2`
+- `full-chaos/dev-health-ops` main: `30176cd030349db67c9c55df7a8a6c67f4102299`
+- `full-chaos/dev-health-web` main: `a2ffbcb9afea26bbf7e4f2b2b93220deb259bb2a`
+
+The web snapshot was exported through temporary review PR `full-chaos/dev-health-web#794`. The temporary export workflow itself is not part of the inventory.
 
 ## Inventory result
 
@@ -46,7 +48,7 @@ It covers the current `dev-health-ops` documentation system, the isolated v2 pro
 
 ## Durable source and review output
 
-`docs_inventory_review.py` and the `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on demand.
+`docs_inventory_review.py` and the read-only `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on demand.
 
 The reviewed disposition is split here by source and target domain so GitHub can render and review ordinary TSV diffs:
 

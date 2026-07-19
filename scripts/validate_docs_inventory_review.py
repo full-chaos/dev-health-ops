@@ -125,7 +125,9 @@ def _summary(rows: list[dict[str, Any]]) -> str:
         f"- `{name}`: {count}" for name, count in sorted(classifications.items())
     )
     lines.extend(["", "## Artifact types", ""])
-    lines.extend(f"- `{name}`: {count}" for name, count in sorted(artifact_types.items()))
+    lines.extend(
+        f"- `{name}`: {count}" for name, count in sorted(artifact_types.items())
+    )
     lines.extend(["", "## Explicit gaps", ""])
     if gaps:
         lines.extend(
@@ -189,14 +191,10 @@ def validate(
         raise ValueError(f"Expected 449 disposition rows, found {len(disposition)}")
 
     ops_rows = [
-        row
-        for row in disposition
-        if row["source_repo"] == "full-chaos/dev-health-ops"
+        row for row in disposition if row["source_repo"] == "full-chaos/dev-health-ops"
     ]
     web_rows = [
-        row
-        for row in disposition
-        if row["source_repo"] == "full-chaos/dev-health-web"
+        row for row in disposition if row["source_repo"] == "full-chaos/dev-health-web"
     ]
     if len(ops_rows) != 313:
         raise ValueError(f"Expected 313 ops disposition rows, found {len(ops_rows)}")
@@ -235,9 +233,7 @@ def validate(
         ):
             errors.append(f"{key} lacks target or explicit non-public disposition")
 
-    if any(
-        row["publication_classification"] == "unclassified" for row in factual_rows
-    ):
+    if any(row["publication_classification"] == "unclassified" for row in factual_rows):
         errors.append("The factual inventory contains unclassified current sources")
 
     gaps = [

@@ -41,3 +41,19 @@ This runbook rotates data protected by `SETTINGS_ENCRYPTION_KEY` without breakin
 - If decryption errors appear immediately after rotation, restore the previous `SETTINGS_ENCRYPTION_KEY` and restart API/workers.
 - If the re-encryption utility reports failures, stop and inspect the affected rows before retrying. Failures usually mean the row is plaintext, corrupted, or encrypted with an unexpected key.
 - If a deployment accidentally omits `SETTINGS_ENCRYPTION_SALT`, restore the explicit production salt and restart before writing new credentials.
+
+## Connection removal
+
+Disconnecting a PagerDuty connection atomically clears its
+`IntegrationCredential.credentials_encrypted` value and removes its
+`ProviderOAuthCredential` row. The inactive integration descriptor remains as a
+non-secret tombstone, retaining only its configuration and lifecycle metadata.
+
+This applies to OAuth, client-credentials, and API-token authentication. After
+commit, a fresh database session cannot retrieve decryptable secret material for
+the disconnected credential; other provider credentials are unchanged. Remote
+OAuth token revocation remains best-effort and happens only after local removal
+has committed.
+
+This contract does not backfill or migrate already-inactive descriptors. Review
+those rows separately if historical credential cleanup is required.

@@ -472,9 +472,10 @@ async def test_disconnect_deactivates_descriptor_without_deleting_it(
         metadata = await PagerDutyOAuthCredentialRepository(
             session, _ORG_ID, "operations"
         ).get_status_metadata()
-    # Descriptor is deactivated (not deleted); the OAuth token row is gone.
+    # Descriptor is deactivated (not deleted); all decryptable secret storage is gone.
     assert descriptor is not None
     assert descriptor.is_active is False
+    assert descriptor.credentials_encrypted is None
     assert metadata is None
 
 
@@ -1270,9 +1271,42 @@ async def test_disconnect_deletes_oauth_row_even_with_corrupt_ciphertext(
 
 
 @pytest.mark.asyncio
-async def test_disconnect_deactivates_legacy_descriptor_without_revalidation(
+@pytest.mark.parametrize(
+    ("credential_name", "credentials", "config"),
+    [
+        (
+            "api-token",
+            {
+                "auth_mode": "api_token",
+                "api_token": "legacy-token",
+                "subdomain": "acme",
+                "region": "us",
+            },
+            {"auth_mode": "api_token", "subdomain": "acme", "region": "us"},
+        ),
+        (
+            "client-credentials",
+            {
+                "auth_mode": "client_credentials",
+                "client_id": "legacy-client-id",
+                "client_secret": "legacy-client-secret",
+                "subdomain": "acme",
+                "region": "us",
+            },
+            {
+                "auth_mode": "client_credentials",
+                "subdomain": "acme",
+                "region": "us",
+            },
+        ),
+    ],
+)
+async def test_disconnect_deactivates_and_clears_legacy_descriptor_secrets(
     client: AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
+    credential_name: str,
+    credentials: dict[str, str],
+    config: dict[str, str],
 ) -> None:
     import json
 
@@ -1282,12 +1316,10 @@ async def test_disconnect_deactivates_legacy_descriptor_without_revalidation(
         session.add(
             IntegrationCredential(
                 provider="pagerduty",
-                name="legacy",
+                name=credential_name,
                 org_id=_ORG_ID,
-                credentials_encrypted=encrypt_value(
-                    json.dumps({"api_token": "legacy-token"})
-                ),
-                config={},
+                credentials_encrypted=encrypt_value(json.dumps(credentials)),
+                config=config,
                 is_active=True,
             )
         )
@@ -1295,16 +1327,17 @@ async def test_disconnect_deactivates_legacy_descriptor_without_revalidation(
 
     response = await client.post(
         "/api/v1/admin/integrations/pagerduty/disconnect",
-        json={"credential_name": "legacy"},
+        json={"credential_name": credential_name},
     )
 
     assert response.status_code == 200
     async with session_maker() as session:
         descriptor = await IntegrationCredentialsService(session, _ORG_ID).get(
-            "pagerduty", "legacy"
+            "pagerduty", credential_name
         )
     assert descriptor is not None
     assert descriptor.is_active is False
+    assert descriptor.credentials_encrypted is None
 
 
 @pytest.mark.asyncio

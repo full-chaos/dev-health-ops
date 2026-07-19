@@ -1,19 +1,24 @@
 /* Home-only presentation. The documentation IA and page templates remain theme-independent. */
 
 .md-content__inner:has(> .fc-home-hero) {
-  max-width: 78rem;
-  padding-top: 2.25rem;
+  max-width: 72rem;
+  padding-top: 1.2rem;
+}
+
+.md-content__inner:has(> .fc-home-hero) > .md-content__button,
+.fc-home-hero h1 .headerlink {
+  display: none;
 }
 
 .fc-home-hero {
   background: var(--fc-ink);
   border: 1px solid var(--fc-surface);
-  border-radius: 0.9rem;
+  border-radius: 0.72rem;
   color: var(--fc-silver);
   display: grid;
   gap: 0;
-  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
-  margin: 0 0 1.25rem;
+  grid-template-columns: minmax(0, 1.3fr) minmax(16rem, 0.7fr);
+  margin: 0 0 1rem;
   overflow: hidden;
   position: relative;
 }
@@ -21,7 +26,7 @@
 .fc-home-hero::before,
 .fc-home-hero::after {
   content: "";
-  height: 0.28rem;
+  height: 0.2rem;
   position: absolute;
   top: 0;
   width: 50%;
@@ -38,40 +43,40 @@
 }
 
 .fc-home-hero__copy {
-  padding: clamp(2.2rem, 5vw, 4.5rem);
+  padding: clamp(1.55rem, 4vw, 2.8rem);
 }
 
 .fc-home-kicker {
   color: var(--fc-glacier);
-  font-size: 0.76rem;
+  font-size: 0.66rem;
   font-weight: 800;
-  letter-spacing: 0.13em;
-  margin: 0 0 0.8rem !important;
+  letter-spacing: 0.11em;
+  margin: 0 0 0.55rem !important;
   text-transform: uppercase;
 }
 
 .fc-home-hero .fc-home-hero__copy h1 {
   color: var(--fc-white);
-  font-size: clamp(2.65rem, 6vw, 4.6rem);
-  letter-spacing: -0.045em;
-  line-height: 0.98;
+  font-size: clamp(2.3rem, 4.8vw, 3.45rem);
+  letter-spacing: -0.04em;
+  line-height: 1.02;
   margin: 0;
-  max-width: 11ch;
+  max-width: 12ch;
 }
 
 .fc-home-lede {
   color: var(--fc-mist);
-  font-size: clamp(1.04rem, 2vw, 1.25rem);
-  line-height: 1.55;
-  margin: 1.5rem 0 2rem !important;
-  max-width: 56ch !important;
+  font-size: clamp(0.88rem, 1.5vw, 1rem);
+  line-height: 1.5;
+  margin: 1rem 0 1.35rem !important;
+  max-width: 58ch !important;
 }
 
 .fc-home-actions {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.7rem;
+  gap: 0.55rem;
 }
 
 .fc-home-actions .md-button {
@@ -106,21 +111,14 @@
   background: var(--fc-carbon);
   border-left: 1px solid var(--fc-surface);
   margin: 0;
-  padding: clamp(1.8rem, 4vw, 3rem);
-}
-
-.fc-home-hero__mark {
-  display: block;
-  height: 5.5rem;
-  margin: 0 0 2.2rem;
-  width: 5.5rem;
+  padding: clamp(1.35rem, 3vw, 2rem);
 }
 
 .fc-home-routes__label {
   color: var(--fc-silver);
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  margin-bottom: 0.65rem !important;
+  font-size: 0.66rem;
+  letter-spacing: 0.075em;
+  margin-bottom: 0.5rem !important;
   text-transform: uppercase;
 }
 
@@ -132,7 +130,12 @@
 
 .fc-home-hero__routes li {
   border-top: 1px solid var(--fc-surface);
+  list-style: none;
   margin: 0 !important;
+}
+
+.fc-home-hero__routes li::marker {
+  content: "";
 }
 
 .fc-home-hero__routes li:last-child {
@@ -143,11 +146,11 @@
   align-items: center;
   color: var(--fc-glacier);
   display: flex;
-  font-size: 0.92rem;
+  font-size: 0.74rem;
   font-weight: 680;
-  gap: 0.7rem;
+  gap: 0.55rem;
   justify-content: space-between;
-  padding: 0.85rem 0;
+  padding: 0.65rem 0;
   text-decoration: none;
 }
 
@@ -163,32 +166,28 @@
   color: var(--fc-white);
 }
 
-.fc-prototype-note--home {
-  margin-bottom: 3rem;
-}
-
 .fc-home-cards {
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 1.35rem 0 3.25rem;
+  margin: 1rem 0 2rem;
 }
 
 .fc-home-card {
   background: var(--fc-doc-surface);
   border: 1px solid var(--fc-doc-border);
-  border-radius: 0.65rem;
+  border-radius: 0.52rem;
   display: flex;
   flex-direction: column;
-  min-height: 15rem;
+  min-height: 0;
   overflow: hidden;
-  padding: 1.35rem 1.4rem 1.25rem;
+  padding: 0.95rem 1rem 0.9rem;
   position: relative;
 }
 
 .fc-home-card::before {
   content: "";
-  height: 0.24rem;
+  height: 0.18rem;
   left: 0;
   position: absolute;
   right: 0;
@@ -213,16 +212,16 @@
 
 .fc-home-card__tag {
   color: var(--fc-doc-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   font-weight: 800;
-  letter-spacing: 0.095em;
-  margin: 0 0 0.8rem !important;
+  letter-spacing: 0.08em;
+  margin: 0 0 0.5rem !important;
   text-transform: uppercase;
 }
 
 .fc-home-card h3 {
-  font-size: 1.22rem;
-  margin: 0 0 0.8rem;
+  font-size: 0.92rem;
+  margin: 0 0 0.45rem;
 }
 
 .fc-home-card h3 a {
@@ -237,17 +236,18 @@
 
 .fc-home-card p:not(.fc-home-card__tag) {
   color: var(--fc-doc-text-muted);
-  font-size: 0.94rem;
-  line-height: 1.55;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin-bottom: 0.45rem;
 }
 
 .fc-home-card .fc-home-card__link {
   color: var(--fc-doc-link);
   display: inline-block;
-  font-size: 0.9rem;
+  font-size: 0.7rem;
   font-weight: 750;
   margin-top: auto;
-  padding-top: 1rem;
+  padding-top: 0.75rem;
   text-decoration: none;
 }
 
@@ -255,31 +255,32 @@
 .fc-home-card .fc-home-card__link:focus-visible {
   color: var(--fc-doc-link-hover);
   text-decoration: underline;
-  text-underline-offset: 0.18em;
+  text-underline-offset: 0.15em;
 }
 
 .fc-home-onramp {
   align-items: center;
   background: var(--fc-doc-surface-muted);
   border: 1px solid var(--fc-doc-border);
-  border-left: 0.3rem solid var(--fc-aqua);
-  border-radius: 0.65rem;
+  border-left: 0.24rem solid var(--fc-aqua);
+  border-radius: 0.52rem;
   display: flex;
-  gap: 2rem;
+  gap: 1.25rem;
   justify-content: space-between;
-  margin: 0 0 3.2rem;
-  padding: 1.5rem 1.7rem;
+  margin: 0 0 2rem;
+  padding: 1rem 1.1rem;
 }
 
 .fc-home-onramp h2 {
   border: 0;
-  font-size: 1.25rem;
-  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  margin: 0 0 0.25rem;
   padding: 0;
 }
 
 .fc-home-onramp p {
   color: var(--fc-doc-text-muted);
+  font-size: 0.74rem;
   margin: 0;
 }
 
@@ -297,7 +298,7 @@
 
 @media screen and (max-width: 54rem) {
   .md-content__inner:has(> .fc-home-hero) {
-    padding-top: 1rem;
+    padding-top: 0.75rem;
   }
 
   .fc-home-hero {
@@ -308,22 +309,16 @@
     border-left: 0;
     border-top: 1px solid var(--fc-surface);
   }
-
-  .fc-home-hero__mark {
-    height: 4rem;
-    margin-bottom: 1.25rem;
-    width: 4rem;
-  }
 }
 
 @media screen and (max-width: 38rem) {
   .fc-home-hero__copy,
   .fc-home-hero__routes {
-    padding: 1.55rem;
+    padding: 1.2rem;
   }
 
   .fc-home-hero .fc-home-hero__copy h1 {
-    font-size: 2.55rem;
+    font-size: 2.2rem;
   }
 
   .fc-home-actions {
@@ -337,10 +332,6 @@
 
   .fc-home-cards {
     grid-template-columns: 1fr;
-  }
-
-  .fc-home-card {
-    min-height: 0;
   }
 
   .fc-home-onramp {

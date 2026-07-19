@@ -1,6 +1,6 @@
 # Documentation inventory review summary
 
-Generated from commit `5669805fb521b8e4422f1cd93a942c4ebd59655b`.
+Generated deterministically by `scripts/docs_inventory_review.py`.
 
 - Inventory rows: **312**
 - Current-site Markdown pages: **216**

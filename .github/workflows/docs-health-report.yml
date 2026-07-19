@@ -1,0 +1,59 @@
+name: Documentation health report
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install documentation dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Build the canonical candidate
+        run: mkdocs build --strict --config-file mkdocs.prototype.yml
+
+      - name: Check external links without blocking pull requests
+        id: external
+        continue-on-error: true
+        run: |
+          mkdir -p .build
+          set -o pipefail
+          python scripts/check_external_links.py \
+            --built-site .build/docs-prototype \
+            --allowlist docs/external-link-allowlist.yml \
+            --site-url https://docs.fullchaos.dev \
+            2>&1 | tee .build/docs-external-links.log
+
+      - name: Record report status
+        if: always()
+        run: |
+          {
+            echo '# Documentation health report'
+            echo
+            echo "- Commit: $GITHUB_SHA"
+            echo "- External link check: ${{ steps.external.outcome }}"
+            echo '- This scheduled result is diagnostic and does not block ordinary pull requests.'
+          } > .build/docs-health-summary.md
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docs-health-report
+          path: |
+            .build/docs-health-summary.md
+            .build/docs-external-links.log
+          if-no-files-found: warn
+          retention-days: 30

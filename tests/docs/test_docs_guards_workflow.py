@@ -1,4 +1,3 @@
-import json
 import subprocess
 from pathlib import Path
 
@@ -7,11 +6,25 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "docs-guards.yml"
-DOCS_QA_PACKAGE_PATH = ROOT / "docs-qa" / "package.json"
 
 
 def _load_workflow() -> dict[str, object]:
     return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+
+def _docs_steps() -> list[dict[str, object]]:
+    workflow = _load_workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    docs_guards_job = jobs["docs-guards-job"]
+    assert isinstance(docs_guards_job, dict)
+    steps = docs_guards_job["steps"]
+    assert isinstance(steps, list)
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def _step_by_name(name: str) -> dict[str, object]:
+    return next(step for step in _docs_steps() if step.get("name") == name)
 
 
 def _aggregate_script() -> str:
@@ -37,78 +50,53 @@ def test_aggregate_job_depends_on_both_changes_and_docs_guards_job() -> None:
     assert set(aggregate_job["needs"]) == {"changes", "docs-guards-job"}
 
 
-def test_docs_guards_pins_setup_node_to_the_v7_0_0_commit() -> None:
-    workflow = _load_workflow()
-    jobs = workflow["jobs"]
-    assert isinstance(jobs, dict)
-    docs_guards_job = jobs["docs-guards-job"]
-    assert isinstance(docs_guards_job, dict)
-    steps = docs_guards_job["steps"]
-    assert isinstance(steps, list)
+def test_docs_guards_has_no_node_or_playwright_runtime() -> None:
+    uses = [str(step.get("uses", "")) for step in _docs_steps()]
+    run_scripts = "\n".join(str(step.get("run", "")) for step in _docs_steps())
 
-    setup_node_uses = [
-        step["uses"]
-        for step in steps
-        if isinstance(step, dict)
-        and step.get("uses", "").startswith("actions/setup-node@")
-    ]
-
-    assert setup_node_uses == [
-        "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
-    ]
+    assert not any(value.startswith("actions/setup-node@") for value in uses)
+    assert "docs-qa" not in run_scripts
+    assert "playwright" not in run_scripts.lower()
+    assert "pnpm" not in run_scripts.lower()
 
 
-def test_docs_guards_installs_the_project_pinned_pnpm_version() -> None:
-    workflow = _load_workflow()
-    jobs = workflow["jobs"]
-    assert isinstance(jobs, dict)
-    docs_guards_job = jobs["docs-guards-job"]
-    assert isinstance(docs_guards_job, dict)
-    steps = docs_guards_job["steps"]
-    assert isinstance(steps, list)
+def test_docs_guards_runs_the_reader_critical_checks() -> None:
+    names = {str(step.get("name", "")) for step in _docs_steps()}
 
-    install_step = next(
-        step
-        for step in steps
-        if isinstance(step, dict)
-        and step.get("name") == "Install docs browser QA dependencies"
-    )
-
-    assert install_step["working-directory"] == "docs-qa"
-    assert (
-        install_step["run"].strip()
-        == "corepack enable\ncorepack install\npnpm install --frozen-lockfile"
-    )
+    assert {
+        "Validate publication inventory, IA placement, redirects, and source links",
+        "Strict candidate build",
+        "Check rendered internal links, anchors, and assets",
+        "Check task-based search acceptance",
+        "Check structural accessibility invariants",
+        "Check objective candidate facts",
+    }.issubset(names)
 
 
-def test_docs_search_step_uses_the_docs_qa_working_directory() -> None:
-    workflow = _load_workflow()
-    jobs = workflow["jobs"]
-    assert isinstance(jobs, dict)
-    docs_guards_job = jobs["docs-guards-job"]
-    assert isinstance(docs_guards_job, dict)
-    steps = docs_guards_job["steps"]
-    assert isinstance(steps, list)
+def test_streamed_docs_checks_propagate_checker_failures() -> None:
+    streamed_steps = {
+        "Validate publication inventory, IA placement, redirects, and source links",
+        "Strict candidate build",
+        "Check rendered internal links, anchors, and assets",
+        "Check task-based search acceptance",
+        "Check structural accessibility invariants",
+        "Check objective candidate facts",
+    }
 
-    search_step = next(
-        step
-        for step in steps
-        if isinstance(step, dict) and step.get("name") == "Run docs search acceptance"
-    )
-
-    assert search_step["working-directory"] == "docs-qa"
-    assert search_step["run"].strip() == "pnpm run typecheck\npnpm run test:search"
+    for name in streamed_steps:
+        run_script = _step_by_name(name).get("run")
+        assert isinstance(run_script, str)
+        assert "set -o pipefail" in run_script
+        assert "| tee " in run_script
 
 
-def test_docs_qa_build_uses_the_ci_python_interpreter() -> None:
-    package = json.loads(DOCS_QA_PACKAGE_PATH.read_text(encoding="utf-8"))
-    scripts = package["scripts"]
-    assert isinstance(scripts, dict)
+def test_docs_guards_does_not_run_external_network_or_visual_contracts() -> None:
+    run_scripts = "\n".join(str(step.get("run", "")) for step in _docs_steps()).lower()
 
-    assert (
-        scripts["build:docs"]
-        == "cd .. && python -m mkdocs build --strict --site-dir .build/site"
-    )
+    assert "check_external_links.py" not in run_scripts
+    assert "screenshot" not in run_scripts
+    assert "visual regression" not in run_scripts
+    assert "exact prose" not in run_scripts
 
 
 @pytest.mark.parametrize(
@@ -125,9 +113,7 @@ def test_docs_qa_build_uses_the_ci_python_interpreter() -> None:
 def test_aggregate_bash_script_exit_code(
     changes_result: str, docs_guards_result: str, expected_exit_code: int
 ) -> None:
-    """Given the aggregate job's real run script, when the upstream changes job
-    fails and docs-guards-job is consequently skipped, then the aggregate must
-    fail rather than report a false pass ("skipped required work")."""
+    """The required aggregate check must not turn failed upstream work into a pass."""
     script = _aggregate_script()
 
     result = subprocess.run(

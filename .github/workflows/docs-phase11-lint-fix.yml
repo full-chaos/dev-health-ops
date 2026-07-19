@@ -1,0 +1,50 @@
+name: Documentation Phase 11 lint fixer
+
+on:
+  push:
+    branches:
+      - agent/docs-phase-11-cloudflare
+    paths:
+      - '.github/workflows/docs-phase11-lint-fix.yml'
+      - 'scripts/prepare_docs_cloudflare.py'
+      - 'scripts/read_wrangler_output.py'
+      - 'scripts/check_docs_cloudflare_host.py'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/docs-phase-11-cloudflare
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Apply Ruff fixes and formatting
+        run: |
+          python -m pip install ruff
+          ruff check --fix \
+            scripts/prepare_docs_cloudflare.py \
+            scripts/read_wrangler_output.py \
+            scripts/check_docs_cloudflare_host.py
+          ruff format \
+            scripts/prepare_docs_cloudflare.py \
+            scripts/read_wrangler_output.py \
+            scripts/check_docs_cloudflare_host.py
+      - name: Commit fixes when needed
+        run: |
+          if git diff --quiet; then
+            echo 'Phase 11 Python already passes Ruff.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            scripts/prepare_docs_cloudflare.py \
+            scripts/read_wrangler_output.py \
+            scripts/check_docs_cloudflare_host.py
+          git commit -m 'style: apply Phase 11 Ruff fixes'
+          git push

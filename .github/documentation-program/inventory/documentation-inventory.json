@@ -2,7 +2,7 @@
   "schema_version": 2,
   "repository": "full-chaos/dev-health-ops",
   "generated_from": ".",
-  "row_count": 312,
+  "row_count": 313,
   "counts": {
     "artifact:browser-qa": 21,
     "artifact:configuration": 7,
@@ -13,7 +13,7 @@
     "artifact:prototype-page": 12,
     "artifact:repository-entry-point": 2,
     "artifact:theme-override": 10,
-    "artifact:tooling": 13,
+    "artifact:tooling": 14,
     "artifact:visual-asset": 3,
     "artifact:workflow": 4,
     "excluded-internal": 69,
@@ -22,7 +22,7 @@
     "prototype-wip": 18,
     "public-nav": 33,
     "public-reference": 132,
-    "supporting-artifact": 57
+    "supporting-artifact": 58
   },
   "rows": [
     {
@@ -7945,6 +7945,29 @@
     {
       "source_repo": "full-chaos/dev-health-ops",
       "source_path": "scripts/validate_docs_ia_v2.py",
+      "artifact_type": "tooling",
+      "current_url": null,
+      "current_nav_location": [],
+      "content_type": null,
+      "primary_audience": null,
+      "secondary_audiences": [],
+      "product_area": "documentation-system",
+      "owner": null,
+      "last_meaningful_review": null,
+      "generated": false,
+      "public_today": false,
+      "publication_classification": "supporting-artifact",
+      "duplicate_group": null,
+      "known_accuracy_risk": null,
+      "known_usability_risk": null,
+      "build_dependencies": [],
+      "links_in": [],
+      "links_out": [],
+      "notes": null
+    },
+    {
+      "source_repo": "full-chaos/dev-health-ops",
+      "source_path": "scripts/validate_docs_inventory_review.py",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],

@@ -310,4 +310,5 @@ full-chaos/dev-health-ops	scripts/gen_taxonomy_docs.py	tooling	supporting-artifa
 full-chaos/dev-health-ops	scripts/user_guide_evidence_contract.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/user_guide_evidence_validation.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/validate_docs_ia_v2.py	tooling	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops	scripts/validate_docs_inventory_review.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/validate_user_guide_evidence.py	tooling	supporting-artifact						documentation-system			False	False							

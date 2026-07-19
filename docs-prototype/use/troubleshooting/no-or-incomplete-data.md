@@ -1,6 +1,6 @@
 ---
 page_id: use-no-data
-summary: Distinguish measured zero, unavailable, incomplete, stale, delayed, and empty results, then escalate at the correct boundary.
+summary: Explain why Investment or another view is empty, incomplete, stale, delayed, unavailable, or measured zero, then escalate at the correct boundary.
 content_type: troubleshooting
 owner: product-analytics
 source_of_truth:
@@ -11,9 +11,9 @@ applicability: current
 lifecycle: active
 ---
 
-# No or incomplete data
+# Why data is empty or incomplete
 
-Use this guide when a view is empty, partially populated, missing an expected source, or does not include recent work. The first task is to identify **which data state the page is showing**. Measured zero, unavailable, incomplete, stale, delayed, and empty are different conditions and require different responses.
+Use this guide when Investment data is empty, a view is partially populated, an expected source is missing, or recent work does not appear. The first task is to identify **which data state the page is showing**. Measured zero, unavailable, incomplete, stale, delayed, and empty are different conditions and require different responses.
 {: .fc-page-lede }
 
 ## Preserve the original question

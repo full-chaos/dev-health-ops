@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-
 SECURITY_HEADERS = [
     "X-Content-Type-Options: nosniff",
     "Referrer-Policy: strict-origin-when-cross-origin",

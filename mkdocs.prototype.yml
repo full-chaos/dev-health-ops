@@ -1,5 +1,6 @@
-site_name: Dev Health documentation — v2 review
+site_name: Dev Health documentation
 site_description: Task-oriented Dev Health documentation with the Full Chaos visual identity.
+site_url: https://docs.fullchaos.dev
 repo_name: Full Chaos / Dev Health
 repo_url: https://github.com/full-chaos/dev-health-ops
 edit_uri: edit/main/docs-prototype/
@@ -273,4 +274,4 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
 
-copyright: Review build — the current production documentation remains the WIP baseline until the publication and cutover gates are approved.
+copyright: Full Chaos · Dev Health documentation

@@ -1,15 +1,22 @@
 .fc-home-card__tasks {
   border-top: 1px solid var(--fc-doc-border);
   color: var(--fc-doc-text-muted);
-  list-style: none;
-  margin: 1rem 0 0 !important;
-  padding: 0.85rem 0 0 !important;
+  list-style: none !important;
+  margin: 0.65rem 0 0 !important;
+  padding: 0.55rem 0 0 !important;
 }
 
 .fc-home-card__tasks li {
+  display: block;
+  font-size: 0.68rem;
+  list-style: none !important;
   margin: 0 !important;
-  padding: 0.3rem 0 0.3rem 1rem;
+  padding: 0.2rem 0 0.2rem 0.75rem;
   position: relative;
+}
+
+.fc-home-card__tasks li::marker {
+  content: "";
 }
 
 .fc-home-card__tasks li::before {
@@ -19,28 +26,24 @@
   position: absolute;
 }
 
-.fc-home-card {
-  min-height: 22rem;
-}
-
 .fc-home-feature-grid {
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 0 0 3rem;
+  margin: 0 0 1.6rem;
 }
 
 .fc-home-feature {
   background: var(--fc-doc-surface);
   border: 1px solid var(--fc-doc-border);
-  border-radius: 0.65rem;
-  padding: 1.4rem 1.5rem;
+  border-radius: 0.52rem;
+  padding: 0.95rem 1rem;
 }
 
 .fc-home-feature h2 {
   border: 0;
-  font-size: 1.3rem;
-  margin: 0 0 0.85rem;
+  font-size: 1rem;
+  margin: 0 0 0.55rem;
   padding: 0;
 }
 
@@ -52,8 +55,14 @@
 
 .fc-home-feature li {
   border-top: 1px solid var(--fc-doc-border);
+  font-size: 0.7rem;
+  list-style: none;
   margin: 0 !important;
-  padding: 0.75rem 0;
+  padding: 0.5rem 0;
+}
+
+.fc-home-feature li::marker {
+  content: "";
 }
 
 .fc-home-feature li:first-child {
@@ -70,26 +79,27 @@
     linear-gradient(120deg, color-mix(in srgb, var(--fc-crimson), transparent 88%), transparent 50%),
     var(--fc-ink);
   border: 1px solid var(--fc-surface);
-  border-left: 0.32rem solid var(--fc-flame);
-  border-radius: 0.65rem;
+  border-left: 0.24rem solid var(--fc-flame);
+  border-radius: 0.52rem;
   color: var(--fc-silver);
   display: flex;
-  gap: 2rem;
+  gap: 1.25rem;
   justify-content: space-between;
-  margin: 0 0 1rem;
-  padding: 1.6rem 1.75rem;
+  margin: 0 0 0.75rem;
+  padding: 1rem 1.1rem;
 }
 
 .fc-home-troubleshooting h2 {
   border: 0;
   color: var(--fc-white);
-  font-size: 1.35rem;
-  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  margin: 0 0 0.25rem;
   padding: 0;
 }
 
 .fc-home-troubleshooting p {
   color: var(--fc-mist);
+  font-size: 0.72rem;
   margin: 0;
 }
 
@@ -116,10 +126,6 @@
 }
 
 @media screen and (max-width: 38rem) {
-  .fc-home-card {
-    min-height: 0;
-  }
-
   .fc-home-troubleshooting {
     align-items: stretch;
     flex-direction: column;

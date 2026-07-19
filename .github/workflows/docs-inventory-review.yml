@@ -46,12 +46,22 @@ jobs:
         run: python -m pip install 'PyYAML>=6.0.3'
 
       - name: Generate complete inventory
+        id: generate
+        continue-on-error: true
         run: |
+          mkdir -p .build
+          set +e
           python scripts/docs_inventory_v2.py \
             --repository full-chaos/dev-health-ops \
-            --output .build/documentation-inventory.json
+            --output .build/documentation-inventory.json \
+            > .build/inventory-command.log 2>&1
+          status=$?
+          cat .build/inventory-command.log
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
       - name: Create review formats
+        if: steps.generate.outcome == 'success'
         run: |
           python - <<'PY'
           from __future__ import annotations
@@ -166,13 +176,14 @@ jobs:
           PY
 
       - name: Upload inventory review artifact
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: documentation-inventory-review
-          path: |
-            .build/documentation-inventory.json
-            .build/documentation-inventory.tsv
-            .build/documentation-disposition-review.tsv
-            .build/documentation-inventory-summary.md
+          path: .build/**
           if-no-files-found: error
           retention-days: 14
+
+      - name: Fail when generation failed
+        if: steps.generate.outcome != 'success'
+        run: exit 1

@@ -78,4 +78,4 @@ The matrix does not make the current site canonical. It says what is retained, r
 
 The live Workers preview remains a non-canonical baseline. Its host-level crawl, headers, indexing, redirects, and final retirement or redirect behavior are intentionally handled in Phase 11.
 
-With the validation counts above at zero, this source and disposition inventory satisfies the Phase 1 inventory gate and is the source map for Phase 5 and the gated Phase 6 migration.
+With the validation counts above at zero, this source and disposition inventory satisfies the Phase 1 inventory gate and is the source map for Phase 5. Phase 6 implementation remains gated by the recorded Phase 5 vertical-slice approval.

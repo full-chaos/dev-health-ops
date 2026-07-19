@@ -7,6 +7,7 @@ on:
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
       - 'wrangler.jsonc'
+      - 'scripts/build_docs_cloudflare.py'
       - 'scripts/validate_docs_v2_publication.py'
       - 'scripts/check_built_site_links.py'
       - 'scripts/check_docs_candidate_search.py'
@@ -61,28 +62,8 @@ jobs:
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
-      - name: Validate and build the candidate
-        run: |
-          mkdir -p .build
-          python scripts/validate_docs_v2_publication.py
-          mkdocs build --strict --config-file mkdocs.prototype.yml
-          python scripts/check_built_site_links.py --site-dir .build/docs-prototype
-          python scripts/check_docs_candidate_search.py \
-            --site-dir .build/docs-prototype \
-            --queries .github/documentation-program/phase-10/search-acceptance.json
-          python scripts/check_docs_candidate_accessibility.py \
-            --site-dir .build/docs-prototype \
-            --css docs-prototype/stylesheets/extra.css
-          python scripts/check_docs_candidate_facts.py
-
-      - name: Prepare preview assets
-        run: |
-          python scripts/prepare_docs_cloudflare.py \
-            --source .build/docs-prototype \
-            --output .build/docs-cloudflare \
-            --mode preview \
-            --redirects .github/documentation-program/phase-9/redirects.tsv \
-            --source-revision "$GITHUB_SHA"
+      - name: Build and prepare validated preview assets
+        run: python scripts/build_docs_cloudflare.py --mode preview --full-check
 
       - name: Upload build evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -116,6 +97,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOCS_CLOUDFLARE_PREBUILT: 'true'
           WRANGLER_OUTPUT_FILE_PATH: .build/wrangler-preview.ndjson
         run: |
           npx --yes wrangler@4.112.0 versions upload \
@@ -186,31 +168,15 @@ jobs:
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
-      - name: Validate and build production assets
-        run: |
-          mkdir -p .build
-          python scripts/validate_docs_v2_publication.py
-          mkdocs build --strict --config-file mkdocs.prototype.yml
-          python scripts/check_built_site_links.py --site-dir .build/docs-prototype
-          python scripts/check_docs_candidate_search.py \
-            --site-dir .build/docs-prototype \
-            --queries .github/documentation-program/phase-10/search-acceptance.json
-          python scripts/check_docs_candidate_accessibility.py \
-            --site-dir .build/docs-prototype \
-            --css docs-prototype/stylesheets/extra.css
-          python scripts/check_docs_candidate_facts.py
-          python scripts/prepare_docs_cloudflare.py \
-            --source .build/docs-prototype \
-            --output .build/docs-cloudflare \
-            --mode production \
-            --redirects .github/documentation-program/phase-9/redirects.tsv \
-            --source-revision "$GITHUB_SHA"
+      - name: Build and prepare validated production assets
+        run: python scripts/build_docs_cloudflare.py --mode production --full-check
 
       - name: Deploy the production Worker
         id: deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOCS_CLOUDFLARE_PREBUILT: 'true'
           WRANGLER_OUTPUT_FILE_PATH: .build/wrangler-production.ndjson
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"

@@ -13,8 +13,8 @@ The web snapshot was exported through temporary review PR `full-chaos/dev-health
 
 ## Inventory result
 
-- Total reviewed rows: **448**
-- `dev-health-ops` rows: **312**
+- Total reviewed rows: **449**
+- `dev-health-ops` rows: **313**
 - `dev-health-web` rows: **136**
 - Current-site Markdown pages: **216**
 - Prototype pages: **12**
@@ -41,14 +41,14 @@ The web snapshot was exported through temporary review PR `full-chaos/dev-health
 | Internal only | 80 |
 | Remove or replace | 27 |
 | Merge and rewrite | 25 |
-| Retain internal | 21 |
+| Retain internal | 22 |
 | Archive | 13 |
 | Internal source evidence | 10 |
 | Other explicit dispositions | 74 |
 
 ## Durable source and review output
 
-`docs_inventory_review.py` and the read-only `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on demand.
+`docs_inventory_review.py`, `validate_docs_inventory_review.py`, and the read-only `Documentation inventory review` workflow generate the factual JSON/TSV inventory and validate the complete row-level disposition on demand.
 
 The reviewed disposition is split here by source and target domain so GitHub can render and review ordinary TSV diffs:
 

@@ -3,7 +3,7 @@ name: Documentation inventory review
 on:
   push:
     branches:
-      - agent/docs-phase-1-inventory-disposition
+      - main
     paths:
       - 'docs/**'
       - 'docs-prototype/**'
@@ -11,6 +11,7 @@ on:
       - '.github/documentation-program/**'
       - 'scripts/docs_inventory_v2.py'
       - 'scripts/docs_inventory_review.py'
+      - 'scripts/validate_docs_inventory_review.py'
       - 'mkdocs.yml'
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
@@ -27,6 +28,7 @@ on:
       - '.github/documentation-program/**'
       - 'scripts/docs_inventory_v2.py'
       - 'scripts/docs_inventory_review.py'
+      - 'scripts/validate_docs_inventory_review.py'
       - 'mkdocs.yml'
       - 'mkdocs.prototype.yml'
       - 'requirements-docs.txt'
@@ -36,15 +38,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   inventory:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -53,210 +53,23 @@ jobs:
       - name: Install inventory dependency
         run: python -m pip install 'PyYAML>=6.0.3'
 
-      - name: Generate complete factual inventory
-        id: generate
-        continue-on-error: true
+      - name: Regenerate factual inventory
         run: |
           mkdir -p .build
-          set +e
+          set -o pipefail
           python scripts/docs_inventory_review.py \
             --repository full-chaos/dev-health-ops \
             --output .build/documentation-inventory.json \
-            > .build/inventory-command.log 2>&1
-          status=$?
-          cat .build/inventory-command.log
-          echo "status=${status}" >> "$GITHUB_OUTPUT"
-          exit "$status"
+            2>&1 | tee .build/inventory-command.log
 
-      - name: Create factual review formats
-        if: steps.generate.outcome == 'success'
+      - name: Validate factual snapshot and reviewed disposition
         run: |
-          python - <<'PY'
-          from __future__ import annotations
+          python scripts/validate_docs_inventory_review.py \
+            --generated-json .build/documentation-inventory.json \
+            --inventory-dir .github/documentation-program/inventory \
+            --ia-dir .github/documentation-program/ia
 
-          import csv
-          import json
-          from collections import Counter
-          from pathlib import Path
-
-          build = Path('.build')
-          inventory = json.loads((build / 'documentation-inventory.json').read_text())
-          rows = inventory['rows']
-          fields = [
-              'source_repo', 'source_path', 'artifact_type',
-              'publication_classification', 'current_url',
-              'current_nav_location', 'content_type', 'primary_audience',
-              'secondary_audiences', 'product_area', 'owner',
-              'last_meaningful_review', 'generated', 'public_today',
-              'duplicate_group', 'known_accuracy_risk',
-              'known_usability_risk', 'build_dependencies', 'links_in',
-              'links_out', 'notes',
-          ]
-          with (build / 'documentation-inventory.tsv').open(
-              'w', encoding='utf-8', newline=''
-          ) as handle:
-              writer = csv.DictWriter(
-                  handle, fieldnames=fields, delimiter='\t', lineterminator='\n'
-              )
-              writer.writeheader()
-              for row in rows:
-                  normalized = dict(row)
-                  for key in (
-                      'current_nav_location', 'secondary_audiences',
-                      'build_dependencies', 'links_in', 'links_out',
-                  ):
-                      normalized[key] = ' | '.join(
-                          str(value) for value in (normalized.get(key) or [])
-                      )
-                  writer.writerow({field: normalized.get(field) for field in fields})
-
-          classifications = Counter(
-              row['publication_classification'] for row in rows
-          )
-          artifact_types = Counter(row['artifact_type'] for row in rows)
-          unclassified = [
-              row for row in rows
-              if row['publication_classification'] == 'unclassified'
-          ]
-          gaps = [
-              row for row in rows
-              if row['publication_classification'] == 'gap-unverified'
-          ]
-          public_pages = [
-              row for row in rows
-              if row.get('public_today') and row['artifact_type'] == 'markdown-page'
-          ]
-          lines = [
-              '# Documentation inventory review summary',
-              '',
-              f"Generated from commit `{__import__('os').environ.get('GITHUB_SHA', 'unknown')}`.",
-              '',
-              f"- Inventory rows: **{len(rows)}**",
-              f"- Current-site Markdown pages: **{artifact_types.get('markdown-page', 0)}**",
-              f"- Prototype pages: **{artifact_types.get('prototype-page', 0)}**",
-              f"- Pages treated as public today: **{len(public_pages)}**",
-              f"- Unclassified pages: **{len(unclassified)}**",
-              f"- Explicit external/runtime gaps: **{len(gaps)}**",
-              '',
-              '## Publication classifications',
-              '',
-          ]
-          lines.extend(
-              f'- `{name}`: {count}'
-              for name, count in sorted(classifications.items())
-          )
-          lines.extend(['', '## Artifact types', ''])
-          lines.extend(
-              f'- `{name}`: {count}'
-              for name, count in sorted(artifact_types.items())
-          )
-          lines.extend(['', '## Explicit gaps', ''])
-          lines.extend(
-              f"- `{row['source_path']}` — {row.get('notes') or ''}"
-              for row in gaps
-          )
-          (build / 'documentation-inventory-summary.md').write_text(
-              '\n'.join(lines) + '\n', encoding='utf-8'
-          )
-          PY
-
-      - name: Copy factual inventory snapshot
-        if: steps.generate.outcome == 'success'
-        run: |
-          cp .build/documentation-inventory.json \
-            .github/documentation-program/inventory/documentation-inventory.json
-          cp .build/documentation-inventory.tsv \
-            .github/documentation-program/inventory/documentation-inventory.tsv
-          cp .build/documentation-inventory-summary.md \
-            .github/documentation-program/inventory/generated-summary.md
-
-      - name: Validate committed disposition
-        if: steps.generate.outcome == 'success'
-        run: |
-          python - <<'PY'
-          from __future__ import annotations
-
-          import csv
-          import json
-          from pathlib import Path
-
-          inventory_dir = Path('.github/documentation-program/inventory')
-          with (inventory_dir / 'documentation-inventory.json').open(
-              encoding='utf-8'
-          ) as handle:
-              factual = json.load(handle)
-          if factual['row_count'] != 312:
-              raise SystemExit(
-                  f"Expected 312 dev-health-ops rows, found {factual['row_count']}"
-              )
-
-          approved_urls = set()
-          for path in sorted(Path('.github/documentation-program/ia').glob('*.tsv')):
-              with path.open(encoding='utf-8', newline='') as handle:
-                  approved_urls.update(
-                      row['url'].strip()
-                      for row in csv.DictReader(handle, delimiter='\t')
-                      if row.get('url', '').strip()
-                  )
-
-          with (inventory_dir / 'disposition-matrix.tsv').open(
-              encoding='utf-8', newline=''
-          ) as handle:
-              rows = list(csv.DictReader(handle, delimiter='\t'))
-          if len(rows) != 448:
-              raise SystemExit(f'Expected 448 disposition rows, found {len(rows)}')
-          if sum(row['source_repo'] == 'full-chaos/dev-health-ops' for row in rows) != 312:
-              raise SystemExit('The reviewed ops disposition no longer matches the factual inventory')
-          if sum(row['source_repo'] == 'full-chaos/dev-health-web' for row in rows) != 136:
-              raise SystemExit('The reviewed web snapshot no longer contains 136 rows')
-
-          required = {
-              'proposed_disposition', 'target_section', 'target_page_type',
-              'canonical_owner', 'source_of_truth', 'migration_phase',
-              'reason', 'reviewer',
-          }
-          explicit_nonpublic = {
-              'archive', 'internal-only', 'internal-source-evidence',
-              'remove', 'remove-or-replace', 'retain-internal',
-              'archive-or-recapture',
-          }
-          errors = []
-          for row in rows:
-              key = f"{row['source_repo']}:{row['source_path']}"
-              for field in required:
-                  if not row.get(field, '').strip():
-                      errors.append(f'{key} missing {field}')
-              target_url = row.get('target_url', '').strip()
-              if target_url and target_url not in approved_urls:
-                  errors.append(f'{key} targets non-IA URL {target_url}')
-              if (
-                  row.get('publication_classification')
-                  in {'public-nav', 'public-reference'}
-                  and not target_url
-                  and row.get('proposed_disposition') not in explicit_nonpublic
-              ):
-                  errors.append(f'{key} lacks target or non-public disposition')
-          if errors:
-              raise SystemExit('\n'.join(errors[:50]))
-          print('Validated 448 reviewed disposition rows against the locked IA')
-          PY
-
-      - name: Commit refreshed factual snapshot
-        if: github.event_name == 'push'
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/documentation-program/inventory/documentation-inventory.json
-          git add .github/documentation-program/inventory/documentation-inventory.tsv
-          git add .github/documentation-program/inventory/generated-summary.md
-          if git diff --cached --quiet; then
-            echo 'Factual inventory snapshot is current.'
-          else
-            git commit -m 'docs: refresh the stable factual inventory snapshot'
-            git push
-          fi
-
-      - name: Upload inventory review artifact
+      - name: Upload inventory review evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -267,7 +80,3 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
-
-      - name: Fail when generation failed
-        if: steps.generate.outcome != 'success'
-        run: exit 1

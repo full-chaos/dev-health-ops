@@ -5,7 +5,7 @@
 **Delivery:** Workers Static Assets, no Worker script  
 **Linear:** CHAOS-3013 and CHAOS-3014
 
-Repository code configures and validates the delivery mechanism. Account-level Cloudflare Access, DNS, API-token scope, and GitHub environment approvals must be reviewed in their respective control planes before production is enabled.
+Repository code configures and validates the delivery mechanism. Account-level Cloudflare Access, API-token scope, and GitHub environment approvals must be reviewed in their respective control planes before production is enabled.
 
 ## Local development
 
@@ -85,34 +85,30 @@ npx --yes wrangler@4.112.0 dev --config wrangler.jsonc
 
 Local development does not require the remote `dev-health-docs` Worker to exist. Static assets are served from the local `.build/docs-cloudflare` directory.
 
-## Recreating the deleted Worker identity
+## Automatic Worker recreation and connection
 
-The repository already declares the Worker name as `dev-health-docs`. Deleting the old Worker removed its versions, deployment history, preview aliases, and account-side settings; it did not require a repository rename.
+`wrangler.jsonc` is the source of truth for the Worker identity, static assets, and custom domain. Do not manually create a replacement Worker or manually attach `docs.fullchaos.dev`.
 
-Before enabling pull-request preview uploads:
+The first approved production command:
 
-1. Create or bootstrap a Worker named `dev-health-docs` in the Full Chaos account.
-2. Enable Preview URLs and protect them with Cloudflare Access.
-3. Add the least-privilege token and account ID to GitHub.
-4. Set `DOCS_CLOUDFLARE_PREVIEWS_ENABLED=true` only after anonymous access is denied.
+```bash
+npx --yes wrangler@4.112.0 deploy --config wrangler.jsonc --strict
+```
 
-A production `wrangler deploy` will create a new version and make it the active deployment. Keep the custom domain and production variable disabled until the Phase 12 go/no-go process authorizes cutover.
+will:
+
+1. create `dev-health-docs` automatically when the Worker does not exist;
+2. upload the prepared Workers Static Assets version and make it active;
+3. apply the `docs.fullchaos.dev` custom domain declared in `wrangler.jsonc`; and
+4. let Cloudflare create the required DNS record and certificate for that custom domain.
+
+Deleting the former Worker removed its versions, deployment history, preview aliases, and account-side policies. The deployment recreates the same logical Worker name, not the deleted resource history.
+
+Because `wrangler deploy` both recreates the Worker and activates the custom domain, run it only through the protected production workflow after the Phase 12 go/no-go decision. Local authoring, validation, and GitHub build artifacts do not require this bootstrap deployment.
 
 ## One-time account setup
 
-### 1. Protect Worker preview URLs
-
-In the Cloudflare dashboard:
-
-1. Open **Workers & Pages** → `dev-health-docs` → **Settings** → **Domains & Routes**.
-2. Enable **Preview URLs**.
-3. Enable Cloudflare Access for preview URLs.
-4. Restrict the Access policy to the documentation reviewers or approved Full Chaos identity domain.
-5. Verify an anonymous browser is denied and an approved reviewer can sign in.
-
-Preview URLs are public when enabled without Access. The generated preview also sends `X-Robots-Tag: noindex, nofollow` and a disallowing `robots.txt`, but indexing controls are not authorization.
-
-### 2. Create a least-privilege Cloudflare token
+### 1. Create a least-privilege Cloudflare token
 
 Create a dedicated token for documentation delivery. Limit it to the Full Chaos account, the `dev-health-docs` Worker, and the `fullchaos.dev` zone operations required for Worker versions, deployments, routes, and the custom domain. Do not reuse a broad personal token.
 
@@ -121,7 +117,7 @@ Store these secrets for the repository or the protected `docs-production` enviro
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 
-### 3. Configure GitHub controls
+### 2. Configure GitHub controls
 
 Create or review the `docs-production` environment:
 
@@ -135,7 +131,29 @@ Create these variables with a default value of `false`:
 - `DOCS_CLOUDFLARE_PREVIEWS_ENABLED`
 - `DOCS_CLOUDFLARE_PRODUCTION_ENABLED`
 
-Set the preview variable to `true` only after Access is verified. Set the production variable to `true` only after the custom domain, token scope, Phase 10 gate, and Phase 12 go/no-go process are ready.
+Set the production variable to `true` only for an approved deployment. Keep the preview variable `false` until the recreated Worker exists and Access has been verified.
+
+### 3. Run the approved bootstrap deployment
+
+Use **Documentation Cloudflare delivery** → **Run workflow** with:
+
+- action: `deploy`
+- confirmation: `docs.fullchaos.dev`
+
+The protected workflow runs the complete quality gate, prepares production assets, recreates `dev-health-docs` when absent, connects the custom domain, verifies the host, and records the resulting Worker version.
+
+### 4. Protect Worker preview URLs
+
+After the Worker exists, in the Cloudflare dashboard:
+
+1. Open **Workers & Pages** → `dev-health-docs` → **Settings** → **Domains & Routes**.
+2. Enable **Preview URLs**.
+3. Enable Cloudflare Access for preview URLs.
+4. Restrict the Access policy to the documentation reviewers or approved Full Chaos identity domain.
+5. Verify an anonymous browser is denied and an approved reviewer can sign in.
+6. Set `DOCS_CLOUDFLARE_PREVIEWS_ENABLED=true` only after that verification passes.
+
+Preview URLs are public when enabled without Access. The generated preview also sends `X-Robots-Tag: noindex, nofollow` and a disallowing `robots.txt`, but indexing controls are not authorization.
 
 ## Pull-request preview
 
@@ -184,12 +202,7 @@ Never use an unspecified implicit rollback target during an incident. Retain and
 
 The generated `_redirects` file contains the approved Phase 9 path migrations. The delivery build fails on duplicate or invalid path rules.
 
-`_redirects` does not perform a host-level redirect from `dev-health-docs.fullchaos.workers.dev`. At cutover, choose one explicit action:
-
-1. disable the old workers.dev production route after confirming it is only a WIP preview; or
-2. retain a minimal host redirect only when measured inbound traffic or durable links justify it.
-
-Do not leave the old WIP site independently indexable alongside `docs.fullchaos.dev`.
+`_redirects` does not perform a host-level redirect from an earlier `dev-health-docs.fullchaos.workers.dev` deployment. Because the old Worker was deleted, verify that no separate old hostname remains live or indexable before canonical launch.
 
 ## Headers and caching
 
@@ -214,8 +227,7 @@ A Content Security Policy is intentionally deferred until it is tested against M
 | Preview accessible anonymously | Disable preview uploads and fix Access immediately. |
 | Deploy succeeds but smoke fails | Roll back to the recorded known-good version. |
 | Redirect mismatch | Correct the Phase 9 manifest or generated output; do not hand-edit the deployed file. |
-| Custom domain fails | Verify zone, Worker route, certificate, and DNS state before retrying. |
-| Old preview remains indexed | Remove/redirect the old host and request re-crawl after canonical launch. |
+| Custom domain fails | Verify zone ownership, conflicting DNS records, Worker configuration, certificate state, and token permissions before retrying. |
 
 ## Evidence required to close Phase 11
 
@@ -224,7 +236,7 @@ A Content Security Policy is intentionally deferred until it is tested against M
 - Access denial and approved-user evidence;
 - least-privilege token review;
 - `docs-production` approval configuration evidence;
-- successful non-production Worker version upload;
+- successful Worker recreation and production version deployment through Wrangler;
 - custom-domain and certificate verification;
 - representative redirects and headers verified on the target host;
 - rollback rehearsal with version IDs and elapsed recovery time;

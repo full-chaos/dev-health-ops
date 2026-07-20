@@ -1,5 +1,5 @@
 PYTHON ?= python3
-WRANGLER ?= npx --yes wrangler@4.112.0
+WRANGLER ?= npx --yes wrangler
 PREVIEW_ALIAS ?=
 VERSION_ID ?=
 DOCS_REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)

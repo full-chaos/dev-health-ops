@@ -38,3 +38,5 @@ index.txt
 .omo/**
 .worktrees/**
 .codegraph/
+.build/
+.wrangler/

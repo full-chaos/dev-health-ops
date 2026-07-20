@@ -10,8 +10,8 @@ site_dir: .build/docs-prototype
 
 theme:
   name: material
-  logo: assets/full-chaos-mark.svg
-  favicon: assets/full-chaos-mark.svg
+  logo: assets/fcd-simplified.png
+  favicon: assets/fcd-simplified.png
   font: false
   features:
     - navigation.indexes

@@ -1271,6 +1271,143 @@ async def test_disconnect_deletes_oauth_row_even_with_corrupt_ciphertext(
 
 
 @pytest.mark.asyncio
+async def test_disconnect_commit_failure_rolls_back_all_local_secret_cleanup(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _connect_oauth(client, monkeypatch)
+    async with session_maker() as session:
+        descriptor_before = (
+            await session.execute(
+                select(IntegrationCredential).where(
+                    IntegrationCredential.org_id == _ORG_ID,
+                    IntegrationCredential.provider == "pagerduty",
+                    IntegrationCredential.name == "operations",
+                )
+            )
+        ).scalar_one()
+        oauth_before = (
+            await session.execute(
+                select(ProviderOAuthCredential).where(
+                    ProviderOAuthCredential.org_id == _ORG_ID,
+                    ProviderOAuthCredential.provider == "pagerduty",
+                    ProviderOAuthCredential.credential_name == "operations",
+                )
+            )
+        ).scalar_one()
+        descriptor_ciphertext = descriptor_before.credentials_encrypted
+        oauth_ciphertext = oauth_before.token_encrypted
+
+    async def fail_commit(_session: AsyncSession) -> None:
+        raise RuntimeError("disconnect commit failure")
+
+    revoke = AsyncMock()
+    monkeypatch.setattr(AsyncSession, "commit", fail_commit)
+    monkeypatch.setattr(pagerduty_router, "revoke_token", revoke)
+
+    with pytest.raises(RuntimeError, match="disconnect commit failure"):
+        await client.post(
+            "/api/v1/admin/integrations/pagerduty/disconnect",
+            json={"credential_name": "operations"},
+        )
+
+    revoke.assert_not_awaited()
+    async with session_maker() as session:
+        descriptor_after = (
+            await session.execute(
+                select(IntegrationCredential).where(
+                    IntegrationCredential.org_id == _ORG_ID,
+                    IntegrationCredential.provider == "pagerduty",
+                    IntegrationCredential.name == "operations",
+                )
+            )
+        ).scalar_one()
+        oauth_after = (
+            await session.execute(
+                select(ProviderOAuthCredential).where(
+                    ProviderOAuthCredential.org_id == _ORG_ID,
+                    ProviderOAuthCredential.provider == "pagerduty",
+                    ProviderOAuthCredential.credential_name == "operations",
+                )
+            )
+        ).scalar_one()
+    assert descriptor_after.is_active is True
+    assert descriptor_after.credentials_encrypted == descriptor_ciphertext
+    assert oauth_after.token_encrypted == oauth_ciphertext
+
+
+@pytest.mark.asyncio
+async def test_disconnect_preserves_unrelated_connector_credentials(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _connect_oauth(client, monkeypatch)
+    standby_tokens = OAuthTokens(
+        access_token="standby-access-token",
+        refresh_token="standby-refresh-token",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        granted_scopes=frozenset({"Incidents.read"}),
+    )
+    async with session_maker() as session:
+        service = IntegrationCredentialsService(session, _ORG_ID)
+        standby_descriptor = await service.set(
+            "pagerduty",
+            {
+                "auth_mode": "oauth",
+                "oauth_credential_name": "standby",
+                "oauth_binding_id": "standby-binding",
+                "subdomain": "acme",
+                "region": "us",
+                "account_id": "acme",
+            },
+            name="standby",
+            config={
+                "auth_mode": "oauth",
+                "subdomain": "acme",
+                "region": "us",
+                "account_id": "acme",
+                "granted_scopes": ["Incidents.read"],
+            },
+        )
+        github_descriptor = await service.set(
+            "github",
+            {"token": "unrelated-github-token"},
+            name="source-control",
+        )
+        await PagerDutyOAuthCredentialRepository(
+            session, _ORG_ID, "standby"
+        ).create_or_replace(standby_tokens, binding_id="standby-binding")
+        await session.commit()
+        standby_ciphertext = standby_descriptor.credentials_encrypted
+        github_ciphertext = github_descriptor.credentials_encrypted
+    monkeypatch.setattr(pagerduty_router, "revoke_token", AsyncMock())
+
+    response = await client.post(
+        "/api/v1/admin/integrations/pagerduty/disconnect",
+        json={"credential_name": "operations"},
+    )
+
+    assert response.status_code == 200
+    async with session_maker() as session:
+        service = IntegrationCredentialsService(session, _ORG_ID)
+        standby_after = await service.get("pagerduty", "standby")
+        github_after = await service.get("github", "source-control")
+        standby_oauth = await PagerDutyOAuthCredentialRepository(
+            session, _ORG_ID, "standby"
+        ).get()
+    assert standby_after is not None
+    assert standby_after.is_active is True
+    assert standby_after.credentials_encrypted == standby_ciphertext
+    assert standby_oauth is not None
+    assert standby_oauth.tokens == standby_tokens
+    assert github_after is not None
+    assert github_after.is_active is True
+    assert github_after.credentials_encrypted == github_ciphertext
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("credential_name", "credentials", "config"),
     [

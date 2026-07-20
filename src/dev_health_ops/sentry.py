@@ -20,6 +20,7 @@ import os
 import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, TypeVar
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dev_health_ops.sync.error_sanitize import REDACTION_MARKER, sanitize_error_text
 
@@ -30,15 +31,20 @@ logger = logging.getLogger(__name__)
 
 _initialized = False
 _MappingKey = TypeVar("_MappingKey")
+_SENSITIVE_EXACT_KEYS: Final = frozenset(
+    {
+        "auth",
+        "authorization",
+        "code",
+        "error_description",
+        "state",
+    }
+)
 _SENSITIVE_KEY_PARTS: Final = frozenset(
     {
         "apikey",
-        "auth",
-        "authorization",
         "cookie",
         "csrf",
-        "oauth",
-        "pagerduty",
         "password",
         "secret",
         "token",
@@ -49,12 +55,45 @@ _SENSITIVE_KEY_PARTS: Final = frozenset(
 def _is_sensitive_key(key: str) -> bool:
     normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key).lower()
     parts = frozenset(re.split(r"[^a-z0-9]+", normalized))
-    return not _SENSITIVE_KEY_PARTS.isdisjoint(parts)
+    return normalized in _SENSITIVE_EXACT_KEYS or not _SENSITIVE_KEY_PARTS.isdisjoint(
+        parts
+    )
+
+
+def _scrub_sentry_string(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme and parsed.netloc and parsed.query:
+        query = urlencode(
+            [
+                (
+                    key,
+                    REDACTION_MARKER
+                    if _is_sensitive_key(key)
+                    else sanitize_error_text(nested, max_length=None) or "",
+                )
+                for key, nested in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
+        )
+        netloc = (
+            f"{REDACTION_MARKER}@{parsed.netloc.rsplit('@', maxsplit=1)[1]}"
+            if "@" in parsed.netloc
+            else parsed.netloc
+        )
+        return urlunsplit(
+            (
+                parsed.scheme,
+                netloc,
+                parsed.path,
+                query,
+                sanitize_error_text(parsed.fragment, max_length=None) or "",
+            )
+        )
+    return sanitize_error_text(value, max_length=None) or ""
 
 
 def _scrub_sentry_value(value: object) -> object:
     if isinstance(value, str):
-        return sanitize_error_text(value, max_length=None)
+        return _scrub_sentry_string(value)
     if isinstance(value, Mapping):
         return _scrub_sentry_mapping(value)
     if isinstance(value, list):

@@ -4,6 +4,7 @@ import sys
 from copy import deepcopy
 from types import ModuleType
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from sentry_sdk.types import Event, Hint
 
@@ -126,11 +127,76 @@ def test_before_send_scrubs_nested_secrets_without_mutating_input() -> None:
     }
     request = scrubbed.get("request")
     assert isinstance(request, dict)
-    assert request["url"] == "https://app.example.test/callback?[REDACTED]"
-    assert request["data"] == {"oauth": REDACTION_MARKER, "csrf": REDACTION_MARKER}
+    scrubbed_url = request["url"]
+    assert isinstance(scrubbed_url, str)
+    parsed_url = urlparse(scrubbed_url)
+    assert parsed_url.scheme == "https"
+    assert parsed_url.netloc == "app.example.test"
+    assert parsed_url.path == "/callback"
+    assert parse_qs(parsed_url.query) == {"access_token": [REDACTION_MARKER]}
+    assert request["data"] == {
+        "oauth": {"client_secret": REDACTION_MARKER},
+        "csrf": REDACTION_MARKER,
+    }
     assert request["headers"] == {
         "Cookie": REDACTION_MARKER,
         "X-Request-ID": "request-123",
+    }
+
+
+def test_before_send_scrubs_nested_oauth_callback_fields_without_mutation() -> None:
+    event: Event = {
+        "extra": {
+            "callback": {
+                "state": "opaque-state",
+                "code": "authorization-code",
+                "error_description": "provider-secret-detail",
+                "oauth_provider": "pagerduty",
+                "pagerduty_region": "eu",
+            }
+        }
+    }
+    original = deepcopy(event)
+
+    scrubbed = sentry.before_send(event, {})
+
+    assert event == original
+    assert scrubbed.get("extra") == {
+        "callback": {
+            "state": REDACTION_MARKER,
+            "code": REDACTION_MARKER,
+            "error_description": REDACTION_MARKER,
+            "oauth_provider": "pagerduty",
+            "pagerduty_region": "eu",
+        }
+    }
+
+
+def test_before_send_scrubs_oauth_callback_query_values_and_preserves_url() -> None:
+    callback_url = (
+        "https://app.example.test/oauth/pagerduty/callback"
+        "?state=opaque-state&code=authorization-code"
+        "&error_description=provider-secret-detail&region=eu"
+    )
+    event: Event = {"request": {"url": callback_url}}
+    original = deepcopy(event)
+
+    scrubbed = sentry.before_send(event, {})
+
+    assert event == original
+    request = scrubbed.get("request")
+    assert isinstance(request, dict)
+    scrubbed_url = request["url"]
+    assert isinstance(scrubbed_url, str)
+    parsed = urlparse(scrubbed_url)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "app.example.test"
+    assert parsed.path == "/oauth/pagerduty/callback"
+    assert parse_qs(parsed.query) == {
+        "state": [REDACTION_MARKER],
+        "code": [REDACTION_MARKER],
+        "error_description": [REDACTION_MARKER],
+        "region": ["eu"],
     }
 
 

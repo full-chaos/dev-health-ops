@@ -40,6 +40,7 @@ nav:
       - Configure a workspace: configuration.md
       - Manage teams: team-configuration.md
       - Connect GitHub: user-guide/github-app-setup.md
+      - Connect PagerDuty: user-guide/pagerduty-oauth-app-setup.md
       - Ingest your data: customer-push-ingestion/overview.md
       - Set up webhooks: webhooks.md
   - Deploy & operate:

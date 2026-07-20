@@ -21,7 +21,7 @@ See [Email Setup](./email-setup.md) for provider configuration, email types, and
 
 ## Credential Management
 
-Provider credentials (GitHub, GitLab, Jira, Linear, Atlassian) are resolved through a unified credential system that supports two sources:
+Provider credentials (GitHub, GitLab, Jira, Linear, Atlassian, PagerDuty) are resolved through a unified credential system that supports two sources:
 
 | Source | When Used | How |
 |--------|-----------|-----|
@@ -42,6 +42,11 @@ Provider credentials (GitHub, GitLab, Jira, Linear, Atlassian) are resolved thro
 | Jira | `JIRA_API_TOKEN`, `JIRA_EMAIL`, `JIRA_BASE_URL` |
 | Linear | `LINEAR_API_KEY` |
 | Atlassian | `ATLASSIAN_API_TOKEN`, `ATLASSIAN_EMAIL` (optional: `ATLASSIAN_CLOUD_ID`) |
+| PagerDuty | OAuth app: `PAGER_DUTY_CLIENT_ID`, `PAGER_DUTY_SECRET`, `PAGER_DUTY_REDIRECT_URI`; API-token fallback: `PAGERDUTY_API_TOKEN` |
+
+For the organization-wide, read-only PagerDuty connection, including app
+registration, scopes, callback URLs, worker configuration, and troubleshooting,
+see [PagerDuty OAuth app setup](./user-guide/pagerduty-oauth-app-setup.md).
 
 ### Usage
 

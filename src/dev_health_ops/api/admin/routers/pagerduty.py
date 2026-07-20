@@ -511,7 +511,7 @@ async def disconnect_pagerduty(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyDisconnectResponse:
-    """Destroy OAuth tokens and deactivate, rather than delete, the descriptor."""
+    """Revoke PagerDuty secrets and retain only an inactive descriptor tombstone."""
     credentials = IntegrationCredentialsService(session, org_id)
     descriptor = await credentials.get("pagerduty", body.credential_name)
     repository = PagerDutyOAuthCredentialRepository(
@@ -521,6 +521,7 @@ async def disconnect_pagerduty(
     token_to_revoke = await _remove_oauth_binding(repository, config)
     if descriptor is not None:
         descriptor.is_active = False
+        descriptor.credentials_encrypted = None
         await session.flush()
     # Commit the local removal BEFORE remote revocation so a commit failure
     # cannot leave an active-looking local binding whose remote token is dead.

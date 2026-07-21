@@ -62,7 +62,7 @@ class FeatureDecision:
 
     @property
     def message(self) -> str | None:
-        message: str | None
+        message: str | None = None
         match self.reason:
             case (
                 FeatureDecisionReason.ENABLED_BY_ORG_OVERRIDE

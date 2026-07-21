@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from unittest.mock import patch
 # or in isolation (CHAOS-2586).
 import alembic.command  # noqa: F401
 import pytest
+from alembic.script import ScriptDirectory
 
 from dev_health_ops import migrate as migrate_mod
 from dev_health_ops.migrate import (
@@ -50,6 +52,20 @@ class TestAlembicDirResolution:
         """The dir must resolve from the installed package, not a hardcoded path."""
         package_dir = Path(migrate_mod.__file__).resolve().parent
         assert package_dir / "alembic" == _ALEMBIC_DIR
+
+    def test_postgres_revision_graph_has_unique_single_head(self):
+        cfg = _make_alembic_config(
+            db_url="postgresql+asyncpg://unused:unused@localhost/unused"
+        )
+        script = ScriptDirectory.from_config(cfg)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            heads = script.get_heads()
+            revisions = list(script.walk_revisions())
+
+        assert len(heads) == 1
+        assert revisions
 
 
 # ── _make_alembic_config ───────────────────────────────────────────

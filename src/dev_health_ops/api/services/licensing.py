@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import jwt
 from jwt.exceptions import InvalidTokenError
 
-from dev_health_ops.licensing.registry import is_explicit_purchase_feature
+from dev_health_ops.licensing.feature_decisions import evaluate_org_feature_sync
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.licensing import (
     STANDARD_FEATURES,
@@ -34,12 +34,6 @@ LICENSE_JWT_ALGORITHM = "RS256"
 LICENSE_JWT_ALGORITHM_SYMMETRIC = "HS256"
 
 
-def _coerce_uuid(value: object) -> uuid.UUID:
-    if isinstance(value, uuid.UUID):
-        return value
-    return uuid.UUID(str(value))
-
-
 def _coerce_limit_map(value: object) -> dict[str, int | float | None]:
     if not isinstance(value, dict):
         return {}
@@ -48,12 +42,6 @@ def _coerce_limit_map(value: object) -> dict[str, int | float | None]:
         if raw is None or isinstance(raw, (int, float)):
             result[str(key)] = raw
     return result
-
-
-def _coerce_bool_map(value: object) -> dict[str, bool]:
-    if not isinstance(value, dict):
-        return {}
-    return {str(key): bool(enabled) for key, enabled in value.items()}
 
 
 def resolve_org_tier(
@@ -296,82 +284,12 @@ class FeatureService:
         self, org_id: uuid.UUID, feature_key: str
     ) -> FeatureAccess:
         """Check if an organization has access to a feature."""
-        feature = self._get_feature(feature_key)
-        if not feature:
-            return FeatureAccess(
-                allowed=False,
-                reason=f"Unknown feature: {feature_key}",
-            )
-
-        if not feature.is_enabled:
-            return FeatureAccess(
-                allowed=False,
-                reason="Feature is globally disabled",
-            )
-
-        if feature.is_deprecated:
-            logger.warning("Access to deprecated feature: %s", feature_key)
-
-        override = self._get_override(org_id, _coerce_uuid(feature.id))
-        if override:
-            now = datetime.now(timezone.utc)
-            override_expires_at = (
-                override.expires_at
-                if isinstance(override.expires_at, datetime)
-                else None
-            )
-            if override.expires_at and override.expires_at < now:
-                pass
-            else:
-                if override.is_enabled:
-                    return FeatureAccess(
-                        allowed=True,
-                        expires_at=override_expires_at,
-                        config=(
-                            dict(override.config)
-                            if isinstance(override.config, dict)
-                            else None
-                        ),
-                    )
-                else:
-                    return FeatureAccess(
-                        allowed=False,
-                        reason="Feature disabled for this organization",
-                    )
-
-        org_license = self._get_org_license(org_id)
-        org_tier = resolve_org_tier(self.session, org_id, org_license)
-
-        if org_license and org_license.features_override:
-            features_override = _coerce_bool_map(org_license.features_override)
-            if feature_key in features_override:
-                if features_override[feature_key]:
-                    return FeatureAccess(allowed=True)
-                else:
-                    return FeatureAccess(
-                        allowed=False,
-                        reason="Feature disabled in license",
-                    )
-
-        if is_explicit_purchase_feature(feature_key):
-            return FeatureAccess(
-                allowed=False,
-                reason="Requires an explicit organization purchase",
-            )
-
-        feature_min_tier = LicenseTier(feature.min_tier)
-        tier_order = [
-            LicenseTier.COMMUNITY,
-            LicenseTier.TEAM,
-            LicenseTier.ENTERPRISE,
-        ]
-
-        if tier_order.index(org_tier) >= tier_order.index(feature_min_tier):
-            return FeatureAccess(allowed=True)
-
+        decision = evaluate_org_feature_sync(self.session, org_id, feature_key)
         return FeatureAccess(
-            allowed=False,
-            reason=f"Requires {feature_min_tier.value} tier or higher",
+            allowed=decision.allowed,
+            reason=decision.message,
+            expires_at=decision.expires_at,
+            config=dict(decision.config) if decision.config is not None else None,
         )
 
     def has_feature(self, org_id: uuid.UUID, feature_key: str) -> bool:

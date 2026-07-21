@@ -1,7 +1,7 @@
 """Add the language-neutral worker job outbox.
 
-Revision ID: 0042
-Revises: 0041
+Revision ID: 0043
+Revises: 0042
 """
 
 from collections.abc import Sequence
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "0042"
-down_revision: str | None = "0041"
+revision: str = "0043"
+down_revision: str | None = "0042"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

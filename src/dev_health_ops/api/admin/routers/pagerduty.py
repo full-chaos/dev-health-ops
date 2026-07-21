@@ -15,11 +15,14 @@ from typing import Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id, get_admin_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
+from dev_health_ops.licensing import is_org_feature_enabled_async
+from dev_health_ops.licensing.registry import CANONICAL_INCIDENT_INGESTION_FEATURE
 from dev_health_ops.providers.pagerduty.oauth import (
     DATASET_SCOPES,
     OAuthCallbackValidationError,
@@ -41,6 +44,30 @@ from dev_health_ops.providers.pagerduty.oauth_storage import (
 from .common import get_session
 
 router = APIRouter()
+
+_FEATURE_DISABLED_DETAIL = (
+    "Canonical incident ingestion is not enabled for this organization"
+)
+
+
+async def _require_canonical_incident_ingestion(
+    session: AsyncSession, org_id: str
+) -> None:
+    try:
+        parsed_org_id = uuid.UUID(org_id)
+    except ValueError:
+        allowed = False
+    else:
+        try:
+            allowed = await is_org_feature_enabled_async(
+                session,
+                parsed_org_id,
+                CANONICAL_INCIDENT_INGESTION_FEATURE,
+            )
+        except SQLAlchemyError:
+            allowed = False
+    if not allowed:
+        raise HTTPException(status_code=403, detail=_FEATURE_DISABLED_DETAIL)
 
 
 class PagerDutyAuthorizeRequest(BaseModel):
@@ -234,6 +261,7 @@ async def authorize_pagerduty(
     admin_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> PagerDutyAuthorizeResponse:
     """Create a one-time authorization context and return PagerDuty's URL."""
+    await _require_canonical_incident_ingestion(session, org_id)
     enabled_datasets = set(body.enabled_datasets)
     unknown_datasets = enabled_datasets.difference(DATASET_SCOPES)
     if unknown_datasets:
@@ -599,6 +627,7 @@ async def set_pagerduty_client_credentials(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyConnectionResponse:
     """Persist a non-OAuth PagerDuty client-credentials descriptor."""
+    await _require_canonical_incident_ingestion(session, org_id)
     config = PagerDutyOAuthConfig.from_env()
     token_to_revoke = await _remove_oauth_binding(
         PagerDutyOAuthCredentialRepository(session, org_id, body.credential_name),
@@ -643,6 +672,7 @@ async def set_pagerduty_api_token(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyConnectionResponse:
     """Persist a non-OAuth PagerDuty API-token descriptor."""
+    await _require_canonical_incident_ingestion(session, org_id)
     config = PagerDutyOAuthConfig.from_env()
     token_to_revoke = await _remove_oauth_binding(
         PagerDutyOAuthCredentialRepository(session, org_id, body.credential_name),

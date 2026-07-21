@@ -24,7 +24,7 @@ from dev_health_ops.models.integrations import (
     SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
-from dev_health_ops.models.licensing import OrgLicense
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
@@ -36,6 +36,7 @@ from dev_health_ops.models.settings import (
     SyncWatermark,
 )
 from dev_health_ops.models.users import Organization, User
+from dev_health_ops.sync.canonical_incident_gate import CANONICAL_INCIDENT_FEATURE_KEY
 from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
@@ -45,6 +46,8 @@ sync_router_module = importlib.import_module("dev_health_ops.api.admin.routers.s
 _TABLES = tables_of(
     User,
     Organization,
+    FeatureFlag,
+    OrgFeatureOverride,
     OrgLicense,
     IntegrationCredential,
     SyncConfiguration,
@@ -154,9 +157,24 @@ async def seeded_state(session_maker):
     user_id = uuid.uuid4()
     org = Organization(id=org_id, slug="test-org", name="Test Org", tier="pro")
     user = User(id=user_id, email="admin@example.com", is_active=True)
+    feature = FeatureFlag(
+        key=CANONICAL_INCIDENT_FEATURE_KEY,
+        name="Canonical incident ingestion",
+        category="integrations",
+        min_tier="community",
+        is_enabled=True,
+    )
 
     async with session_maker() as session:
-        session.add_all([org, user])
+        session.add_all([org, user, feature])
+        await session.flush()
+        session.add(
+            OrgFeatureOverride(
+                org_id=org_id,
+                feature_id=feature.id,
+                is_enabled=True,
+            )
+        )
         await session.commit()
 
     return {

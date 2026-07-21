@@ -56,6 +56,12 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.sync.canonical_incident_gate import (
+    CanonicalIncidentFeatureDisabledError,
+    is_canonical_incident_feature_enabled_async,
+    require_canonical_incident_feature_async,
+    sync_targets_require_canonical_incident_feature,
+)
 from dev_health_ops.sync.datasets import (
     DatasetKey,
     supported_datasets,
@@ -79,6 +85,19 @@ from .common import get_session
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+async def _require_canonical_incident_sync_access(
+    session: AsyncSession,
+    org_id: str,
+    sync_targets: Sequence[str] | None,
+) -> None:
+    if not sync_targets_require_canonical_incident_feature(sync_targets):
+        return
+    try:
+        await require_canonical_incident_feature_async(session, org_id)
+    except CanonicalIncidentFeatureDisabledError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
 
 
 def _mark_job_run_failed(sync_session, run_id: str, error: BaseException | str) -> None:
@@ -1316,8 +1335,27 @@ async def _create_planner_managed_config(
 
 
 @router.get("/sync-targets")
-async def get_provider_sync_targets() -> dict[str, list[str]]:
-    return PROVIDER_SYNC_TARGETS
+async def get_provider_sync_targets(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> dict[str, list[str]]:
+    feature_enabled = await is_canonical_incident_feature_enabled_async(
+        session,
+        org_id,
+    )
+    if feature_enabled:
+        return {
+            provider: list(targets)
+            for provider, targets in PROVIDER_SYNC_TARGETS.items()
+        }
+    return {
+        provider: [
+            target
+            for target in targets
+            if not sync_targets_require_canonical_incident_feature((target,))
+        ]
+        for provider, targets in PROVIDER_SYNC_TARGETS.items()
+    }
 
 
 @router.get(
@@ -1623,6 +1661,11 @@ async def batch_create_sync_configs(
         This endpoint always creates the parent config only (zero children) plus
         the integration/source/dataset rows it routes through.
     """
+    await _require_canonical_incident_sync_access(
+        session,
+        org_id,
+        payload.sync_targets,
+    )
     await _acquire_repo_limit_create_lock(session, org_id)
     current_count = await _active_repo_usage_count_for_limit(session, org_id)
     new_count = len(payload.repos)
@@ -1696,7 +1739,11 @@ async def create_sync_config(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
-
+    await _require_canonical_incident_sync_access(
+        session,
+        org_id,
+        payload.sync_targets,
+    )
     # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
     await _acquire_repo_limit_create_lock(session, org_id)
     current_count = await _active_repo_usage_count_for_limit(session, org_id)
@@ -1905,6 +1952,11 @@ async def replace_sync_config_repositories(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    await _require_canonical_incident_sync_access(
+        session,
+        org_id,
+        list(config.sync_targets or []),
+    )
     if str(getattr(config, "provider", "")).lower() not in {"github", "gitlab"}:
         raise HTTPException(
             status_code=400,
@@ -1924,6 +1976,13 @@ async def update_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    await _require_canonical_incident_sync_access(
+        session,
+        org_id,
+        payload.sync_targets
+        if payload.sync_targets is not None
+        else list(config.sync_targets or []),
+    )
 
     # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron when updating sync_options.
     # PATCH semantics for schedule fields: an explicitly provided null clears the
@@ -2103,6 +2162,11 @@ async def trigger_sync_config(
         raise HTTPException(status_code=404, detail="Sync configuration not found")
     if str(getattr(config, "org_id", "")) != org_id:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    await _require_canonical_incident_sync_access(
+        session,
+        org_id,
+        list(config.sync_targets or []),
+    )
     if not bool(getattr(config, "is_active", False)):
         raise HTTPException(
             status_code=409,
@@ -2227,6 +2291,11 @@ async def trigger_sync_config_backfill(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    await _require_canonical_incident_sync_access(
+        session,
+        org_id,
+        list(config.sync_targets or []),
+    )
     if not bool(getattr(config, "is_active", False)):
         raise HTTPException(
             status_code=409,

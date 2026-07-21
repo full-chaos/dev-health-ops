@@ -13,6 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dev_health_ops.external_ingest import sinks as sinks_mod
+from dev_health_ops.external_ingest.feature_gate import (
+    CanonicalIncidentIngestionDisabledError,
+)
 from dev_health_ops.external_ingest.ids import derive_repo_uuid, derive_work_item_id
 from dev_health_ops.external_ingest.sinks import write_batch
 from dev_health_ops.external_ingest.types import NormalizedBatch
@@ -67,6 +71,28 @@ def _base_batch(**overrides: object) -> NormalizedBatch:
     )
     defaults.update(overrides)
     return NormalizedBatch(**defaults)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_operational_write_fails_closed_before_opening_clickhouse() -> None:
+    batch = _base_batch(operational_incidents=[object()])
+    canonical_allowed = AsyncMock(return_value=False)
+    with (
+        patch.object(
+            sinks_mod,
+            "_operational_ingestion_allowed",
+            canonical_allowed,
+            create=True,
+        ),
+        patch.object(sinks_mod, "create_store") as create_store,
+        pytest.raises(
+            CanonicalIncidentIngestionDisabledError, match="feature_disabled"
+        ),
+    ):
+        await write_batch(batch, clickhouse_dsn="clickhouse://x/y")
+
+    canonical_allowed.assert_awaited_once_with(batch.org_id)
+    create_store.assert_not_called()
 
 
 @pytest.mark.asyncio

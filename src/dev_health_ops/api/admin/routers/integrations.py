@@ -291,12 +291,7 @@ async def discover_integration_sources(
     except Exception:
         logger.error(
             "integration_discovery.failed",
-            extra={
-                "error_code": INTEGRATION_DISCOVERY_ERROR_CODE,
-                "org_id": org_id,
-                "provider": str(getattr(integration, "provider")),
-                "integration_id": integration_id,
-            },
+            extra={"error_code": INTEGRATION_DISCOVERY_ERROR_CODE},
         )
         raise HTTPException(
             status_code=503,

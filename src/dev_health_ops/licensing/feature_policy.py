@@ -90,7 +90,7 @@ class FeatureDecision:
             case FeatureDecisionReason.TIER_REQUIRED:
                 return f"Requires {self.feature_key} minimum tier"
             case unreachable:
-                assert_never(unreachable)
+                return assert_never(unreachable)
 
 
 def closed_feature_decision(

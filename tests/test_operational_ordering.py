@@ -69,18 +69,17 @@ def _replacement(field_name: str, value: object) -> object:
             return UUID("00000000-0000-0000-0000-000000000099")
         case name if name in _DATETIME_FIELDS:
             return _AT + timedelta(seconds=1)
-        case _:
-            if isinstance(value, bool):
-                return not value
-            if isinstance(value, str):
-                return f"{value}-changed"
-            if isinstance(value, int | float):
-                return value + 1
-            if isinstance(value, UUID):
-                return UUID("00000000-0000-0000-0000-000000000099")
-            if value is None:
-                return "changed"
-            raise AssertionError(f"No replacement for {field_name}={value!r}")
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, str):
+        return f"{value}-changed"
+    if isinstance(value, int | float):
+        return value + 1
+    if isinstance(value, UUID):
+        return UUID("00000000-0000-0000-0000-000000000099")
+    if value is None:
+        return "changed"
+    raise AssertionError(f"No replacement for {field_name}={value!r}")
 
 
 def test_all_actual_families_expose_the_persisted_ordering_contract() -> None:

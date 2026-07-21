@@ -3,6 +3,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from typing import TypeAlias
 from uuid import UUID
 
 from dev_health_ops.models.operational_ordering_types import (
@@ -10,10 +11,22 @@ from dev_health_ops.models.operational_ordering_types import (
     CONFLICT_DOMAIN,
     UINT64_MAX,
     UNIX_EPOCH,
-    ConflictValue,
     OperationalOrderingEncodingError,
     OperationalOrderingOverflowError,
     SourceConflictKey,
+)
+
+ConflictValue: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | datetime
+    | UUID
+    | Mapping[str, "ConflictValue"]
+    | list["ConflictValue"]
+    | tuple["ConflictValue", ...]
 )
 
 
@@ -86,10 +99,9 @@ def _encode_value(value: ConflictValue, field_name: str) -> tuple[bytes, bytes, 
                 b"\x01",
                 len(encoded).to_bytes(8, "big") + b"".join(encoded),
             )
-        case unsupported:
-            raise OperationalOrderingEncodingError(
-                field_name, f"unsupported value type {type(unsupported).__name__}"
-            )
+    raise OperationalOrderingEncodingError(
+        field_name, f"unsupported value type {type(value).__name__}"
+    )
 
 
 def _encode_field(name: str, value: ConflictValue) -> bytes:

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import fields
+from dataclasses import Field, fields
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import ClassVar, Protocol
 
 from dev_health_ops.models.operational_ordering_codec import (
+    ConflictValue,
     conflict_key_bytes,
     encode_conflict_fields,
     utc_microseconds,
@@ -25,8 +26,34 @@ from dev_health_ops.models.operational_ordering_types import (
     SourceRevision,
 )
 
-if TYPE_CHECKING:
-    from dev_health_ops.models.operational import CanonicalOperationalEntity
+
+class OperationalOrderingEntity(Protocol):
+    __dataclass_fields__: ClassVar[dict[str, Field[ConflictValue]]]
+
+    @property
+    def entity_family(self) -> str: ...
+
+    @property
+    def source_version_at(self) -> datetime: ...
+
+    @property
+    def observed_at(self) -> datetime: ...
+
+    @property
+    def last_synced(self) -> datetime: ...
+
+    @property
+    def source_revision(self) -> SourceRevision: ...
+
+    @property
+    def source_conflict_key(self) -> SourceConflictKey: ...
+
+    @property
+    def ingest_revision(self) -> IngestRevision: ...
+
+    @property
+    def ordering_contract(self) -> int: ...
+
 
 __all__ = [
     "OPERATIONAL_ORDERING_CONTRACT",
@@ -124,14 +151,14 @@ def build_ingest_revision(
     )
 
 
-def _entity_is_tombstone(entity: CanonicalOperationalEntity) -> bool:
+def _entity_is_tombstone(entity: OperationalOrderingEntity) -> bool:
     return (
         bool(getattr(entity, "is_deleted", False))
         or getattr(entity, "is_active", True) is False
     )
 
 
-def entity_conflict_key(entity: CanonicalOperationalEntity) -> SourceConflictKey:
+def entity_conflict_key(entity: OperationalOrderingEntity) -> SourceConflictKey:
     values = tuple(
         (item.name, getattr(entity, item.name))
         for item in fields(entity)
@@ -141,7 +168,7 @@ def entity_conflict_key(entity: CanonicalOperationalEntity) -> SourceConflictKey
 
 
 def build_entity_ordering(
-    entity: CanonicalOperationalEntity, operation_rank: OperationRank | None = None
+    entity: OperationalOrderingEntity, operation_rank: OperationRank | None = None
 ) -> OperationalOrderingValues:
     tombstone = _entity_is_tombstone(entity)
     rank = (
@@ -171,7 +198,7 @@ def operation_rank_from_revision(
     return _operation_rank((int(source_revision) >> 56) & 0xFF)
 
 
-def validate_operational_entity_ordering(entity: CanonicalOperationalEntity) -> None:
+def validate_operational_entity_ordering(entity: OperationalOrderingEntity) -> None:
     if entity.ordering_contract != OPERATIONAL_ORDERING_CONTRACT:
         raise OperationalOrderingEncodingError(
             "ordering_contract", "contract 2 required"

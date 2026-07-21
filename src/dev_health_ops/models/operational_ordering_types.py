@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum
-from typing import Final, NewType, TypeAlias
-from uuid import UUID
+from typing import Final, NewType
 
 SourceRevision = NewType("SourceRevision", int)
 SourceConflictKey = NewType("SourceConflictKey", str)
@@ -30,19 +28,6 @@ UINT128_MAX: Final = (1 << 128) - 1
 UNIX_EPOCH: Final = datetime(1970, 1, 1, tzinfo=timezone.utc)
 CLICKHOUSE_DATETIME64_MAX: Final = datetime(
     2299, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc
-)
-
-ConflictValue: TypeAlias = (
-    str
-    | int
-    | float
-    | bool
-    | None
-    | datetime
-    | UUID
-    | Mapping[str, "ConflictValue"]
-    | list["ConflictValue"]
-    | tuple["ConflictValue", ...]
 )
 
 

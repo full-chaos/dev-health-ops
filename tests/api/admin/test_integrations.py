@@ -364,10 +364,10 @@ async def test_discover_integration_not_found(client):
 @pytest.mark.asyncio
 async def test_discover_integration_sanitizes_provider_error(client, caplog):
     ac, _ = client
-    created = await _create_integration(ac)
     secret = "ghp_" + "FAKE1234567890abcdefghijklmnopqrst"
     malicious_fragments = (
         "MaliciousDiscoveryError",
+        "forged-log-entry",
         "internal-db.example",
         "/srv/private/config.json",
         "SELECT token FROM credentials",
@@ -375,11 +375,11 @@ async def test_discover_integration_sanitizes_provider_error(client, caplog):
         secret,
         'payload={"access_token":"private"}',
     )
+    malicious_message = "github\r\n" + " | ".join(malicious_fragments[1:])
+    created = await _create_integration(ac, provider=malicious_message)
 
     class MaliciousDiscoveryError(RuntimeError):
         pass
-
-    malicious_message = " | ".join(malicious_fragments[1:])
 
     with caplog.at_level(
         logging.ERROR,
@@ -400,6 +400,15 @@ async def test_discover_integration_sanitizes_provider_error(client, caplog):
             "message": "Integration discovery failed",
         }
     }
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "dev_health_ops.api.admin.routers.integrations"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.getMessage() == "integration_discovery.failed"
+    assert {"org_id", "provider", "integration_id"}.isdisjoint(record.__dict__)
     captured = f"{response.text} {caplog.text} " + " ".join(
         str(record.__dict__) for record in caplog.records
     )

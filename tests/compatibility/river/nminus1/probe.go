@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 const (
 	resultSchemaVersion = 1
 	riverVersion        = "v0.39.0"
+	riverDriverVersion  = "v0.39.0"
+	pgxVersion          = "v5.9.2"
 	latestNMinus1       = 6
 )
 
@@ -34,21 +37,23 @@ type options struct {
 }
 
 type result struct {
-	SchemaVersion    int    `json:"schema_version"`
-	Status           string `json:"status"`
-	Operation        string `json:"operation"`
-	GoVersion        string `json:"go_version"`
-	RiverVersion     string `json:"river_version"`
-	PollOnly         bool   `json:"poll_only"`
-	Marker           string `json:"marker,omitempty"`
-	Queue            string `json:"queue,omitempty"`
-	JobID            int64  `json:"job_id,omitempty"`
-	ContractVersion  int    `json:"contract_version,omitempty"`
-	Source           string `json:"source,omitempty"`
-	Outcome          string `json:"outcome,omitempty"`
-	InsertedByWorker bool   `json:"inserted_by_worker,omitempty"`
-	LatestMigration  int    `json:"latest_migration,omitempty"`
-	AppliedVersions  []int  `json:"applied_versions,omitempty"`
+	SchemaVersion      int    `json:"schema_version"`
+	Status             string `json:"status"`
+	Operation          string `json:"operation"`
+	GoVersion          string `json:"go_version"`
+	PgxVersion         string `json:"pgx_version"`
+	RiverDriverVersion string `json:"river_driver_version"`
+	RiverVersion       string `json:"river_version"`
+	PollOnly           bool   `json:"poll_only"`
+	Marker             string `json:"marker,omitempty"`
+	Queue              string `json:"queue,omitempty"`
+	JobID              int64  `json:"job_id,omitempty"`
+	ContractVersion    int    `json:"contract_version,omitempty"`
+	Source             string `json:"source,omitempty"`
+	Outcome            string `json:"outcome,omitempty"`
+	InsertedByWorker   bool   `json:"inserted_by_worker,omitempty"`
+	LatestMigration    int    `json:"latest_migration,omitempty"`
+	AppliedVersions    []int  `json:"applied_versions,omitempty"`
 }
 
 type phaseError struct {
@@ -72,6 +77,15 @@ func errorPhase(err error) string {
 }
 
 func runProbe(ctx context.Context, opts options) (result, error) {
+	if err := verifyDependencyVersion("github.com/riverqueue/river", riverVersion); err != nil {
+		return result{}, failPhase("verify_river_version", err)
+	}
+	if err := verifyDependencyVersion("github.com/riverqueue/river/riverdriver/riverpgxv5", riverDriverVersion); err != nil {
+		return result{}, failPhase("verify_river_driver_version", err)
+	}
+	if err := verifyDependencyVersion("github.com/jackc/pgx/v5", pgxVersion); err != nil {
+		return result{}, failPhase("verify_pgx_version", err)
+	}
 	poolConfig, err := pgxpool.ParseConfig(opts.databaseURL)
 	if err != nil {
 		return result{}, failPhase("parse_database_url", err)
@@ -96,12 +110,14 @@ func runProbe(ctx context.Context, opts options) (result, error) {
 	}
 
 	base := result{
-		SchemaVersion: resultSchemaVersion,
-		Status:        "ok",
-		Operation:     opts.operation,
-		GoVersion:     runtime.Version(),
-		RiverVersion:  riverVersion,
-		PollOnly:      opts.pollOnly,
+		SchemaVersion:      resultSchemaVersion,
+		Status:             "ok",
+		Operation:          opts.operation,
+		GoVersion:          runtime.Version(),
+		PgxVersion:         pgxVersion,
+		RiverDriverVersion: riverDriverVersion,
+		RiverVersion:       riverVersion,
+		PollOnly:           opts.pollOnly,
 	}
 
 	switch opts.operation {
@@ -114,6 +130,26 @@ func runProbe(ctx context.Context, opts options) (result, error) {
 	default:
 		return result{}, failPhase("validate_options", fmt.Errorf("unsupported operation %q", opts.operation))
 	}
+}
+
+func verifyDependencyVersion(path, expected string) error {
+	buildInfo, ok := debug.ReadBuildInfo()
+	if !ok {
+		return errors.New("Go build information is unavailable")
+	}
+	for _, dependency := range buildInfo.Deps {
+		if dependency.Path != path {
+			continue
+		}
+		if dependency.Replace != nil {
+			dependency = dependency.Replace
+		}
+		if dependency.Version != expected {
+			return fmt.Errorf("%s version = %q, want %q", path, dependency.Version, expected)
+		}
+		return nil
+	}
+	return fmt.Errorf("%s is absent from Go build information", path)
 }
 
 func runMigrate(ctx context.Context, pool *pgxpool.Pool, opts options, base result) (result, error) {

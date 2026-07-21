@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -96,7 +97,9 @@ def test_insert_options_preserve_required_queue_policy() -> None:
 
 
 def test_scheduled_insert_option_is_in_the_future() -> None:
+    before = datetime.now(timezone.utc)
     options = python_enqueue._insert_opts(_args(scheduled_delay_ms=60_000))
 
     assert options.scheduled_at is not None
     assert options.scheduled_at.tzinfo is not None
+    assert options.scheduled_at > before

@@ -5,6 +5,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+GO_TOOLCHAIN="go1.25.9"
+export GOTOOLCHAIN="${GO_TOOLCHAIN}"
+DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}"
+mkdir -p "${DEV_HEALTH_GO_CACHE}"
+export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 
 usage() {
   cat <<'EOF'
@@ -27,6 +32,11 @@ die() {
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v go >/dev/null 2>&1 || die "go is required"
 command -v gofmt >/dev/null 2>&1 || die "gofmt is required"
+
+case "$(go version)" in
+  *" ${GO_TOOLCHAIN} "*) ;;
+  *) die "Go ${GO_TOOLCHAIN#go} is required" ;;
+esac
 
 declare -a MODULE_DIRS=()
 

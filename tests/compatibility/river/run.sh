@@ -14,6 +14,10 @@ PYTHON_BIN="${RIVER_COMPAT_PYTHON:-${REPO_ROOT}/.venv/bin/python}"
 
 SAMPLES=20
 GO_TOOLCHAIN="go1.25.9"
+PYTHON_VERSION="3.13.14"
+RIVERQUEUE_PYTHON_VERSION="0.7.0"
+SQLALCHEMY_VERSION="2.0.49"
+ASYNCPG_VERSION="0.31.0"
 FETCH_POLL_INTERVAL="250ms"
 CRASH_CANDIDATE_JOB_TIMEOUT="30s"
 CRASH_CANDIDATE_RESCUE_AFTER="31s"
@@ -225,6 +229,8 @@ assert_matrix() {
       .status == "ok"
       and .mode == $mode
       and .go_version == "go1.25.9"
+      and .pgx_version == "v5.10.0"
+      and .river_driver_version == "v0.40.0"
       and .river_version == "v0.40.0"
       and .poll_only == $poll_only
       and .migration.latest_version > 0
@@ -268,6 +274,7 @@ run_python_case() {
   local queue="$5"
   local pgbouncer="$6"
   local output_file="$7"
+  local scheduled_delay_ms="${8:-0}"
   local args
 
   args=(
@@ -281,12 +288,39 @@ run_python_case() {
   if [ "${pgbouncer}" = true ]; then
     args+=(--pgbouncer)
   fi
+  if [ "${scheduled_delay_ms}" -gt 0 ]; then
+    args+=(--scheduled-delay-ms "${scheduled_delay_ms}")
+  fi
 
   if ! "${PYTHON_BIN}" "${PYTHON_CLI}" "${args[@]}" \
     >"${output_file}" 2>"${TEMP_DIR}/${label}.stderr"; then
     die "${label} failed; captured details were discarded"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
+}
+
+assert_python_scheduled_commit() {
+  local output_file="$1"
+  local marker="$2"
+  local queue="$3"
+
+  jq -e --arg marker "${marker}" --arg queue "${queue}" '
+    .mode == "commit"
+    and .marker == $marker
+    and .domain_count == 1
+    and .job_count == 1
+    and (.job_id | type == "number")
+    and .job_contract == {
+      contract_version: 1,
+      max_attempts: 7,
+      priority: 2,
+      queue: $queue,
+      scheduled_after_create: true,
+      source: "python",
+      state: "scheduled",
+      tags: ["phase0", "python"]
+    }
+  ' "${output_file}" >/dev/null 2>&1 || die "Python scheduled-commit contract assertion failed"
 }
 
 assert_python_commit() {
@@ -334,7 +368,8 @@ assert_python_unique() {
     .mode == "unique"
     and .marker == $marker
     and .status == "unsupported"
-    and .reason == "no unique or exclusion constraint matching"
+    and .reason_code == "river_0_40_unique_index_contract_missing"
+    and .sqlstate == "42P10"
   ' "${output_file}" >/dev/null 2>&1 || die "Python unique-insert incompatibility assertion failed"
 }
 
@@ -357,6 +392,8 @@ assert_external_consume() {
       .status == "ok"
       and .mode == $mode
       and .go_version == "go1.25.9"
+      and .pgx_version == "v5.10.0"
+      and .river_driver_version == "v0.40.0"
       and .river_version == "v0.40.0"
       and .workload.external.source == $source
       and .workload.external.queue == $queue
@@ -510,11 +547,13 @@ run_profile() {
   local output_file="$6"
   local queue="chaos3034-${mode}"
   local commit_stdout="${TEMP_DIR}/${mode}-python-commit.stdout"
+  local scheduled_stdout="${TEMP_DIR}/${mode}-python-scheduled.stdout"
   local rollback_stdout="${TEMP_DIR}/${mode}-python-rollback.stdout"
   local unique_stdout="${TEMP_DIR}/${mode}-python-unique.stdout"
   local consume_stdout="${TEMP_DIR}/${mode}-python-consume.stdout"
   local crash_stdout="${TEMP_DIR}/${mode}-crash-result.json"
   local commit_marker="python-commit-${mode}-${compose_project}-${RANDOM}"
+  local scheduled_marker="python-scheduled-${mode}-${compose_project}-${RANDOM}"
   local rollback_marker="python-rollback-${mode}-${compose_project}-${RANDOM}"
   local unique_marker="python-unique-${mode}-${compose_project}-${RANDOM}"
 
@@ -541,6 +580,17 @@ run_profile() {
     --fetch-poll-interval "${FETCH_POLL_INTERVAL}" \
     --timeout 60s
   assert_external_consume "${consume_stdout}" "${mode}" "python" "${queue}" 1 0 7
+
+  run_python_case \
+    "${mode}-python-scheduled" \
+    "${database_url}" \
+    commit \
+    "${scheduled_marker}" \
+    "${queue}" \
+    "${poll_only}" \
+    "${scheduled_stdout}" \
+    300000
+  assert_python_scheduled_commit "${scheduled_stdout}" "${scheduled_marker}" "${queue}"
 
   run_python_case \
     "${mode}-python-rollback" \
@@ -570,6 +620,7 @@ run_profile() {
     --arg transport "${transport}" \
     --slurpfile matrix "${matrix_stdout}" \
     --slurpfile commit "${commit_stdout}" \
+    --slurpfile scheduled "${scheduled_stdout}" \
     --slurpfile rollback "${rollback_stdout}" \
     --slurpfile unique "${unique_stdout}" \
     --slurpfile consume "${consume_stdout}" \
@@ -584,6 +635,12 @@ run_profile() {
           job_count: $commit[0].job_count,
           job_contract: $commit[0].job_contract
         },
+        scheduled_commit: {
+          mode: $scheduled[0].mode,
+          domain_count: $scheduled[0].domain_count,
+          job_count: $scheduled[0].job_count,
+          job_contract: $scheduled[0].job_contract
+        },
         rollback: {
           mode: $rollback[0].mode,
           domain_count: $rollback[0].domain_count,
@@ -593,7 +650,8 @@ run_profile() {
         unique: {
           mode: $unique[0].mode,
           status: $unique[0].status,
-          reason_code: "riverqueue_0_7_unique_index_incompatible"
+          reason_code: $unique[0].reason_code,
+          sqlstate: $unique[0].sqlstate
         }
       },
       cross_language_consume: $consume[0],
@@ -611,6 +669,8 @@ run_nested_n_minus_one() {
   local work_stdout="${TEMP_DIR}/n-minus-one-work.stdout"
   local insert_stdout="${TEMP_DIR}/n-minus-one-insert.stdout"
   local consume_stdout="${TEMP_DIR}/n-minus-one-v0.40-consume.stdout"
+  local current_insert_stdout="${TEMP_DIR}/n-minus-one-v0.40-insert.stdout"
+  local n_minus_one_consume_stdout="${TEMP_DIR}/n-minus-one-v0.39-consume.stdout"
 
   case "${phase}" in
     before-v0.40-upgrade)
@@ -626,6 +686,8 @@ run_nested_n_minus_one() {
         and .status == "ok"
         and .operation == "migrate"
         and .go_version == "go1.25.9"
+        and .pgx_version == "v5.9.2"
+        and .river_driver_version == "v0.39.0"
         and .river_version == "v0.39.0"
         and .poll_only == false
         and .latest_migration == 6
@@ -646,6 +708,8 @@ run_nested_n_minus_one() {
         and .status == "ok"
         and .operation == "work"
         and .go_version == "go1.25.9"
+        and .pgx_version == "v5.9.2"
+        and .river_driver_version == "v0.39.0"
         and .river_version == "v0.39.0"
         and .poll_only == false
         and .marker == $marker
@@ -665,6 +729,8 @@ run_nested_n_minus_one() {
           status: "pass",
           migration: {
             go_version: $migrate[0].go_version,
+            pgx_version: $migrate[0].pgx_version,
+            river_driver_version: $migrate[0].river_driver_version,
             river_version: $migrate[0].river_version,
             latest_migration: $migrate[0].latest_migration,
             applied_versions: $migrate[0].applied_versions,
@@ -672,6 +738,8 @@ run_nested_n_minus_one() {
           },
           old_worker: {
             go_version: $work[0].go_version,
+            pgx_version: $work[0].pgx_version,
+            river_driver_version: $work[0].river_driver_version,
             river_version: $work[0].river_version,
             contract_version: $work[0].contract_version,
             source: $work[0].source,
@@ -681,7 +749,8 @@ run_nested_n_minus_one() {
         }' >"${output_file}"
       ;;
     after-v0.40-upgrade)
-      progress "running River v0.39-on-schema-7 insert and v0.40 consume probes"
+      local current_marker="n-minus-1-current-to-old-${compose_project}-${RANDOM}"
+      progress "running both River v0.39/v0.40 orientations on schema 7"
       run_n_minus_one_checked \
         n-minus-one-insert \
         "${database_url}" \
@@ -695,6 +764,8 @@ run_nested_n_minus_one() {
         and .status == "ok"
         and .operation == "insert"
         and .go_version == "go1.25.9"
+        and .pgx_version == "v5.9.2"
+        and .river_driver_version == "v0.39.0"
         and .river_version == "v0.39.0"
         and .poll_only == false
         and .marker == $marker
@@ -720,6 +791,8 @@ run_nested_n_minus_one() {
         .status == "ok"
         and .mode == "direct"
         and .go_version == "go1.25.9"
+        and .pgx_version == "v5.10.0"
+        and .river_driver_version == "v0.40.0"
         and .river_version == "v0.40.0"
         and .workload.external.source == "go"
         and .workload.external.queue == $queue
@@ -728,20 +801,95 @@ run_nested_n_minus_one() {
         and .workload.external.attempt == 1
       ' "${consume_stdout}" >/dev/null 2>&1 || die "River v0.40 N-1 consume assertion failed"
 
+      run_go_checked \
+        n-minus-one-v0.40-insert \
+        "${database_url}" \
+        "${current_insert_stdout}" \
+        --operation insert \
+        --mode direct \
+        --marker "${current_marker}" \
+        --queue "${queue}" \
+        --priority 2 \
+        --max-attempts 3 \
+        --timeout 45s
+      jq -e --arg queue "${queue}" '
+        .status == "ok"
+        and .mode == "direct"
+        and .go_version == "go1.25.9"
+        and .pgx_version == "v5.10.0"
+        and .river_driver_version == "v0.40.0"
+        and .river_version == "v0.40.0"
+        and .migration.latest_version == 7
+        and .workload.external.source == "go"
+        and .workload.external.queue == $queue
+        and .workload.external.priority == 2
+        and .workload.external.max_attempts == 3
+        and .workload.external.state == "available"
+        and .workload.external.outcome == "inserted"
+      ' "${current_insert_stdout}" >/dev/null 2>&1 || die "River v0.40 schema-7 insert assertion failed"
+
+      run_n_minus_one_checked \
+        n-minus-one-v0.39-consume \
+        "${database_url}" \
+        "${n_minus_one_consume_stdout}" \
+        --operation work \
+        --consume-existing \
+        --marker "${current_marker}" \
+        --queue "${queue}" \
+        --timeout 45s
+      jq -e --arg queue "${queue}" '
+        .schema_version == 1
+        and .status == "ok"
+        and .operation == "work"
+        and .go_version == "go1.25.9"
+        and .pgx_version == "v5.9.2"
+        and .river_driver_version == "v0.39.0"
+        and .river_version == "v0.39.0"
+        and .poll_only == false
+        and .queue == $queue
+        and (.job_id | type == "number")
+        and .contract_version == 1
+        and .source == "go"
+        and .outcome == "completed"
+        and ((.inserted_by_worker // false) == false)
+      ' "${n_minus_one_consume_stdout}" >/dev/null 2>&1 || die "River v0.39 schema-7 consume assertion failed"
+
       jq -n \
         --arg phase "${phase}" \
         --slurpfile insert "${insert_stdout}" \
-        --slurpfile consume "${consume_stdout}" '{
+        --slurpfile consume "${consume_stdout}" \
+        --slurpfile current_insert "${current_insert_stdout}" \
+        --slurpfile n_minus_one_consume "${n_minus_one_consume_stdout}" '{
           phase: $phase,
           status: "pass",
           n_minus_one_insert: {
             go_version: $insert[0].go_version,
+            pgx_version: $insert[0].pgx_version,
+            river_driver_version: $insert[0].river_driver_version,
             river_version: $insert[0].river_version,
             contract_version: $insert[0].contract_version,
             source: $insert[0].source,
             outcome: $insert[0].outcome
           },
-          current_consume: $consume[0]
+          current_consume: $consume[0],
+          current_insert: {
+            go_version: $current_insert[0].go_version,
+            pgx_version: $current_insert[0].pgx_version,
+            river_driver_version: $current_insert[0].river_driver_version,
+            river_version: $current_insert[0].river_version,
+            source: $current_insert[0].workload.external.source,
+            outcome: $current_insert[0].workload.external.outcome
+          },
+          n_minus_one_consume: {
+            go_version: $n_minus_one_consume[0].go_version,
+            pgx_version: $n_minus_one_consume[0].pgx_version,
+            river_driver_version: $n_minus_one_consume[0].river_driver_version,
+            river_version: $n_minus_one_consume[0].river_version,
+            contract_version: $n_minus_one_consume[0].contract_version,
+            source: $n_minus_one_consume[0].source,
+            outcome: $n_minus_one_consume[0].outcome,
+            inserted_by_worker: ($n_minus_one_consume[0].inserted_by_worker // false)
+          }
         }' >"${output_file}"
       ;;
     *) die "unknown N-1 compatibility phase" ;;
@@ -795,10 +943,36 @@ if ! "${compose[@]}" config --quiet \
 fi
 
 progress "checking the locked Python compatibility dependencies"
-if ! "${PYTHON_BIN}" -c 'import asyncpg, riverqueue, sqlalchemy' \
-  >"${TEMP_DIR}/python-import.stdout" \
+python_versions="${TEMP_DIR}/python-versions.json"
+if ! "${PYTHON_BIN}" -c '
+import json
+import platform
+from importlib.metadata import version
+
+print(json.dumps({
+    "asyncpg": version("asyncpg"),
+    "python": platform.python_version(),
+    "riverqueue": version("riverqueue"),
+    "sqlalchemy": version("SQLAlchemy"),
+}, separators=(",", ":"), sort_keys=True))
+' \
+  >"${python_versions}" \
   2>"${TEMP_DIR}/python-import.stderr"; then
   die "the locked Python compatibility dependencies are unavailable"
+fi
+if ! jq -e \
+  --arg python "${PYTHON_VERSION}" \
+  --arg riverqueue "${RIVERQUEUE_PYTHON_VERSION}" \
+  --arg sqlalchemy "${SQLALCHEMY_VERSION}" \
+  --arg asyncpg "${ASYNCPG_VERSION}" '
+    .python == $python
+    and .riverqueue == $riverqueue
+    and .sqlalchemy == $sqlalchemy
+    and .asyncpg == $asyncpg
+  ' "${python_versions}" \
+  >"${TEMP_DIR}/python-import.stdout" \
+  2>"${TEMP_DIR}/python-version-check.stderr"; then
+  die "the Python compatibility runtime does not match the recorded spike pins"
 fi
 
 progress "building the River v0.40 CLI once"
@@ -843,8 +1017,8 @@ n_minus_one="${TEMP_DIR}/n-minus-one.json"
 combined_result="${TEMP_DIR}/combined-result.json"
 
 # The N-1 proof owns the migration-prefix order: v0.39 first creates its schema
-# and work on a fresh database, v0.40 then migrates through schema 7, and v0.39
-# finally reopens that newer schema before v0.40 consumes its inserted job.
+# and work on a fresh database, v0.40 then migrates through schema 7, and both
+# versions insert work that the other version consumes on the upgraded schema.
 run_nested_n_minus_one before-v0.40-upgrade "${direct_database_url}" "${n_minus_one_before}"
 run_mode_matrix direct "${direct_database_url}" false chaos3034-direct "${direct_matrix}"
 run_nested_n_minus_one after-v0.40-upgrade "${direct_database_url}" "${n_minus_one_after}"
@@ -861,12 +1035,26 @@ jq -n \
   --argjson samples "${SAMPLES}" \
   --slurpfile direct "${direct_profile}" \
   --slurpfile poll "${poll_profile}" \
-  --slurpfile n_minus_one "${n_minus_one}" '{
+  --slurpfile n_minus_one "${n_minus_one}" \
+  --slurpfile python_versions "${python_versions}" '{
     schema_version: 1,
     status: "complete_with_architecture_blocker",
     architecture_blocker: "poll_only_running_cancel_not_propagated",
     evidence_scope: "local_ephemeral_compatibility_harness",
     go_version: $direct[0].matrix.go_version,
+    versions: {
+      go: $direct[0].matrix.go_version,
+      river: $direct[0].matrix.river_version,
+      river_driver: $direct[0].matrix.river_driver_version,
+      pgx: $direct[0].matrix.pgx_version,
+      river_n_minus_1: $n_minus_one[0].phases[0].migration.river_version,
+      river_driver_n_minus_1: $n_minus_one[0].phases[0].migration.river_driver_version,
+      pgx_n_minus_1: $n_minus_one[0].phases[0].migration.pgx_version,
+      python: $python_versions[0].python,
+      riverqueue_python: $python_versions[0].riverqueue,
+      sqlalchemy: $python_versions[0].sqlalchemy,
+      asyncpg: $python_versions[0].asyncpg
+    },
     samples_per_mode: $samples,
     gate_truth_table: {
       direct: {

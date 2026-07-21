@@ -216,13 +216,17 @@ async def _probe_unique(args: argparse.Namespace) -> dict[str, Any]:
         except ProgrammingError as exc:
             message = str(exc)
             expected = "no unique or exclusion constraint matching"
-            if expected not in message:
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+                exc.orig, "pgcode", None
+            )
+            if expected not in message or sqlstate != "42P10":
                 raise
             return {
                 "marker": args.marker,
                 "mode": "unique",
                 "status": "unsupported",
-                "reason": expected,
+                "reason_code": "river_0_40_unique_index_contract_missing",
+                "sqlstate": sqlstate,
             }
         raise RuntimeError(
             "riverqueue 0.7.0 unique insert unexpectedly succeeded; "

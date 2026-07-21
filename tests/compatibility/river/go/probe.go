@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"time"
 
@@ -19,7 +20,11 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-const RiverVersion = "v0.40.0"
+const (
+	PgxVersion         = "v5.10.0"
+	RiverDriverVersion = "v0.40.0"
+	RiverVersion       = "v0.40.0"
+)
 
 type Mode string
 
@@ -58,6 +63,8 @@ type Result struct {
 	Status              string             `json:"status"`
 	Mode                Mode               `json:"mode"`
 	GoVersion           string             `json:"go_version"`
+	PgxVersion          string             `json:"pgx_version"`
+	RiverDriverVersion  string             `json:"river_driver_version"`
 	RiverVersion        string             `json:"river_version"`
 	PollOnly            bool               `json:"poll_only"`
 	FetchPollIntervalMS float64            `json:"fetch_poll_interval_ms"`
@@ -184,6 +191,15 @@ func Run(ctx context.Context, rawOpts Options) (_ Result, retErr error) {
 	if err != nil {
 		return Result{}, phaseError("validate_options", err)
 	}
+	if err := verifyDependencyVersion("github.com/riverqueue/river", RiverVersion); err != nil {
+		return Result{}, phaseError("verify_river_version", err)
+	}
+	if err := verifyDependencyVersion("github.com/riverqueue/river/riverdriver/riverpgxv5", RiverDriverVersion); err != nil {
+		return Result{}, phaseError("verify_river_driver_version", err)
+	}
+	if err := verifyDependencyVersion("github.com/jackc/pgx/v5", PgxVersion); err != nil {
+		return Result{}, phaseError("verify_pgx_version", err)
+	}
 
 	poolConfig, err := pgxpool.ParseConfig(opts.DatabaseURL)
 	if err != nil {
@@ -211,6 +227,8 @@ func Run(ctx context.Context, rawOpts Options) (_ Result, retErr error) {
 		Status:              "ok",
 		Mode:                opts.Mode,
 		GoVersion:           runtime.Version(),
+		PgxVersion:          PgxVersion,
+		RiverDriverVersion:  RiverDriverVersion,
 		RiverVersion:        RiverVersion,
 		PollOnly:            opts.Mode == ModePollOnly,
 		FetchPollIntervalMS: milliseconds(opts.FetchPollInterval),
@@ -836,6 +854,26 @@ func normalizedOptions(opts Options) (Options, error) {
 
 func newMarker(prefix string, mode Mode) string {
 	return fmt.Sprintf("go-%s-%s-%d", prefix, mode, time.Now().UnixNano())
+}
+
+func verifyDependencyVersion(path, expected string) error {
+	buildInfo, ok := debug.ReadBuildInfo()
+	if !ok {
+		return errors.New("Go build information is unavailable")
+	}
+	for _, dependency := range buildInfo.Deps {
+		if dependency.Path != path {
+			continue
+		}
+		if dependency.Replace != nil {
+			dependency = dependency.Replace
+		}
+		if dependency.Version != expected {
+			return fmt.Errorf("%s version = %q, want %q", path, dependency.Version, expected)
+		}
+		return nil
+	}
+	return fmt.Errorf("%s is absent from Go build information", path)
 }
 
 func readDatabaseCounters(ctx context.Context, pool *pgxpool.Pool) (DatabaseCounters, error) {

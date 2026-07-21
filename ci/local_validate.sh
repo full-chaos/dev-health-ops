@@ -128,6 +128,7 @@ gate_lint_format() { "${RUFF}" format --check .; }
 gate_lint_check()  { "${RUFF}" check .; }
 gate_typecheck()   { "${MYPY}" --install-types --non-interactive .; }
 gate_go_fast()     { bash "${ROOT}/ci/check_go.sh" fast; }
+gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 
 # --- The FULL unit suite — the CHAOS-2604 fix. NOT a file subset. ------------------
 # Byte-for-byte the marker filter + ignores of ci/run_tests.sh unit_tests().
@@ -320,6 +321,7 @@ main() {
   run_stage "lint: ruff check"           gate_lint_check
   run_stage "typecheck: mypy"            gate_typecheck
   run_stage "go: format + vet + test"     gate_go_fast
+  run_stage "river: static compatibility harness" gate_river_compat_static
   ch_provision   # scratch db + migrations; exports CLICKHOUSE_URI when available
   run_stage "unit suite (FULL, not subset)" gate_unit_suite
   ch_tests       # argMax live-exec proof on the real engine (reuses the scratch db)

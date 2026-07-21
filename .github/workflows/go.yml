@@ -10,7 +10,9 @@ on:
       - 'go.work'
       - 'go.work.sum'
       - 'tests/compatibility/river/**'
+      - 'docs/architecture/evidence/go-worker-migration/**'
       - 'ci/check_go.sh'
+      - 'ci/check_river_compat_static.sh'
       - 'ci/local_validate.sh'
       - 'Makefile'
       - '.github/workflows/go.yml'
@@ -23,7 +25,9 @@ on:
       - 'go.work'
       - 'go.work.sum'
       - 'tests/compatibility/river/**'
+      - 'docs/architecture/evidence/go-worker-migration/**'
       - 'ci/check_go.sh'
+      - 'ci/check_river_compat_static.sh'
       - 'ci/local_validate.sh'
       - 'Makefile'
       - '.github/workflows/go.yml'
@@ -52,3 +56,6 @@ jobs:
 
       - name: Run Go quality gate
         run: bash ci/check_go.sh all
+
+      - name: Validate River compatibility harness
+        run: bash ci/check_river_compat_static.sh

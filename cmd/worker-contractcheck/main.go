@@ -8,10 +8,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 )
 
 const defaultContractRoot = "contracts/jobs/v1"
+const defaultDeploymentManifest = "deploy/go-workers/profiles.json"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -45,6 +47,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", defaultContractRoot, "contract v1 directory")
+	deployment := flags.String("deployment", defaultDeploymentManifest, "Go worker deployment profile manifest")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -56,7 +59,24 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "contract validation failed:", err)
 		return 1
 	}
+	registry, err := jobcontract.LoadRegistry(*root)
+	if err != nil {
+		fmt.Fprintln(stderr, "load registry:", err)
+		return 1
+	}
+	_, budget, err := deploymentcontract.Load(*deployment, registry)
+	if err != nil {
+		fmt.Fprintln(stderr, "deployment validation failed:", err)
+		return 1
+	}
 	fmt.Fprintln(stdout, "worker contracts valid")
+	fmt.Fprintf(
+		stdout,
+		"deployment profiles valid: direct=%d domain_clients=%d server_footprint=%d\n",
+		budget.DirectQueueControlConnections,
+		budget.DomainClientConnections,
+		budget.ServerConnectionFootprint,
+	)
 	return 0
 }
 

@@ -4,6 +4,7 @@ package health
 import (
 	"context"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"sync"
@@ -17,16 +18,24 @@ var checkNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 // text is deliberately never returned by the HTTP surface.
 type CheckFunc func(context.Context) error
 
+// MetricsSource writes one complete Prometheus text-format fragment. Sources
+// are registered at process construction time and must expose only bounded,
+// pre-registered dimensions.
+type MetricsSource interface {
+	WritePrometheus(io.Writer) error
+}
+
 // Registry combines the process admission gate with required dependency
 // checks. Any failed, missing, timed-out, or panicking check fails readiness.
 type Registry struct {
 	checkTimeout time.Duration
 	startedAt    time.Time
 
-	mu       sync.RWMutex
-	required map[string]*requiredCheck
-	ready    atomic.Bool
-	live     atomic.Bool
+	mu            sync.RWMutex
+	required      map[string]*requiredCheck
+	metricsSource map[string]MetricsSource
+	ready         atomic.Bool
+	live          atomic.Bool
 }
 
 type requiredCheck struct {
@@ -52,12 +61,60 @@ func NewRegistry(checkTimeout time.Duration) *Registry {
 		checkTimeout = 2 * time.Second
 	}
 	registry := &Registry{
-		checkTimeout: checkTimeout,
-		startedAt:    time.Now(),
-		required:     make(map[string]*requiredCheck),
+		checkTimeout:  checkTimeout,
+		startedAt:     time.Now(),
+		required:      make(map[string]*requiredCheck),
+		metricsSource: make(map[string]MetricsSource),
 	}
 	registry.live.Store(true)
 	return registry
+}
+
+// RegisterMetrics adds a named Prometheus fragment to the operator endpoint.
+// Duplicate or unsafe names fail construction instead of silently replacing a
+// collector.
+func (r *Registry) RegisterMetrics(name string, source MetricsSource) error {
+	if !checkNamePattern.MatchString(name) {
+		return fmt.Errorf("metrics source name must match %s", checkNamePattern.String())
+	}
+	if source == nil {
+		return fmt.Errorf("metrics source %q must not be nil", name)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.metricsSource[name]; exists {
+		return fmt.Errorf("metrics source %q is already registered", name)
+	}
+	r.metricsSource[name] = source
+	return nil
+}
+
+// WriteMetrics writes registered sources in stable name order. The caller is
+// responsible for buffering before committing an HTTP response so a source
+// failure cannot produce a partial scrape.
+func (r *Registry) WriteMetrics(output io.Writer) error {
+	if output == nil {
+		return fmt.Errorf("metrics output is required")
+	}
+	r.mu.RLock()
+	sources := make(map[string]MetricsSource, len(r.metricsSource))
+	for name, source := range r.metricsSource {
+		sources[name] = source
+	}
+	r.mu.RUnlock()
+
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := sources[name].WritePrometheus(output); err != nil {
+			return fmt.Errorf("write metrics source %q: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // RegisterRequired adds a fail-closed readiness dependency. Names are bounded

@@ -1,6 +1,7 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -13,6 +14,19 @@ import (
 	"testing"
 	"time"
 )
+
+type testMetricsSource struct {
+	text string
+	err  error
+}
+
+func (source testMetricsSource) WritePrometheus(output io.Writer) error {
+	if source.err != nil {
+		return source.err
+	}
+	_, err := io.WriteString(output, source.text)
+	return err
+}
 
 func TestReadinessFailsClosedWithoutRequiredChecks(t *testing.T) {
 	t.Parallel()
@@ -148,6 +162,9 @@ func TestHTTPHandlersExposeSanitizedHealthReadinessAndMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry.SetReady(true)
+	if err := registry.RegisterMetrics("worker", testMetricsSource{text: "worker_execution_saturation_ratio{profile=\"ops\"} 0.5\n"}); err != nil {
+		t.Fatal(err)
+	}
 	server, err := NewServer(ServerOptions{
 		Address:  "127.0.0.1:0",
 		Registry: registry,
@@ -165,7 +182,7 @@ func TestHTTPHandlersExposeSanitizedHealthReadinessAndMetrics(t *testing.T) {
 	}{
 		{path: "/healthz", wantStatus: http.StatusOK, wantBody: `"status":"ok"`},
 		{path: "/readyz", wantStatus: http.StatusServiceUnavailable, wantBody: `"database"`},
-		{path: "/metrics", wantStatus: http.StatusOK, wantBody: "dev_health_runtime_ready 0"},
+		{path: "/metrics", wantStatus: http.StatusOK, wantBody: "worker_execution_saturation_ratio"},
 	} {
 		request := httptest.NewRequest(http.MethodGet, test.path, nil)
 		response := httptest.NewRecorder()
@@ -176,6 +193,43 @@ func TestHTTPHandlersExposeSanitizedHealthReadinessAndMetrics(t *testing.T) {
 		if strings.Contains(response.Body.String(), "secret") || strings.Contains(response.Body.String(), "postgres://") {
 			t.Fatalf("%s leaked check error: %s", test.path, response.Body.String())
 		}
+	}
+}
+
+func TestMetricsSourcesAreStableAndFailWithoutPartialOutput(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(100 * time.Millisecond)
+	if err := registry.RegisterMetrics("z_source", testMetricsSource{text: "z_metric 1\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterMetrics("a_source", testMetricsSource{text: "a_metric 1\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterMetrics("a_source", testMetricsSource{text: "duplicate 1\n"}); err == nil {
+		t.Fatal("duplicate metrics source unexpectedly registered")
+	}
+	var output bytes.Buffer
+	if err := registry.WriteMetrics(&output); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "a_metric 1\nz_metric 1\n" {
+		t.Fatalf("metrics source order = %q", got)
+	}
+
+	failing := NewRegistry(100 * time.Millisecond)
+	if err := failing.RegisterMetrics("broken", testMetricsSource{err: errors.New("postgres://user:secret@db/app")}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerOptions{Address: "127.0.0.1:0", Registry: failing, Service: "test", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || response.Body.String() != "{\"status\":\"metrics_unavailable\"}\n" {
+		t.Fatalf("metrics failure response: status=%d body=%q", response.Code, response.Body.String())
 	}
 }
 

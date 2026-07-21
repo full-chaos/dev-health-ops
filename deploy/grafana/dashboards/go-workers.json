@@ -1,0 +1,162 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [
+        {
+          "expr": "max by (profile, queue) (worker_job_oldest_age_seconds)",
+          "legendFormat": "{{profile}} / {{queue}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Oldest available job",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum by (profile, queue) (worker_jobs_available)",
+          "legendFormat": "available {{profile}} / {{queue}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (profile, queue) (worker_jobs_running)",
+          "legendFormat": "running {{profile}} / {{queue}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Queue depth and running jobs",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [
+        {
+          "expr": "max by (profile) (worker_execution_saturation_ratio)",
+          "legendFormat": "{{profile}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Execution saturation",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sum by (kind, result) (rate(worker_job_attempts_total[5m]))",
+          "legendFormat": "{{kind}} / {{result}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Attempt outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "id": 5,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, profile, queue, kind) (rate(worker_job_duration_seconds_bucket[10m])))",
+          "legendFormat": "{{profile}} / {{queue}} / {{kind}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Execution duration p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum by (domain_type) (increase(worker_domain_state_mismatch_total[15m]))",
+          "legendFormat": "{{domain_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Domain-state mismatches",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "id": 7,
+      "targets": [
+        {
+          "expr": "max by (stream, consumer_group) (worker_stream_lag)",
+          "legendFormat": "lag {{stream}} / {{consumer_group}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (stream, consumer_group) (worker_stream_pending)",
+          "legendFormat": "pending {{stream}} / {{consumer_group}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Stream lag and pending",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "id": 8,
+      "targets": [
+        {
+          "expr": "max by (pool) (worker_database_pool_saturation_ratio)",
+          "legendFormat": "{{profile}} / {{pool}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Database pool saturation",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["dev-health", "go-workers", "phase-1"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Dev Health Go Workers",
+  "uid": "dev-health-go-workers",
+  "version": 1,
+  "weekStart": ""
+}

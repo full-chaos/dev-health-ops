@@ -24,6 +24,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY cmd ./cmd
 COPY contracts ./contracts
+COPY deploy/go-workers ./deploy/go-workers
 COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -34,6 +35,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         dev-health-scheduler \
         dev-health-reconciler \
         dev-health-stream-runner \
+        dev-health-workerctl \
         worker-contractcheck; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
         -buildvcs=false \
@@ -47,17 +49,29 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     done; \
     mkdir -p \
       /runtime/worker/usr/local/bin \
+      /runtime/worker/app/contracts/jobs \
+      /runtime/worker/app/deploy/go-workers \
       /runtime/scheduler/usr/local/bin \
       /runtime/reconciler/usr/local/bin \
       /runtime/stream-runner/usr/local/bin \
+      /runtime/operator/usr/local/bin \
+      /runtime/operator/app/contracts/jobs \
+      /runtime/operator/app/deploy/go-workers \
       /runtime/contractcheck/usr/local/bin \
-      /runtime/contractcheck/app/contracts/jobs; \
+      /runtime/contractcheck/app/contracts/jobs \
+      /runtime/contractcheck/app/deploy/go-workers; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp /out/dev-health-reconciler /runtime/reconciler/usr/local/bin/dev-health-reconciler; \
     cp /out/dev-health-stream-runner /runtime/stream-runner/usr/local/bin/dev-health-stream-runner; \
+    cp /out/dev-health-workerctl /runtime/operator/usr/local/bin/dev-health-workerctl; \
     cp /out/worker-contractcheck /runtime/contractcheck/usr/local/bin/worker-contractcheck; \
+    cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
+    cp /src/deploy/go-workers/profiles.json /runtime/worker/app/deploy/go-workers/profiles.json; \
+    cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1; \
+    cp /src/deploy/go-workers/profiles.json /runtime/operator/app/deploy/go-workers/profiles.json; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
+    cp /src/deploy/go-workers/profiles.json /runtime/contractcheck/app/deploy/go-workers/profiles.json; \
     find /runtime -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM ${GO_RUNTIME_IMAGE} AS runtime
@@ -78,6 +92,7 @@ EXPOSE 8080
 
 FROM runtime AS worker
 COPY --from=build --chown=65532:65532 /runtime/worker/ /
+WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dev-health-worker"]
 
 FROM runtime AS scheduler
@@ -91,6 +106,11 @@ ENTRYPOINT ["/usr/local/bin/dev-health-reconciler"]
 FROM runtime AS stream-runner
 COPY --from=build --chown=65532:65532 /runtime/stream-runner/ /
 ENTRYPOINT ["/usr/local/bin/dev-health-stream-runner"]
+
+FROM runtime AS operator
+COPY --from=build --chown=65532:65532 /runtime/operator/ /
+WORKDIR /app
+ENTRYPOINT ["/usr/local/bin/dev-health-workerctl"]
 
 FROM runtime AS contractcheck
 COPY --from=build --chown=65532:65532 /runtime/contractcheck/ /

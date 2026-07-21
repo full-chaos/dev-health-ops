@@ -339,6 +339,7 @@ func ValidateTree(root string) error {
 		"registry.schema.json",
 		"migration-state.schema.json",
 		"capability-report.schema.json",
+		"deployment-profiles.schema.json",
 	} {
 		data, err := readContractFile(root, artifact)
 		if err != nil {

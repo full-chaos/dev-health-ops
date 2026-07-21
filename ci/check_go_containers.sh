@@ -13,7 +13,7 @@ readonly COMMIT="0000000000000000000000000000000000000000"
 readonly BUILD_TIME="1970-01-01T00:00:00Z"
 readonly SOURCE_DATE_EPOCH="0"
 readonly RUNTIME_TARGETS=(worker scheduler reconciler stream-runner)
-readonly ALL_TARGETS=(worker scheduler reconciler stream-runner contractcheck)
+readonly ALL_TARGETS=(worker scheduler reconciler stream-runner operator contractcheck)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -88,6 +88,9 @@ smoke_target() {
   local container_name="dev-health-go-${target}-smoke-$$"
   local published_address
   local exit_code
+  local readiness_body
+  local dependency
+  local dependencies
 
   build_target "${target}" "${tag}"
 
@@ -108,13 +111,39 @@ smoke_target() {
 
   wait_for_status "http://${published_address}/healthz" 200 \
     || die "${target} health endpoint did not become available"
-  # Foundation binaries deliberately fail readiness until CHAOS-3037 and
-  # CHAOS-3038 register real storage, River schema, and job-registry checks.
+  # Foundation binaries deliberately remain live but fail readiness until
+  # their required runtime dependencies are configured.
   wait_for_status "http://${published_address}/readyz" 503 \
     || die "${target} reported ready without required dependencies"
-  curl --silent --show-error --max-time 1 "http://${published_address}/readyz" \
-    | grep -F '"dependencies"' >/dev/null \
-    || die "${target} readiness response omitted the dependency failure"
+  readiness_body="$(curl --silent --show-error --max-time 1 "http://${published_address}/readyz")"
+  if [ "${target}" = "worker" ]; then
+    for dependency in domain_postgres profile_completeness queue_postgres river_schema; do
+      grep -F "\"${dependency}\"" <<<"${readiness_body}" >/dev/null \
+        || die "worker readiness omitted ${dependency}"
+    done
+    if grep -F '"job_registry"' <<<"${readiness_body}" >/dev/null; then
+      die "worker image could not load its packaged job contract artifacts"
+    fi
+  else
+    case "${target}" in
+      scheduler)
+        dependencies="domain_postgres queue_postgres river_schema scheduler_loop"
+        ;;
+      reconciler)
+        dependencies="domain_postgres queue_postgres reconciler_loop river_schema"
+        ;;
+      stream-runner)
+        dependencies="clickhouse domain_postgres stream_consumer valkey"
+        ;;
+      *)
+        die "no readiness contract declared for ${target}"
+        ;;
+    esac
+    for dependency in ${dependencies}; do
+      grep -F "\"${dependency}\"" <<<"${readiness_body}" >/dev/null \
+        || die "${target} readiness omitted ${dependency}"
+    done
+  fi
   wait_for_status "http://${published_address}/metrics" 200 \
     || die "${target} metrics endpoint did not become available"
 
@@ -138,6 +167,14 @@ smoke() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-contractcheck:ci" validate \
     | grep -F "worker contracts valid" >/dev/null \
     || die "contractcheck image did not validate its embedded contract artifacts"
+
+  printf 'container smoke: operator\n'
+  build_target operator "${IMAGE_PREFIX}-operator:ci"
+  [ "$(docker image inspect --format '{{.Config.User}}' "${IMAGE_PREFIX}-operator:ci")" = "65532:65532" ] \
+    || die "operator image is not configured for numeric non-root execution"
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-operator:ci" --version \
+    | grep -F '"version":"phase1-ci"' >/dev/null \
+    || die "operator did not report injected version metadata"
 }
 
 reproducible() {

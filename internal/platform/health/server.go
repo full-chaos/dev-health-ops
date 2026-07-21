@@ -1,6 +1,7 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -158,10 +159,9 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 		live = 1
 	}
 
-	response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	response.WriteHeader(http.StatusOK)
+	var output bytes.Buffer
 	_, _ = fmt.Fprintf(
-		response,
+		&output,
 		"# HELP dev_health_runtime_live Whether the process is live.\n"+
 			"# TYPE dev_health_runtime_live gauge\n"+
 			"dev_health_runtime_live %d\n"+
@@ -184,6 +184,14 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 		strconv.Quote(s.service),
 		strconv.Quote(s.version),
 	)
+	if err := s.registry.WriteMetrics(&output); err != nil {
+		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"status": "metrics_unavailable"})
+		return
+	}
+
+	response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(output.Bytes())
 }
 
 func allowRead(response http.ResponseWriter, request *http.Request) bool {

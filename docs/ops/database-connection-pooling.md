@@ -17,6 +17,132 @@
   endpoint and set **`PGBOUNCER_TRANSACTION_MODE=true`**.
 - Run **schema migrations against Postgres directly** (bypass PgBouncer).
 
+## Go worker dual-pool contract
+
+The additive Go runtime uses two deliberately different PostgreSQL pools. The
+domain and queue-control responsibilities must not be collapsed into one DSN:
+
+| Purpose | Configuration | Default maximum | Required endpoint |
+| --- | --- | ---: | --- |
+| Domain state | `POSTGRES_URI` | `WORKER_DOMAIN_DATABASE_MAX_CONNS=4` | Existing transaction-mode PgBouncer endpoint is supported |
+| River queue control | `WORKER_DATABASE_URI` | `WORKER_DATABASE_MAX_CONNS=2` | Direct PostgreSQL; a session-mode endpoint requires separate compatibility evidence |
+| One-shot migrations | `MIGRATION_DATABASE_URI` | 2 migration connections | Direct PostgreSQL with the dedicated migration role |
+
+Each URI also supports the shared `_FILE` secret form. Secret values are
+mutually exclusive with their inline form. `WORKER_DATABASE_MODE` defaults to
+`direct`; `transaction` is rejected because River cancellation and listener
+semantics are incomplete under transaction-mode `PollOnly`, and `session`
+remains rejected until the same compatibility matrix passes against a real
+session-mode endpoint.
+
+Long-running workers receive the domain and queue-control roles only. They do
+not receive `MIGRATION_DATABASE_URI` and never apply River or application
+migrations. The one-shot migration process receives a dedicated elevated DSN;
+the non-secret `RIVER_DOMAIN_DATABASE_ROLE` and
+`RIVER_QUEUE_DATABASE_ROLE` identifiers tell it which runtime grants to apply.
+They default to `devhealth_domain` and `devhealth_queue` in the checked-in
+deployment profiles, but production may override both names. Every worker and
+the operator CLI bind the `POSTGRES_URI` and `WORKER_DATABASE_URI` usernames
+to those declared names before opening pools; a mismatch is a fail-closed
+configuration error, not a fallback to whatever login the DSN supplied.
+The River schema defaults to `river`; migration grants its
+queue role only the schema/table/sequence access needed by the runtime and does
+not grant the domain role or `PUBLIC` access. Separately, the domain role gets
+`USAGE` on `public`, DML on every semantic table, and sequence access. It gets
+no schema `CREATE`, no River access, and no access to `alembic_version`; the
+queue role gets no general semantic-table or sequence access. Its sole `public`
+exception is `SELECT`, `UPDATE`, and `DELETE` on `worker_job_outbox`, allowing
+the relay to claim and retire producer-created UUID rows in the same direct
+transaction that inserts River jobs. The queue role never receives outbox
+`INSERT`. Readiness checks the effective (including inherited) privileges of
+both connected roles: neither can gain database or schema `CREATE`, the domain
+role cannot access River or Alembic metadata, and the queue role cannot access
+other semantic tables or insert outbox rows. These checks return stable health
+categories only and never emit a DSN, grant detail, or database error.
+
+### Provision the runtime roles first
+
+The migration intentionally does not create production login roles or choose
+their passwords. Before setting `MIGRATION_DATABASE_URI`, provision the two
+distinct, unprivileged roles named by `RIVER_DOMAIN_DATABASE_ROLE` and
+`RIVER_QUEUE_DATABASE_ROLE`. The migration command checks that both exist
+and are unprivileged LOGIN roles before applying any River DDL. After Alembic
+runs, the same one-shot command refreshes domain grants across the current
+semantic tables and sequences, then grants River access only to the queue role.
+This avoids broad default privileges and keeps migration metadata unavailable
+to long-running workers.
+
+For an existing database, run the idempotent provisioning script as the
+database owner. It prompts for both passwords without echo; managed-database
+installations may perform the equivalent operation through their provider or
+secret-management workflow:
+
+```bash
+psql "$MIGRATION_DATABASE_URI" \
+  --set=domain_role=devhealth_domain \
+  --set=queue_role=devhealth_queue \
+  --file=scripts/worker/provision_river_roles.sql
+```
+
+Then construct `POSTGRES_URI` with the domain role and
+`WORKER_DATABASE_URI` with the queue role. The URI usernames must match the two
+role-name settings exactly. Do not reuse the migration role in either runtime
+DSN.
+
+Worker readiness verifies effective authorization with read-only catalog
+queries, not only connectivity. `domain_postgres` remains failed unless the
+active role is an unprivileged LOGIN role with `USAGE` but no effective
+`CREATE` on `public`, DML on every semantic table, and access to every semantic
+sequence. A new Alembic table without a matching grant therefore fails closed
+until the one-shot migration refreshes grants. A legacy cluster that still
+grants `CREATE` on `public` to `PUBLIC` also fails this check; after assessing
+other database users, remediate explicitly as the database owner:
+
+```sql
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+The provisioning scripts do not make that cluster-wide change implicitly.
+
+Fresh `compose.yml` volumes create the same local-only roles automatically.
+Because `/docker-entrypoint-initdb.d` runs only on first initialization,
+existing local volumes must run the script once before opting into the River
+migration. The local upgrade form uses the checked-in development passwords:
+
+```bash
+docker compose exec -T postgres \
+  psql -U postgres -d postgres \
+  --set=domain_password=devhealth_domain \
+  --set=queue_password=devhealth_queue \
+  < scripts/worker/provision_river_roles.sql
+```
+
+The canonical Go worker deployment profile manifest at
+`deploy/go-workers/profiles.json` calculates budgets from every profile's
+`max_replicas`, even while all Phase 1 profiles remain disabled by default.
+The current maximum topology uses:
+
+- 22 direct River queue-control connections, including one bounded operator
+  CLI invocation;
+- 50 PgBouncer domain client connections, including that operator; and
+- 87 PostgreSQL server slots after adding two 25-connection PgBouncer server
+  pools (the existing app role and the Go domain role), 22 direct queue-control
+  connections, and a 15-connection server reserve, below
+  `max_connections=100`.
+
+`worker-contractcheck validate` rejects registry/profile drift, runtime exposure
+of the migration DSN, or any budget increase that crosses those ceilings.
+
+River terminal-row cleanup is configured independently of product history:
+
+- `RIVER_COMPLETED_JOB_RETENTION=168h`;
+- `RIVER_CANCELLED_JOB_RETENTION=720h`;
+- `RIVER_DISCARDED_JOB_RETENTION=720h`; and
+- `RIVER_JOB_CLEANER_TIMEOUT=30s`.
+
+Product-visible history remains in domain run tables; the River rows are
+bounded execution records.
+
 ## The connection-budget math
 
 ```
@@ -81,16 +207,24 @@ cross-connection dependency.
 
 ## Migrations bypass the pooler
 
-Run Alembic/`dev-hops migrate postgres` against Postgres **directly**, not
-through transaction-mode PgBouncer. Migrations can rely on session-scoped
-behavior that transaction pooling does not preserve. Point `POSTGRES_URI` at the
-Postgres host (`postgres:5432`) for the migration step and leave
-`PGBOUNCER_TRANSACTION_MODE` unset for that invocation, e.g.:
+Run `dev-hops migrate postgres` against Postgres **directly**, not through
+transaction-mode PgBouncer. Migrations can rely on session-scoped behavior that
+transaction pooling does not preserve. The dedicated
+`MIGRATION_DATABASE_URI` activates both the existing Alembic upgrade and the
+pinned River migration; it must use a role distinct from both runtime roles:
 
 ```bash
-POSTGRES_URI="postgresql+asyncpg://postgres:postgres@postgres:5432/postgres" \
+MIGRATION_DATABASE_URI="postgresql://devhealth_migrate:secret@postgres:5432/postgres" \
+RIVER_DOMAIN_DATABASE_ROLE="devhealth_domain" \
+RIVER_QUEUE_DATABASE_ROLE="devhealth_queue" \
   dev-hops migrate postgres
 ```
+
+Existing Alembic-only installations may continue to supply a direct
+`POSTGRES_URI`; without either form of `MIGRATION_DATABASE_URI`, the additive
+River step is skipped. An explicitly configured but empty migration secret is
+an error. Deployment templates therefore omit or unset empty placeholders
+before invoking the compatibility path.
 
 ## Local development
 

@@ -57,11 +57,17 @@ until `dev-hops migrate clickhouse status --check` reports the schema current.
 
 Notes:
 
-- `CLICKHOUSE_URI` (in `dev-health-secrets`) is the DSN that
-  `dev-hops migrate clickhouse` and `status --check` resolve — keep it in sync
-  with `DATABASE_URI` (the app connection string).
-- `POSTGRES_URI` (in `dev-health-secrets`) must point **directly** at Postgres
-  (port 5432), never at a transaction-mode pooler (PgBouncer/RDS Proxy) —
-  migrations run raw DDL. See `docs/ops/database-connection-pooling.md`.
-- The Alembic step is skipped automatically when `POSTGRES_URI` is unset;
-  ClickHouse migrations always run.
+- `CLICKHOUSE_URI` is intentionally duplicated: the migration Job reads it
+  from the database-only `dev-health-migration-secrets`, while application and
+  read-only wait containers read it from `dev-health-secrets`. Keep both in
+  sync with `DATABASE_URI` (the app connection string). This prevents the
+  elevated one-shot pod from receiving provider credentials.
+- For the unified Alembic + River path, populate `MIGRATION_DATABASE_URI` in
+  the dedicated `dev-health-migration-secrets` Secret. It must point
+  **directly** at Postgres (port 5432) and use the migration role; the checked-in
+  Secret intentionally contains no placeholder value.
+- Existing Alembic-only installations may continue to use the direct
+  `POSTGRES_URI` in `dev-health-migration-secrets`. Without the elevated
+  migration DSN, the River step is skipped. ClickHouse migrations always run.
+  See
+  `docs/ops/database-connection-pooling.md`.

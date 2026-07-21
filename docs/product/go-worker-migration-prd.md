@@ -396,7 +396,7 @@ After full cutover:
 
 - River schema in PostgreSQL.
 - Generic `worker_job_outbox` storage and a Go relay for transitional producers.
-- A proposed `WORKER_DATABASE_URI`, introduced by CHAOS-3037, for the required
+- `WORKER_DATABASE_URI`, introduced by CHAOS-3037, for the required
   small direct PostgreSQL queue-control pool, or a session-mode endpoint after
   equivalent validation. Readiness must fail when only the
   transaction-mode domain pool is configured.

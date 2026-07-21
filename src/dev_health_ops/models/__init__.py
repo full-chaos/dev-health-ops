@@ -114,6 +114,7 @@ from .work_items import (
     WorkItemReopenEvent,
     WorkItemStatusTransition,
 )
+from .worker_job_outbox import WorkerJobOutbox
 
 __all__ = [
     "AuditAction",
@@ -215,4 +216,5 @@ __all__ = [
     "WorkItemInteractionEvent",
     "WorkItemReopenEvent",
     "WorkItemStatusTransition",
+    "WorkerJobOutbox",
 ]

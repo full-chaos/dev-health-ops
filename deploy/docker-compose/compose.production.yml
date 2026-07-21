@@ -80,11 +80,21 @@ services:
       - sh
       - -c
       - >-
-        if [ -n "$$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+        if [ -z "$${MIGRATION_DATABASE_URI:-}" ];
+        then unset MIGRATION_DATABASE_URI; fi;
+        if [ -n "$$POSTGRES_URI" ]
+        || [ "$${MIGRATION_DATABASE_URI+x}" = x ]
+        || [ "$${MIGRATION_DATABASE_URI_FILE+x}" = x ];
+        then dev-hops migrate postgres; fi
         && dev-hops migrate clickhouse
     environment:
       # Direct Postgres URI (5432), NOT pgbouncer — empty skips the Alembic step.
       POSTGRES_URI: ${POSTGRES_URI:-}
+      # Dedicated elevated DSN activates the pinned River migration step.
+      MIGRATION_DATABASE_URI: ${MIGRATION_DATABASE_URI:-}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:

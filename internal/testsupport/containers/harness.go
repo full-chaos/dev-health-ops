@@ -45,7 +45,12 @@ func StartPostgres(ctx context.Context) (*Instance, error) {
 			"POSTGRES_PASSWORD": password,
 			"POSTGRES_DB":       database,
 		},
-		WaitingFor: wait.ForListeningPort(port).WithStartupTimeout(60 * time.Second),
+		// The official image briefly accepts connections during initdb before
+		// restarting PostgreSQL. Waiting for the second ready log prevents a
+		// listening-port race against that restart.
+		WaitingFor: wait.ForLog("database system is ready to accept connections").
+			WithOccurrence(2).
+			WithStartupTimeout(60 * time.Second),
 	}, port)
 	if err != nil {
 		return nil, fmt.Errorf("start PostgreSQL test dependency: %w", err)

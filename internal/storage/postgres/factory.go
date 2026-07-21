@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,7 +45,7 @@ func (c Config) Validate() error {
 	if c.ConnectTimeout <= 0 || c.MaxConnLifetime <= 0 || c.MaxConnIdleTime <= 0 || c.HealthCheckPeriod <= 0 {
 		return ErrInvalidConfig
 	}
-	if _, err := pgxpool.ParseConfig(c.URI); err != nil {
+	if _, err := parseConfig(c.URI); err != nil {
 		return ErrInvalidConfig
 	}
 	return nil
@@ -62,14 +63,15 @@ func (c Config) SafeAttributes() map[string]any {
 	}
 }
 
-// Open creates and verifies a pool. Driver errors are deliberately replaced by
-// stable categories so a malformed or unreachable URI cannot appear in logs.
-func Open(ctx context.Context, config Config) (*pgxpool.Pool, error) {
+// New creates a bounded pool without performing network I/O. Long-running
+// processes use this form so readiness can remain false and recover when a
+// configured database endpoint is temporarily unavailable.
+func New(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 
-	poolConfig, err := pgxpool.ParseConfig(config.URI)
+	poolConfig, err := parseConfig(config.URI)
 	if err != nil {
 		return nil, ErrInvalidConfig
 	}
@@ -84,9 +86,49 @@ func Open(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, ErrUnavailable
 	}
+	return pool, nil
+}
+
+// Open creates and verifies a pool. Driver errors are deliberately replaced by
+// stable categories so a malformed or unreachable URI cannot appear in logs.
+func Open(ctx context.Context, config Config) (*pgxpool.Pool, error) {
+	pool, err := New(ctx, config)
+	if err != nil {
+		return nil, err
+	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, ErrUnavailable
 	}
 	return pool, nil
+}
+
+func parseConfig(uri string) (*pgxpool.Config, error) {
+	return pgxpool.ParseConfig(normalizeURI(uri))
+}
+
+// normalizeURI accepts the documented SQLAlchemy driver-qualified aliases at
+// the Go boundary without changing credentials, host, path, or query options.
+func normalizeURI(uri string) string {
+	for _, driverScheme := range []string{
+		"postgresql+asyncpg://",
+		"postgresql+psycopg://",
+		"postgresql+psycopg2://",
+		"postgres+asyncpg://",
+	} {
+		if strings.HasPrefix(strings.ToLower(uri), driverScheme) {
+			return "postgresql://" + uri[len(driverScheme):]
+		}
+	}
+	return uri
+}
+
+// ConnectionUser returns only the PostgreSQL role name. It is suitable for
+// privilege-policy validation; callers must never log the source URI.
+func ConnectionUser(uri string) (string, error) {
+	config, err := parseConfig(uri)
+	if err != nil || config.ConnConfig.User == "" {
+		return "", ErrInvalidConfig
+	}
+	return config.ConnConfig.User, nil
 }

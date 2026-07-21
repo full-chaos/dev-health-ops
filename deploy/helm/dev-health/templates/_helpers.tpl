@@ -182,6 +182,35 @@ DATABASE_URI: {{ include "dev-health.postgresURI" . | quote }}
 {{- end }}
 
 {{/*
+Migration-only secret data. Keep the elevated migration DSN out of the shared
+application Secret while retaining selected Postgres/ClickHouse compatibility
+values for existing installations.
+*/}}
+{{- define "dev-health.migrationSecretData" -}}
+{{- range $key, $value := .Values.migrations.hook.secretData }}
+{{- if $value }}
+{{ $key }}: {{ $value | quote }}
+{{- end }}
+{{- end }}
+{{- if and (not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI")) (index .Values.secrets.data "CLICKHOUSE_URI") }}
+CLICKHOUSE_URI: {{ index .Values.secrets.data "CLICKHOUSE_URI" | quote }}
+{{- else if and (not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI")) .Values.clickhouse.enabled }}
+CLICKHOUSE_URI: {{ include "dev-health.clickhouseURI" . | quote }}
+{{- end }}
+{{- $hasDedicatedMigrationURI := index .Values.migrations.hook.secretData "MIGRATION_DATABASE_URI" }}
+{{- $hasHookPostgresURI := index .Values.migrations.hook.secretData "POSTGRES_URI" }}
+{{- $hasHookDatabaseURI := index .Values.migrations.hook.secretData "DATABASE_URI" }}
+{{- $hasHookDatabase := or $hasDedicatedMigrationURI $hasHookPostgresURI $hasHookDatabaseURI }}
+{{- if and (not $hasHookDatabase) (index .Values.secrets.data "POSTGRES_URI") }}
+POSTGRES_URI: {{ index .Values.secrets.data "POSTGRES_URI" | quote }}
+{{- else if and (not $hasHookDatabase) (index .Values.secrets.data "DATABASE_URI") }}
+DATABASE_URI: {{ index .Values.secrets.data "DATABASE_URI" | quote }}
+{{- else if and (not $hasHookDatabase) .Values.postgresql.enabled }}
+POSTGRES_URI: {{ include "dev-health.postgresURI" . | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
 Component labels helper — call with (dict "component" "api" "context" $)
 */}}
 {{- define "dev-health.componentLabels" -}}

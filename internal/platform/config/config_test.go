@@ -74,9 +74,10 @@ func TestSafeAttrsNeverContainSecretsOrDSNs(t *testing.T) {
 
 	secret := "postgres://worker:top-secret@database.internal/app"
 	cfg, err := Load(workerSpec(map[string]string{
-		"POSTGRES_URI":   secret,
-		"CLICKHOUSE_URI": "clickhouse://analytics:secret@ch.internal/default",
-		"VALKEY_URI":     "redis://:secret@valkey.internal/1",
+		"POSTGRES_URI":        secret,
+		"WORKER_DATABASE_URI": "postgres://queue:other-secret@database.internal/app",
+		"CLICKHOUSE_URI":      "clickhouse://analytics:secret@ch.internal/default",
+		"VALKEY_URI":          "redis://:secret@valkey.internal/1",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -90,12 +91,101 @@ func TestSafeAttrsNeverContainSecretsOrDSNs(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"domain_database_configured=true",
+		"queue_database_configured=true",
 		"clickhouse_configured=true",
 		"valkey_configured=true",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("safe attrs missing %q: %s", expected, text)
 		}
+	}
+}
+
+func TestQueueControlAndRetentionDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(workerSpec(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QueueDatabaseMode != QueueControlDirect {
+		t.Fatalf("queue mode = %q, want direct", cfg.QueueDatabaseMode)
+	}
+	if cfg.RiverDatabaseSchema != "river" {
+		t.Fatalf("River schema = %q, want river", cfg.RiverDatabaseSchema)
+	}
+	if cfg.DomainDatabaseRole != "devhealth_domain" || cfg.QueueDatabaseRole != "devhealth_queue" {
+		t.Fatalf("unexpected default runtime roles: domain=%q queue=%q", cfg.DomainDatabaseRole, cfg.QueueDatabaseRole)
+	}
+	if cfg.QueueDatabaseMaxConns != 2 || cfg.DomainDatabaseMaxConns != 4 {
+		t.Fatalf("unexpected connection budget: queue=%d domain=%d", cfg.QueueDatabaseMaxConns, cfg.DomainDatabaseMaxConns)
+	}
+	if cfg.CompletedJobRetention != 7*24*time.Hour {
+		t.Fatalf("completed retention = %s", cfg.CompletedJobRetention)
+	}
+	if cfg.CancelledJobRetention != 30*24*time.Hour || cfg.DiscardedJobRetention != 30*24*time.Hour {
+		t.Fatalf("unexpected terminal retention: cancelled=%s discarded=%s", cfg.CancelledJobRetention, cfg.DiscardedJobRetention)
+	}
+	if cfg.RiverJobCleanerTimeout != 30*time.Second {
+		t.Fatalf("cleaner timeout = %s", cfg.RiverJobCleanerTimeout)
+	}
+}
+
+func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(workerSpec(map[string]string{
+		"WORKER_DATABASE_MODE":             "transaction",
+		"PGBOUNCER_TRANSACTION_MODE":       "true",
+		"RIVER_DATABASE_SCHEMA":            "worker_queue",
+		"RIVER_DOMAIN_DATABASE_ROLE":       "worker_domain",
+		"RIVER_QUEUE_DATABASE_ROLE":        "worker_queue",
+		"WORKER_DATABASE_MAX_CONNS":        "4",
+		"WORKER_DOMAIN_DATABASE_MAX_CONNS": "12",
+		"RIVER_COMPLETED_JOB_RETENTION":    "48h",
+		"RIVER_CANCELLED_JOB_RETENTION":    "240h",
+		"RIVER_DISCARDED_JOB_RETENTION":    "336h",
+		"RIVER_JOB_CLEANER_TIMEOUT":        "45s",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QueueDatabaseMode != QueueControlTransaction || cfg.QueueDatabaseMaxConns != 4 || cfg.DomainDatabaseMaxConns != 12 {
+		t.Fatalf("unexpected queue settings: %#v", cfg.SafeAttrs())
+	}
+	if cfg.RiverDatabaseSchema != "worker_queue" {
+		t.Fatalf("River schema = %q", cfg.RiverDatabaseSchema)
+	}
+	if cfg.DomainDatabaseRole != "worker_domain" || cfg.QueueDatabaseRole != "worker_queue" {
+		t.Fatalf("runtime roles = domain=%q queue=%q", cfg.DomainDatabaseRole, cfg.QueueDatabaseRole)
+	}
+	if !cfg.DomainTransactionPooler {
+		t.Fatal("expected domain transaction-pooler mode")
+	}
+	if cfg.CompletedJobRetention != 48*time.Hour || cfg.RiverJobCleanerTimeout != 45*time.Second {
+		t.Fatalf("unexpected retention settings: %#v", cfg.SafeAttrs())
+	}
+
+	for key, value := range map[string]string{
+		"WORKER_DATABASE_MODE":             "arbitrary",
+		"WORKER_DATABASE_MAX_CONNS":        "5",
+		"WORKER_DOMAIN_DATABASE_MAX_CONNS": "0",
+		"RIVER_COMPLETED_JOB_RETENTION":    "23h",
+		"RIVER_JOB_CLEANER_TIMEOUT":        "4s",
+		"RIVER_DATABASE_SCHEMA":            "River-Bad",
+		"RIVER_DOMAIN_DATABASE_ROLE":       "Domain-Bad",
+		"RIVER_QUEUE_DATABASE_ROLE":        "Queue-Bad",
+		"PGBOUNCER_TRANSACTION_MODE":       "sometimes",
+	} {
+		if _, err := Load(workerSpec(map[string]string{key: value})); err == nil {
+			t.Fatalf("expected %s=%q to fail", key, value)
+		}
+	}
+	if _, err := Load(workerSpec(map[string]string{
+		"RIVER_DOMAIN_DATABASE_ROLE": "same_role",
+		"RIVER_QUEUE_DATABASE_ROLE":  "same_role",
+	})); err == nil {
+		t.Fatal("expected shared runtime roles to fail")
 	}
 }
 

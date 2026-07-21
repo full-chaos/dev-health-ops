@@ -211,12 +211,13 @@ check_contract() {
 }
 
 check_integration() {
-  printf 'go test integration: internal/testsupport/containers\n'
-  (
-    cd "${ROOT}"
-    GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=10m \
-      ./internal/testsupport/containers
-  )
+	printf 'go test integration: storage, River, outbox, and operator\n'
+	(
+		cd "${ROOT}"
+		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=10m \
+			./internal/testsupport/containers ./internal/storage/river \
+			./internal/joboutbox ./internal/joboperator
+	)
 }
 
 discover_modules

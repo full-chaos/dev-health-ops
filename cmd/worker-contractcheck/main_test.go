@@ -11,9 +11,10 @@ import (
 func TestValidateAndCapabilitiesCommands(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..", "contracts", "jobs", "v1")
+	deployment := filepath.Join("..", "..", "deploy", "go-workers", "profiles.json")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := run([]string{"validate", "--root", root}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"validate", "--root", root, "--deployment", deployment}, &stdout, &stderr); code != 0 {
 		t.Fatalf("validate code = %d, stderr = %s", code, stderr.String())
 	}
 	stdout.Reset()

@@ -180,19 +180,20 @@ CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
 ```
 
 Phase 1 of the [Go worker migration plan](docs/plans/go-worker-migration-implementation-plan.md)
-adds shared Go runtime, storage, health, and versioned-contract foundations for
-future worker, scheduler, reconciler, and stream-runner processes. No job is
-migrated, routed to River, or production-canary ready merely because these
-binaries build or report healthy. Keep the required Celery workers and Beat
-schedules running until the issue for that job explicitly changes its route and
-passes the documented parity gates.
+adds the Go runtime, River migration, dual-pool, job-contract, middleware, and
+operator foundations for future worker, scheduler, reconciler, and
+stream-runner processes. Every Go deployment profile remains disabled and all
+registered jobs still route to Celery. A binary building—or even reporting its
+storage dependencies healthy—does not make a job migrated or canary-ready.
+Keep the required Celery workers and Beat schedules running until the issue for
+that job explicitly changes its route and passes the documented parity gates.
 
-River schema management and mandatory direct PostgreSQL queue-control
-connectivity are separate CHAOS-3037 prerequisites. Until that work lands,
-`POSTGRES_URI` and the existing Python compatibility aliases remain the active
-domain-database configuration; the proposed `WORKER_DATABASE_URI` is not a
-current Python runtime setting. See [Workers](docs/ops/workers.md) and the
-[Go worker runtime TRD](docs/architecture/go-worker-runtime-trd.md) for the
+Go River processes use `POSTGRES_URI` for domain state and the separate,
+least-privilege `WORKER_DATABASE_URI` for direct queue control. The latter is a
+Go runtime setting, not a replacement Python database alias. River schema is
+applied only by the one-shot migration path when `MIGRATION_DATABASE_URI` and
+the two runtime role names are supplied. See [Workers](docs/ops/workers.md) and
+the [Go worker runtime TRD](docs/architecture/go-worker-runtime-trd.md) for the
 coexistence boundary.
 
 ## Test tiers

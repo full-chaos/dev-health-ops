@@ -53,3 +53,25 @@ func TestOpenReturnsSanitizedUnavailableError(t *testing.T) {
 		t.Fatalf("Open() exposed PostgreSQL connection material: %v", err)
 	}
 }
+
+func TestDocumentedSQLAlchemySchemesNormalizeForPgx(t *testing.T) {
+	t.Parallel()
+
+	for _, uri := range []string{
+		"postgresql+asyncpg://domain_role:secret@postgres.internal/app?sslmode=require",
+		"postgresql+psycopg://domain_role:secret@postgres.internal/app?sslmode=require",
+		"postgresql+psycopg2://domain_role:secret@postgres.internal/app?sslmode=require",
+	} {
+		cfg := DefaultConfig(uri)
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate(%q) error = %v", uri, err)
+		}
+		user, err := ConnectionUser(uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if user != "domain_role" {
+			t.Fatalf("ConnectionUser(%q) = %q", uri, user)
+		}
+	}
+}

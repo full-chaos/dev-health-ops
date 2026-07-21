@@ -55,6 +55,9 @@ class RegisteredContract:
     current_version: int
     supported_versions: tuple[int, ...]
     profile: str
+    queue: str
+    priority: int
+    max_attempts: int
     organization_scope: str
     schema_versions: tuple[tuple[int, str], ...]
 
@@ -133,6 +136,11 @@ def load_registry(root: Path | None = None) -> Registry:
         supported = _version_tuple(raw.get("supported_versions"))
         _validate_version_window(current, supported)
         profile = _required_string(raw, "profile")
+        queue = _required_string(raw, "queue")
+        priority = _required_int(raw, "priority")
+        max_attempts = _required_int(raw, "max_attempts")
+        if not 1 <= priority <= 4 or not 1 <= max_attempts <= 25:
+            raise ContractDecodeError("registry insertion policy is invalid")
         scope = _required_string(raw, "organization_scope")
         schemas = raw.get("schema_versions")
         if not isinstance(schemas, dict):
@@ -158,6 +166,9 @@ def load_registry(root: Path | None = None) -> Registry:
                 current_version=current,
                 supported_versions=supported,
                 profile=profile,
+                queue=queue,
+                priority=priority,
+                max_attempts=max_attempts,
                 organization_scope=scope,
                 schema_versions=schema_versions,
             )

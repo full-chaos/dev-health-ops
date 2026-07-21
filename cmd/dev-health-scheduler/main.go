@@ -1,7 +1,37 @@
 package main
 
-import "github.com/full-chaos/dev-health-ops/internal/platform/shell"
+import (
+	"context"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
+)
+
+var schedulerSpec = shell.Spec{
+	Service:               "dev-health-scheduler",
+	ConfigureDependencies: configureSchedulerDependencies,
+}
 
 func main() {
-	shell.Main(shell.Spec{Service: "dev-health-scheduler"})
+	shell.Main(schedulerSpec)
+}
+
+func configureSchedulerDependencies(
+	_ context.Context,
+	_ config.Config,
+	registry *health.Registry,
+) ([]lifecycle.Component, error) {
+	// Phase 1 has no scheduler loop or composed storage clients. Keep every
+	// dependency required by the control-process topology explicitly closed.
+	err := processreadiness.RegisterUnavailable(
+		registry,
+		"domain_postgres",
+		"queue_postgres",
+		"river_schema",
+		"scheduler_loop",
+	)
+	return nil, err
 }

@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dev-health.local/contracts/jobs/v1/deployment-profiles.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "deployment_state",
+    "registry",
+    "postgres_budget",
+    "migration_job",
+    "operator_cli",
+    "processes"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "deployment_state": {"const": "coexistence_disabled"},
+    "registry": {"const": "contracts/jobs/v1/registry.json"},
+    "postgres_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server_max_connections",
+        "server_reserved_connections",
+        "pgbouncer_default_pool_size",
+        "pgbouncer_server_pool_count",
+        "pgbouncer_max_client_connections"
+      ],
+      "properties": {
+        "server_max_connections": {"type": "integer", "minimum": 1},
+        "server_reserved_connections": {"type": "integer", "minimum": 1},
+        "pgbouncer_default_pool_size": {"type": "integer", "minimum": 1},
+        "pgbouncer_server_pool_count": {"type": "integer", "minimum": 1},
+        "pgbouncer_max_client_connections": {"type": "integer", "minimum": 1}
+      }
+    },
+    "migration_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "binary", "max_connections", "config_env", "secret_env"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
+        "binary": {"const": "dev-hops"},
+        "max_connections": {"type": "integer", "minimum": 1, "maximum": 4},
+        "config_env": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"}
+        },
+        "secret_env": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"}
+        }
+      }
+    },
+    "operator_cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "binary",
+        "max_concurrent_invocations",
+        "queue_control_max_connections",
+        "domain_max_connections",
+        "config_env",
+        "secret_env"
+      ],
+      "properties": {
+        "name": {"const": "worker-operator"},
+        "binary": {"const": "dev-health-workerctl"},
+        "max_concurrent_invocations": {"const": 1},
+        "queue_control_max_connections": {"type": "integer", "minimum": 1, "maximum": 4},
+        "domain_max_connections": {"type": "integer", "minimum": 1, "maximum": 16},
+        "config_env": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"}
+        },
+        "secret_env": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"}
+        }
+      }
+    },
+    "processes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "binary",
+          "runtime",
+          "enabled_by_default",
+          "min_replicas",
+          "max_replicas",
+          "queues",
+          "queue_workers",
+          "job_kinds",
+          "queue_control_max_connections",
+          "domain_max_connections",
+          "requires_clickhouse",
+          "requires_valkey",
+          "secret_env"
+        ],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
+          "binary": {"type": "string", "pattern": "^dev-health-[a-z-]+$"},
+          "runtime": {"enum": ["control", "river", "stream"]},
+          "registry_profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+          "enabled_by_default": {"const": false},
+          "min_replicas": {"const": 0},
+          "max_replicas": {"type": "integer", "minimum": 1, "maximum": 8},
+          "queues": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$"}
+          },
+          "queue_workers": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["queue", "max_workers"],
+              "properties": {
+                "queue": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$"},
+                "max_workers": {"type": "integer", "minimum": 1, "maximum": 10000}
+              }
+            }
+          },
+          "job_kinds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"}
+          },
+          "queue_control_max_connections": {"type": "integer", "minimum": 0, "maximum": 4},
+          "domain_max_connections": {"type": "integer", "minimum": 1, "maximum": 16},
+          "requires_clickhouse": {"type": "boolean"},
+          "requires_valkey": {"type": "boolean"},
+          "secret_env": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"}
+          }
+        }
+      }
+    }
+  }
+}

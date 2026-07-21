@@ -708,7 +708,7 @@ A separate issue must define partition keys, consumer identity, pending-entry ow
 
 Use two PostgreSQL pools in Go worker processes:
 
-1. **Queue-control pool (proposed `WORKER_DATABASE_URI`)**
+1. **Queue-control pool (`WORKER_DATABASE_URI`)**
    - validated production default: direct PostgreSQL; a session-mode pool
      requires the same compatibility matrix before adoption;
    - small bounded connection count;
@@ -728,7 +728,12 @@ provide direct PostgreSQL queue control before a worker profile becomes ready.
 A separately verified session-mode endpoint or cancellation control plane may replace this
 condition only after equivalent cross-process and crash tests pass.
 
-`WORKER_DATABASE_URI` is an additive configuration contract introduced by CHAOS-3037, not a name accepted by the current Python runtime. Until that issue lands, `POSTGRES_URI` and the documented compatibility aliases remain authoritative; CHAOS-3037 must update the configuration and database-pooling documentation in the same change.
+`WORKER_DATABASE_URI` is the additive Go queue-control contract introduced by
+CHAOS-3037; it is not a Python database alias. `POSTGRES_URI` remains the
+domain-database setting. Long-running processes validate both roles and fail
+readiness if the direct queue-control DSN is absent, shared with the domain
+role, or configured as transaction/session mode without the required evidence.
+Only the one-shot migration path receives `MIGRATION_DATABASE_URI`.
 
 ### 14.2 Transactional enqueue from Python
 
@@ -935,6 +940,7 @@ Required low-cardinality metrics:
 - `worker_jobs_available{profile,queue,kind}`;
 - `worker_job_oldest_age_seconds{profile,queue}`;
 - `worker_jobs_running{profile,queue,kind}`;
+- `worker_execution_saturation_ratio{profile}`;
 - `worker_job_wait_seconds{profile,queue,kind}`;
 - `worker_job_duration_seconds{profile,queue,kind,result}`;
 - `worker_job_attempts_total{kind,result,error_category}`;
@@ -1040,7 +1046,8 @@ Add multi-stage Go build targets:
 - `dev-health-worker`;
 - `dev-health-scheduler`;
 - `dev-health-reconciler`;
-- `dev-health-stream`;
+- `dev-health-stream-runner`;
+- `dev-health-workerctl`;
 - `worker-contractcheck`.
 
 The image should follow the ACR reference posture: pinned inputs, non-root numeric UID/GID, minimal runtime, read-only root where possible, SBOM, vulnerability scan, and reproducibility check.
@@ -1299,7 +1306,8 @@ Default configurations must keep total worst-case connections below the document
 - whether a future application-owned cancellation plane is worth validating;
 - whether scheduler and reconciler share a binary/image;
 - whether River UI can be safely deployed;
-- how to expose operator commands—existing `dev-hops` CLI, a Go CLI, or authenticated internal HTTP;
+- whether a future authenticated HTTP transport should complement the selected
+  `dev-health-workerctl` one-shot Go CLI;
 - whether selected Python-only analytics algorithms stay behind a temporary service boundary;
 - exact job retention and River maintenance settings;
 - whether generic platform code is extracted after the first two worker families.

@@ -30,7 +30,10 @@ only the envelope defined by `envelope.schema.json`.
 
 `registry.json` defines the supported kind/version pairs and execution policy.
 `migration-state.json` records producer routing and promotion state without
-making queue state authoritative for product state.
+making queue state authoritative for product state. The validated
+[`deploy/go-workers/profiles.json`](../../../deploy/go-workers/profiles.json)
+manifest maps every registered profile, queue, and kind to a disabled-by-default
+deployment process and proves the maximum PostgreSQL connection footprint.
 
 ## Validation
 
@@ -43,4 +46,7 @@ go run ./cmd/worker-contractcheck compare --base <old-v1-dir> --candidate contra
 ```
 
 `compare` exits non-zero for a breaking in-place edit and is designed to be
-wired to CI with the merge-base contract directory as `--base`.
+wired to CI with the merge-base contract directory as `--base`. `validate`
+also fails when the registry and deployment profiles drift, a long-running
+process receives the migration DSN, or the rendered maximum connection budget
+exceeds its checked-in PostgreSQL/PgBouncer ceilings.

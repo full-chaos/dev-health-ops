@@ -10,6 +10,7 @@ on:
       - 'go.work'
       - 'go.work.sum'
       - 'contracts/jobs/v1/**'
+      - 'deploy/go-workers/**'
       - 'src/dev_health_ops/workers/job_contracts/**'
       - 'tests/workers/job_contracts/**'
       - 'docker/go-worker.Dockerfile'
@@ -31,6 +32,7 @@ on:
       - 'go.work'
       - 'go.work.sum'
       - 'contracts/jobs/v1/**'
+      - 'deploy/go-workers/**'
       - 'src/dev_health_ops/workers/job_contracts/**'
       - 'tests/workers/job_contracts/**'
       - 'docker/go-worker.Dockerfile'
@@ -118,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [worker, scheduler, reconciler, stream-runner, contractcheck]
+        target: [worker, scheduler, reconciler, stream-runner, operator, contractcheck]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 

@@ -85,10 +85,10 @@ services:
   #   docker service logs dev-health_migrate
   # App services run with AUTO_RUN_MIGRATIONS=false and never ambient-migrate.
   #
-  # POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
-  # transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.
-  # The Alembic step is skipped when POSTGRES_URI is unset (ClickHouse-only
-  # stacks).
+  # MIGRATION_DATABASE_URI (Alembic + River) or compatibility POSTGRES_URI
+  # (Alembic only) must point DIRECTLY at Postgres (port 5432), never at a
+  # transaction-mode pooler. PostgreSQL migration is skipped when both are
+  # unset (ClickHouse-only stacks).
   migrate:
     image: ghcr.io/your-org/dev-health-ops:latest
     security_opt:
@@ -100,10 +100,19 @@ services:
       - sh
       - -c
       - >-
-        if [ -n "$$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+        if [ -z "$${MIGRATION_DATABASE_URI:-}" ];
+        then unset MIGRATION_DATABASE_URI; fi;
+        if [ -n "$$POSTGRES_URI" ]
+        || [ "$${MIGRATION_DATABASE_URI+x}" = x ]
+        || [ "$${MIGRATION_DATABASE_URI_FILE+x}" = x ];
+        then dev-hops migrate postgres; fi
         && dev-hops migrate clickhouse
     environment:
       POSTGRES_URI: ${POSTGRES_URI:-}
+      MIGRATION_DATABASE_URI: ${MIGRATION_DATABASE_URI:-}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
       LOG_LEVEL: INFO
     deploy:

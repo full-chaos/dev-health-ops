@@ -11,11 +11,13 @@ language-neutral job contracts live under `contracts/jobs/`.
 - Python continues to own FastAPI/GraphQL, providers, processors, domain
   behavior, and all currently routed Celery jobs.
 - Go process foundations provide configuration, lifecycle, health, storage,
-  and versioned-contract support for future bounded-job migrations.
+  versioned-contract support, a one-shot River migrator, and separate bounded
+  domain and direct queue-control PostgreSQL pools.
 - No job changes runtime because a Go command exists. Migration and routing are
   explicit per-job work with parity and rollback gates.
-- River migrations and the direct PostgreSQL queue-control pool are later
-  CHAOS-3037 work. Long-running processes do not auto-migrate.
+- River DDL runs only from the one-shot migration job when its dedicated,
+  elevated DSN is configured. Long-running processes do not auto-migrate, and
+  the disabled Go profiles do not change the current Celery production routes.
 
 ### Python module roots
 
@@ -55,15 +57,19 @@ src/dev_health_ops/
 
 ```text
 cmd/
+├── dev-health-worker-migrate/ # One-shot pinned River schema migrator
 ├── dev-health-worker/        # Worker-profile process shell
 ├── dev-health-scheduler/     # Scheduler process shell
 ├── dev-health-reconciler/    # Durable-repair process shell
 ├── dev-health-stream-runner/ # Redis Streams process shell
+├── dev-health-workerctl/     # Authenticated, audited River operator CLI
 └── worker-contractcheck/     # Versioned-contract validation CLI
 internal/
 ├── platform/                 # Config, secrets, logging, lifecycle, health, version
 ├── storage/                  # Bounded PostgreSQL, ClickHouse, and Valkey factories
 ├── jobcontract/              # Go job-envelope and compatibility types
+├── joboutbox/                # Transactional Python-to-River relay
+├── joboperator/              # Payload-redacted operator policy and storage
 └── testsupport/containers/   # Isolated pinned dependency harness
 contracts/jobs/v1/            # Schemas, registry, examples, and migration state
 ```

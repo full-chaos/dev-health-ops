@@ -279,6 +279,60 @@ def test_legacy_compose_migrate_uses_local_build_matching_api() -> None:
     assert migrate["build"] == api["build"]
 
 
+def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    environment = services["postgres"]["environment"]
+    assert environment["RIVER_DOMAIN_DATABASE_ROLE"] == (
+        "${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}"
+    )
+    assert environment["RIVER_QUEUE_DATABASE_ROLE"] == (
+        "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}"
+    )
+
+    init_script = (_REPO_ROOT / "docker" / "init-extra-dbs.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "CREATE ROLE %I LOGIN NOSUPERUSER" in init_script
+    for attribute in ("NOCREATEDB", "NOCREATEROLE", "NOREPLICATION", "NOBYPASSRLS"):
+        assert attribute in init_script
+    assert '-v app_database="$POSTGRES_DB"' in init_script
+    assert ':"app_database"' in init_script
+    assert "GRANT CONNECT ON DATABASE" in init_script
+    for grant in (
+        "GRANT USAGE ON SCHEMA public",
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public",
+        "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public",
+        "REVOKE CREATE ON SCHEMA public FROM",
+        "public.alembic_version",
+        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
+        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
+        "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+    ):
+        assert grant in init_script
+    assert "REVOKE CREATE ON SCHEMA public FROM PUBLIC" not in init_script
+    assert "GRANT INSERT ON TABLE public.worker_job_outbox" not in init_script
+
+    upgrade_script = (
+        _REPO_ROOT / "scripts" / "worker" / "provision_river_roles.sql"
+    ).read_text(encoding="utf-8")
+    assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION" in upgrade_script
+    assert "WHERE NOT EXISTS" in upgrade_script
+    assert "domain_role and queue_role must be distinct" in upgrade_script
+    for grant in (
+        "GRANT USAGE ON SCHEMA public",
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public",
+        "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public",
+        "REVOKE CREATE ON SCHEMA public FROM",
+        "public.alembic_version",
+        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
+        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
+        "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+    ):
+        assert grant in upgrade_script
+    assert "REVOKE CREATE ON SCHEMA public FROM PUBLIC" not in upgrade_script
+    assert "GRANT INSERT ON TABLE public.worker_job_outbox" not in upgrade_script
+
+
 def test_legacy_compose_disables_ambient_migrations() -> None:
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     for name in ("api", "billing-edge", "worker", "worker-ingest", "worker-heavy"):
@@ -311,6 +365,23 @@ def test_swarm_stack_has_migrate_service_and_disables_ambient_migrations() -> No
         assert env.get("AUTO_RUN_MIGRATIONS") == "false"
 
 
+@pytest.mark.parametrize(
+    "manifest",
+    [_LEGACY_COMPOSE, _PROD_COMPOSE, _SWARM_STACK],
+)
+def test_compose_migration_jobs_remove_empty_dedicated_uri(manifest: Path) -> None:
+    """Compose interpolation creates an empty-but-present value by default.
+
+    The migration CLI deliberately treats an explicitly empty elevated DSN as
+    a configuration error, so each compatibility entrypoint must remove that
+    placeholder before running the legacy POSTGRES_URI-only Alembic path.
+    """
+    migrate = _load_yaml(manifest)["services"]["migrate"]
+    entrypoint = " ".join(str(part) for part in migrate["entrypoint"])
+    assert "unset MIGRATION_DATABASE_URI" in entrypoint
+    assert "MIGRATION_DATABASE_URI_FILE+x" in entrypoint
+
+
 def test_kubernetes_manifests_run_migrations_as_job() -> None:
     job_docs = [
         d
@@ -325,12 +396,27 @@ def test_kubernetes_manifests_run_migrations_as_job() -> None:
     assert pod_spec["restartPolicy"] == "Never"
     command = " ".join(pod_spec["containers"][0]["command"])
     assert "dev-hops migrate clickhouse" in command
+    assert "unset MIGRATION_DATABASE_URI" in command
+    assert "MIGRATION_DATABASE_URI_FILE+x" in command
 
     config = _load_yaml(_K8S_DIR / "configmap.yaml")
     assert config["data"]["AUTO_RUN_MIGRATIONS"] == "false"
 
     kustomization = _load_yaml(_K8S_DIR / "kustomization.yaml")
     assert "migrate-job.yaml" in kustomization["resources"]
+
+    migration_secret = next(
+        document
+        for document in _k8s_docs("secrets.yaml")
+        if document.get("kind") == "Secret"
+        and document["metadata"]["name"] == "dev-health-migration-secrets"
+    )
+    migration_data = migration_secret.get("stringData") or {}
+    assert "MIGRATION_DATABASE_URI" not in migration_data, (
+        "the checked-in migration Secret must omit MIGRATION_DATABASE_URI; "
+        "an empty key is a fail-closed CLI configuration error"
+    )
+    assert set(migration_data) == {"POSTGRES_URI", "CLICKHOUSE_URI"}
 
 
 def _k8s_docs(filename: str) -> list[dict]:
@@ -348,13 +434,19 @@ def test_kubernetes_secret_exposes_clickhouse_uri_for_migrate(monkeypatch) -> No
     in the secret the migrate Job fails on first boot."""
     from dev_health_ops.db import resolve_sink_uri
 
-    secret = next(
+    shared_secret = next(
         d
         for d in _k8s_docs("secrets.yaml")
         if d.get("kind") == "Secret" and d["metadata"]["name"] == "dev-health-secrets"
     )
-    uri = secret["stringData"].get("CLICKHOUSE_URI")
-    assert uri, "dev-health-secrets must define CLICKHOUSE_URI"
+    migration_secret = next(
+        d
+        for d in _k8s_docs("secrets.yaml")
+        if d.get("kind") == "Secret"
+        and d["metadata"]["name"] == "dev-health-migration-secrets"
+    )
+    uri = migration_secret["stringData"].get("CLICKHOUSE_URI")
+    assert uri, "dev-health-migration-secrets must define CLICKHOUSE_URI"
     assert uri.startswith("clickhouse://")
 
     # The value must be resolvable exactly the way the migrate CLI resolves it.
@@ -369,7 +461,9 @@ def test_kubernetes_secret_exposes_clickhouse_uri_for_migrate(monkeypatch) -> No
         for ref in container.get("envFrom", [])
         if "secretRef" in ref
     }
-    assert "dev-health-secrets" in secret_refs
+    assert secret_refs == {"dev-health-migration-secrets"}
+    assert "GITHUB_TOKEN" in shared_secret["stringData"]
+    assert "GITHUB_TOKEN" not in migration_secret["stringData"]
 
 
 @pytest.mark.parametrize("manifest", ["api.yaml", "worker.yaml"])
@@ -419,9 +513,12 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
     assert "helm.sh/hook: pre-install,pre-upgrade" in template
     assert "helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded" in template
     assert "dev-hops migrate clickhouse" in template
+    assert "unset MIGRATION_DATABASE_URI" in template
+    assert "MIGRATION_DATABASE_URI_FILE+x" in template
 
     helpers = (_HELM_DIR / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
     assert "AUTO_RUN_MIGRATIONS" in helpers
+    assert '.Values.secrets.data "DATABASE_URI"' in helpers
 
     values = _load_yaml(_HELM_DIR / "values.yaml")
     assert values["migrations"]["hook"]["enabled"] is True

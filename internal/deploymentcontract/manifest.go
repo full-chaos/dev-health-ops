@@ -78,6 +78,7 @@ type Manifest struct {
 	SchemaVersion   int            `json:"schema_version"`
 	DeploymentState string         `json:"deployment_state"`
 	Registry        string         `json:"registry"`
+	RuntimeRoleEnv  []string       `json:"runtime_role_env"`
 	PostgresBudget  PostgresBudget `json:"postgres_budget"`
 	MigrationJob    MigrationJob   `json:"migration_job"`
 	OperatorCLI     OperatorCLI    `json:"operator_cli"`
@@ -121,6 +122,12 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	}
 	if manifest.Registry != "contracts/jobs/v1/registry.json" {
 		return BudgetSummary{}, errors.New("deployment profile registry path is not canonical")
+	}
+	if !equalStrings(manifest.RuntimeRoleEnv, []string{
+		"RIVER_DOMAIN_DATABASE_ROLE",
+		"RIVER_QUEUE_DATABASE_ROLE",
+	}) {
+		return BudgetSummary{}, errors.New("runtime role identity configuration is invalid")
 	}
 	if err := validatePostgresBudget(manifest.PostgresBudget); err != nil {
 		return BudgetSummary{}, err
@@ -279,6 +286,8 @@ func validateOperatorCLI(operator OperatorCLI) error {
 	if !equalStrings(operator.ConfigEnv, []string{
 		"PGBOUNCER_TRANSACTION_MODE",
 		"RIVER_DATABASE_SCHEMA",
+		"RIVER_DOMAIN_DATABASE_ROLE",
+		"RIVER_QUEUE_DATABASE_ROLE",
 		"WORKER_DATABASE_MODE",
 	}) || !equalStrings(operator.SecretEnv, []string{
 		"POSTGRES_URI",

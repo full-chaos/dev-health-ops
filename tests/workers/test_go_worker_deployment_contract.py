@@ -72,6 +72,10 @@ def test_go_profiles_are_disabled_future_topology() -> None:
     manifest = _load_json(_PROFILES)
 
     assert manifest["deployment_state"] == "coexistence_disabled"
+    assert manifest["runtime_role_env"] == [
+        "RIVER_DOMAIN_DATABASE_ROLE",
+        "RIVER_QUEUE_DATABASE_ROLE",
+    ]
     assert all(
         not process["enabled_by_default"] and process["min_replicas"] == 0
         for process in manifest["processes"]
@@ -94,6 +98,8 @@ def test_go_profiles_are_disabled_future_topology() -> None:
         "config_env": [
             "PGBOUNCER_TRANSACTION_MODE",
             "RIVER_DATABASE_SCHEMA",
+            "RIVER_DOMAIN_DATABASE_ROLE",
+            "RIVER_QUEUE_DATABASE_ROLE",
             "WORKER_DATABASE_MODE",
         ],
         "secret_env": [

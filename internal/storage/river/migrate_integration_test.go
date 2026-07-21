@@ -61,6 +61,7 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 		"CREATE TABLE public.domain_runtime_probe (id bigserial PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE FUNCTION public.domain_runtime_forbidden() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
 	} {
 		if _, err := adminPool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -342,6 +343,21 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	); err != nil {
 		t.Fatalf("domain producer cannot insert outbox state: %v", err)
 	}
+	if _, err := domainPool.Exec(
+		ctx,
+		"UPDATE public.worker_job_outbox SET state='forged' WHERE id='00000000-0000-0000-0000-000000000001'",
+	); err == nil {
+		t.Fatal("domain producer unexpectedly updates relay-owned outbox state")
+	}
+	if _, err := domainPool.Exec(
+		ctx,
+		"DELETE FROM public.worker_job_outbox WHERE id='00000000-0000-0000-0000-000000000001'",
+	); err == nil {
+		t.Fatal("domain producer unexpectedly deletes relay-owned outbox state")
+	}
+	if _, err := domainPool.Exec(ctx, "TRUNCATE public.worker_job_outbox"); err == nil {
+		t.Fatal("domain producer unexpectedly truncates relay-owned outbox state")
+	}
 	if _, err := domainPool.Exec(ctx, "SELECT * FROM public.alembic_version"); err == nil {
 		t.Fatal("domain role unexpectedly reads Alembic migration metadata")
 	}
@@ -350,6 +366,9 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	}
 	if _, err := domainPool.Exec(ctx, "SELECT count(*) FROM river.river_job"); err == nil {
 		t.Fatal("domain role unexpectedly reads River tables")
+	}
+	if _, err := domainPool.Exec(ctx, "SELECT public.domain_runtime_forbidden()"); err == nil {
+		t.Fatal("domain role unexpectedly executes public functions")
 	}
 
 	queuePool := openPool(t, ctx, queueURI)

@@ -55,8 +55,11 @@ func TestQueueAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *tes
 		"ROLREPLICATION",
 		"ROLBYPASSRLS",
 		"PG_HAS_ROLE",
+		"'MEMBER'",
 		"HAS_DATABASE_PRIVILEGE",
 		"WORKER_JOB_OUTBOX",
+		"PUBLIC_FUNCTIONS",
+		"PUBLIC_SEQUENCES",
 		"RIVER_TABLES",
 		"RIVER_SEQUENCES",
 		"RIVER_FUNCTIONS",
@@ -64,6 +67,7 @@ func TestQueueAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *tes
 		"'TRUNCATE'",
 		"'REFERENCES'",
 		"'TRIGGER'",
+		"'MAINTAIN'",
 	} {
 		if !strings.Contains(upperQuery, required) {
 			t.Fatalf("queue authorization query omits %q", required)

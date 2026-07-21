@@ -36,12 +36,16 @@ func TestDomainAuthorizationRequiresSemanticDML(t *testing.T) {
 	defer adminPool.Close()
 	for _, statement := range []string{
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+		"CREATE SCHEMA river",
 		"CREATE TABLE public." + domainAuthorizationTable + " (id bigserial PRIMARY KEY, value text NOT NULL)",
+		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
 		"CREATE ROLE " + connectOnlyDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainConnectOnlyPass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + authorizedDomainRole + ", " + connectOnlyDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + authorizedDomainRole,
+		"REVOKE ALL PRIVILEGES ON TABLE public.worker_job_outbox FROM " + authorizedDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + authorizedDomainRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO " + authorizedDomainRole,
 	} {
 		if _, err := adminPool.Exec(ctx, statement); err != nil {
@@ -55,13 +59,13 @@ func TestDomainAuthorizationRequiresSemanticDML(t *testing.T) {
 		postgresRoleURI(t, instance.URI, authorizedDomainRole, domainAuthorizationPass),
 	)
 	defer authorizedPool.Close()
-	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool); err != nil {
+	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool, authorizedDomainRole, "river"); err != nil {
 		t.Fatalf("authorized domain readiness failed: %v", err)
 	}
 	if _, err := adminPool.Exec(ctx, "CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool); err != nil {
+	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool, authorizedDomainRole, "river"); err != nil {
 		t.Fatalf("Alembic metadata without runtime grants closed readiness: %v", err)
 	}
 	if _, err := authorizedPool.Exec(ctx, "SELECT * FROM public.alembic_version"); err == nil {
@@ -70,7 +74,7 @@ func TestDomainAuthorizationRequiresSemanticDML(t *testing.T) {
 	if _, err := adminPool.Exec(ctx, "CREATE TABLE public.domain_newly_migrated (id bigint PRIMARY KEY)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool); !errors.Is(err, postgresstore.ErrUnavailable) {
+	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool, authorizedDomainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
 		t.Fatalf("ungranted semantic table readiness error = %v, want ErrUnavailable", err)
 	}
 	if _, err := adminPool.Exec(
@@ -79,7 +83,7 @@ func TestDomainAuthorizationRequiresSemanticDML(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool); err != nil {
+	if err := postgresstore.CheckDomainAuthorization(ctx, authorizedPool, authorizedDomainRole, "river"); err != nil {
 		t.Fatalf("refreshed semantic grants did not recover readiness: %v", err)
 	}
 	assertDomainDML(t, ctx, authorizedPool)
@@ -93,7 +97,7 @@ func TestDomainAuthorizationRequiresSemanticDML(t *testing.T) {
 		postgresRoleURI(t, instance.URI, connectOnlyDomainRole, domainConnectOnlyPass),
 	)
 	defer connectOnlyPool.Close()
-	if err := postgresstore.CheckDomainAuthorization(ctx, connectOnlyPool); !errors.Is(err, postgresstore.ErrUnavailable) {
+	if err := postgresstore.CheckDomainAuthorization(ctx, connectOnlyPool, connectOnlyDomainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
 		t.Fatalf("CONNECT-only domain readiness error = %v, want ErrUnavailable", err)
 	}
 	if _, err := connectOnlyPool.Exec(ctx, "SELECT count(*) FROM public."+domainAuthorizationTable); err == nil {

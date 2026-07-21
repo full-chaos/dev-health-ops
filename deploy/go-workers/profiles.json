@@ -2,6 +2,10 @@
   "schema_version": 1,
   "deployment_state": "coexistence_disabled",
   "registry": "contracts/jobs/v1/registry.json",
+  "runtime_role_env": [
+    "RIVER_DOMAIN_DATABASE_ROLE",
+    "RIVER_QUEUE_DATABASE_ROLE"
+  ],
   "postgres_budget": {
     "server_max_connections": 100,
     "server_reserved_connections": 15,
@@ -32,6 +36,8 @@
     "config_env": [
       "PGBOUNCER_TRANSACTION_MODE",
       "RIVER_DATABASE_SCHEMA",
+      "RIVER_DOMAIN_DATABASE_ROLE",
+      "RIVER_QUEUE_DATABASE_ROLE",
       "WORKER_DATABASE_MODE"
     ],
     "secret_env": [

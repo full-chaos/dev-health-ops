@@ -18,7 +18,7 @@ WITH domain_tables AS (
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 	WHERE namespace.nspname = 'public'
 		AND class.relkind IN ('r', 'p')
-		AND class.relname <> 'alembic_version'
+		AND class.relname NOT IN ('alembic_version', 'worker_job_outbox')
 ), domain_sequences AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
@@ -36,14 +36,15 @@ WITH domain_tables AS (
 	FROM pg_catalog.pg_proc AS procedure
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
 	WHERE namespace.nspname = $2
-), elevated_roles AS (
+), public_functions AS (
+	SELECT procedure.oid
+	FROM pg_catalog.pg_proc AS procedure
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+	WHERE namespace.nspname = 'public'
+), member_roles AS (
 	SELECT role.oid
 	FROM pg_catalog.pg_roles AS role
-	WHERE role.rolsuper
-		OR role.rolcreatedb
-		OR role.rolcreaterole
-		OR role.rolreplication
-		OR role.rolbypassrls
+	WHERE role.rolname <> current_user
 )
 SELECT
 	current_user = $1
@@ -59,8 +60,8 @@ SELECT
 			AND NOT rolbypassrls
 	)
 	AND NOT EXISTS (
-		SELECT 1 FROM elevated_roles
-		WHERE pg_has_role(current_user, oid, 'USAGE')
+		SELECT 1 FROM member_roles
+		WHERE pg_has_role(current_user, oid, 'MEMBER')
 	)
 	AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
 	AND has_schema_privilege(current_user, 'public', 'USAGE')
@@ -73,6 +74,34 @@ SELECT
 			OR NOT has_table_privilege(current_user, oid, 'INSERT')
 			OR NOT has_table_privilege(current_user, oid, 'UPDATE')
 			OR NOT has_table_privilege(current_user, oid, 'DELETE')
+			OR has_table_privilege(current_user, oid, 'TRUNCATE')
+			OR has_table_privilege(current_user, oid, 'REFERENCES')
+			OR has_table_privilege(current_user, oid, 'TRIGGER')
+			OR CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'worker_job_outbox'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
 	)
 	AND NOT EXISTS (
 		SELECT 1
@@ -87,7 +116,20 @@ SELECT
 		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 		WHERE namespace.nspname = 'public'
 			AND class.relname = 'alembic_version'
-			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND (
+				has_table_privilege(current_user, class.oid, 'SELECT')
+				OR has_table_privilege(current_user, class.oid, 'INSERT')
+				OR has_table_privilege(current_user, class.oid, 'UPDATE')
+				OR has_table_privilege(current_user, class.oid, 'DELETE')
+				OR has_table_privilege(current_user, class.oid, 'TRUNCATE')
+				OR has_table_privilege(current_user, class.oid, 'REFERENCES')
+				OR has_table_privilege(current_user, class.oid, 'TRIGGER')
+				OR CASE
+					WHEN current_setting('server_version_num')::integer >= 170000
+					THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+					ELSE false
+				END
+			)
 	)
 	AND NOT has_schema_privilege(current_user, $2, 'USAGE')
 	AND NOT EXISTS (
@@ -97,10 +139,23 @@ SELECT
 			OR has_table_privilege(current_user, oid, 'INSERT')
 			OR has_table_privilege(current_user, oid, 'UPDATE')
 			OR has_table_privilege(current_user, oid, 'DELETE')
+			OR has_table_privilege(current_user, oid, 'TRUNCATE')
+			OR has_table_privilege(current_user, oid, 'REFERENCES')
+			OR has_table_privilege(current_user, oid, 'TRIGGER')
+			OR CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, oid, 'MAINTAIN')
+				ELSE false
+			END
 	)
 	AND NOT EXISTS (
 		SELECT 1
 		FROM river_functions
+		WHERE has_function_privilege(current_user, oid, 'EXECUTE')
+	)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM public_functions
 		WHERE has_function_privilege(current_user, oid, 'EXECUTE')
 	)`
 

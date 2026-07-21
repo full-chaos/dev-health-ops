@@ -45,6 +45,18 @@ psql \
     )
       WHERE to_regclass('public.alembic_version') IS NOT NULL
     \gexec
+    SELECT format(
+      'REVOKE ALL PRIVILEGES ON TABLE public.worker_job_outbox FROM %I',
+      :'domain_role'
+    )
+      WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+    \gexec
+    SELECT format(
+      'GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO %I',
+      :'domain_role'
+    )
+      WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+    \gexec
     GRANT USAGE ON SCHEMA public TO :"queue_role";
     REVOKE CREATE ON SCHEMA public FROM :"queue_role";
     REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"queue_role";

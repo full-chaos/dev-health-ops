@@ -9,6 +9,9 @@ The manifest also budgets one concurrent `dev-health-workerctl` invocation
 with two domain and two direct queue-control connections. The operator is a
 one-shot authenticated CLI, not a replica-bearing process, and its dedicated
 image target receives the operator token only when an operator invokes it.
+`runtime_role_env` is the shared non-secret identity contract for every future
+Go workload renderer: runtime DSN usernames must match both declared role names
+before a process can become ready.
 
 The checked-in Compose, Swarm, Kubernetes, and Helm stacks still render the
 Celery topology; none currently renders the Go `processes` entries. Static

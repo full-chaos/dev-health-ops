@@ -211,11 +211,11 @@ check_contract() {
 }
 
 check_integration() {
-	printf 'go test integration: storage, River, outbox, and operator\n'
+	printf 'go test integration: PostgreSQL roles, River, outbox, and operator\n'
 	(
 		cd "${ROOT}"
 		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=10m \
-			./internal/testsupport/containers ./internal/storage/river \
+			./internal/testsupport/containers ./internal/storage/postgres ./internal/storage/river \
 			./internal/joboutbox ./internal/joboperator
 	)
 }

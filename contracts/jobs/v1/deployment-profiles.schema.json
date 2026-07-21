@@ -7,6 +7,7 @@
     "schema_version",
     "deployment_state",
     "registry",
+    "runtime_role_env",
     "postgres_budget",
     "migration_job",
     "operator_cli",
@@ -16,6 +17,13 @@
     "schema_version": {"const": 1},
     "deployment_state": {"const": "coexistence_disabled"},
     "registry": {"const": "contracts/jobs/v1/registry.json"},
+    "runtime_role_env": {
+      "type": "array",
+      "const": [
+        "RIVER_DOMAIN_DATABASE_ROLE",
+        "RIVER_QUEUE_DATABASE_ROLE"
+      ]
+    },
     "postgres_budget": {
       "type": "object",
       "additionalProperties": false,

@@ -139,7 +139,7 @@
       "targets": [
         {
           "expr": "max by (pool) (worker_database_pool_saturation_ratio)",
-          "legendFormat": "{{profile}} / {{pool}}",
+          "legendFormat": "{{pool}}",
           "refId": "A"
         }
       ],

@@ -28,21 +28,28 @@ WITH river_tables AS (
 	FROM pg_catalog.pg_proc AS procedure
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
 	WHERE namespace.nspname = $2
-), other_public_relations AS (
+), other_public_tables AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 	WHERE namespace.nspname = 'public'
-		AND class.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
-		AND class.relname NOT IN ('worker_job_outbox', 'alembic_version')
-), elevated_roles AS (
+		AND class.relkind IN ('r', 'p', 'v', 'm', 'f')
+		AND class.relname <> 'worker_job_outbox'
+), public_sequences AS (
+	SELECT class.oid
+	FROM pg_catalog.pg_class AS class
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+	WHERE namespace.nspname = 'public'
+		AND class.relkind = 'S'
+), public_functions AS (
+	SELECT procedure.oid
+	FROM pg_catalog.pg_proc AS procedure
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+	WHERE namespace.nspname = 'public'
+), member_roles AS (
 	SELECT role.oid
 	FROM pg_catalog.pg_roles AS role
-	WHERE role.rolsuper
-		OR role.rolcreatedb
-		OR role.rolcreaterole
-		OR role.rolreplication
-		OR role.rolbypassrls
+	WHERE role.rolname <> current_user
 )
 SELECT
 	current_user = $1
@@ -58,8 +65,8 @@ SELECT
 			AND NOT rolbypassrls
 	)
 	AND NOT EXISTS (
-		SELECT 1 FROM elevated_roles
-		WHERE pg_has_role(current_user, oid, 'USAGE')
+		SELECT 1 FROM member_roles
+		WHERE pg_has_role(current_user, oid, 'MEMBER')
 	)
 	AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
 	AND has_schema_privilege(current_user, 'public', 'USAGE')
@@ -78,10 +85,15 @@ SELECT
 			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
 			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
 	)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM other_public_relations
+		FROM other_public_tables
 		WHERE has_table_privilege(current_user, oid, 'SELECT')
 			OR has_table_privilege(current_user, oid, 'INSERT')
 			OR has_table_privilege(current_user, oid, 'UPDATE')
@@ -89,6 +101,23 @@ SELECT
 			OR has_table_privilege(current_user, oid, 'TRUNCATE')
 			OR has_table_privilege(current_user, oid, 'REFERENCES')
 			OR has_table_privilege(current_user, oid, 'TRIGGER')
+			OR CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM public_sequences
+		WHERE has_sequence_privilege(current_user, oid, 'USAGE')
+			OR has_sequence_privilege(current_user, oid, 'SELECT')
+			OR has_sequence_privilege(current_user, oid, 'UPDATE')
+	)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM public_functions
+		WHERE has_function_privilege(current_user, oid, 'EXECUTE')
 	)
 	AND has_schema_privilege(current_user, $2, 'USAGE')
 	AND NOT has_schema_privilege(current_user, $2, 'CREATE')
@@ -103,6 +132,11 @@ SELECT
 			OR has_table_privilege(current_user, oid, 'TRUNCATE')
 			OR has_table_privilege(current_user, oid, 'REFERENCES')
 			OR has_table_privilege(current_user, oid, 'TRIGGER')
+			OR CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, oid, 'MAINTAIN')
+				ELSE false
+			END
 	)
 	AND NOT EXISTS (
 		SELECT 1

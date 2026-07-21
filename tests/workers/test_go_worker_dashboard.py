@@ -34,6 +34,9 @@ def test_go_worker_dashboard_covers_required_runtime_signals() -> None:
     assert len(panel_ids) == len(set(panel_ids))
     assert dashboard["refresh"] == "30s"
 
+    pool_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 8)
+    assert pool_panel["targets"][0]["legendFormat"] == "{{pool}}"
+
 
 def test_go_worker_dashboard_queries_are_low_cardinality_and_payload_free() -> None:
     serialized = DASHBOARD_PATH.read_text(encoding="utf-8")

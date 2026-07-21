@@ -31,6 +31,8 @@ import (
 const (
 	serviceName         = "dev-health-workerctl"
 	operatorAdvisoryKey = int64(30330001)
+	defaultDomainRole   = "devhealth_domain"
+	defaultQueueRole    = "devhealth_queue"
 )
 
 func main() {
@@ -115,6 +117,9 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if mode != platformconfig.QueueControlDirect {
 		return nil, writeError(stderr, "queue_control_mode_unsupported")
 	}
+	domainRole := resolveName("RIVER_DOMAIN_DATABASE_ROLE", defaultDomainRole, lookup)
+	queueRole := resolveName("RIVER_QUEUE_DATABASE_ROLE", defaultQueueRole, lookup)
+	schema := resolveName("RIVER_DATABASE_SCHEMA", "river", lookup)
 	domainTransactionPooler := false
 	if raw, configured := lookup("PGBOUNCER_TRANSACTION_MODE"); configured && raw != "" {
 		var err error
@@ -124,8 +129,11 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		}
 	}
 
-	runtimeConfig := postgresstore.DefaultRuntimeConfig(domainURI.Reveal(), queueURI.Reveal())
+	runtimeConfig := postgresstore.DefaultRuntimeConfig(
+		domainURI.Reveal(), queueURI.Reveal(), domainRole, queueRole,
+	)
 	runtimeConfig.QueueControlMode = mode
+	runtimeConfig.RiverSchema = schema
 	runtimeConfig.DomainTransactionPooler = domainTransactionPooler
 	runtimeConfig.DomainMaxConns = 2
 	runtimeConfig.QueueMaxConns = 2
@@ -139,6 +147,10 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 			pools.Close()
 		}
 	}()
+	if postgresstore.CheckDomainAuthorization(ctx, pools.Domain, domainRole, schema) != nil ||
+		postgresstore.CheckQueueAuthorization(ctx, pools.QueueControl, queueRole, schema) != nil {
+		return nil, writeError(stderr, "runtime_role_unauthorized")
+	}
 
 	authenticator, err := joboperator.NewAuthenticator(pools.Domain)
 	if err != nil {
@@ -163,10 +175,6 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		return nil, writeError(stderr, "operator_busy")
 	}
 
-	schema := "river"
-	if raw, configured := lookup("RIVER_DATABASE_SCHEMA"); configured && raw != "" {
-		schema = raw
-	}
 	if _, err := riverstore.CheckSchema(ctx, pools.QueueControl, schema, nil); err != nil {
 		return nil, writeError(stderr, "river_schema_unavailable")
 	}
@@ -422,6 +430,13 @@ func positiveID(raw string) (int64, bool) {
 func resolveRequired(key string, lookup platformsecrets.LookupEnv) (platformsecrets.Value, bool) {
 	value, configured, err := platformsecrets.Resolve(key, lookup)
 	return value, err == nil && configured
+}
+
+func resolveName(key, fallback string, lookup platformsecrets.LookupEnv) string {
+	if value, configured := lookup(key); configured && strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
 }
 
 func writeResult(stdout, stderr io.Writer, value any) int {

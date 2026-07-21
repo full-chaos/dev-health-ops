@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,6 +24,8 @@ import (
 const (
 	operatorIntegrationDomainRole = "operator_domain_runtime"
 	operatorIntegrationQueueRole  = "operator_queue_runtime"
+	operatorIntegrationDomainPass = "operator_domain_runtime_password"
+	operatorIntegrationQueuePass  = "operator_queue_runtime_password"
 	operatorIntegrationToken      = "svc_worker_0123456789abcdefghijklmnopqrstuvwxyzAB"
 	operatorIntegrationCredential = "00000000-0000-4000-8000-000000000303"
 )
@@ -46,30 +49,44 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		}
 	}()
 
-	pool := openOperatorIntegrationPool(t, ctx, instance.URI)
-	defer pool.Close()
-	createOperatorIntegrationSchema(t, ctx, pool)
-	if _, err := riverstore.ApplyPinnedMigrations(ctx, pool, riverstore.MigrationOptions{
+	adminPool := openOperatorIntegrationPool(t, ctx, instance.URI)
+	defer adminPool.Close()
+	createOperatorIntegrationSchema(t, ctx, adminPool)
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:     "river",
 		DomainRole: operatorIntegrationDomainRole,
 		QueueRole:  operatorIntegrationQueueRole,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	domainPool := openOperatorIntegrationRolePool(
+		t, ctx, instance.URI, operatorIntegrationDomainRole, operatorIntegrationDomainPass,
+	)
+	defer domainPool.Close()
+	queuePool := openOperatorIntegrationRolePool(
+		t, ctx, instance.URI, operatorIntegrationQueueRole, operatorIntegrationQueuePass,
+	)
+	defer queuePool.Close()
+	if err := postgresstore.CheckDomainAuthorization(ctx, domainPool, operatorIntegrationDomainRole, "river"); err != nil {
+		t.Fatalf("domain role authorization: %v", err)
+	}
+	if err := postgresstore.CheckQueueAuthorization(ctx, queuePool, operatorIntegrationQueueRole, "river"); err != nil {
+		t.Fatalf("queue role authorization: %v", err)
+	}
 	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	jobID := insertOperatorIntegrationJob(t, ctx, pool, registry, now)
-	if _, err := pool.Exec(ctx, `
+	jobID := insertOperatorIntegrationJob(t, ctx, adminPool, registry, now)
+	if _, err := adminPool.Exec(ctx, `
 		INSERT INTO river.river_queue (name, updated_at)
 		VALUES ('heartbeat', $1), ('retention', $1)
 		ON CONFLICT (name) DO UPDATE SET updated_at = EXCLUDED.updated_at`, now); err != nil {
 		t.Fatal(err)
 	}
 
-	authenticator, err := NewAuthenticator(pool)
+	authenticator, err := NewAuthenticator(domainPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,15 +101,15 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatalf("principal = %+v", authentication.Principal())
 	}
 
-	backend, err := NewDirectPostgresBackend(pool, "river", registry)
+	backend, err := NewDirectPostgresBackend(queuePool, "river", registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	auditor, err := NewPostgresAuditor(pool)
+	auditor, err := NewPostgresAuditor(domainPool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	productionGuard, err := NewPostgresDomainGuard(pool)
+	productionGuard, err := NewPostgresDomainGuard(domainPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +150,7 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if cancelled.State != StateCancelled {
 		t.Fatalf("cancelled job = %+v", cancelled)
 	}
-	assertOperatorIntegrationAudit(t, ctx, pool, 1, "jobs.cancel", "succeeded")
+	assertOperatorIntegrationAudit(t, ctx, adminPool, 1, "jobs.cancel", "succeeded")
 
 	if err := service.PauseQueue(ctx, principal, "heartbeat", "incident_response", "operator-integration-pause"); err != nil {
 		t.Fatalf("PauseQueue: %v", err)
@@ -145,10 +162,10 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err := service.ResumeQueue(ctx, principal, "heartbeat", "incident_response", "operator-integration-resume"); err != nil {
 		t.Fatalf("ResumeQueue: %v", err)
 	}
-	assertOperatorIntegrationAudit(t, ctx, pool, 3, "queues.resume", "succeeded")
+	assertOperatorIntegrationAudit(t, ctx, adminPool, 3, "queues.resume", "succeeded")
 
 	var auditColumns []string
-	rows, err := pool.Query(ctx, `
+	rows, err := adminPool.Query(ctx, `
 		SELECT column_name FROM information_schema.columns
 		WHERE table_schema = 'public' AND table_name = 'worker_operator_audits'
 		ORDER BY column_name`)
@@ -182,8 +199,8 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	statements := []string{
-		"CREATE ROLE " + operatorIntegrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
-		"CREATE ROLE " + operatorIntegrationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+		"CREATE ROLE " + operatorIntegrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationDomainPass + "'",
+		"CREATE ROLE " + operatorIntegrationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationQueuePass + "'",
 		`CREATE TABLE public.internal_service_credentials (
 			id uuid PRIMARY KEY,
 			service_name text NOT NULL,
@@ -206,6 +223,10 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			status varchar(16) NOT NULL,
 			created_at timestamptz NOT NULL,
 			completed_at timestamptz
+		)`,
+		`CREATE TABLE public.worker_job_outbox (
+			id uuid PRIMARY KEY,
+			state text NOT NULL
 		)`,
 	}
 	for _, statement := range statements {
@@ -318,6 +339,32 @@ func openOperatorIntegrationPool(t *testing.T, ctx context.Context, uri string) 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		t.Fatal(fmt.Errorf("ping PostgreSQL: %w", err))
+	}
+	return pool
+}
+
+func openOperatorIntegrationRolePool(
+	t *testing.T,
+	ctx context.Context,
+	uri string,
+	role string,
+	password string,
+) *pgxpool.Pool {
+	t.Helper()
+	configuration, err := pgxpool.ParseConfig(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration.ConnConfig.User = role
+	configuration.ConnConfig.Password = password
+	configuration.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		t.Fatal(fmt.Errorf("ping PostgreSQL runtime role %q: %w", role, err))
 	}
 	return pool
 }

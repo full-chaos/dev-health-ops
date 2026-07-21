@@ -63,6 +63,18 @@ SELECT format(
        )
  WHERE to_regclass('public.alembic_version') IS NOT NULL
 \gexec
+SELECT format(
+         'REVOKE ALL PRIVILEGES ON TABLE public.worker_job_outbox FROM %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+\gexec
 
 -- The queue role may atomically claim/delete only the durable relay outbox.
 -- It never receives INSERT or general semantic-table/sequence privileges.

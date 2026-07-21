@@ -91,6 +91,15 @@ func TestManifestRejectsOperatorCredentialOrBudgetDrift(t *testing.T) {
 	}
 }
 
+func TestManifestRejectsRuntimeRoleIdentityDrift(t *testing.T) {
+	t.Parallel()
+	manifest, registry := loadFixture(t)
+	manifest.RuntimeRoleEnv = []string{"RIVER_DOMAIN_DATABASE_ROLE"}
+	if _, err := manifest.Validate(registry); err == nil {
+		t.Fatal("expected missing queue role identity to fail validation")
+	}
+}
+
 func TestManifestRejectsMigrationDSNOnRuntimeProcess(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)

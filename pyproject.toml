@@ -209,6 +209,8 @@ module = [
   "celery.*",
   "billiard",
   "billiard.*",
+  "kombu",
+  "kombu.*",
   "atlassian",
   "atlassian.*",
   "radon",

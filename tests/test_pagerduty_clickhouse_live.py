@@ -193,6 +193,7 @@ def _pagerduty_rows() -> PagerDutyOperationalRows:
                 user=user_reference,
                 schedule=schedule_reference,
                 escalation_policy=policy_reference,
+                escalation_level=1,
                 start=SOURCE_TIME,
                 end=SOURCE_TIME,
                 updated_at=SOURCE_TIME,

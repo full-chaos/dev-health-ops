@@ -74,6 +74,10 @@ from dev_health_ops.sync.execution_trigger import (
     mark_job_run_failed,
     merge_job_run_result,
 )
+from dev_health_ops.sync.pagerduty_repair import (
+    PagerDutyOperationalTargetError,
+    repair_pagerduty_operational_integration,
+)
 from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
 )
@@ -170,8 +174,20 @@ def _sync_config_integration_credential_id(
 
 def _preflight_planner_credential(sync_session, config) -> None:
     org_id = str(getattr(config, "org_id"))
+    provider = str(getattr(config, "provider", "")).lower()
+    if provider == "pagerduty" and set(getattr(config, "sync_targets", []) or []) != {
+        "operational"
+    }:
+        raise HTTPException(
+            status_code=409, detail="PagerDuty sync target must be operational"
+        )
     credential_id = _sync_config_integration_credential_id(sync_session, config, org_id)
     if credential_id is None:
+        if provider == "pagerduty":
+            raise HTTPException(
+                status_code=409,
+                detail="PagerDuty sync requires an active organization-scoped credential",
+            )
         return
     from dev_health_ops.models.settings import IntegrationCredential
 
@@ -180,6 +196,7 @@ def _preflight_planner_credential(sync_session, config) -> None:
         .filter(
             IntegrationCredential.id == credential_id,
             IntegrationCredential.org_id == org_id,
+            IntegrationCredential.provider == provider,
         )
         .one_or_none()
     )
@@ -832,10 +849,17 @@ def get_backfill_metrics_sink() -> Callable[
 # Jira/Linear only support work-items; Git/CI/CD come from code hosts.
 PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
     provider: supported_legacy_targets(provider)
-    for provider in ("github", "gitlab", "jira", "linear", "launchdarkly")
+    for provider in (
+        "github",
+        "gitlab",
+        "jira",
+        "linear",
+        "launchdarkly",
+        "pagerduty",
+    )
 }
 
-NON_REPO_SYNC_PROVIDERS = {"jira", "linear"}
+NON_REPO_SYNC_PROVIDERS = {"jira", "linear", "pagerduty"}
 DEFAULT_SYNC_CRON = "0 * * * *"
 DEFAULT_GITLAB_URL = "https://gitlab.com"
 
@@ -919,7 +943,10 @@ async def _upsert_scheduled_job(
 
 def _planner_dataset_keys(provider: str, sync_targets: list[str]) -> list[str]:
     targets = {str(target) for target in sync_targets if target is not None}
-    if provider.lower() in {"github", "gitlab"} and "git" in targets:
+    provider_key = provider.lower()
+    if provider_key == "pagerduty" and targets != {"operational"}:
+        raise ValueError("PagerDuty sync target must be operational")
+    if provider_key in {"github", "gitlab"} and "git" in targets:
         targets.add(DatasetKey.BLAME.value)
     return [
         spec.dataset_key
@@ -1329,6 +1356,12 @@ async def _create_planner_managed_config(
         for dataset_key in _planner_dataset_keys(provider, sync_targets)
     ]
     session.add_all([*source_rows, *dataset_rows])
+    await session.flush()
+    await session.run_sync(
+        lambda sync_session: repair_pagerduty_operational_integration(
+            sync_session, integration
+        )
+    )
     await _upsert_scheduled_job(session, parent, org_id)
     await session.flush()
     return parent, integration
@@ -1855,7 +1888,7 @@ async def create_sync_config(
     def _build_sources(
         integration_id: uuid.UUID, config_id: uuid.UUID
     ) -> list[IntegrationSource]:
-        if payload.provider.lower() in {"github", "gitlab"}:
+        if payload.provider.lower() in {"github", "gitlab", "pagerduty"}:
             return []
         return _non_git_source_rows(
             payload.provider,
@@ -1866,18 +1899,22 @@ async def create_sync_config(
             config_id,
         )
 
-    config, integration = await _create_planner_managed_config(
-        session,
-        org_id,
-        name=payload.name,
-        provider=payload.provider,
-        credential_id=payload.credential_id,
-        sync_targets=payload.sync_targets,
-        parent_options=sync_options,
-        schedule_cron=payload.schedule_cron,
-        timezone=payload.timezone,
-        build_source_rows=_build_sources,
-    )
+    try:
+        config, integration = await _create_planner_managed_config(
+            session,
+            org_id,
+            name=payload.name,
+            provider=payload.provider,
+            credential_id=payload.credential_id,
+            sync_targets=payload.sync_targets,
+            parent_options=sync_options,
+            schedule_cron=payload.schedule_cron,
+            timezone=payload.timezone,
+            build_source_rows=_build_sources,
+        )
+    except PagerDutyOperationalTargetError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return _sync_config_to_response(config, credential_id=integration.credential_id)
 
 
@@ -2227,6 +2264,9 @@ async def trigger_sync_config(
                 mode="incremental",
             )
         )
+    except PagerDutyOperationalTargetError as exc:
+        await session.commit()
+        raise HTTPException(status_code=409, detail=sanitize_error_text(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=sanitize_error_text(exc))
     if trigger is None:
@@ -2234,6 +2274,14 @@ async def trigger_sync_config(
             status_code=400,
             detail="Sync configuration has no linked integration",
         )
+    if not trigger.dispatch_required:
+        await session.commit()
+        return {
+            "status": "disabled",
+            "config_id": str(config.id),
+            "run_id": trigger.job_run_id,
+            "total_units": trigger.total_units,
+        }
     await session.commit()
     try:
         dispatch_result = getattr(dispatch_sync_run, "apply_async")(
@@ -2339,6 +2387,11 @@ async def trigger_sync_config_backfill(
                     initial_job_result={"planner_managed": True},
                 )
             )
+        except PagerDutyOperationalTargetError as plan_exc:
+            await session.commit()
+            raise HTTPException(
+                status_code=409, detail=sanitize_error_text(plan_exc)
+            ) from None
         except ValueError as plan_exc:
             raise HTTPException(status_code=400, detail=sanitize_error_text(plan_exc))
         if trigger is None:
@@ -2346,6 +2399,14 @@ async def trigger_sync_config_backfill(
                 status_code=400,
                 detail="Sync configuration has no linked integration",
             )
+        if not trigger.dispatch_required:
+            await session.commit()
+            return {
+                "status": "disabled",
+                "config_id": str(config.id),
+                "run_id": trigger.job_run_id,
+                "total_units": trigger.total_units,
+            }
 
         backfill_job = BackfillJobModel(
             org_id=org_id,

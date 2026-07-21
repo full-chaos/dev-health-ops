@@ -110,4 +110,5 @@ def test_canonical_incident_feature_seed_extends_single_alembic_head() -> None:
     scripts = ScriptDirectory.from_config(config)
 
     assert migration.down_revision == "0041"
-    assert scripts.get_heads() == [migration.revision]
+    assert scripts.get_heads() == ["0044"]
+    assert scripts.get_revision("0044").down_revision == "0043"

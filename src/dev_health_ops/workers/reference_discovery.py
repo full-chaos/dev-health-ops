@@ -221,23 +221,25 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
         )
         if integration is None:
             raise ValueError(f"integration not found for sync run: {run_uuid}")
-        # Prefer the run-stamped credential frozen at plan time (CHAOS-2755) so
-        # discovery resolves the SAME auth as this run's units. NULL-stamped
-        # (legacy/in-flight) runs fall back to integration.credential_id.
-        _stamped_credential_id, resolved_credentials = resolve_run_auth(
-            session,
-            run=run,
-            integration=integration,
-            provider=integration.provider,
-            error_label=f"sync run: {run_uuid}",
-        )
-        credentials: dict[str, Any] = dict(resolved_credentials)
         units = (
             session.query(SyncRunUnit)
             .filter(SyncRunUnit.sync_run_id == run_uuid)
             .order_by(SyncRunUnit.id)
             .all()
         )
+        credentials: dict[str, Any] = {}
+        if units:
+            # Prefer the run-stamped credential frozen at plan time (CHAOS-2755)
+            # so discovery resolves the SAME auth as this run's units. NULL-stamped
+            # (legacy/in-flight) runs fall back to integration.credential_id.
+            _stamped_credential_id, resolved_credentials = resolve_run_auth(
+                session,
+                run=run,
+                integration=integration,
+                provider=integration.provider,
+                error_label=f"sync run: {run_uuid}",
+            )
+            credentials = dict(resolved_credentials)
         source_ids = {unit.source_id for unit in units}
         sources = (
             session.query(IntegrationSource)

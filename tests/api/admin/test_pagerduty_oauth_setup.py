@@ -25,14 +25,24 @@ from dev_health_ops.exceptions import (
     RateLimitException,
 )
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.pagerduty_webhook_binding import PagerDutyWebhookBinding
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     PagerDutyOAuthAuthorizationRequest,
     ProviderOAuthCredential,
+    ProviderOAuthRevocation,
 )
 from dev_health_ops.providers.pagerduty.auth import PagerDutyAuth
+from dev_health_ops.providers.pagerduty.credential_validation import (
+    PagerDutyCredentialValidationError,
+    ValidatedPagerDutyCredential,
+)
 from dev_health_ops.providers.pagerduty.models import Service
-from dev_health_ops.providers.pagerduty.oauth import OAuthTokens, PagerDutyOAuthConfig
+from dev_health_ops.providers.pagerduty.oauth import (
+    READ_SCOPES,
+    OAuthTokens,
+    PagerDutyOAuthConfig,
+)
 from dev_health_ops.providers.pagerduty.oauth_storage import (
     PagerDutyOAuthCredentialRepository,
 )
@@ -44,6 +54,9 @@ pagerduty_services_router = importlib.import_module(
 )
 credentials_router = importlib.import_module(
     "dev_health_ops.api.admin.routers.credentials"
+)
+pagerduty_revocations = importlib.import_module(
+    "dev_health_ops.providers.pagerduty.oauth_revocations"
 )
 
 _ORG_ID = "00000000-0000-0000-0000-000000003024"
@@ -70,6 +83,8 @@ async def session_maker(
                     IntegrationCredential,
                     PagerDutyOAuthAuthorizationRequest,
                     ProviderOAuthCredential,
+                    ProviderOAuthRevocation,
+                    PagerDutyWebhookBinding,
                 ),
             )
         )
@@ -97,6 +112,23 @@ async def client(
         "is_org_feature_enabled_async",
         AsyncMock(return_value=True),
     )
+
+    async def validate_candidate(
+        _candidate: object, *, required_scopes: frozenset[str]
+    ) -> ValidatedPagerDutyCredential:
+        return ValidatedPagerDutyCredential(
+            auth_mode="oauth",
+            access_token=None,
+            granted_scopes=required_scopes,
+            account_id="acme",
+            account_display="Acme Operations",
+            subdomain="acme",
+        )
+
+    monkeypatch.setattr(
+        pagerduty_router, "validate_pagerduty_credential", validate_candidate
+    )
+    monkeypatch.setattr(pagerduty_revocations, "revoke_token", AsyncMock())
 
     app = FastAPI()
     app.include_router(pagerduty_router.router, prefix="/api/v1/admin")
@@ -231,7 +263,7 @@ async def test_callback_persists_oauth_token_and_safe_descriptor(
         access_token="access-token",
         refresh_token="refresh-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read", "Services.read"}),
+        granted_scopes=READ_SCOPES,
     )
     monkeypatch.setattr(
         pagerduty_router, "exchange_code", AsyncMock(return_value=tokens)
@@ -248,7 +280,7 @@ async def test_callback_persists_oauth_token_and_safe_descriptor(
         "credential_name": "operations",
         "region": "eu",
         "subdomain": "acme",
-        "granted_scopes": ["Incidents.read", "Services.read"],
+        "granted_scopes": sorted(READ_SCOPES),
     }
     async with session_maker() as session:
         oauth_credential = (
@@ -262,7 +294,7 @@ async def test_callback_persists_oauth_token_and_safe_descriptor(
         ).scalar_one()
 
     assert oauth_credential.account_id == "acme"
-    assert oauth_credential.account_display == "acme"
+    assert oauth_credential.account_display == "Acme Operations"
     assert integration_credential.is_active is True
     assert descriptor is not None
     assert descriptor == {
@@ -280,7 +312,8 @@ async def test_callback_persists_oauth_token_and_safe_descriptor(
         "region": "eu",
         "subdomain": "acme",
         "account_id": "acme",
-        "granted_scopes": ["Incidents.read", "Services.read"],
+        "account_display": "Acme Operations",
+        "granted_scopes": sorted(READ_SCOPES),
     }
 
 
@@ -318,7 +351,7 @@ async def test_callback_rejects_replayed_state_without_another_persistence(
     tokens = OAuthTokens(
         access_token="access-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     exchange = AsyncMock(return_value=tokens)
     monkeypatch.setattr(pagerduty_router, "exchange_code", exchange)
@@ -391,6 +424,57 @@ async def test_callback_revokes_and_rejects_missing_required_scope(
 
 
 @pytest.mark.asyncio
+async def test_oauth_reconnect_commits_new_grant_before_revoking_superseded_grant(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    first_state = await _authorize(client, datasets=["incidents"])
+    first_tokens = OAuthTokens(
+        access_token="first-access-token",
+        refresh_token="first-refresh-token",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        granted_scopes=READ_SCOPES,
+    )
+    second_tokens = OAuthTokens(
+        access_token="second-access-token",
+        refresh_token="second-refresh-token",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        granted_scopes=READ_SCOPES,
+    )
+    monkeypatch.setattr(
+        pagerduty_router,
+        "exchange_code",
+        AsyncMock(side_effect=[first_tokens, second_tokens]),
+    )
+    first_response = await client.post(
+        "/api/v1/admin/integrations/pagerduty/callback",
+        json={"state": first_state, "code": "first-authorization-code"},
+    )
+    assert first_response.status_code == 200
+    revoked: list[str] = []
+
+    async def revoke_after_commit(_config: object, token: str) -> None:
+        async with session_maker() as session:
+            current = await PagerDutyOAuthCredentialRepository(
+                session, _ORG_ID, "operations"
+            ).get()
+        assert current is not None
+        assert current.tokens == second_tokens
+        revoked.append(token)
+
+    monkeypatch.setattr(pagerduty_revocations, "revoke_token", revoke_after_commit)
+    second_state = await _authorize(client, datasets=["incidents"])
+    second_response = await client.post(
+        "/api/v1/admin/integrations/pagerduty/callback",
+        json={"state": second_state, "code": "second-authorization-code"},
+    )
+
+    assert second_response.status_code == 200
+    assert revoked == ["first-refresh-token"]
+
+
+@pytest.mark.asyncio
 async def test_status_returns_non_secret_oauth_metadata(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -400,7 +484,7 @@ async def test_status_returns_non_secret_oauth_metadata(
         access_token="access-token",
         refresh_token="refresh-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     monkeypatch.setattr(
         pagerduty_router, "exchange_code", AsyncMock(return_value=tokens)
@@ -420,7 +504,7 @@ async def test_status_returns_non_secret_oauth_metadata(
     assert payload["connected"] is True
     assert payload["auth_mode"] == "oauth"
     assert payload["subdomain"] == "acme"
-    assert payload["granted_scopes"] == ["Incidents.read"]
+    assert payload["granted_scopes"] == sorted(READ_SCOPES)
     assert "access_token" not in payload
     assert "refresh_token" not in payload
 
@@ -445,13 +529,13 @@ async def test_disconnect_deactivates_descriptor_without_deleting_it(
     tokens = OAuthTokens(
         access_token="access-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     monkeypatch.setattr(
         pagerduty_router, "exchange_code", AsyncMock(return_value=tokens)
     )
     revoke = AsyncMock()
-    monkeypatch.setattr(pagerduty_router, "revoke_token", revoke)
+    monkeypatch.setattr(pagerduty_revocations, "revoke_token", revoke)
     await client.post(
         "/api/v1/admin/integrations/pagerduty/callback",
         json={"state": state, "code": "authorization-code"},
@@ -468,7 +552,6 @@ async def test_disconnect_deactivates_descriptor_without_deleting_it(
 
     assert response.status_code == 200
     assert repeated_response.status_code == 200
-    # Remote revocation is best-effort and happens after the local removal commits.
     revoke.assert_awaited()
     async with session_maker() as session:
         descriptor = await IntegrationCredentialsService(session, _ORG_ID).get(
@@ -493,7 +576,7 @@ async def test_preflight_reports_dataset_scopes_without_users_requirement(
     tokens = OAuthTokens(
         access_token="access-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     monkeypatch.setattr(
         pagerduty_router, "exchange_code", AsyncMock(return_value=tokens)
@@ -521,8 +604,8 @@ async def test_preflight_reports_dataset_scopes_without_users_requirement(
         "granted": True,
         "missing": [],
     }
-    assert datasets["users"]["granted"] is False
-    assert datasets["users"]["missing"] == ["Users.read"]
+    assert datasets["users"]["granted"] is True
+    assert datasets["users"]["missing"] == []
 
 
 @pytest.mark.asyncio
@@ -558,6 +641,8 @@ async def test_client_credentials_persists_exact_descriptor(
         "auth_mode": "client_credentials",
         "region": "eu",
         "subdomain": "acme",
+        "account_id": "acme",
+        "account_display": "Acme Operations",
     }
 
 
@@ -592,7 +677,113 @@ async def test_api_token_persists_exact_descriptor(
         "auth_mode": "api_token",
         "region": "us",
         "subdomain": "acme",
+        "account_id": "acme",
+        "account_display": "Acme Operations",
     }
+
+
+@pytest.mark.asyncio
+async def test_manual_validation_failure_preserves_existing_credential_and_test_state(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    initial = await client.post(
+        "/api/v1/admin/integrations/pagerduty/api-token",
+        json={
+            "credential_name": "personal",
+            "api_token": "old-token",
+            "subdomain": "acme",
+            "region": "us",
+        },
+    )
+    assert initial.status_code == 200
+    monkeypatch.setattr(
+        pagerduty_router,
+        "validate_pagerduty_credential",
+        AsyncMock(side_effect=PagerDutyCredentialValidationError("live_read_failed")),
+    )
+
+    rejected = await client.post(
+        "/api/v1/admin/integrations/pagerduty/api-token",
+        json={
+            "credential_name": "personal",
+            "api_token": "replacement-token",
+            "subdomain": "acme",
+            "region": "us",
+        },
+    )
+
+    assert rejected.status_code == 400
+    async with session_maker() as session:
+        credential = await IntegrationCredentialsService(session, _ORG_ID).get(
+            "pagerduty", "personal"
+        )
+        descriptor = await IntegrationCredentialsService(
+            session, _ORG_ID
+        ).get_decrypted_credentials("pagerduty", "personal")
+    assert credential is not None
+    assert credential.last_test_success is True
+    assert credential.last_test_error is None
+    assert descriptor is not None
+    assert descriptor["api_token"] == "old-token"
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_validates_the_complete_operational_scope_bundle(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validation = AsyncMock(
+        return_value=ValidatedPagerDutyCredential(
+            auth_mode="client_credentials",
+            access_token="machine-token",
+            granted_scopes=READ_SCOPES,
+            account_id="acme",
+            account_display="Acme Operations",
+            subdomain="acme",
+        )
+    )
+    monkeypatch.setattr(pagerduty_router, "validate_pagerduty_credential", validation)
+
+    response = await client.post(
+        "/api/v1/admin/integrations/pagerduty/client-credentials",
+        json={
+            "credential_name": "automation",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "subdomain": "acme",
+            "region": "eu",
+        },
+    )
+
+    assert response.status_code == 200
+    assert validation.await_args is not None
+    assert validation.await_args.kwargs["required_scopes"] == READ_SCOPES
+
+
+@pytest.mark.asyncio
+async def test_generic_pagerduty_delete_uses_disconnect_tombstone(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _connect_oauth(client, monkeypatch)
+
+    response = await client.delete("/api/v1/admin/credentials/pagerduty/operations")
+
+    assert response.status_code == 200
+    async with session_maker() as session:
+        descriptor = await IntegrationCredentialsService(session, _ORG_ID).get(
+            "pagerduty", "operations"
+        )
+        oauth = await PagerDutyOAuthCredentialRepository(
+            session, _ORG_ID, "operations"
+        ).get_status_metadata()
+    assert descriptor is not None
+    assert descriptor.is_active is False
+    assert descriptor.credentials_encrypted is None
+    assert oauth is None
 
 
 @pytest.mark.asyncio
@@ -712,7 +903,7 @@ async def test_callback_burns_state_and_revokes_after_descriptor_write_failure(
         access_token="access-token",
         refresh_token="refresh-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     revoke = AsyncMock()
     monkeypatch.setattr(
@@ -749,7 +940,7 @@ async def test_callback_burns_state_and_revokes_after_persistence_commit_failure
         access_token="access-token",
         refresh_token="refresh-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     revoke = AsyncMock()
     original_commit = AsyncSession.commit
@@ -839,7 +1030,7 @@ async def test_disconnect_removes_oauth_row_without_descriptor_or_oauth_config(
     tokens = OAuthTokens(
         access_token="access-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     monkeypatch.setattr(
         pagerduty_router, "exchange_code", AsyncMock(return_value=tokens)
@@ -888,7 +1079,7 @@ async def test_non_oauth_modes_remove_existing_oauth_binding(
     tokens = OAuthTokens(
         access_token="access-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     monkeypatch.setattr(
         pagerduty_router, "exchange_code", AsyncMock(return_value=tokens)
@@ -1171,7 +1362,7 @@ async def _connect_oauth(
         access_token="access-token",
         refresh_token="refresh-token",
         expires_at=datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset(granted or {"Incidents.read"}),
+        granted_scopes=READ_SCOPES,
     )
     monkeypatch.setattr(
         pagerduty_router, "exchange_code", AsyncMock(return_value=connected_tokens)
@@ -1211,6 +1402,94 @@ async def test_callback_rejects_missing_subdomain_before_exchange(
 
     assert response.status_code == 400
     exchange.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_mismatched_verified_account_without_persistence(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    state = await _authorize(client, datasets=["incidents"])
+    tokens = OAuthTokens(
+        access_token="access-token",
+        refresh_token="refresh-token",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        granted_scopes=READ_SCOPES,
+    )
+    revoke = AsyncMock()
+    monkeypatch.setattr(
+        pagerduty_router, "exchange_code", AsyncMock(return_value=tokens)
+    )
+    monkeypatch.setattr(pagerduty_router, "revoke_token", revoke)
+    monkeypatch.setattr(
+        pagerduty_router,
+        "validate_pagerduty_credential",
+        AsyncMock(
+            return_value=ValidatedPagerDutyCredential(
+                auth_mode="oauth",
+                access_token="access-token",
+                granted_scopes=READ_SCOPES,
+                account_id="other",
+                account_display="Other Operations",
+                subdomain="other",
+            )
+        ),
+    )
+
+    response = await client.post(
+        "/api/v1/admin/integrations/pagerduty/callback",
+        json={"state": state, "code": "authorization-code"},
+    )
+
+    assert response.status_code == 400
+    assert await _persisted_counts(session_maker) == (0, 0)
+    revoke.assert_awaited_once_with(_CONFIG, "refresh-token")
+
+
+@pytest.mark.asyncio
+async def test_failed_replacement_revoke_is_retained_and_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from dev_health_ops.providers.pagerduty.oauth_revocations import (
+        PagerDutyOAuthRevocationRepository,
+    )
+
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "pagerduty-oauth-test-encryption-key")
+    async with session_maker() as session:
+        revocations = PagerDutyOAuthRevocationRepository(session, _ORG_ID, "operations")
+        await revocations.enqueue("old-refresh-token", purpose="replacement")
+        await session.commit()
+        response = httpx.Response(
+            503, request=httpx.Request("POST", "https://identity.pagerduty.test/revoke")
+        )
+        monkeypatch.setattr(
+            pagerduty_revocations,
+            "revoke_token",
+            AsyncMock(
+                side_effect=httpx.HTTPStatusError(
+                    "unavailable", request=response.request, response=response
+                )
+            ),
+        )
+
+        assert await revocations.retry_pending(_CONFIG) is False
+        await session.commit()
+        pending = list(
+            (await session.execute(select(ProviderOAuthRevocation))).scalars()
+        )
+        assert len(pending) == 1
+        assert pending[0].status == "pending"
+        assert pending[0].attempts == 1
+        assert pending[0].token_encrypted != "old-refresh-token"
+
+        monkeypatch.setattr(pagerduty_revocations, "revoke_token", AsyncMock())
+        assert await revocations.retry_pending(_CONFIG) is True
+        await session.commit()
+        assert (
+            await session.execute(select(ProviderOAuthRevocation))
+        ).scalar_one_or_none() is None
 
 
 def test_validate_pagerduty_descriptor_guards_config_secrets_and_mode() -> None:
@@ -1498,7 +1777,7 @@ async def test_disconnect_revokes_only_after_local_removal_committed(
             ).get_status_metadata()
         observed["row_present_at_revoke"] = meta is not None
 
-    monkeypatch.setattr(pagerduty_router, "revoke_token", spy_revoke)
+    monkeypatch.setattr(pagerduty_revocations, "revoke_token", spy_revoke)
 
     response = await client.post(
         "/api/v1/admin/integrations/pagerduty/disconnect",

@@ -46,11 +46,20 @@ def plan_run(state: CanonicalState) -> tuple[SyncRun, SyncRunUnit]:
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="test",
             before=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+            dataset_keys=(graph.dataset.dataset_key,),
         ),
     )
     run = state.session.get(SyncRun, plan.sync_run_id)
     assert run is not None
-    unit = state.session.query(SyncRunUnit).filter_by(sync_run_id=run.id).one()
+    unit = (
+        state.session.query(SyncRunUnit)
+        .filter_by(
+            sync_run_id=run.id,
+            provider=graph.integration.provider,
+            dataset_key=graph.dataset.dataset_key,
+        )
+        .one()
+    )
     discovery = (
         state.session.query(SyncRunReferenceDiscovery)
         .filter_by(sync_run_id=run.id)
@@ -64,8 +73,6 @@ def plan_run(state: CanonicalState) -> tuple[SyncRun, SyncRunUnit]:
 
 def plan_zero_unit_run(state: CanonicalState) -> SyncRun:
     graph = create_canonical_graph(state, state.enabled_org_id)
-    graph.source.is_enabled = False
-    state.session.commit()
     plan = plan_sync_run(
         state.session,
         SyncPlanRequest(
@@ -74,6 +81,8 @@ def plan_zero_unit_run(state: CanonicalState) -> SyncRun:
             mode=SyncRunMode.INCREMENTAL.value,
             triggered_by="test",
             before=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+            source_ids=(),
+            dataset_keys=(graph.dataset.dataset_key,),
         ),
     )
     run = state.session.get(SyncRun, plan.sync_run_id)

@@ -15,6 +15,7 @@ from dev_health_ops.models import (
     SyncRunMode,
     SyncRunUnit,
 )
+from dev_health_ops.sync import planner
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from tests.canonical_incident_orchestration_support import (
     CanonicalState,
@@ -56,16 +57,22 @@ def test_planner_creates_canonical_work_when_feature_enabled(
     )
 
     # Then
-    assert plan.total_units == 1
+    assert plan.total_units == 11
     assert state.session.query(SyncRun).count() == 1
 
 
 def test_planner_denies_canonical_work_before_persistence(
     canonical_state: CanonicalState,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
     state = canonical_state
     graph = create_canonical_graph(state, state.disabled_org_id)
+    monkeypatch.setattr(
+        planner,
+        "_resolve_credential_stamp",
+        lambda *_args: pytest.fail("feature-denied plan hydrated credentials"),
+    )
 
     # When
     with pytest.raises(RuntimeError, match="feature_disabled"):
@@ -178,3 +185,54 @@ def test_scheduler_rechecks_feature_immediately_before_enqueue(
     assert result is False
     dispatch.apply_async.assert_not_called()
     assert state.session.query(SyncRun).count() == 1
+
+
+def test_scheduler_skips_typed_pagerduty_disable_without_enqueuing(
+    canonical_state: CanonicalState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.sync import execution_trigger
+    from dev_health_ops.sync.execution_trigger import SyncExecutionTriggerResult
+    from dev_health_ops.workers import sync_scheduler
+
+    state = canonical_state
+    graph = create_canonical_graph(state, state.enabled_org_id, with_config=True)
+    assert graph.config is not None
+    job = ScheduledJob(
+        name=f"sync-config-{graph.config.id}",
+        job_type="sync",
+        schedule_cron="* * * * *",
+        org_id=str(state.enabled_org_id),
+        provider="pagerduty",
+        sync_config_id=graph.config.id,
+        tz="UTC",
+        status=JobStatus.ACTIVE.value,
+    )
+    state.session.add(job)
+    state.session.commit()
+    dispatch = MagicMock()
+    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)
+    monkeypatch.setattr(
+        execution_trigger,
+        "create_sync_execution_trigger",
+        lambda *_args, **_kwargs: SyncExecutionTriggerResult(
+            sync_run_id="sync-run-1",
+            job_run_id="job-run-1",
+            total_units=0,
+            dispatch_required=False,
+            terminal_reason="PagerDuty account identity needs repair",
+        ),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.workers.sync_units.dispatch_sync_run",
+        dispatch,
+    )
+
+    result = sync_scheduler._maybe_dispatch_config(
+        state.session,
+        graph.config,
+        datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result is False
+    dispatch.apply_async.assert_not_called()

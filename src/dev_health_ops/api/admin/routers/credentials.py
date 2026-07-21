@@ -317,6 +317,11 @@ async def delete_credential(
 ) -> dict:
     svc = IntegrationCredentialsService(session, org_id)
     deleted = await svc.delete(provider, name)
+    if provider == "pagerduty" and deleted is False:
+        raise HTTPException(
+            status_code=503,
+            detail="PagerDuty remote revocation is pending retry",
+        )
     if not deleted:
         raise HTTPException(status_code=404, detail="Credential not found")
     return {"deleted": True}
@@ -724,8 +729,9 @@ async def _test_pagerduty_connection(
     from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth, OAuthBearerAuth
     from dev_health_ops.providers.pagerduty.client import PagerDutyClient
     from dev_health_ops.providers.pagerduty.oauth import (
-        DATASET_SCOPES,
+        DATASET_OAUTH_FAMILIES,
         missing_read_scopes,
+        pagerduty_oauth_family,
     )
 
     access_token = creds.get("access_token")
@@ -739,7 +745,7 @@ async def _test_pagerduty_connection(
     )
     client = PagerDutyClient(auth, region=str(creds.get("region", "us")))
     datasets = [str(value) for value in creds.get("enabled_datasets", [])]
-    unknown = set(datasets).difference(DATASET_SCOPES)
+    unknown = set(datasets).difference(DATASET_OAUTH_FAMILIES)
     if unknown:
         await client.close()
         return False, {
@@ -755,7 +761,7 @@ async def _test_pagerduty_connection(
         if not datasets:
             return False, {"error": "Select at least one PagerDuty dataset"}
         records_count = 0
-        match datasets[0]:
+        match pagerduty_oauth_family(datasets[0]):
             case "incidents":
                 records_count = len(await client.list_incidents())
             case "services":

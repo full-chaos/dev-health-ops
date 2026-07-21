@@ -232,6 +232,44 @@ def test_run_backfill_via_planner_creates_backfill_units_per_source_dataset_wind
     }
 
 
+def test_run_backfill_via_planner_returns_terminal_plan_without_dispatch(
+    db_session, monkeypatch
+):
+    # Given: the planner returns a durable terminal PagerDuty repair run.
+    from dev_health_ops.backfill import runner
+    from dev_health_ops.sync.planner import SyncRunPlan
+
+    _patch_db_session(monkeypatch, db_session)
+    terminal_plan = SyncRunPlan(
+        sync_run_id=str(uuid.uuid4()),
+        total_units=0,
+        unit_ids=(),
+        dispatch_required=False,
+        terminal_reason="PagerDuty target was disabled",
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.sync.planner.plan_sync_run", lambda *_args: terminal_plan
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.workers.sync_units.dispatch_sync_run",
+        lambda *_args: pytest.fail("terminal plan must not dispatch"),
+    )
+
+    # When: the planner-backed backfill command runs.
+    result = runner.run_backfill_via_planner(
+        str(uuid.uuid4()),
+        date(2026, 6, 1),
+        date(2026, 6, 14),
+        org_id=ORG_ID,
+        triggered_by="manual",
+    )
+
+    # Then: it exposes the terminal result without executing work.
+    assert result["status"] == "disabled"
+    assert result["sync_run_id"] == terminal_plan.sync_run_id
+    assert result["reason"] == terminal_plan.terminal_reason
+
+
 def test_finalize_sync_run_terminalizes_backfill_job_and_job_run(
     db_session, monkeypatch
 ):

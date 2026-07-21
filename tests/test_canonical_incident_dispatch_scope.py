@@ -4,6 +4,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from dev_health_ops.models import IntegrationDataset
 from tests.canonical_incident_dispatch_support import patch_dispatch, plan_run
 from tests.canonical_incident_orchestration_support import (
     CanonicalState,
@@ -16,6 +17,24 @@ from tests.canonical_incident_orchestration_support import (
 def canonical_state() -> Iterator[CanonicalState]:
     with canonical_state_context() as state:
         yield state
+
+
+def test_plan_run_selects_incidents_unit_after_pagerduty_expansion(
+    canonical_state: CanonicalState,
+) -> None:
+    state = canonical_state
+
+    _run, unit = plan_run(state)
+
+    datasets = (
+        state.session.query(IntegrationDataset)
+        .filter_by(integration_id=unit.integration_id)
+        .all()
+    )
+
+    assert len(datasets) == 11
+    assert unit.provider == "pagerduty"
+    assert unit.dataset_key == "incidents"
 
 
 def test_dispatch_gate_uses_persisted_run_scope_not_all_integration_datasets(

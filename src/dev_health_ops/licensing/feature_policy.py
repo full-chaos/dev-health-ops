@@ -62,35 +62,37 @@ class FeatureDecision:
 
     @property
     def message(self) -> str | None:
+        message: str | None
         match self.reason:
             case (
                 FeatureDecisionReason.ENABLED_BY_ORG_OVERRIDE
                 | FeatureDecisionReason.ENABLED_BY_LICENSE_OVERRIDE
                 | FeatureDecisionReason.ENABLED_BY_TIER
             ):
-                return None
+                message = None
             case FeatureDecisionReason.FEATURE_NOT_REGISTERED:
-                return f"Unknown feature: {self.feature_key}"
+                message = f"Unknown feature: {self.feature_key}"
             case FeatureDecisionReason.GLOBAL_DISABLED:
-                return "Feature is globally disabled"
+                message = "Feature is globally disabled"
             case FeatureDecisionReason.INVALID_FEATURE_STATE:
-                return "Feature configuration is invalid"
+                message = "Feature configuration is invalid"
             case FeatureDecisionReason.STORAGE_ERROR:
-                return "Feature decision storage is unavailable"
+                message = "Feature decision storage is unavailable"
             case FeatureDecisionReason.ORG_OVERRIDE_EXPIRED:
-                return "Organization feature override has expired"
+                message = "Organization feature override has expired"
             case FeatureDecisionReason.ORG_OVERRIDE_DISABLED:
-                return "Feature disabled for this organization"
+                message = "Feature disabled for this organization"
             case FeatureDecisionReason.ORG_OVERRIDE_REQUIRED:
-                return "Requires an active organization feature override"
+                message = "Requires an active organization feature override"
             case FeatureDecisionReason.LICENSE_OVERRIDE_DISABLED:
-                return "Feature disabled in license"
+                message = "Feature disabled in license"
             case FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED:
-                return "Requires an explicit organization purchase"
+                message = "Requires an explicit organization purchase"
             case FeatureDecisionReason.TIER_REQUIRED:
-                return f"Requires {self.feature_key} minimum tier"
+                message = f"Requires {self.feature_key} minimum tier"
             case unreachable:
-                return assert_never(unreachable)
+                assert_never(unreachable)
+        return message
 
 
 def closed_feature_decision(

@@ -13,13 +13,12 @@ from datetime import datetime, timezone
 from typing import ClassVar, Final
 from uuid import UUID
 
-from dev_health_ops.models.operational_ordering import (
+from dev_health_ops.models.operational_ordering_types import (
     OPERATIONAL_ORDERING_CONTRACT,
     IngestRevision,
     OperationRank,
     SourceConflictKey,
     SourceRevision,
-    build_entity_ordering,
 )
 
 
@@ -104,6 +103,8 @@ class CanonicalOperationalEntity:
     relationship_confidence: float | None = None
 
     def __post_init__(self, operation_rank: OperationRank | None = None) -> None:
+        from dev_health_ops.models.operational_ordering import build_entity_ordering
+
         for value, vocabulary, field_name in (
             (self.normalized_status, CANONICAL_STATUSES, "normalized_status"),
             (self.normalized_severity, CANONICAL_SEVERITIES, "normalized_severity"),

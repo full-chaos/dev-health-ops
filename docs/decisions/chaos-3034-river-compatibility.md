@@ -23,8 +23,8 @@ the direct path used SQLAlchemy's ordinary async engine configuration.
 
 Standard inserts passed: a commit produced exactly one job with queue,
 priority, maximum-attempt, and scheduled-state values intact, while rollback
-produced none. Unique insertion failed with
-`asyncpg.exceptions.InvalidColumnReferenceError`. The Python client targets
+produced none. Unique insertion failed with PostgreSQL SQLSTATE `42P10`. The
+Python client targets
 `ON CONFLICT (kind, unique_key)`, while [River migration
 006](https://github.com/riverqueue/river/blob/v0.40.0/riverdriver/riverpgxv5/migration/main/006_bulk_unique.up.sql)
 removes that qualifying index and moves uniqueness to the `unique_states`
@@ -167,12 +167,13 @@ its domain claim, ledger, or idempotency policy.
   leadership normally and is required for production running-job cancellation.
   A session-mode endpoint remains unverified until it passes this matrix.
 - Transaction-mode PgBouncer with `PollOnly` may not be the sole queue-control
-  endpoint. At a 250 ms interval its 20-sample queue-start p95 was 233.811 ms
-  and its connection/load gates passed, but both running-cancel propagation
-  paths failed.
+  endpoint. At a 250 ms interval its 20-sample queue-start p95 and
+  connection/load gates passed their compatibility limits, but both
+  running-cancel propagation paths failed. Exact measurements are retained in
+  the generated local result rather than duplicated here.
 - River 0.40.0 and 0.39.0 passed the migration-prefix and rolling-client
-  checks: schema 6 was upgraded to 7, the old client inserted on 7, and the
-  current client consumed the old-client job.
+  checks: schema 6 was upgraded to 7, and on schema 7 each version inserted the
+  v1 contract and the other version consumed it.
 - The relay uses River APIs, not copied SQL or assumptions about the
   `river_job` index layout.
 

@@ -40,7 +40,7 @@ connection settings. It does not make the client production-compatible.
 ## Blocking incompatibility
 
 `riverqueue` 0.7.0 unique insertion fails against the River 0.40.0 schema with
-`asyncpg.exceptions.InvalidColumnReferenceError`. The client emits
+PostgreSQL SQLSTATE `42P10`. The client emits
 `ON CONFLICT (kind, unique_key) WHERE unique_key IS NOT NULL`, but River
 migration 006 replaces and drops the matching `(kind, unique_key)` index in
 favor of the newer `unique_states` design. PostgreSQL therefore cannot match
@@ -63,21 +63,22 @@ The checked-in harness ran with Go 1.25.9, River/`riverpgxv5` 0.40.0, River
 N-1 0.39.0, a 250 ms fetch interval, and 20 execution samples per mode.
 
 - Direct PostgreSQL passed execution, retry, scheduled-state, cross-client
-  running cancellation, connection, and load gates. Queue-start p50/p95 was
-  3.882/28.269 ms against the compatibility p95 limit of 100 ms.
+  running cancellation, connection, and load gates. Its 20-sample queue-start
+  p95 was within the one-fetch-interval (250 ms) compatibility limit.
 - Transaction-mode PgBouncer with `PollOnly` passed execution, retry,
-  scheduled-state, connection, and load gates. Queue-start p50/p95 was
-  158.603/233.811 ms against the compatibility p95 limit of 600 ms.
+  scheduled-state, connection, and load gates. Its 20-sample queue-start p95
+  was within the 600 ms compatibility limit.
 - River 0.39 migrated a fresh database through schema 6 and worked a job;
-  River 0.40 then applied schema 7; River 0.39 inserted on schema 7; and River
-  0.40 consumed that job.
+  River 0.40 then applied schema 7; on schema 7 each version inserted the v1
+  contract and the other version consumed it.
 - A real `SIGKILL` of an executing worker was rescued as attempt 2 in both
   direct and PollOnly profiles, with one recorded first-attempt error.
 - Go consumed the committed Python payload through both connection profiles;
   the exact fixture is also decoded by the Python and River 0.39 tests.
 
-These values are local compatibility measurements, not production SLOs or
-capacity evidence.
+Exact measurements live only in the raw generated result to prevent derived
+documentation from drifting after a rerun. They are local compatibility
+measurements, not production SLOs or capacity evidence.
 
 ## PollOnly architecture blocker
 

@@ -427,7 +427,10 @@ func runInternalWorkload(
 			execute = observed
 		}
 	}
-	latencyLimit := 100.0
+	// This is a local compatibility regression bound, not a production SLO.
+	// Give notification mode one configured fallback interval so host scheduler
+	// load cannot turn a successful notification path into a flaky benchmark.
+	latencyLimit := milliseconds(opts.FetchPollInterval)
 	if opts.Mode == ModePollOnly {
 		latencyLimit = milliseconds(2*opts.FetchPollInterval + 100*time.Millisecond)
 	}

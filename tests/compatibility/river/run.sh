@@ -188,6 +188,21 @@ assert_all_emitted_gates() {
   ' "${output_file}" >/dev/null 2>&1
 }
 
+report_gate_failure() {
+  local output_file="$1"
+
+  # This bounded diagnostic contains only aggregate booleans and counters. It
+  # deliberately omits job rows, identifiers, payloads, ports, and connection
+  # material so a failed gate is actionable without weakening redaction.
+  jq -c '{
+    mode,
+    gates,
+    execute_latency_ms: .workload.execute_latency_ms,
+    postgres_delta: .postgres.delta,
+    pool_delta: .pool.delta
+  }' "${output_file}" >&2 || true
+}
+
 run_go_checked() {
   local label="$1"
   local database_url="$2"
@@ -199,7 +214,10 @@ run_go_checked() {
     die "${label} failed; captured details were discarded"
   fi
   assert_single_json_object "${output_file}" || die "${label} emitted invalid JSON"
-  assert_all_emitted_gates "${output_file}" || die "${label} emitted an unexpected gate truth table"
+  if ! assert_all_emitted_gates "${output_file}"; then
+    report_gate_failure "${output_file}"
+    die "${label} emitted an unexpected gate truth table"
+  fi
 }
 
 run_n_minus_one_checked() {

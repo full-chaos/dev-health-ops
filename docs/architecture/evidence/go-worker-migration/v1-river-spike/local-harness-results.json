@@ -1,25 +1,23 @@
 {
   "schema_version": 1,
-  "recorded_date_local": "2026-07-21",
-  "evidence_scope": "local_ephemeral_compatibility_harness",
-  "production_performance_evidence": false,
-  "command": "GOTOOLCHAIN=go1.25.9 tests/compatibility/river/run.sh",
   "status": "complete_with_architecture_blocker",
   "architecture_blocker": "poll_only_running_cancel_not_propagated",
+  "evidence_scope": "local_ephemeral_compatibility_harness",
+  "go_version": "go1.25.9",
   "versions": {
     "go": "go1.25.9",
     "river": "v0.40.0",
+    "river_driver": "v0.40.0",
     "pgx": "v5.10.0",
     "river_n_minus_1": "v0.39.0",
+    "river_driver_n_minus_1": "v0.39.0",
     "pgx_n_minus_1": "v5.9.2",
     "python": "3.13.14",
     "riverqueue_python": "0.7.0",
     "sqlalchemy": "2.0.49",
-    "asyncpg": "0.31.0",
-    "fetch_poll_interval_ms": 250,
-    "samples_per_mode": 20
+    "asyncpg": "0.31.0"
   },
-  "go_version": "go1.25.9",
+  "samples_per_mode": 20,
   "gate_truth_table": {
     "direct": {
       "backend_connection_delta_at_most_six": true,
@@ -38,119 +36,1049 @@
       "same_client_running_cancel": false
     }
   },
-  "profiles": {
-    "direct_postgresql": {
-      "execution": "pass",
-      "retry": "pass",
-      "scheduled_state": "pass",
-      "cross_client_running_cancel": "pass",
-      "queue_start_latency_ms": {
-        "min": 3.163,
-        "p50": 4.017,
-        "p95": 25.838,
-        "max": 221.456,
-        "p95_limit": 100,
-        "within_limit": true
+  "profiles": [
+    {
+      "mode": "direct",
+      "transport": "direct_postgresql",
+      "matrix": {
+        "status": "ok",
+        "mode": "direct",
+        "go_version": "go1.25.9",
+        "pgx_version": "v5.10.0",
+        "river_driver_version": "v0.40.0",
+        "river_version": "v0.40.0",
+        "poll_only": false,
+        "fetch_poll_interval_ms": 250,
+        "migration": {
+          "applied_versions": [
+            7
+          ],
+          "duration_ms": 21.595,
+          "latest_version": 7,
+          "version_count": 7
+        },
+        "workload": {
+          "execute": {
+            "attempt": 1,
+            "enqueue_to_start_ms": 10.167,
+            "error_count": 0,
+            "max_attempts": 3,
+            "outcome": "completed",
+            "priority": 2,
+            "queue": "chaos3034-direct",
+            "run_duration_ms": 0.101,
+            "scheduled": false,
+            "source": "go",
+            "state": "completed"
+          },
+          "execute_latency_ms": {
+            "count": 20,
+            "max": 232.265,
+            "min": 2.974,
+            "p50": 4.12,
+            "p95": 21.995,
+            "limit": 250,
+            "within_limit": true
+          },
+          "cancel": {
+            "attempt": 1,
+            "enqueue_to_start_ms": 5.453,
+            "error_count": 1,
+            "max_attempts": 3,
+            "outcome": "running_context_cancelled_cross_client",
+            "priority": 2,
+            "queue": "chaos3034-direct",
+            "run_duration_ms": 1.243,
+            "scheduled": false,
+            "source": "go",
+            "state": "cancelled"
+          },
+          "running_cancellation": {
+            "cross_client_context_cancelled": true,
+            "cross_client_observation_ms": 0.043,
+            "same_client_attempted": false,
+            "same_client_context_cancelled": false,
+            "probe_release_used": false
+          },
+          "recovery": {
+            "attempt": 2,
+            "enqueue_to_start_ms": 23.233,
+            "error_count": 1,
+            "max_attempts": 3,
+            "outcome": "completed_after_retry",
+            "priority": 2,
+            "queue": "chaos3034-direct",
+            "recovery_first_to_last_ms": 228.553,
+            "run_duration_ms": 0.03,
+            "scheduled": true,
+            "source": "go",
+            "state": "completed"
+          },
+          "scheduled": {
+            "attempt": 0,
+            "error_count": 0,
+            "max_attempts": 3,
+            "outcome": "scheduled_state_observed",
+            "priority": 2,
+            "queue": "chaos3034-direct",
+            "scheduled": true,
+            "source": "go",
+            "state": "cancelled"
+          }
+        },
+        "postgres": {
+          "before": {
+            "backend_connections": 2,
+            "blocks_hit": 15437,
+            "blocks_read": 376,
+            "sessions": 9,
+            "tuples_deleted": 79,
+            "tuples_inserted": 578,
+            "tuples_updated": 59,
+            "xact_commit": 50,
+            "xact_rollback": 0
+          },
+          "after": {
+            "backend_connections": 8,
+            "blocks_hit": 24361,
+            "blocks_read": 385,
+            "sessions": 15,
+            "tuples_deleted": 226,
+            "tuples_inserted": 683,
+            "tuples_updated": 120,
+            "xact_commit": 231,
+            "xact_rollback": 0
+          },
+          "delta": {
+            "backend_connections": 6,
+            "blocks_hit": 8924,
+            "blocks_read": 9,
+            "sessions": 6,
+            "tuples_deleted": 147,
+            "tuples_inserted": 105,
+            "tuples_updated": 61,
+            "xact_commit": 181,
+            "xact_rollback": 0
+          }
+        },
+        "pool": {
+          "before": {
+            "acquire_count": 9,
+            "acquire_duration_ms": 5.05,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 1,
+            "idle_connections": 1,
+            "new_connections": 1,
+            "total_connections": 1
+          },
+          "after": {
+            "acquire_count": 151,
+            "acquire_duration_ms": 38.601,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 7,
+            "idle_connections": 6,
+            "new_connections": 7,
+            "total_connections": 6
+          },
+          "delta": {
+            "acquire_count": 142,
+            "acquire_duration_ms": 33.551,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 6,
+            "idle_connections": 5,
+            "new_connections": 6,
+            "total_connections": 5
+          }
+        },
+        "gates": {
+          "backend_connection_delta_at_most_six": true,
+          "canceled_acquires_zero": true,
+          "enqueue_p95_within_limit": true,
+          "new_connections_at_most_six": true,
+          "cross_client_running_cancel": true
+        }
       },
-      "postgres_delta": {
-        "backend_connections": 6,
-        "blocks_hit": 9182,
-        "blocks_read": 9,
-        "sessions": 6,
-        "xact_commit": 179,
-        "xact_rollback": 0
+      "python_transactions": {
+        "commit": {
+          "mode": "commit",
+          "domain_count": 1,
+          "job_count": 1,
+          "job_contract": {
+            "contract_version": 1,
+            "max_attempts": 7,
+            "priority": 2,
+            "queue": "chaos3034-direct",
+            "scheduled_after_create": false,
+            "source": "python",
+            "state": "available",
+            "tags": [
+              "phase0",
+              "python"
+            ]
+          }
+        },
+        "scheduled_commit": {
+          "mode": "commit",
+          "domain_count": 1,
+          "job_count": 1,
+          "job_contract": {
+            "contract_version": 1,
+            "max_attempts": 7,
+            "priority": 2,
+            "queue": "chaos3034-direct",
+            "scheduled_after_create": true,
+            "source": "python",
+            "state": "scheduled",
+            "tags": [
+              "phase0",
+              "python"
+            ]
+          }
+        },
+        "rollback": {
+          "mode": "rollback",
+          "domain_count": 0,
+          "job_count": 0,
+          "job_contract": null
+        },
+        "unique": {
+          "mode": "unique",
+          "status": "unsupported",
+          "reason_code": "river_0_40_unique_index_contract_missing",
+          "sqlstate": "42P10"
+        }
       },
-      "pool_delta": {
-        "acquire_count": 144,
-        "canceled_acquire_count": 0,
-        "new_connections": 6,
-        "total_connections": 5
+      "cross_language_consume": {
+        "status": "ok",
+        "mode": "direct",
+        "go_version": "go1.25.9",
+        "pgx_version": "v5.10.0",
+        "river_driver_version": "v0.40.0",
+        "river_version": "v0.40.0",
+        "poll_only": false,
+        "fetch_poll_interval_ms": 250,
+        "migration": {
+          "applied_versions": [],
+          "duration_ms": 17.359,
+          "latest_version": 7,
+          "version_count": 7
+        },
+        "workload": {
+          "external": {
+            "attempt": 1,
+            "enqueue_to_start_ms": 134.937,
+            "error_count": 0,
+            "max_attempts": 7,
+            "outcome": "external_completed",
+            "priority": 2,
+            "queue": "chaos3034-direct",
+            "run_duration_ms": 0.046,
+            "scheduled": false,
+            "source": "python",
+            "state": "completed"
+          }
+        },
+        "postgres": {
+          "before": {
+            "backend_connections": 3,
+            "blocks_hit": 51834,
+            "blocks_read": 404,
+            "sessions": 31,
+            "tuples_deleted": 229,
+            "tuples_inserted": 756,
+            "tuples_updated": 174,
+            "xact_commit": 471,
+            "xact_rollback": 2
+          },
+          "after": {
+            "backend_connections": 8,
+            "blocks_hit": 51989,
+            "blocks_read": 404,
+            "sessions": 36,
+            "tuples_deleted": 229,
+            "tuples_inserted": 756,
+            "tuples_updated": 174,
+            "xact_commit": 476,
+            "xact_rollback": 2
+          },
+          "delta": {
+            "backend_connections": 5,
+            "blocks_hit": 155,
+            "blocks_read": 0,
+            "sessions": 5,
+            "tuples_deleted": 0,
+            "tuples_inserted": 0,
+            "tuples_updated": 0,
+            "xact_commit": 5,
+            "xact_rollback": 0
+          }
+        },
+        "pool": {
+          "before": {
+            "acquire_count": 8,
+            "acquire_duration_ms": 9.776,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 1,
+            "idle_connections": 1,
+            "new_connections": 1,
+            "total_connections": 1
+          },
+          "after": {
+            "acquire_count": 21,
+            "acquire_duration_ms": 63.298,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 6,
+            "idle_connections": 5,
+            "new_connections": 6,
+            "total_connections": 5
+          },
+          "delta": {
+            "acquire_count": 13,
+            "acquire_duration_ms": 53.522000000000006,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 5,
+            "idle_connections": 4,
+            "new_connections": 5,
+            "total_connections": 4
+          }
+        },
+        "gates": {
+          "backend_connection_delta_at_most_six": true,
+          "canceled_acquires_zero": true,
+          "enqueue_p95_within_limit": true,
+          "new_connections_at_most_six": true
+        }
+      },
+      "crash_recovery": {
+        "first_attempt": {
+          "event": "started",
+          "attempt": 1
+        },
+        "termination": {
+          "signal": "SIGKILL",
+          "exit_code": 137
+        },
+        "rescue": {
+          "status": "ok",
+          "mode": "direct",
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.10.0",
+          "river_driver_version": "v0.40.0",
+          "river_version": "v0.40.0",
+          "poll_only": false,
+          "fetch_poll_interval_ms": 250,
+          "migration": {
+            "applied_versions": [],
+            "duration_ms": 15.259,
+            "latest_version": 7,
+            "version_count": 7
+          },
+          "workload": {
+            "external": {
+              "attempt": 2,
+              "enqueue_to_start_ms": 23108.403,
+              "error_count": 1,
+              "max_attempts": 3,
+              "outcome": "external_completed",
+              "priority": 2,
+              "queue": "chaos3034-direct",
+              "run_duration_ms": 0.045,
+              "scheduled": true,
+              "source": "go",
+              "state": "completed"
+            }
+          },
+          "postgres": {
+            "before": {
+              "backend_connections": 3,
+              "blocks_hit": 71893,
+              "blocks_read": 404,
+              "sessions": 47,
+              "tuples_deleted": 230,
+              "tuples_inserted": 763,
+              "tuples_updated": 179,
+              "xact_commit": 566,
+              "xact_rollback": 9
+            },
+            "after": {
+              "backend_connections": 7,
+              "blocks_hit": 77557,
+              "blocks_read": 404,
+              "sessions": 52,
+              "tuples_deleted": 231,
+              "tuples_inserted": 767,
+              "tuples_updated": 190,
+              "xact_commit": 715,
+              "xact_rollback": 9
+            },
+            "delta": {
+              "backend_connections": 4,
+              "blocks_hit": 5664,
+              "blocks_read": 0,
+              "sessions": 5,
+              "tuples_deleted": 1,
+              "tuples_inserted": 4,
+              "tuples_updated": 11,
+              "xact_commit": 149,
+              "xact_rollback": 0
+            }
+          },
+          "pool": {
+            "before": {
+              "acquire_count": 8,
+              "acquire_duration_ms": 8.151,
+              "acquired_connections": 0,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 1,
+              "idle_connections": 1,
+              "new_connections": 1,
+              "total_connections": 1
+            },
+            "after": {
+              "acquire_count": 111,
+              "acquire_duration_ms": 40.66,
+              "acquired_connections": 0,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 5,
+              "idle_connections": 4,
+              "new_connections": 5,
+              "total_connections": 4
+            },
+            "delta": {
+              "acquire_count": 103,
+              "acquire_duration_ms": 32.509,
+              "acquired_connections": 0,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 4,
+              "idle_connections": 3,
+              "new_connections": 4,
+              "total_connections": 3
+            }
+          },
+          "gates": {
+            "backend_connection_delta_at_most_six": true,
+            "canceled_acquires_zero": true,
+            "enqueue_p95_within_limit": true,
+            "new_connections_at_most_six": true
+          }
+        }
       }
     },
-    "pgbouncer_transaction_poll_only": {
-      "execution": "pass",
-      "retry": "pass",
-      "scheduled_state": "pass",
-      "cross_client_running_cancel": "fail",
-      "same_client_running_cancel": "fail",
-      "test_only_release_used": true,
-      "queue_start_latency_ms": {
-        "min": 12.914,
-        "p50": 178.052,
-        "p95": 275.022,
-        "max": 311.126,
-        "p95_limit": 600,
-        "within_limit": true
+    {
+      "mode": "poll-only",
+      "transport": "pgbouncer_transaction_poll_only",
+      "matrix": {
+        "status": "ok",
+        "mode": "poll-only",
+        "go_version": "go1.25.9",
+        "pgx_version": "v5.10.0",
+        "river_driver_version": "v0.40.0",
+        "river_version": "v0.40.0",
+        "poll_only": true,
+        "fetch_poll_interval_ms": 250,
+        "migration": {
+          "applied_versions": [],
+          "duration_ms": 13.853,
+          "latest_version": 7,
+          "version_count": 7
+        },
+        "workload": {
+          "execute": {
+            "attempt": 1,
+            "enqueue_to_start_ms": 15.251,
+            "error_count": 0,
+            "max_attempts": 3,
+            "outcome": "completed",
+            "priority": 2,
+            "queue": "chaos3034-poll-only",
+            "run_duration_ms": 0.054,
+            "scheduled": false,
+            "source": "go",
+            "state": "completed"
+          },
+          "execute_latency_ms": {
+            "count": 20,
+            "max": 271.024,
+            "min": 5.634,
+            "p50": 133.507,
+            "p95": 231.58,
+            "limit": 600,
+            "within_limit": true
+          },
+          "cancel": {
+            "attempt": 1,
+            "enqueue_to_start_ms": 240.699,
+            "error_count": 1,
+            "max_attempts": 3,
+            "outcome": "running_cancel_not_propagated_probe_released",
+            "priority": 2,
+            "queue": "chaos3034-poll-only",
+            "run_duration_ms": 1504.576,
+            "scheduled": false,
+            "source": "go",
+            "state": "cancelled"
+          },
+          "running_cancellation": {
+            "cross_client_context_cancelled": false,
+            "cross_client_observation_ms": 750.943,
+            "same_client_attempted": true,
+            "same_client_context_cancelled": false,
+            "same_client_observation_ms": 750.271,
+            "probe_release_used": true
+          },
+          "recovery": {
+            "attempt": 2,
+            "enqueue_to_start_ms": 104.082,
+            "error_count": 1,
+            "max_attempts": 3,
+            "outcome": "completed_after_retry",
+            "priority": 2,
+            "queue": "chaos3034-poll-only",
+            "recovery_first_to_last_ms": 264.491,
+            "run_duration_ms": 0.037,
+            "scheduled": true,
+            "source": "go",
+            "state": "completed"
+          },
+          "scheduled": {
+            "attempt": 0,
+            "error_count": 0,
+            "max_attempts": 3,
+            "outcome": "scheduled_state_observed",
+            "priority": 2,
+            "queue": "chaos3034-poll-only",
+            "scheduled": true,
+            "source": "go",
+            "state": "cancelled"
+          }
+        },
+        "postgres": {
+          "before": {
+            "backend_connections": 1,
+            "blocks_hit": 42726,
+            "blocks_read": 385,
+            "sessions": 28,
+            "tuples_deleted": 229,
+            "tuples_inserted": 690,
+            "tuples_updated": 132,
+            "xact_commit": 354,
+            "xact_rollback": 0
+          },
+          "after": {
+            "backend_connections": 2,
+            "blocks_hit": 49154,
+            "blocks_read": 385,
+            "sessions": 29,
+            "tuples_deleted": 229,
+            "tuples_inserted": 711,
+            "tuples_updated": 172,
+            "xact_commit": 467,
+            "xact_rollback": 0
+          },
+          "delta": {
+            "backend_connections": 1,
+            "blocks_hit": 6428,
+            "blocks_read": 0,
+            "sessions": 1,
+            "tuples_deleted": 0,
+            "tuples_inserted": 21,
+            "tuples_updated": 40,
+            "xact_commit": 113,
+            "xact_rollback": 0
+          }
+        },
+        "pool": {
+          "before": {
+            "acquire_count": 8,
+            "acquire_duration_ms": 7.474,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 1,
+            "idle_connections": 1,
+            "new_connections": 1,
+            "total_connections": 1
+          },
+          "after": {
+            "acquire_count": 139,
+            "acquire_duration_ms": 29.299,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 5,
+            "idle_connections": 5,
+            "new_connections": 5,
+            "total_connections": 5
+          },
+          "delta": {
+            "acquire_count": 131,
+            "acquire_duration_ms": 21.825,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 4,
+            "idle_connections": 4,
+            "new_connections": 4,
+            "total_connections": 4
+          }
+        },
+        "gates": {
+          "backend_connection_delta_at_most_six": true,
+          "canceled_acquires_zero": true,
+          "enqueue_p95_within_limit": true,
+          "new_connections_at_most_six": true,
+          "cross_client_running_cancel": false,
+          "same_client_running_cancel": false
+        }
       },
-      "running_cancel_observation_ms": {
-        "cross_client": 751.042,
-        "same_client": 750.798
+      "python_transactions": {
+        "commit": {
+          "mode": "commit",
+          "domain_count": 1,
+          "job_count": 1,
+          "job_contract": {
+            "contract_version": 1,
+            "max_attempts": 7,
+            "priority": 2,
+            "queue": "chaos3034-poll-only",
+            "scheduled_after_create": false,
+            "source": "python",
+            "state": "available",
+            "tags": [
+              "phase0",
+              "python"
+            ]
+          }
+        },
+        "scheduled_commit": {
+          "mode": "commit",
+          "domain_count": 1,
+          "job_count": 1,
+          "job_contract": {
+            "contract_version": 1,
+            "max_attempts": 7,
+            "priority": 2,
+            "queue": "chaos3034-poll-only",
+            "scheduled_after_create": true,
+            "source": "python",
+            "state": "scheduled",
+            "tags": [
+              "phase0",
+              "python"
+            ]
+          }
+        },
+        "rollback": {
+          "mode": "rollback",
+          "domain_count": 0,
+          "job_count": 0,
+          "job_contract": null
+        },
+        "unique": {
+          "mode": "unique",
+          "status": "unsupported",
+          "reason_code": "river_0_40_unique_index_contract_missing",
+          "sqlstate": "42P10"
+        }
       },
-      "postgres_delta": {
-        "backend_connections": 2,
-        "blocks_hit": 4894,
-        "blocks_read": 0,
-        "sessions": 2,
-        "xact_commit": 112,
-        "xact_rollback": 0
+      "cross_language_consume": {
+        "status": "ok",
+        "mode": "poll-only",
+        "go_version": "go1.25.9",
+        "pgx_version": "v5.10.0",
+        "river_driver_version": "v0.40.0",
+        "river_version": "v0.40.0",
+        "poll_only": true,
+        "fetch_poll_interval_ms": 250,
+        "migration": {
+          "applied_versions": [],
+          "duration_ms": 7.12,
+          "latest_version": 7,
+          "version_count": 7
+        },
+        "workload": {
+          "external": {
+            "attempt": 1,
+            "enqueue_to_start_ms": 133.205,
+            "error_count": 0,
+            "max_attempts": 7,
+            "outcome": "external_completed",
+            "priority": 2,
+            "queue": "chaos3034-poll-only",
+            "run_duration_ms": 0.067,
+            "scheduled": false,
+            "source": "python",
+            "state": "completed"
+          }
+        },
+        "postgres": {
+          "before": {
+            "backend_connections": 2,
+            "blocks_hit": 78955,
+            "blocks_read": 404,
+            "sessions": 52,
+            "tuples_deleted": 233,
+            "tuples_inserted": 768,
+            "tuples_updated": 195,
+            "xact_commit": 740,
+            "xact_rollback": 10
+          },
+          "after": {
+            "backend_connections": 2,
+            "blocks_hit": 79055,
+            "blocks_read": 404,
+            "sessions": 52,
+            "tuples_deleted": 233,
+            "tuples_inserted": 768,
+            "tuples_updated": 195,
+            "xact_commit": 741,
+            "xact_rollback": 10
+          },
+          "delta": {
+            "backend_connections": 0,
+            "blocks_hit": 100,
+            "blocks_read": 0,
+            "sessions": 0,
+            "tuples_deleted": 0,
+            "tuples_inserted": 0,
+            "tuples_updated": 0,
+            "xact_commit": 1,
+            "xact_rollback": 0
+          }
+        },
+        "pool": {
+          "before": {
+            "acquire_count": 8,
+            "acquire_duration_ms": 4.544,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 1,
+            "idle_connections": 1,
+            "new_connections": 1,
+            "total_connections": 1
+          },
+          "after": {
+            "acquire_count": 20,
+            "acquire_duration_ms": 18.059,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 4,
+            "idle_connections": 4,
+            "new_connections": 4,
+            "total_connections": 4
+          },
+          "delta": {
+            "acquire_count": 12,
+            "acquire_duration_ms": 13.515,
+            "acquired_connections": 0,
+            "canceled_acquire_count": 0,
+            "empty_acquire_count": 3,
+            "idle_connections": 3,
+            "new_connections": 3,
+            "total_connections": 3
+          }
+        },
+        "gates": {
+          "backend_connection_delta_at_most_six": true,
+          "canceled_acquires_zero": true,
+          "enqueue_p95_within_limit": true,
+          "new_connections_at_most_six": true
+        }
       },
-      "pool_delta": {
-        "acquire_count": 135,
-        "canceled_acquire_count": 0,
-        "new_connections": 3,
-        "total_connections": 3
+      "crash_recovery": {
+        "first_attempt": {
+          "event": "started",
+          "attempt": 1
+        },
+        "termination": {
+          "signal": "SIGKILL",
+          "exit_code": 137
+        },
+        "rescue": {
+          "status": "ok",
+          "mode": "poll-only",
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.10.0",
+          "river_driver_version": "v0.40.0",
+          "river_version": "v0.40.0",
+          "poll_only": true,
+          "fetch_poll_interval_ms": 250,
+          "migration": {
+            "applied_versions": [],
+            "duration_ms": 9.594,
+            "latest_version": 7,
+            "version_count": 7
+          },
+          "workload": {
+            "external": {
+              "attempt": 2,
+              "enqueue_to_start_ms": 22609.576,
+              "error_count": 1,
+              "max_attempts": 3,
+              "outcome": "external_completed",
+              "priority": 2,
+              "queue": "chaos3034-poll-only",
+              "run_duration_ms": 0.049,
+              "scheduled": true,
+              "source": "go",
+              "state": "completed"
+            }
+          },
+          "postgres": {
+            "before": {
+              "backend_connections": 3,
+              "blocks_hit": 82750,
+              "blocks_read": 404,
+              "sessions": 53,
+              "tuples_deleted": 234,
+              "tuples_inserted": 776,
+              "tuples_updated": 199,
+              "xact_commit": 782,
+              "xact_rollback": 16
+            },
+            "after": {
+              "backend_connections": 3,
+              "blocks_hit": 91380,
+              "blocks_read": 425,
+              "sessions": 54,
+              "tuples_deleted": 235,
+              "tuples_inserted": 796,
+              "tuples_updated": 238,
+              "xact_commit": 919,
+              "xact_rollback": 18
+            },
+            "delta": {
+              "backend_connections": 0,
+              "blocks_hit": 8630,
+              "blocks_read": 21,
+              "sessions": 1,
+              "tuples_deleted": 1,
+              "tuples_inserted": 20,
+              "tuples_updated": 39,
+              "xact_commit": 137,
+              "xact_rollback": 2
+            }
+          },
+          "pool": {
+            "before": {
+              "acquire_count": 8,
+              "acquire_duration_ms": 3.489,
+              "acquired_connections": 0,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 1,
+              "idle_connections": 1,
+              "new_connections": 1,
+              "total_connections": 1
+            },
+            "after": {
+              "acquire_count": 117,
+              "acquire_duration_ms": 14.832,
+              "acquired_connections": 1,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 4,
+              "idle_connections": 3,
+              "new_connections": 4,
+              "total_connections": 4
+            },
+            "delta": {
+              "acquire_count": 109,
+              "acquire_duration_ms": 11.343,
+              "acquired_connections": 1,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 3,
+              "idle_connections": 2,
+              "new_connections": 3,
+              "total_connections": 3
+            }
+          },
+          "gates": {
+            "backend_connection_delta_at_most_six": true,
+            "canceled_acquires_zero": true,
+            "enqueue_p95_within_limit": true,
+            "new_connections_at_most_six": true
+          }
+        }
       }
     }
-  },
-  "rolling_compatibility": {
+  ],
+  "nested_n_minus_1": {
     "status": "pass",
-    "river_0_39_migrated_fresh_database_through_schema_6": true,
-    "river_0_39_worker_completed_work_on_schema_6": true,
-    "river_0_40_upgraded_schema_6_to_7": true,
-    "river_0_39_inserted_on_schema_7": true,
-    "river_0_40_consumed_0_39_job_on_schema_7": true,
-    "river_0_40_inserted_on_schema_7": true,
-    "river_0_39_consumed_0_40_insert_on_schema_7": true
-  },
-  "python_transactions": {
-    "direct_commit_domain_rows": 1,
-    "direct_commit_jobs": 1,
-    "direct_scheduled_commit_domain_rows": 1,
-    "direct_scheduled_commit_jobs": 1,
-    "direct_rollback_domain_rows": 0,
-    "direct_rollback_jobs": 0,
-    "pgbouncer_commit_domain_rows": 1,
-    "pgbouncer_commit_jobs": 1,
-    "pgbouncer_scheduled_commit_domain_rows": 1,
-    "pgbouncer_scheduled_commit_jobs": 1,
-    "pgbouncer_rollback_domain_rows": 0,
-    "pgbouncer_rollback_jobs": 0,
-    "queue_priority_attempts_and_tags_preserved": true,
-    "go_consumed_python_payload_in_both_profiles": true,
-    "unique_insert": "unsupported_riverqueue_0_7_index_contract"
-  },
-  "process_failure": {
-    "direct": {
-      "termination": "SIGKILL",
-      "exit_code": 137,
-      "recovered_attempt": 2,
-      "error_count": 1,
-      "enqueue_to_recovered_start_ms": 18326.154
-    },
-    "poll_only": {
-      "termination": "SIGKILL",
-      "exit_code": 137,
-      "recovered_attempt": 2,
-      "error_count": 1,
-      "enqueue_to_recovered_start_ms": 21948.947
-    }
+    "phases": [
+      {
+        "phase": "before-v0.40-upgrade",
+        "status": "pass",
+        "migration": {
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.9.2",
+          "river_driver_version": "v0.39.0",
+          "river_version": "v0.39.0",
+          "latest_migration": 6,
+          "applied_versions": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "outcome": "migrated"
+        },
+        "old_worker": {
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.9.2",
+          "river_driver_version": "v0.39.0",
+          "river_version": "v0.39.0",
+          "contract_version": 1,
+          "source": "go",
+          "outcome": "completed",
+          "inserted_by_worker": true
+        }
+      },
+      {
+        "phase": "after-v0.40-upgrade",
+        "status": "pass",
+        "n_minus_one_insert": {
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.9.2",
+          "river_driver_version": "v0.39.0",
+          "river_version": "v0.39.0",
+          "contract_version": 1,
+          "source": "go",
+          "outcome": "inserted"
+        },
+        "current_consume": {
+          "status": "ok",
+          "mode": "direct",
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.10.0",
+          "river_driver_version": "v0.40.0",
+          "river_version": "v0.40.0",
+          "poll_only": false,
+          "fetch_poll_interval_ms": 250,
+          "migration": {
+            "applied_versions": [],
+            "duration_ms": 14.049,
+            "latest_version": 7,
+            "version_count": 7
+          },
+          "workload": {
+            "external": {
+              "attempt": 1,
+              "enqueue_to_start_ms": 74.575,
+              "error_count": 0,
+              "max_attempts": 25,
+              "outcome": "external_completed",
+              "priority": 1,
+              "queue": "chaos3034-n-minus-1",
+              "run_duration_ms": 0.055,
+              "scheduled": false,
+              "source": "go",
+              "state": "completed"
+            }
+          },
+          "postgres": {
+            "before": {
+              "backend_connections": 2,
+              "blocks_hit": 28994,
+              "blocks_read": 385,
+              "sessions": 17,
+              "tuples_deleted": 227,
+              "tuples_inserted": 687,
+              "tuples_updated": 126,
+              "xact_commit": 258,
+              "xact_rollback": 0
+            },
+            "after": {
+              "backend_connections": 7,
+              "blocks_hit": 29149,
+              "blocks_read": 385,
+              "sessions": 22,
+              "tuples_deleted": 227,
+              "tuples_inserted": 687,
+              "tuples_updated": 126,
+              "xact_commit": 263,
+              "xact_rollback": 0
+            },
+            "delta": {
+              "backend_connections": 5,
+              "blocks_hit": 155,
+              "blocks_read": 0,
+              "sessions": 5,
+              "tuples_deleted": 0,
+              "tuples_inserted": 0,
+              "tuples_updated": 0,
+              "xact_commit": 5,
+              "xact_rollback": 0
+            }
+          },
+          "pool": {
+            "before": {
+              "acquire_count": 8,
+              "acquire_duration_ms": 6.328,
+              "acquired_connections": 0,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 1,
+              "idle_connections": 1,
+              "new_connections": 1,
+              "total_connections": 1
+            },
+            "after": {
+              "acquire_count": 21,
+              "acquire_duration_ms": 38.307,
+              "acquired_connections": 0,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 6,
+              "idle_connections": 5,
+              "new_connections": 6,
+              "total_connections": 5
+            },
+            "delta": {
+              "acquire_count": 13,
+              "acquire_duration_ms": 31.979000000000003,
+              "acquired_connections": 0,
+              "canceled_acquire_count": 0,
+              "empty_acquire_count": 5,
+              "idle_connections": 4,
+              "new_connections": 5,
+              "total_connections": 4
+            }
+          },
+          "gates": {
+            "backend_connection_delta_at_most_six": true,
+            "canceled_acquires_zero": true,
+            "enqueue_p95_within_limit": true,
+            "new_connections_at_most_six": true
+          }
+        },
+        "current_insert": {
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.10.0",
+          "river_driver_version": "v0.40.0",
+          "river_version": "v0.40.0",
+          "source": "go",
+          "outcome": "inserted"
+        },
+        "n_minus_one_consume": {
+          "go_version": "go1.25.9",
+          "pgx_version": "v5.9.2",
+          "river_driver_version": "v0.39.0",
+          "river_version": "v0.39.0",
+          "contract_version": 1,
+          "source": "go",
+          "outcome": "completed",
+          "inserted_by_worker": false
+        }
+      }
+    ]
   },
   "redaction": {
     "contains_raw_logs": false,
     "contains_credentials_or_dsns": false,
     "contains_job_payloads": false,
     "contains_dynamic_ports": false,
-    "contains_container_or_project_ids": false,
-    "contains_job_or_marker_ids": false
+    "contains_container_or_project_ids": false
   }
 }

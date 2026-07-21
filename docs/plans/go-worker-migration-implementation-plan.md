@@ -239,8 +239,10 @@ circular.
 - Add the proposed `WORKER_DATABASE_URI` queue-control DSN while retaining `POSTGRES_URI` as the canonical domain DSN and preserving documented compatibility aliases.
 - Update configuration examples and `docs/ops/database-connection-pooling.md` in the same change that introduces the new variable.
 - Add queue-control and domain database roles/DSNs.
-- Implement mandatory direct/session queue-control connectivity and fail
-  readiness when only the transaction-mode domain pool is configured.
+- Implement mandatory direct PostgreSQL queue-control connectivity and fail
+  readiness when only the transaction-mode domain pool is configured. A
+  session-mode endpoint may replace direct connectivity only after the same
+  matrix passes.
 - Configure River job retention and maintenance.
 - Add database growth, index, vacuum, backup, and restore tests.
 - Add migration prefix/suffix compatibility checks modeled after ACR.
@@ -252,7 +254,8 @@ circular.
 - Queue work survives process and broker-equivalent outages.
 - A PgBouncer-only PollOnly deployment fails readiness with an actionable
   queue-control configuration error.
-- Production default direct/session pool is least-privilege and bounded.
+- Production default direct PostgreSQL pool is least-privilege and bounded; a
+  session-mode alternative requires equivalent evidence first.
 - Restore test preserves runnable and terminal job state.
 - Maximum configured connections stay within documented budgets.
 

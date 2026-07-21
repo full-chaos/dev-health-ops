@@ -10,6 +10,7 @@
     "river": "0.40.0",
     "riverpgxv5": "0.40.0",
     "river_n_minus_1": "0.39.0",
+    "riverpgxv5_n_minus_1": "0.39.0",
     "pgx": "5.10.0",
     "pgx_n_minus_1": "5.9.2",
     "clickhouse_go": "2.47.0",
@@ -23,10 +24,12 @@
   },
   "container_pins": {
     "postgres": {
+      "image": "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
       "digest": "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
     },
     "pgbouncer": {
       "version": "1.25.2",
+      "image": "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
       "digest": "sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd"
     }
   },
@@ -74,7 +77,8 @@
     {
       "id": "python_unique_insert_river_0_40_schema",
       "result": "fail",
-      "error_type": "asyncpg.exceptions.InvalidColumnReferenceError",
+      "reason_code": "river_0_40_unique_index_contract_missing",
+      "sqlstate": "42P10",
       "assertion": "riverqueue 0.7.0 unique insertion is incompatible with the River 0.40.0 migration-006 index shape.",
       "cause": "The client targets ON CONFLICT(kind, unique_key), while migration 006 removes the qualifying index and introduces the unique_states design."
     },
@@ -96,13 +100,13 @@
       "result": "fail",
       "assertion": "Neither cross-client nor same-client JobCancel propagated to an already-running worker context with riverpgxv5 0.40.0 and PollOnly.",
       "cause": "PollOnly suppresses the listener, while the local no-listener control helper returns early for the listener-capable riverpgxv5 driver.",
-      "required_resolution": "Provision direct/session queue control, add and verify a separate cancellation control plane, or reopen the broker decision."
+      "required_resolution": "Provision direct PostgreSQL queue control, separately validate a session-mode endpoint, add and verify a separate cancellation control plane, or reopen the broker decision."
     },
     {
       "id": "river_0_40_0_39_rolling_compatibility",
       "gate": "phase_0_compatibility",
       "result": "pass",
-      "assertion": "River 0.39 migrates and works on schema 6, reopens and inserts on schema 7, and River 0.40 consumes its schema-7 job."
+      "assertion": "River 0.39 migrates and works on schema 6; after River 0.40 upgrades to schema 7, each version inserts the v1 contract and the other version consumes it."
     },
     {
       "id": "python_payload_consumed_by_go",
@@ -138,15 +142,16 @@
       "id": "poll_only_latency_and_postgres_load",
       "gate": "phase_0_compatibility",
       "result": "pass",
-      "assertion": "At a 250 ms fetch interval, 20-sample PollOnly queue-start p95 is 233.811 ms within the 600 ms compatibility limit; backend and pool connection deltas remain within six with zero cancelled acquires."
+      "assertion": "At a 250 ms fetch interval, the 20-sample PollOnly queue-start p95 stays within the 600 ms compatibility limit; backend and pool connection deltas remain within six with zero cancelled acquires. Exact measurements are in the generated harness result."
     }
   ],
   "decisions": {
-    "go_river_0_40_direct_or_session": "go",
+    "go_river_0_40_direct_postgresql": "go",
+    "go_river_0_40_session_mode": "pending_equivalent_compatibility_matrix",
     "go_river_0_40_poll_only_as_sole_queue_control": "no_go_running_cancel_not_propagated",
     "riverqueue_python_production_dependency": "no_go",
     "python_to_go_enqueue_bridge": "generic_worker_job_outbox",
-    "phase_1_foundation": "conditional_go_requires_direct_or_session_queue_control_or_verified_cancel_plane",
+    "phase_1_foundation": "conditional_go_requires_direct_postgresql_or_separately_verified_session_or_cancel_plane",
     "production_canary": "blocked_until_v0_production_baseline_is_recorded"
   },
   "redaction": {

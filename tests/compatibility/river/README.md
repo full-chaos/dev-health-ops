@@ -20,7 +20,18 @@ touch the repository's development PostgreSQL or ClickHouse data.
   builds both CLIs with and asserts the exact candidate runtime Go 1.25.9;
 - `jq`;
 - the repository virtual environment synchronized with the locked dev
-  dependencies, including `riverqueue`, SQLAlchemy, and `asyncpg`.
+  dependencies on Python 3.13.14, including `riverqueue`, SQLAlchemy, and
+  `asyncpg`.
+
+Prepare that exact interpreter and frozen environment with:
+
+```bash
+uv python install 3.13.14
+uv sync --python 3.13.14 --frozen --all-extras --dev
+```
+
+The runner fails closed if the Python patch version or the pinned
+`riverqueue`, SQLAlchemy, or `asyncpg` versions drift.
 
 The default Python executable is `.venv/bin/python`. Set
 `RIVER_COMPAT_PYTHON` to another fully prepared Python executable when the
@@ -42,6 +53,17 @@ uses stderr. A failed run exits nonzero without printing a partial result.
 Do not run the harness with shell xtrace (`set -x` or `bash -x`). The runner
 itself never enables xtrace and never prints database URLs or credentials.
 
+To atomically regenerate the committed evidence from that exact sanitized
+stdout schema, run:
+
+```bash
+tests/compatibility/river/record.sh
+```
+
+The recorder validates the redaction contract before replacing
+`docs/architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json`.
+It leaves the existing evidence untouched when any harness assertion fails.
+
 ## What the runner proves
 
 The runner first builds the River v0.40 and nested v0.39 CLIs once each into a
@@ -55,7 +77,8 @@ For each of `direct` and `poll-only`, it:
 1. runs a 20-sample execute/cancel/retry/scheduled-job matrix;
 2. asserts every Boolean emitted under `gates` against the mode-specific truth
    table and requires the expected job outcomes;
-3. runs Python commit, rollback, and known-incompatible unique insertion;
+3. runs Python immediate and future-scheduled commits, rollback, and the
+   known-incompatible unique insertion;
 4. has the Go worker consume the committed Python payload and verifies the
    version, source, queue policy, and first-attempt completion;
 5. starts a blocking crash candidate, waits for its first-attempt start event,
@@ -79,10 +102,10 @@ The nested River v0.39 N-1 integration is deliberately isolated in
 `run_nested_n_minus_one` in [`run.sh`](run.sh). The hook runs first on the fresh
 database: v0.39 migrates through schema 6, then inserts and completes
 old-version work. After the direct v0.40 matrix upgrades through schema 7, the
-hook runs again: v0.39 reopens the additive schema and inserts a versioned job,
-then the v0.40 worker consumes it. Both phase outputs are sanitized before they
-enter the combined result, and any migration, insert, work, or consume mismatch
-fails closed.
+hook runs again in both directions: v0.39 inserts a versioned job for v0.40 to
+consume, then v0.40 inserts the same contract for a v0.39 worker to consume.
+Both phase outputs are sanitized before they enter the combined result, and any
+migration, insert, work, or consume mismatch fails closed.
 
 ## Output and redaction
 
@@ -127,7 +150,7 @@ These checks do not start the compatibility services:
 
 ```bash
 bash -n tests/compatibility/river/run.sh
-shellcheck tests/compatibility/river/run.sh
+shellcheck tests/compatibility/river/run.sh tests/compatibility/river/record.sh
 docker compose \
   --project-name rivercompat-static-check \
   --file tests/compatibility/river/compose.compatibility.yml \

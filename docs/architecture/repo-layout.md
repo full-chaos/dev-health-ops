@@ -2,9 +2,22 @@
 
 ## dev-health-ops
 
-All Python source code lives under `src/dev_health_ops/`.
+Python application source lives under `src/dev_health_ops/`. The additive Go
+worker-runtime foundation lives under `cmd/` and `internal/`; shared,
+language-neutral job contracts live under `contracts/jobs/`.
 
-### Module roots
+### Runtime ownership
+
+- Python continues to own FastAPI/GraphQL, providers, processors, domain
+  behavior, and all currently routed Celery jobs.
+- Go process foundations provide configuration, lifecycle, health, storage,
+  and versioned-contract support for future bounded-job migrations.
+- No job changes runtime because a Go command exists. Migration and routing are
+  explicit per-job work with parity and rollback gates.
+- River migrations and the direct PostgreSQL queue-control pool are later
+  CHAOS-3037 work. Long-running processes do not auto-migrate.
+
+### Python module roots
 
 ```
 src/dev_health_ops/
@@ -38,6 +51,29 @@ src/dev_health_ops/
 └── migrations/clickhouse/ # ClickHouse DDL migrations
 ```
 
+### Go and cross-language roots
+
+```text
+cmd/
+├── dev-health-worker/        # Worker-profile process shell
+├── dev-health-scheduler/     # Scheduler process shell
+├── dev-health-reconciler/    # Durable-repair process shell
+├── dev-health-stream-runner/ # Redis Streams process shell
+└── worker-contractcheck/     # Versioned-contract validation CLI
+internal/
+├── platform/                 # Config, secrets, logging, lifecycle, health, version
+├── storage/                  # Bounded PostgreSQL, ClickHouse, and Valkey factories
+├── jobcontract/              # Go job-envelope and compatibility types
+└── testsupport/containers/   # Isolated pinned dependency harness
+contracts/jobs/v1/            # Schemas, registry, examples, and migration state
+```
+
+These roots are Phase 1 foundations. The command shells do not imply a
+production job handler, River route, or canary approval. Detailed runtime
+topology and migration gates live in the
+[Go worker runtime TRD](go-worker-runtime-trd.md) and
+[migration PRD](../product/go-worker-migration-prd.md).
+
 ### Other top-level directories
 
 - `tests/` — pytest test suite (120+ files)
@@ -46,6 +82,7 @@ src/dev_health_ops/
 - `ci/` — CI scripts (test runner, governance gate)
 - `deploy/` — Deployment configuration
 - `scripts/` — Build and utility scripts
+- `contracts/` — Versioned cross-language contracts and sanitized fixtures
 
 ## dev-health-web
 

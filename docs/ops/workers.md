@@ -1,6 +1,40 @@
-# Workers & Celery
+# Workers: Celery and Go foundation
 
-Background job processing for dev-health-ops, powered by Celery with Redis as broker and result backend.
+Production background job processing for dev-health-ops is currently powered by
+Celery with Redis/Valkey as broker and result backend.
+
+## Runtime status and coexistence
+
+Phase 1 of the [Go worker migration](../architecture/go-worker-runtime-trd.md)
+adds four process foundations: `dev-health-worker`, `dev-health-scheduler`,
+`dev-health-reconciler`, and `dev-health-stream-runner`. It also adds shared
+configuration, lifecycle, health, storage, and versioned-contract packages.
+Those components are additive during coexistence:
+
+- Python remains the owner of FastAPI/GraphQL, providers, processors, domain
+  behavior, and every job listed in this document.
+- No production job is routed to River solely because a Go binary builds,
+  starts, or reports healthy.
+- Celery workers and Beat schedules remain required until each job's migration
+  issue changes its route behind rollback controls and passes shadow, parity,
+  and canary gates.
+- Separate worker stacks may run against the same representative dataset for
+  on-the-fly comparison, but they must use isolated process/container projects
+  and must not mutate, drain, purge, or normalize away the Celery baseline.
+
+River schemas, retention, and dual PostgreSQL pools are CHAOS-3037 work. River
+queue control requires a small direct PostgreSQL connection; transaction-mode
+PgBouncer remains the domain pool and is insufficient as the sole production
+queue-control path. Until CHAOS-3037 lands, `POSTGRES_URI` and its documented
+Python compatibility aliases remain authoritative, and the proposed
+`WORKER_DATABASE_URI` is not a current Python setting. Long-running worker
+processes never apply River migrations.
+
+The rest of this page documents the active Celery runtime. See the
+[Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target
+topology and the
+[CHAOS-3034 decision](../decisions/chaos-3034-river-compatibility.md) for the
+direct-PostgreSQL compatibility boundary.
 
 ---
 

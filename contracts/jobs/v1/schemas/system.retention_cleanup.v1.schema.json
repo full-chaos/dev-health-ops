@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/jobs/v1/schemas/system.retention_cleanup.v1.schema.json",
+  "title": "system.retention_cleanup payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["batch_size", "delete_before", "retention_policy"],
+  "properties": {
+    "batch_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "delete_before": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "retention_policy": {
+      "type": "string",
+      "enum": ["worker_job_terminal"]
+    }
+  }
+}

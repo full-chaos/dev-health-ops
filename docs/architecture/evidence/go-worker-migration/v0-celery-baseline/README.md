@@ -1,134 +1,111 @@
 # v0 Celery baseline
 
-This artifact defines the reproducible baseline that River task families must
-meet or improve. It intentionally contains no claimed production numbers yet.
-The machine-readable [`capture.json`](capture.json) therefore remains
-`not_recorded`, and that state blocks every production canary.
+This directory contains the reproducible Celery baseline that replacement
+worker stacks must meet or improve. The running local Compose project
+`dev-health` is the designated production-equivalent runtime for this phase:
+it runs the real Celery workers against the shared representative dataset, so
+the capture does not require a separate hosted production environment.
 
-A separate [`local-resource-snapshot.json`](local-resource-snapshot.json)
-records the 2026-07-20 local one-shot resource observation. It proves the
-capture shape only; it is not a latency, load, SLO, or production sizing
-baseline. In that capture, `worker-wi` is the concurrency-2 work-item/provider
-medium worker, not the external-ingest worker.
+[`capture.json`](capture.json) is generated evidence, not a hand-authored SLO.
+Its measurements describe what the designated runtime actually did, including
+backlogs and failures. Reviewers choose parity thresholds separately; an
+unhealthy observed value must not silently become an acceptable target.
+
+## Capture
+
+From the `dev-health-ops` repository root, run:
+
+```bash
+.venv/bin/python scripts/worker/capture_celery_baseline.py \
+  --project dev-health \
+  --duration-seconds 300 \
+  --interval-seconds 30 \
+  --history-seconds 86400
+```
+
+The recorder is read-only with respect to the running stack. It does not stop,
+restart, rebuild, scale, drain, enqueue, acknowledge, delete, or purge
+anything. It:
+
+- streams retained worker logs through an in-memory reducer and keeps only
+  task-family counts and successful-duration summaries;
+- reads Celery queue depth and the stamped oldest-message age through Kombu;
+- reads Valkey stream/group depth, pending count, lag, and oldest pending age;
+- samples Docker CPU/memory and process counts;
+- reads PostgreSQL cumulative statistics, locks, and aggregate sync-lease
+  counters; and
+- asks Celery inspect only for aggregate worker/active/reserved/scheduled
+  counts.
+
+The output is written atomically only after schema and redaction validation.
+The recorder never writes raw logs, task IDs, task arguments/results, stream
+keys, tenant IDs, credentials, DSNs, container environments, or absolute host
+paths. [`capture.schema.json`](capture.schema.json) and
+`tests/worker_baseline/test_capture_celery_baseline.py` lock that contract.
+
+## Comparing concurrent stacks
+
+The project name and output path are parameters, so an alternate Celery
+Compose project with the same service topology can be sampled against the same
+dataset without replacing this baseline:
+
+```bash
+.venv/bin/python scripts/worker/capture_celery_baseline.py \
+  --project alternate-worker-project \
+  --output /tmp/alternate-worker-capture.json
+```
+
+Keep alternate captures outside git unless they are deliberately promoted to
+a versioned evidence artifact. A Go stack uses its own runtime probe and emits
+the matching normalized measurement paths; it does not run this Celery-specific
+recorder. Compare matching measurement paths and capture windows; do not
+compare a five-minute resource sample with a one-shot value or an unrelated
+historical log window.
 
 ## Evidence boundary
 
-Local Compose output is useful for checking commands and metric availability,
-but it is not representative of production traffic, worker sizing, PostgreSQL
-load, provider latency, or rollout behavior. Production capture must use a
-representative UTC window that includes normal scheduled and interactive load
-and at least one worker deployment. Record the exact source revision, window,
-query backend, label substitutions, and missing series in `capture.json`.
+The production-equivalent designation applies to this shared dataset and
+runtime session. The recorder still records the bound source revision, image
+IDs, service start times, restart counters, history window, live-sampling
+window, and whether the source worktree was dirty. A bind-mounted source
+revision is the Git HEAD observed at capture time; it cannot independently
+prove which modules were already imported by a process that started earlier.
 
-Never commit raw query responses or logs. Reduce them to aggregate, redacted
-values in `capture.json`; retain raw evidence only in the approved restricted
-operations system.
+Raw logs are intentionally not retained. This means explicit Celery terminal
+markers can produce success/retry/failure/discard aggregates, but failure
+reasons and payloads cannot be reconstructed from the checked-in evidence.
 
-## PromQL capture
+The historical [`local-resource-snapshot.json`](local-resource-snapshot.json)
+is the earlier one-shot rehearsal. It is superseded for comparisons by the
+multi-sample resource fields in `capture.json` and remains only as provenance.
 
-[`queries.promql`](queries.promql) contains the canonical queries for task
-throughput/outcomes, successful-task duration, worker resource use, restarts,
-and PostgreSQL load. Use the Prometheus range-query API so the time window is
-explicit and repeatable:
+## Explicit observability gaps
 
-```bash
-export BASELINE_PROMETHEUS_URL="https://prometheus.example.invalid"
-export BASELINE_START="2026-07-01T00:00:00Z"
-export BASELINE_END="2026-07-08T00:00:00Z"
-export BASELINE_STEP="60s"
+The recorder does not invent signals that the current workers do not emit:
 
-curl --fail --silent --show-error --get \
-  "${BASELINE_PROMETHEUS_URL%/}/api/v1/query_range" \
-  --data-urlencode 'query=sum by (task_name, state) (rate(devhealth_celery_tasks_total[15m]))' \
-  --data-urlencode "start=${BASELINE_START}" \
-  --data-urlencode "end=${BASELINE_END}" \
-  --data-urlencode "step=${BASELINE_STEP}"
-```
+- enqueue-to-start latency is unavailable because the enqueue timestamp is not
+  present in completion logs or Celery inspect output;
+- process-crash recovery is unavailable until a naturally occurring or
+  separately authorized controlled crash is observed;
+- deployment drain duration is unavailable because no drain-start marker is
+  emitted (worker start-to-ready can still be measured when retained logs
+  contain the ready marker);
+- discard rate is a lower bound from explicit revoked/rejected/ignored log
+  markers; and
+- `devhealth_celery_*` metrics remain process-local and are not exported by
+  worker scrape endpoints.
 
-If the backend requires authentication, use the approved secret-bearing client
-configuration; do not paste an authorization header, cookie, or signed URL into
-this repository. Repeat the range request for each expression in
-`queries.promql`. Record absent series as an observability gap.
+Each gap is machine-readable in `capture.json`. A missing signal is never
+encoded as zero.
 
-The 2026-07-20 local check of the API `/metrics` endpoint exposed HELP/TYPE
-metadata for `devhealth_celery_*` but no samples. The custom counters and
-histograms are process-local to worker processes, and workers expose no scrape
-endpoint. Therefore an empty PromQL result is an observability gap, not zero
-traffic. A real production capture must use available OTLP/trace evidence or
-add an export/scrape path before relying on those queries.
-
-The current worker instrumentation also does **not** expose queue depth,
-oldest-message age, enqueue-to-start latency, stream pending age, or deploy
-recovery as Prometheus series. Do not fabricate PromQL for those signals. The
-commands and structured-log captures below are the v0 source of truth until a
-sanitized exporter exists.
-
-## Local command rehearsal
-
-These commands verify the capture procedure against the local Compose stack.
-Their results must be labeled `local` and must not populate production values:
-
-```bash
-docker compose ps
-docker compose exec -T worker celery \
-  -A dev_health_ops.workers.celery_app inspect ping
-docker compose exec -T worker celery \
-  -A dev_health_ops.workers.celery_app inspect active
-docker compose exec -T worker celery \
-  -A dev_health_ops.workers.celery_app inspect reserved
-docker compose stats --no-stream \
-  worker worker-ingest worker-wi worker-heavy beat
-curl --fail --silent http://localhost:8010/metrics \
-  | rg '^(# (HELP|TYPE) )?devhealth_celery_'
-docker compose logs --since 24h \
-  worker worker-ingest worker-wi worker-heavy beat \
-  | rg 'queue_depth|queue_backlog|external_ingest_stream_health'
-```
-
-The scheduled `monitor_queue_depths` task logs every non-empty declared queue's
-depth and, when the `enqueued_at` header is present, oldest-message age. Keep the
-raw log outside git and record only per-profile percentiles/maxima plus the
-window and log query used.
-
-For stream lag, enumerate Valkey database 1 stream keys without committing the
-output, then query each expected consumer group with `XINFO GROUPS` and
-`XPENDING`. Hash or remove tenant-bearing stream-key components before recording
-aggregates:
-
-```bash
-docker compose exec -T valkey valkey-cli -n 1 \
-  --scan --type stream --pattern 'ingest:*'
-docker compose exec -T valkey valkey-cli -n 1 \
-  --scan --type stream --pattern 'product-telemetry:*'
-docker compose exec -T valkey valkey-cli -n 1 \
-  --scan --type stream --pattern 'external-ingest:*'
-```
-
-## Production-only capture
-
-Production evidence must additionally record:
-
-- enqueue-to-start and oldest-queue-age percentiles by workload profile;
-- task success, retry, failure, and discard rates;
-- worker CPU and memory by profile;
-- PostgreSQL connections, transaction rate, lock/I/O pressure, and saturation;
-- process-crash recovery and one deployment's drain/recovery duration;
-- sync lease-expiry rate;
-- stream pending count, lag, and oldest pending age.
-
-Use the production log backend for `queue_depth`, `queue_backlog`, stream-health,
-and rollout events. Record the exact redacted query and UTC window in the
-restricted evidence system, then write only aggregates and its evidence
-reference into `capture.json`.
-
-If `devhealth_celery_*` remains process-local in production, capture task
-outcomes/durations from the approved OTLP/trace backend or add instrumentation
-that exports them. The production evidence must name that source; API
-HELP/TYPE metadata without samples does not satisfy the gate.
+[`queries.promql`](queries.promql) remains the canonical query set for a
+deployment that exports the same measurements through Prometheus. It is an
+alternate source, not a requirement for the designated Compose baseline.
 
 ## Gate
 
-- Missing production baseline does not by itself block Phase 1 foundation work.
-- It does block shadow-to-canary promotion and every production canary.
-- Empty/missing series require either an instrumentation fix or an explicitly
-  approved alternate measurement before the canary gate can open.
+- Phase 1 foundation is open while baseline capture and comparisons continue.
+- `capture.json` is authoritative evidence for the designated
+  production-equivalent session.
+- Production canary approval remains false until required observability gaps
+  are resolved or explicitly accepted and parity thresholds are reviewed.

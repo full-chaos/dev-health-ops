@@ -9,11 +9,17 @@ on:
       - '**/go.sum'
       - 'go.work'
       - 'go.work.sum'
+      - 'contracts/jobs/v1/**'
+      - 'src/dev_health_ops/workers/job_contracts/**'
+      - 'tests/workers/job_contracts/**'
+      - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'docs/architecture/evidence/go-worker-migration/**'
       - 'ci/check_go.sh'
+      - 'ci/check_go_containers.sh'
       - 'ci/check_river_compat_static.sh'
       - 'ci/local_validate.sh'
+      - '.dockerignore'
       - 'Makefile'
       - '.github/workflows/go.yml'
   pull_request:
@@ -24,11 +30,17 @@ on:
       - '**/go.sum'
       - 'go.work'
       - 'go.work.sum'
+      - 'contracts/jobs/v1/**'
+      - 'src/dev_health_ops/workers/job_contracts/**'
+      - 'tests/workers/job_contracts/**'
+      - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'docs/architecture/evidence/go-worker-migration/**'
       - 'ci/check_go.sh'
+      - 'ci/check_go_containers.sh'
       - 'ci/check_river_compat_static.sh'
       - 'ci/local_validate.sh'
+      - '.dockerignore'
       - 'Makefile'
       - '.github/workflows/go.yml'
   merge_group:
@@ -54,11 +66,108 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
+      - name: Prepare base job contracts
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          if ! git cat-file -e "${BASE_SHA}:contracts/jobs/v1" 2>/dev/null; then
+            echo "No v1 job contracts exist on the merge base; validating the additive tree only."
+            exit 0
+          fi
+          base_dir="${RUNNER_TEMP}/job-contract-base"
+          mkdir -p "${base_dir}"
+          git archive "${BASE_SHA}" contracts/jobs/v1 | tar -x -C "${base_dir}"
+          echo "DEV_HEALTH_CONTRACT_BASE=${base_dir}/contracts/jobs/v1" >> "${GITHUB_ENV}"
+
       - name: Run Go quality gate
         run: bash ci/check_go.sh all
 
       - name: Validate River compatibility harness
         run: bash ci/check_river_compat_static.sh
+
+  go-storage-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Run isolated storage integration suite
+        run: bash ci/check_go.sh integration
+
+  go-container-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build and smoke Go images
+        run: bash ci/check_go_containers.sh smoke
+
+  go-container-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [worker, scheduler, reconciler, stream-runner, contractcheck]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build ${{ matrix.target }} security image
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          docker build \
+            --file docker/go-worker.Dockerfile \
+            --target "${TARGET}" \
+            --build-arg VERSION=phase1-ci \
+            --build-arg COMMIT=0000000000000000000000000000000000000000 \
+            --build-arg BUILD_TIME=1970-01-01T00:00:00Z \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --tag "dev-health-go-${TARGET}:security" \
+            .
+
+      - name: Generate ${{ matrix.target }} SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: dev-health-go-${{ matrix.target }}:security
+          format: spdx-json
+          artifact-name: go-${{ matrix.target }}-sbom.spdx.json
+          syft-version: v1.42.3
+          dependency-snapshot: false
+          upload-artifact: true
+          upload-artifact-retention: 14
+          upload-release-assets: false
+
+      - name: Scan ${{ matrix.target }} for critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dev-health-go-${{ matrix.target }}:security
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          version: v0.70.0
+
+  go-container-reproducibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Verify reproducible Go images
+        run: bash ci/check_go_containers.sh reproducible
 
   river-compatibility:
     runs-on: ubuntu-latest

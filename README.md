@@ -40,6 +40,12 @@ Providers → Processors → Sinks → Metrics → API / Visualization
 - **API/GraphQL** serves persisted analytics to `dev-health-web` and other
   consumers.
 
+Python remains the owner of the API, GraphQL schema, provider fetch and
+normalization, processors, and current Celery job implementations. The
+repository also contains an additive Go worker-runtime foundation under `cmd/`
+and `internal/`; adding those process shells does not move a job out of Python
+or change its routing.
+
 The primary visualization surface is now `dev-health-web`. Grafana is optional,
 and this repository no longer ships the old sample dashboard gallery in this
 README.
@@ -163,7 +169,7 @@ running. GraphQL is served by the API for the web app.
 
 ### Run workers
 
-Background jobs use Celery with Valkey/Redis:
+All production background jobs currently use Celery with Valkey/Redis:
 
 ```bash
 POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
@@ -172,6 +178,22 @@ CELERY_BROKER_URL="redis://localhost:6379/0" \
 CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
   dev-hops workers start-worker --queues default metrics sync reports
 ```
+
+Phase 1 of the [Go worker migration plan](docs/plans/go-worker-migration-implementation-plan.md)
+adds shared Go runtime, storage, health, and versioned-contract foundations for
+future worker, scheduler, reconciler, and stream-runner processes. No job is
+migrated, routed to River, or production-canary ready merely because these
+binaries build or report healthy. Keep the required Celery workers and Beat
+schedules running until the issue for that job explicitly changes its route and
+passes the documented parity gates.
+
+River schema management and mandatory direct PostgreSQL queue-control
+connectivity are separate CHAOS-3037 prerequisites. Until that work lands,
+`POSTGRES_URI` and the existing Python compatibility aliases remain the active
+domain-database configuration; the proposed `WORKER_DATABASE_URI` is not a
+current Python runtime setting. See [Workers](docs/ops/workers.md) and the
+[Go worker runtime TRD](docs/architecture/go-worker-runtime-trd.md) for the
+coexistence boundary.
 
 ## Test tiers
 

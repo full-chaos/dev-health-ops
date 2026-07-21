@@ -1,56 +1,982 @@
 {
   "schema_version": 1,
   "evidence_version": "v0-celery-baseline",
-  "capture_status": "not_recorded",
-  "scope": "production",
+  "capture_status": "recorded_with_explicit_observability_gaps",
+  "scope": "production_equivalent_local",
+  "authoritative_for_baseline": true,
   "authoritative_for_canary": false,
-  "captured_at": null,
-  "source_revision": null,
+  "captured_at": "2026-07-21T17:13:06.189Z",
+  "source_revision": "e19b1d8c58d96410158987be1a13c79884b28835",
+  "runtime": {
+    "compose_project": "dev-health",
+    "dataset_scope": "shared_production_equivalent_dataset",
+    "runtime_kind": "celery",
+    "source_revision_basis": "bind_mount_git_head_at_capture",
+    "source_worktree_dirty": false,
+    "services": {
+      "worker": {
+        "profile": "general",
+        "image_id": "sha256:8e9581ab0f7583312b8b254465fa4b81c59957c9f1f7c9bc9ff8cb1afa9f3e4c",
+        "started_at": "2026-07-20T22:45:31.935Z",
+        "restart_count": 0
+      },
+      "worker-ingest": {
+        "profile": "ingest",
+        "image_id": "sha256:0ed9aff661d9a885b3e437b4dc14ee1670d0bdf4fc60397f44285934ea34936c",
+        "started_at": "2026-07-20T22:45:31.934Z",
+        "restart_count": 0
+      },
+      "worker-wi": {
+        "profile": "work_item_provider_medium",
+        "image_id": "sha256:78088decc975805790bbd318a3d0fb032cc94d0f289adbccb42127f8e264ca1a",
+        "started_at": "2026-07-20T14:11:27.598Z",
+        "restart_count": 0
+      },
+      "worker-heavy": {
+        "profile": "heavy",
+        "image_id": "sha256:221e2d51da7ac3f81ab6221f3bd9a98f88d1103a70d6f9daaa8cc88c8a211bab",
+        "started_at": "2026-07-20T14:11:27.603Z",
+        "restart_count": 0
+      },
+      "beat": {
+        "profile": "scheduler",
+        "image_id": "sha256:43ff94e63164cf5c907d1cce884a01422381d0dd0506436f49cbbb72dfecdbb7",
+        "started_at": "2026-07-20T22:45:20.978Z",
+        "restart_count": 0
+      },
+      "postgres": {
+        "profile": "postgres",
+        "image_id": "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+        "started_at": "2026-07-20T13:31:22.702Z",
+        "restart_count": 0
+      },
+      "pgbouncer": {
+        "profile": "pgbouncer",
+        "image_id": "sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
+        "started_at": "2026-07-20T13:31:28.337Z",
+        "restart_count": 0
+      },
+      "valkey": {
+        "profile": "valkey",
+        "image_id": "sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02",
+        "started_at": "2026-07-20T13:31:22.700Z",
+        "restart_count": 0
+      }
+    }
+  },
   "window": {
-    "start": null,
-    "end": null,
+    "start": "2026-07-20T22:45:31.935Z",
+    "end": "2026-07-21T17:13:06.189Z",
     "timezone": "UTC",
-    "contains_worker_deployment": null
+    "contains_worker_deployment": true,
+    "live_sampling": {
+      "start": "2026-07-21T17:07:33.107Z",
+      "end": "2026-07-21T17:12:33.118Z",
+      "requested_duration_seconds": 300.0,
+      "interval_seconds": 30.0,
+      "sample_count": 9
+    }
   },
   "sources": {
-    "promql_file": "queries.promql",
-    "prometheus_backend": null,
-    "log_backend": null,
+    "recorder": "scripts/worker/capture_celery_baseline.py",
+    "task_outcomes": "docker_logs_streamed_and_reduced_in_memory",
+    "queue_state": "read_only_kombu_valkey_probe",
+    "stream_state": "read_only_valkey_xinfo_xpending_probe",
+    "worker_resources": "docker_stats_no_stream",
+    "postgres": "read_only_pg_stat_database_pg_locks",
+    "sync_leases": "read_only_sync_run_units_aggregate",
     "restricted_raw_evidence_reference": null,
-    "known_local_gap_reference": "local-resource-snapshot.json",
+    "raw_evidence_retained": false,
     "label_substitutions": [],
-    "missing_series": []
+    "missing_series": [
+      "enqueue_to_start_not_emitted_by_celery_workers",
+      "no_controlled_process_crash_in_read_only_window",
+      "deployment_drain_start_not_emitted",
+      "task_discard_not_distinguishable_from_all_terminal_paths",
+      "celery_process_metrics_not_exported"
+    ]
   },
   "measurements": {
-    "enqueue_to_start_seconds_by_profile": null,
-    "oldest_queue_age_seconds_by_profile": null,
-    "queue_depth_by_profile": null,
-    "task_outcome_rates_by_family": null,
-    "successful_task_duration_seconds_by_family": null,
-    "process_crash_recovery_seconds": null,
-    "deployment_drain_and_recovery_seconds": null,
-    "sync_unit_lease_expiry_rate": null,
-    "stream_pending_count_by_group": null,
-    "stream_lag_by_group": null,
-    "stream_oldest_pending_seconds_by_group": null,
-    "worker_cpu_cores_by_profile": null,
-    "worker_memory_bytes_by_profile": null,
-    "postgres_connections": null,
-    "postgres_transactions_per_second": null,
-    "postgres_lock_or_io_pressure": null
+    "enqueue_to_start_seconds_by_profile": {
+      "status": "unavailable",
+      "reason_code": "enqueue_timestamp_not_present_in_worker_completion_logs"
+    },
+    "oldest_queue_age_seconds_by_profile": {
+      "external_ingest": {
+        "sample_count": 9,
+        "min": 1021263.99762,
+        "p50": 1021439.881993,
+        "p95": 1021564.688122,
+        "max": 1021564.688122,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "recorded"
+      },
+      "general": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      },
+      "heavy": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      },
+      "ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      },
+      "monitoring": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      },
+      "work_item_provider_medium": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      }
+    },
+    "queue_depth_by_profile": {
+      "external_ingest": {
+        "sample_count": 9,
+        "min": 24009.0,
+        "p50": 24015.0,
+        "p95": 24019.0,
+        "max": 24019.0
+      },
+      "general": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "heavy": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "ingest": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "monitoring": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "work_item_provider_medium": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      }
+    },
+    "task_outcome_rates_by_family": {
+      "billing_email": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 23,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000346103,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "capacity_recommendations": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 2,
+          "retry": 0,
+          "failure": 23,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 3.0096e-05,
+          "retry": 0.0,
+          "failure": 0.000346103,
+          "discard": 0.0
+        }
+      },
+      "complexity": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 14,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000210671,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "dora_release": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 31,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000466486,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "external_stream_health": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 1107,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.016658076,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "heartbeat": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 1,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 1.5048e-05,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "ingest": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 2216,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.033346247,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "membership": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 31,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000466486,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "metrics": {
+        "task_name_count": 5,
+        "counts": {
+          "success": 239,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.003596459,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "other": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 30,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000451438,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "product_telemetry": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 2215,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.033331199,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "queue_monitor": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 1107,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.016658076,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "reports": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 222,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.003340644,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "retention": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 2,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 3.0096e-05,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "scheduled_sync_dispatch": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 222,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.003340644,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_dispatch": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 9315,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.140171612,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_finalizer": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 9336,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.140487619,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_other": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 4675,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.070349145,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_outbox_reconciler": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 1107,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.016658076,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_unit": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 4664,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.070183618,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "webhooks": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 150,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.002257192,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      }
+    },
+    "successful_task_duration_seconds_by_family": {
+      "billing_email": {
+        "sample_count": 23,
+        "min": 0.001942,
+        "p50": 0.002995,
+        "p95": 0.00976,
+        "max": 0.059601
+      },
+      "capacity_recommendations": {
+        "sample_count": 2,
+        "min": 0.098355,
+        "p50": 0.098355,
+        "p95": 0.415111,
+        "max": 0.415111
+      },
+      "complexity": {
+        "sample_count": 14,
+        "min": 0.013275,
+        "p50": 0.016323,
+        "p95": 9.701602,
+        "max": 9.701602
+      },
+      "dora_release": {
+        "sample_count": 31,
+        "min": 0.022163,
+        "p50": 0.031072,
+        "p95": 0.038809,
+        "max": 0.039272
+      },
+      "external_stream_health": {
+        "sample_count": 1107,
+        "min": 0.00124,
+        "p50": 0.001989,
+        "p95": 0.005216,
+        "max": 0.258393
+      },
+      "heartbeat": {
+        "sample_count": 1,
+        "min": 0.011419,
+        "p50": 0.011419,
+        "p95": 0.011419,
+        "max": 0.011419
+      },
+      "ingest": {
+        "sample_count": 2216,
+        "min": 0.001344,
+        "p50": 0.002208,
+        "p95": 0.007273,
+        "max": 0.137595
+      },
+      "membership": {
+        "sample_count": 31,
+        "min": 0.008956,
+        "p50": 0.010146,
+        "p95": 0.023355,
+        "max": 0.235077
+      },
+      "metrics": {
+        "sample_count": 239,
+        "min": 0.004082,
+        "p50": 0.004691,
+        "p95": 0.017631,
+        "max": 11.805012
+      },
+      "other": {
+        "sample_count": 30,
+        "min": 0.044064,
+        "p50": 0.049426,
+        "p95": 0.062582,
+        "max": 8.527733
+      },
+      "product_telemetry": {
+        "sample_count": 2215,
+        "min": 23.403544,
+        "p50": 25.290028,
+        "p95": 25.362079,
+        "max": 25.429018
+      },
+      "queue_monitor": {
+        "sample_count": 1107,
+        "min": 0.003846,
+        "p50": 0.006624,
+        "p95": 0.016516,
+        "max": 0.081584
+      },
+      "reports": {
+        "sample_count": 222,
+        "min": 0.004178,
+        "p50": 0.005041,
+        "p95": 0.013518,
+        "max": 0.081217
+      },
+      "retention": {
+        "sample_count": 2,
+        "min": 0.004738,
+        "p50": 0.004738,
+        "p95": 0.004858,
+        "max": 0.004858
+      },
+      "scheduled_sync_dispatch": {
+        "sample_count": 222,
+        "min": 0.004199,
+        "p50": 0.394216,
+        "p95": 1.328513,
+        "max": 2.418268
+      },
+      "sync_dispatch": {
+        "sample_count": 9315,
+        "min": 0.005627,
+        "p50": 0.026254,
+        "p95": 0.172689,
+        "max": 0.6405
+      },
+      "sync_finalizer": {
+        "sample_count": 9336,
+        "min": 0.007142,
+        "p50": 0.020594,
+        "p95": 0.061499,
+        "max": 0.257179
+      },
+      "sync_other": {
+        "sample_count": 4675,
+        "min": 0.004603,
+        "p50": 0.019951,
+        "p95": 0.068827,
+        "max": 0.391999
+      },
+      "sync_outbox_reconciler": {
+        "sample_count": 1107,
+        "min": 0.014103,
+        "p50": 0.028753,
+        "p95": 0.663284,
+        "max": 2.729
+      },
+      "sync_unit": {
+        "sample_count": 4664,
+        "min": 0.029264,
+        "p50": 0.062246,
+        "p95": 0.170825,
+        "max": 0.452552
+      },
+      "webhooks": {
+        "sample_count": 150,
+        "min": 0.001762,
+        "p50": 0.003998,
+        "p95": 0.143598,
+        "max": 0.2796
+      }
+    },
+    "process_crash_recovery_seconds": {
+      "status": "not_observed",
+      "reason_code": "read_only_capture_did_not_inject_a_crash",
+      "container_restart_counts": {
+        "worker": 0,
+        "worker-ingest": 0,
+        "worker-wi": 0,
+        "worker-heavy": 0,
+        "beat": 0
+      }
+    },
+    "deployment_drain_and_recovery_seconds": {
+      "status": "unavailable",
+      "reason_code": "drain_start_marker_not_emitted"
+    },
+    "worker_start_to_ready_seconds_by_profile": {
+      "general": {
+        "status": "recorded",
+        "seconds": 6.921596
+      },
+      "ingest": {
+        "status": "recorded",
+        "seconds": 6.533953
+      },
+      "work_item_provider_medium": {
+        "status": "ready_marker_unavailable",
+        "seconds": null
+      },
+      "heavy": {
+        "status": "ready_marker_unavailable",
+        "seconds": null
+      }
+    },
+    "sync_unit_lease_expiry_rate": {
+      "status": "recorded_from_monotonic_row_counters",
+      "expired_lease_retry_count_delta": 0,
+      "counter_reset_detected": false,
+      "rate_per_second": 0.0,
+      "unit_count_end": 26925,
+      "units_with_expired_lease_retry_end": 9,
+      "currently_leased_units_end": 0,
+      "currently_expired_leases_end": 0
+    },
+    "stream_pending_count_by_group": {
+      "ingest": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "stream_count": {
+          "sample_count": 9,
+          "min": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        }
+      },
+      "product_telemetry": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "stream_count": {
+          "sample_count": 9,
+          "min": 3.0,
+          "p50": 3.0,
+          "p95": 3.0,
+          "max": 3.0
+        }
+      },
+      "external_ingest": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "stream_count": {
+          "sample_count": 9,
+          "min": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        }
+      }
+    },
+    "stream_lag_by_group": {
+      "ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "consumer_group_lag_unavailable"
+      },
+      "product_telemetry": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "status": "recorded"
+      },
+      "external_ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "consumer_group_lag_unavailable"
+      }
+    },
+    "stream_oldest_pending_seconds_by_group": {
+      "ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "no_pending_entries_observed"
+      },
+      "product_telemetry": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "no_pending_entries_observed"
+      },
+      "external_ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "no_pending_entries_observed"
+      }
+    },
+    "worker_cpu_cores_by_profile": {
+      "general": {
+        "sample_count": 9,
+        "min": 0.0003,
+        "p50": 0.0012,
+        "p95": 0.0031,
+        "max": 0.0031
+      },
+      "heavy": {
+        "sample_count": 9,
+        "min": 0.0002,
+        "p50": 0.001,
+        "p95": 0.0017,
+        "max": 0.0017
+      },
+      "ingest": {
+        "sample_count": 9,
+        "min": 0.0001,
+        "p50": 0.0013,
+        "p95": 0.0032,
+        "max": 0.0032
+      },
+      "scheduler": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "work_item_provider_medium": {
+        "sample_count": 9,
+        "min": 0.0002,
+        "p50": 0.0012,
+        "p95": 0.0029,
+        "max": 0.0029
+      }
+    },
+    "worker_memory_bytes_by_profile": {
+      "general": {
+        "sample_count": 9,
+        "min": 1187558457.0,
+        "p50": 1187558457.0,
+        "p95": 1187558457.0,
+        "max": 1187558457.0
+      },
+      "heavy": {
+        "sample_count": 9,
+        "min": 750780416.0,
+        "p50": 750780416.0,
+        "p95": 750780416.0,
+        "max": 750780416.0
+      },
+      "ingest": {
+        "sample_count": 9,
+        "min": 293915852.0,
+        "p50": 293915852.0,
+        "p95": 294020710.0,
+        "max": 294020710.0
+      },
+      "scheduler": {
+        "sample_count": 9,
+        "min": 230162432.0,
+        "p50": 230162432.0,
+        "p95": 230162432.0,
+        "max": 230162432.0
+      },
+      "work_item_provider_medium": {
+        "sample_count": 9,
+        "min": 702965350.0,
+        "p50": 702965350.0,
+        "p95": 702965350.0,
+        "max": 702965350.0
+      }
+    },
+    "postgres_connections": {
+      "sample_count": 9,
+      "min": 7.0,
+      "p50": 7.0,
+      "p95": 7.0,
+      "max": 7.0
+    },
+    "postgres_transactions_per_second": 1.996592,
+    "postgres_lock_or_io_pressure": {
+      "status": "recorded",
+      "connections": {
+        "sample_count": 9,
+        "min": 7.0,
+        "p50": 7.0,
+        "p95": 7.0,
+        "max": 7.0
+      },
+      "max_connections": 100,
+      "connection_saturation_ratio_max": 0.07,
+      "transactions_per_second": 1.996592,
+      "waiting_locks": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "total_locks": {
+        "sample_count": 9,
+        "min": 2.0,
+        "p50": 2.0,
+        "p95": 30.0,
+        "max": 30.0
+      },
+      "block_read_ratio": 0.0,
+      "block_read_time_delta_ms": 0.0,
+      "block_write_time_delta_ms": 0.0,
+      "track_io_timing": "off",
+      "deadlock_count_delta": 0,
+      "temp_file_count_delta": 0,
+      "temp_bytes_delta": 0
+    },
+    "celery_inspect": {
+      "status": "recorded",
+      "samples": [
+        {
+          "active_jobs": 1,
+          "reserved_jobs": 0,
+          "responding_workers": 4,
+          "scheduled_jobs": 0
+        },
+        {
+          "active_jobs": 1,
+          "reserved_jobs": 0,
+          "responding_workers": 4,
+          "scheduled_jobs": 0
+        }
+      ]
+    }
   },
+  "observability_gaps": [
+    {
+      "code": "enqueue_to_start_not_emitted_by_celery_workers",
+      "effect": "cannot_set_enqueue_latency_parity_threshold"
+    },
+    {
+      "code": "no_controlled_process_crash_in_read_only_window",
+      "effect": "cannot_set_process_crash_recovery_threshold"
+    },
+    {
+      "code": "deployment_drain_start_not_emitted",
+      "effect": "start_to_ready_is_recorded_but_drain_duration_is_not"
+    },
+    {
+      "code": "task_discard_not_distinguishable_from_all_terminal_paths",
+      "effect": "discard_rate_is_a_lower_bound_from_explicit_log_markers"
+    },
+    {
+      "code": "celery_process_metrics_not_exported",
+      "effect": "task_aggregates_use_ephemeral_log_reduction_instead_of_prometheus"
+    }
+  ],
   "review": {
     "reviewed_by": [],
     "reviewed_at": null,
     "parity_thresholds_approved": false
   },
   "gates": {
-    "phase_1_foundation": "not_blocked_by_missing_production_baseline",
-    "production_canary": "blocked_until_capture_and_threshold_review"
+    "phase_1_foundation": "open",
+    "production_canary": "blocked_until_observability_gaps_and_threshold_review"
   },
   "redaction": {
     "contains_raw_logs": false,
+    "contains_task_args_results_or_payloads": false,
     "contains_credentials_or_dsns": false,
-    "contains_tenant_identifiers": false
+    "contains_tenant_identifiers": false,
+    "contains_stream_keys": false,
+    "automated_validation": "pass"
   }
 }

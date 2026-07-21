@@ -16,13 +16,14 @@ from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.providers.pagerduty.sync_auth import (
     hydrate_pagerduty_credentials_async,
 )
+from dev_health_ops.providers.pagerduty.webhook_worker_shared import (
+    PagerDutyWebhookAuth,
+    PagerDutyWebhookWorkerContext,
+    build_pagerduty_webhook_auth,
+)
 
 if TYPE_CHECKING:
     from dev_health_ops.api.webhooks.pagerduty_models import PagerDutyV3Webhook
-    from dev_health_ops.providers.pagerduty.webhook_worker import (
-        PagerDutyWebhookAuth,
-        PagerDutyWebhookWorkerContext,
-    )
     from dev_health_ops.providers.pagerduty.webhooks import PagerDutyWebhookStore
 
 
@@ -132,9 +133,6 @@ async def hydrate_locked_pagerduty_webhook_auth(
     graph: LockedPagerDutyWebhookGraph,
 ) -> PagerDutyWebhookAuth:
     from dev_health_ops.credentials.resolver import pagerduty_credentials_from_mapping
-    from dev_health_ops.providers.pagerduty.webhook_worker import (
-        _pagerduty_webhook_auth,
-    )
 
     encrypted_credentials = graph.credential.credentials_encrypted
     if not encrypted_credentials:
@@ -152,7 +150,7 @@ async def hydrate_locked_pagerduty_webhook_auth(
     resolved_credentials = pagerduty_credentials_from_mapping(hydrated)
     if resolved_credentials is None:
         raise RuntimeError("pagerduty webhook credential payload is invalid")
-    return _pagerduty_webhook_auth(resolved_credentials)
+    return build_pagerduty_webhook_auth(resolved_credentials)
 
 
 async def reconcile_pagerduty_webhook_with_locked_graph(
@@ -212,10 +210,6 @@ def _trusted_graph(
     integration: Integration,
     credential: IntegrationCredential,
 ) -> LockedPagerDutyWebhookGraph | None:
-    from dev_health_ops.providers.pagerduty.webhook_worker import (
-        PagerDutyWebhookWorkerContext,
-    )
-
     if (
         binding.status != "active"
         or source.org_id != str(binding.org_id)

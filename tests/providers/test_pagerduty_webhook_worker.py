@@ -19,6 +19,11 @@ from dev_health_ops.providers.pagerduty.webhook_worker_graph import (
     load_active_pagerduty_webhook_context,
     lock_active_pagerduty_webhook_graph,
 )
+from dev_health_ops.providers.pagerduty.webhook_worker_shared import (
+    PagerDutyWebhookAuth,
+    PagerDutyWebhookWorkerContext,
+    build_pagerduty_webhook_auth,
+)
 
 
 @pytest.fixture
@@ -258,3 +263,19 @@ def test_hydrated_pagerduty_auth_uses_the_mode_specific_strategy(
     resolved = _pagerduty_webhook_auth(credentials)
 
     assert resolved.auth.headers()["Authorization"] == authorization
+
+
+def test_webhook_worker_public_contract_uses_acyclic_shared_types() -> None:
+    from dev_health_ops.providers.pagerduty.webhook_worker import (
+        PagerDutyWebhookAuth as WorkerAuth,
+    )
+    from dev_health_ops.providers.pagerduty.webhook_worker import (
+        PagerDutyWebhookWorkerContext as WorkerContext,
+    )
+    from dev_health_ops.providers.pagerduty.webhook_worker import (
+        _pagerduty_webhook_auth as worker_build_auth,
+    )
+
+    assert WorkerAuth is PagerDutyWebhookAuth
+    assert WorkerContext is PagerDutyWebhookWorkerContext
+    assert worker_build_auth is build_pagerduty_webhook_auth

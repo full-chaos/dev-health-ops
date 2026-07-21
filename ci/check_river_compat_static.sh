@@ -21,6 +21,7 @@ docker compose version >/dev/null 2>&1 || {
 }
 
 bash -n "${HARNESS}"
+bash -n "${RECORDER}"
 shellcheck "${HARNESS}" "${RECORDER}" "${ROOT}/ci/check_go.sh" "${BASH_SOURCE[0]}"
 docker compose \
   --project-name rivercompat-static-check \

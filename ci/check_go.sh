@@ -31,12 +31,13 @@ die() {
 
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v go >/dev/null 2>&1 || die "go is required"
-command -v gofmt >/dev/null 2>&1 || die "gofmt is required"
 
 case "$(go version)" in
   *" ${GO_TOOLCHAIN} "*) ;;
   *) die "Go ${GO_TOOLCHAIN#go} is required" ;;
 esac
+GOFMT="$(go env GOROOT)/bin/gofmt"
+[ -x "${GOFMT}" ] || die "gofmt from ${GO_TOOLCHAIN} is required"
 
 declare -a MODULE_DIRS=()
 
@@ -92,7 +93,7 @@ check_format() {
     return 0
   fi
 
-  output="$(cd "${ROOT}" && gofmt -l "${go_files[@]}")"
+  output="$(cd "${ROOT}" && "${GOFMT}" -l "${go_files[@]}")"
   if [ -n "${output}" ]; then
     printf 'gofmt: these files need formatting:\n%s\n' "${output}" >&2
     return 1

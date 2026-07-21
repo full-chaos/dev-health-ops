@@ -1,6 +1,6 @@
 # CHAOS-3034: River compatibility and cross-language enqueue boundary
 
-**Status:** Accepted for direct/session queue control; PollOnly-only deployment rejected  
+**Status:** Accepted for direct PostgreSQL queue control; PollOnly-only deployment rejected; session mode unverified  
 **Date:** 2026-07-20  
 **Owners:** Dev Health Ops architecture  
 **Supersedes:** The proposed direct Python-to-River production path in the
@@ -65,14 +65,15 @@ spike environment, not new production dependencies selected by this ADR.
 
 ## Decision
 
-1. **GO for River/riverpgxv5 0.40.0 only with direct/session queue
-   control.** The direct, N/N-1, load, and worker-failure harness rows pass.
-   Direct/session connectivity is a mandatory deployment prerequisite, not a
-   preference.
+1. **GO for River/riverpgxv5 0.40.0 with direct PostgreSQL queue control.**
+   The direct, N/N-1, load, and worker-failure harness rows pass. A session-mode
+   pooler is not covered by this evidence and may replace direct PostgreSQL only
+   after it passes the same execution, cancellation, failure, and load matrix.
 2. **NO-GO for transaction-mode PgBouncer PollOnly as the sole production
    queue-control path.** It does not propagate cancellation to running worker
    contexts with the selected pgx driver. Phase 1 may proceed only if the
-   direct/session prerequisite is accepted, or if a separate cancellation
+   direct PostgreSQL prerequisite is accepted, or if a session-mode endpoint
+   or separate cancellation
    control plane is designed and passes equivalent failure tests. Otherwise
    the broker decision reopens.
 3. **NO-GO for `riverqueue` as a production dependency.** Passing standard
@@ -162,8 +163,9 @@ its domain claim, ledger, or idempotency policy.
 
 - River migrations run only in the one-shot migration job and are pinned to
   0.40.0.
-- Direct/session queue-control connectivity uses notifications and leadership
-  normally and is required for production running-job cancellation.
+- Direct PostgreSQL queue-control connectivity uses notifications and
+  leadership normally and is required for production running-job cancellation.
+  A session-mode endpoint remains unverified until it passes this matrix.
 - Transaction-mode PgBouncer with `PollOnly` may not be the sole queue-control
   endpoint. At a 250 ms interval its 20-sample queue-start p95 was 233.811 ms
   and its connection/load gates passed, but both running-cancel propagation
@@ -224,12 +226,13 @@ Phase 1 must implement the table, relay, cleanup/retention policy, metrics, and
 failure-injection tests. The existing sync dispatch outbox remains authoritative
 for sync orchestration and is not replaced by this generic bridge.
 
-Infrastructure must expose a bounded direct/session worker queue-control pool
-before any production worker profile starts. If operations instead choose a
-separate application-owned cancellation channel, that channel becomes a new P0
-compatibility gate and must prove cross-process delivery, worker-crash behavior,
-and bounded cancellation latency before the direct/session requirement can be
-removed.
+Infrastructure must expose bounded direct PostgreSQL worker queue control
+before any production worker profile starts. A session-mode pooler may replace
+it only after equivalent compatibility evidence is recorded. If operations
+instead choose a separate application-owned cancellation channel, that channel
+becomes a new P0 compatibility gate and must prove cross-process delivery,
+worker-crash behavior, and bounded cancellation latency before the direct
+requirement can be removed.
 
 ## Gate disposition
 
@@ -243,8 +246,9 @@ Phase 0 compatibility evidence is complete:
 - Python unique insertion: fail, client rejected;
 - worker `SIGKILL` rescue in both profiles: pass.
 
-Phase 1 foundation has a conditional GO only with direct/session queue control
-or a separately approved and verified cancellation plane. This is a deployment
+Phase 1 foundation has a conditional GO only with direct PostgreSQL queue
+control, a session-mode endpoint that separately passes the same matrix, or a
+separately approved and verified cancellation plane. This is a deployment
 condition, not a pending harness row.
 
 Phase 1 foundation and canary gates:

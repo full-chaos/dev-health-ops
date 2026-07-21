@@ -159,7 +159,8 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 - Proved the River 0.39 schema-6 to River 0.40 schema-7 rolling window, Python
   and Go contract interoperability, and real `SIGKILL` rescue to attempt 2 in
   both connection profiles.
-- Recorded a GO for River 0.40.0 with mandatory direct/session queue control.
+- Recorded a GO for River 0.40.0 with mandatory direct PostgreSQL queue
+  control. Session mode remains unverified until it passes the same matrix.
   Rejected transaction-mode PgBouncer PollOnly as the sole production path:
   neither cross-client nor same-client cancellation reached a running worker.
 
@@ -177,10 +178,11 @@ circular.
 - The checked-in compatibility matrix is the Phase 0 gate record. Its PollOnly
   running-cancellation failure is an architecture boundary, not an unmeasured
   row.
-- Phase 1 foundation may proceed only with direct/session queue control as a
-  hard deployment prerequisite, or after a separately approved cancellation
-  plane passes equivalent tests. Missing production Celery baseline values do
-  not independently block foundation work.
+- Phase 1 foundation may proceed only with direct PostgreSQL queue control as a
+  hard deployment prerequisite, a session-mode endpoint that separately passes
+  the same matrix, or after a separately approved cancellation plane passes
+  equivalent tests. Missing production Celery baseline values do not
+  independently block foundation work.
 - Shadow-to-canary promotion and every production canary remain blocked until
   the real Celery baseline and parity thresholds are recorded and reviewed.
 - Any failed compatibility row that can require a different broker reopens the
@@ -760,7 +762,7 @@ Before each family enters canary:
 |---|---|---|
 | River version/support window | Resolved in P0 | River 0.40.0 with N-1 0.39.0; rerun the matrix on any pin change |
 | Python client vs generic outbox fallback | Resolved in P0 | use `worker_job_outbox`; no direct Python River writes |
-| direct/session queue DB availability | P1 database | block worker readiness and P1 deployment; PollOnly is not the sole fallback |
+| direct PostgreSQL or separately verified session-mode queue DB availability | P1 database | block worker readiness and P1 deployment; PollOnly is not the sole fallback |
 | shared Go module extraction | after first two families | keep in ops |
 | River UI deployment | P6 infra | do not deploy; use sanitized CLI/endpoints |
 | temporary Python algorithm service | before affected P5 issue | keep task on Celery |

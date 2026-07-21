@@ -14,8 +14,9 @@
 
 The recommended product and platform outcome is:
 
-- **River OSS 0.40.0 on PostgreSQL with mandatory direct/session queue
-  control**, for bounded jobs, retries, scheduled availability, queue
+- **River OSS 0.40.0 on PostgreSQL with mandatory direct PostgreSQL queue
+  control**, or a session-mode endpoint that separately passes the same matrix,
+  for bounded jobs, retries, scheduled availability, queue
   isolation, and operator-visible job state. Transaction-mode PgBouncer
   `PollOnly` is not an acceptable sole production path because it failed both
   cross-client and same-client running-job cancellation propagation.
@@ -176,9 +177,10 @@ Until a task family completes its stability gate, routing can be returned to its
 #### Infrastructure
 
 - PostgreSQL River schema migrations.
-- A small direct/session PostgreSQL pool for River notifications, leadership,
-  and running-job cancellation; PgBouncer transaction mode remains the domain
-  pool, not the sole River queue-control fallback.
+- A small direct PostgreSQL pool for River notifications, leadership, and
+  running-job cancellation; a session-mode pooler is an unverified alternative.
+  PgBouncer transaction mode remains the domain pool, not the sole River
+  queue-control fallback.
 - Existing PgBouncer path retained for domain traffic.
 - Compose, production Compose, Kubernetes, Helm, Docker Swarm, image build, migration job, CI, and deployment tests.
 - HPA and alerting changes from Redis queue length to job age/depth and stream lag.
@@ -395,7 +397,8 @@ After full cutover:
 - River schema in PostgreSQL.
 - Generic `worker_job_outbox` storage and a Go relay for transitional producers.
 - A proposed `WORKER_DATABASE_URI`, introduced by CHAOS-3037, for the required
-  small direct/session queue-control pool. Readiness must fail when only the
+  small direct PostgreSQL queue-control pool, or a session-mode endpoint after
+  equivalent validation. Readiness must fail when only the
   transaction-mode domain pool is configured.
 - Go worker and scheduler images or targets.
 - job queue and stream telemetry exporters.
@@ -478,9 +481,10 @@ A family that fails parity or reliability gates returns to the prior route. Data
 - CHAOS-2277 — stream-consumer starvation lessons.
 - CHAOS-2923 — ACR Go service-shell and storage-boundary reference.
 - The [CHAOS-3034 compatibility decision](../decisions/chaos-3034-river-compatibility.md):
-  River 0.40.0 direct/session GO, PollOnly-only deployment NO-GO, generic
+  River 0.40.0 direct PostgreSQL GO, session mode unverified, PollOnly-only deployment NO-GO, generic
   outbox bridge, and no production `riverqueue` dependency.
-- A deployable direct/session queue-control endpoint, or a separately approved
+- A deployable direct PostgreSQL queue-control endpoint, a session-mode endpoint
+  that separately passes the matrix, or a separately approved
   cancellation control plane that passes the same cross-process and crash
   gates.
 - A licensing/ownership decision for any future public shared Go foundation;
@@ -492,7 +496,7 @@ A family that fails parity or reliability gates returns to the prior route. Data
 |---|---|---|
 | Port changes domain behavior | Incorrect analytics or provider coverage | Golden fixtures, shadow comparison, provider-by-provider parity gates |
 | Queue DB load competes with semantic traffic | API/worker latency regression | Dedicated small direct pool, bounded workers, indexes, load tests, PgBouncer retained for domain traffic |
-| Only transaction-mode PgBouncer is available | Running jobs ignore remote cancellation | Fail readiness; require direct/session queue control or a separately verified cancellation plane |
+| Only transaction-mode PgBouncer is available | Running jobs ignore remote cancellation | Fail readiness; require direct PostgreSQL, a separately verified session-mode endpoint, or a separately verified cancellation plane |
 | Generic outbox and Go River schema drift | Jobs fail to decode or enqueue | Pin versions, keep Python off River tables, validate versioned contracts, and use the supported Go River API in the relay |
 | Go lacks equivalent provider/analytics libraries | Scope expansion | Port by capability, retain stable Python service boundary temporarily where justified, do not shell out per job |
 | Replay assumptions are wrong | Duplicate external or ClickHouse effects | Required idempotency matrix, kill tests, CHAOS-2596 gate |
@@ -506,7 +510,8 @@ A family that fails parity or reliability gates returns to the prior route. Data
 Phase 0 resolved the broker, initial support window, Python bridge, queue
 connection boundary, and provenance direction in the
 [CHAOS-3034 ADR](../decisions/chaos-3034-river-compatibility.md): River
-0.40.0/0.39.0 is a GO with direct/session queue control, PollOnly-only
+0.40.0/0.39.0 is a GO with direct PostgreSQL queue control, session mode is
+unverified, PollOnly-only
 deployment is a NO-GO, `riverqueue` is a production NO-GO, the generic outbox
 relay is selected, and Phase 1 uses a public clean-room implementation.
 
@@ -515,7 +520,7 @@ The remaining approvals are:
 1. Select direct PostgreSQL versus a session-mode pooler for the required
    `WORKER_DATABASE_URI` implementation.
 2. Decide whether a future application-owned cancellation plane is worth
-   validating; until then it does not relax the direct/session requirement.
+   validating; until then it does not relax the direct PostgreSQL requirement.
 3. Define the first canary organizations and production parity thresholds after the real Celery baseline is recorded.
 4. Decide whether River UI is deployed; a custom sanitized operator surface remains required if River UI cannot meet payload and authorization constraints.
 5. Assign owners for provider ports, analytics ports, runtime foundation, and infrastructure.

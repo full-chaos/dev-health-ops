@@ -99,15 +99,16 @@ poll-only cancellation fix to a single process. Primary pointers:
 
 The architecture result is therefore:
 
-- **GO** for River 0.40.0 with a direct PostgreSQL or session-capable
-  queue-control endpoint;
+- **GO** for River 0.40.0 with direct PostgreSQL queue control; a session-mode
+  endpoint remains unverified until it passes the same matrix;
 - **NO-GO** for transaction-mode PgBouncer PollOnly as the sole production
   queue-control path while running-job cancellation is a runtime requirement;
 - **NO-GO** for `riverqueue` 0.7.0 as a production dependency.
 
-Phase 1 may proceed only with direct/session queue control as a hard deployment
-prerequisite, or after a separately designed and verified cancellation control
-plane closes this blocker. If neither is available, the broker decision must be
-reopened. Missing production Celery baseline values continue to block every
-production canary. Full generic-outbox claim/insert/mark crash-window proof is
-a Phase 1 foundation gate because Phase 1 owns that relay implementation.
+Phase 1 may proceed only with direct PostgreSQL queue control as a hard
+deployment prerequisite, a session-mode endpoint that separately passes the
+same matrix, or a separately designed and verified cancellation control plane.
+If none is available, the broker decision must be reopened. Missing production
+Celery baseline values continue to block every production canary. Full
+generic-outbox claim/insert/mark crash-window proof is a Phase 1 foundation gate
+because Phase 1 owns that relay implementation.

@@ -13,7 +13,8 @@
 Adopt a hybrid Go execution platform:
 
 1. **Adopt River OSS 0.40.0 backed by the existing PostgreSQL database** for
-   bounded jobs, with a mandatory direct/session queue-control endpoint.
+   bounded jobs, with mandatory direct PostgreSQL queue control. A session-mode
+   endpoint may replace it only after passing the same compatibility matrix.
    Transaction-mode PgBouncer `PollOnly` is not an acceptable sole production
    path because it failed running-job cancellation propagation.
 2. **Dedicated Go stream runners over the existing Valkey/Redis Streams** for internal ingest, product telemetry, and external ingest.
@@ -23,7 +24,7 @@ Adopt a hybrid Go execution platform:
 6. **Temporal, NATS JetStream, and Asynq are not introduced in phase 1.**
 7. **Valkey database 0 is removed only after Celery is fully decommissioned.** Valkey database 1 remains for cache, provider rate-limit state, and streams.
 
-River is selected because the bounded-job system already depends on PostgreSQL as the durable source of truth and because transactional enqueue removes a distributed commit boundary between application state and an external broker. River also provides typed Go workers, multiple queues, delayed jobs, retries, uniqueness, periodic jobs, and job telemetry without adding a new service. The [Phase 0 evidence](evidence/go-worker-migration/v1-river-spike/README.md) makes direct/session connectivity a hard boundary of that decision.
+River is selected because the bounded-job system already depends on PostgreSQL as the durable source of truth and because transactional enqueue removes a distributed commit boundary between application state and an external broker. River also provides typed Go workers, multiple queues, delayed jobs, retries, uniqueness, periodic jobs, and job telemetry without adding a new service. The [Phase 0 evidence](evidence/go-worker-migration/v1-river-spike/README.md) makes direct PostgreSQL connectivity, or a session-mode endpoint with equivalent evidence, a hard boundary of that decision.
 
 The design deliberately does not delegate domain correctness to River. River owns job availability and attempt execution. Domain tables own product state and idempotency.
 
@@ -708,7 +709,8 @@ A separate issue must define partition keys, consumer identity, pending-entry ow
 Use two PostgreSQL pools in Go worker processes:
 
 1. **Queue-control pool (proposed `WORKER_DATABASE_URI`)**
-   - production default: direct PostgreSQL or session-mode pool;
+   - validated production default: direct PostgreSQL; a session-mode pool
+     requires the same compatibility matrix before adoption;
    - small bounded connection count;
    - used by River for `LISTEN/NOTIFY`, leadership, maintenance, and queue operations.
 
@@ -722,8 +724,8 @@ the selected runtime contract. The Phase 0 harness showed that
 `riverpgxv5` 0.40.0 with `PollOnly=true` can execute, retry, schedule, and
 recover work at a 250 ms interval, but neither cross-client nor same-client
 `JobCancel` reaches an already-running worker context. Infrastructure must
-provide the direct/session queue-control pool before a worker profile becomes
-ready. A separately designed cancellation control plane may replace this
+provide direct PostgreSQL queue control before a worker profile becomes ready.
+A separately verified session-mode endpoint or cancellation control plane may replace this
 condition only after equivalent cross-process and crash tests pass.
 
 `WORKER_DATABASE_URI` is an additive configuration contract introduced by CHAOS-3037, not a name accepted by the current Python runtime. Until that issue lands, `POSTGRES_URI` and the documented compatibility aliases remain authoritative; CHAOS-3037 must update the configuration and database-pooling documentation in the same change.
@@ -1199,7 +1201,7 @@ Use testcontainers for:
 - PostgreSQL with River migrations;
 - PgBouncer transaction mode and River `PollOnly`, including the checked-in
   running-cancellation blocker regression;
-- direct/session queue-control pool;
+- direct PostgreSQL or separately verified session-mode queue-control pool;
 - ClickHouse writes and dedup reads;
 - Valkey Streams consumer groups and reclaim;
 - crash/restart during enqueue, claim, external call, sink write, domain completion, and queue completion.
@@ -1276,7 +1278,8 @@ Default configurations must keep total worst-case connections below the document
 
 1. **Architecture gate:** River direct, N/N-1, worker-failure, load, and
    cross-language fixture harnesses pass; PollOnly running cancellation is an
-   explicit NO-GO; direct/session queue control is mandatory; MPL-2.0 and
+   explicit NO-GO; direct PostgreSQL queue control is mandatory unless a
+   session-mode endpoint separately passes the matrix; MPL-2.0 and
    clean-room provenance paths are recorded. The Python River client is also
    an explicit NO-GO, not a pending requirement.
 2. **Foundation gate:** registry, contracts, runtime, health, telemetry,

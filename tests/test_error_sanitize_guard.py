@@ -55,12 +55,11 @@ _TARGET_FILES = (
     "src/dev_health_ops/api/admin/routers/sync.py",
 )
 
-# Files that must actually import/use the helper -- guards against someone
-# satisfying the negative check below by deleting the sanitize calls outright
-# instead of the exception text they guard.
+# Files that must actually import/use the helper -- reference discovery is
+# intentionally excluded because its stronger boundary persists only a stable,
+# opaque code/message and has dedicated malicious-exception regressions.
 _FILES_REQUIRING_HELPER_USAGE = (
     "src/dev_health_ops/workers/sync_units.py",
-    "src/dev_health_ops/workers/reference_discovery.py",
     "src/dev_health_ops/sync/dispatch_outbox.py",
     "src/dev_health_ops/sync/execution_trigger.py",
     "src/dev_health_ops/api/admin/routers/sync.py",

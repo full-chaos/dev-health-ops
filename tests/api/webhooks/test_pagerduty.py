@@ -5,6 +5,7 @@ import hmac
 import json
 from collections.abc import Generator
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,6 +47,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
     monkeypatch.setenv("PAGERDUTY_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("PAGERDUTY_WEBHOOK_ORG_ID", "org-1")
     monkeypatch.setenv("PAGERDUTY_WEBHOOK_PROVIDER_INSTANCE_ID", "acme")
+    monkeypatch.setattr(
+        "dev_health_ops.api.webhooks.pagerduty._canonical_incident_ingestion_allowed",
+        AsyncMock(return_value=True),
+    )
     with TestClient(app) as test_client:
         yield test_client
 

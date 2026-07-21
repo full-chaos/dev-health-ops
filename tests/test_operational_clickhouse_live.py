@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from dev_health_ops.models.operational import OperationalIncident, operational_columns
+from dev_health_ops.storage.operational_current import current_operational_rows_sql
 
 CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
 pytestmark = [
@@ -80,13 +81,17 @@ def test_operational_incident_uses_source_version_for_tombstone_ordering(sink) -
         )
         sink.client.command("OPTIMIZE TABLE operational_incidents FINAL")
         result = sink.client.query(
-            "SELECT is_deleted, source_version_at FROM operational_incidents FINAL "
-            "WHERE org_id = {org_id:String} AND id = {id:String}",
+            "SELECT is_deleted, source_version_at FROM "
+            + current_operational_rows_sql(
+                "operational_incidents", ("id = {id:String}",)
+            ),
             parameters={"org_id": org_id, "id": incident.id},
         )
         visible = sink.client.query(
-            "SELECT id FROM operational_incidents FINAL "
-            "WHERE org_id = {org_id:String} AND id = {id:String} AND is_deleted = 0",
+            "SELECT id FROM "
+            + current_operational_rows_sql(
+                "operational_incidents", ("id = {id:String}", "is_deleted = 0")
+            ),
             parameters={"org_id": org_id, "id": incident.id},
         )
         types = sink.client.query(

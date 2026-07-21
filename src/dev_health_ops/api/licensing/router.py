@@ -9,11 +9,11 @@ from pydantic import BaseModel, Field
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session
-from dev_health_ops.licensing.registry import is_explicit_purchase_feature
+from dev_health_ops.licensing.feature_decisions import evaluate_org_features_async
+from dev_health_ops.licensing.registry import get_features_for_tier
 from dev_health_ops.licensing.types import LicenseTier
 
 router = APIRouter(prefix="/api/v1/licensing", tags=["licensing"])
-_CUSTOMER_PUSH_FEATURE = "customer_push_ingest"
 
 
 def _coerce_license_tier(value: object) -> LicenseTier:
@@ -52,13 +52,6 @@ class EntitlementsResponse(BaseModel):
     limits: dict[str, int | float | None] = Field(default_factory=dict)
 
 
-TIER_RANK = {
-    LicenseTier.COMMUNITY: 0,
-    LicenseTier.TEAM: 1,
-    LicenseTier.ENTERPRISE: 2,
-}
-
-
 @router.get("/entitlements/{org_id}", response_model=EntitlementsResponse)
 async def get_entitlements(
     org_id: str,
@@ -72,7 +65,6 @@ async def get_entitlements(
     from dev_health_ops.models.licensing import (
         TIER_LIMITS,
         FeatureFlag,
-        OrgFeatureOverride,
         OrgLicense,
     )
     from dev_health_ops.models.users import Organization
@@ -95,69 +87,22 @@ async def get_entitlements(
         )
         org_license = license_result.scalar_one_or_none()
 
-        flags_result = await session.execute(select(FeatureFlag))
-        all_flags = flags_result.scalars().all()
-
-        overrides_result = await session.execute(
-            select(OrgFeatureOverride).where(OrgFeatureOverride.org_id == org_uuid)
+        stored_feature_keys = tuple(
+            str(key) for key in (await session.scalars(select(FeatureFlag.key))).all()
         )
-        org_overrides = {str(o.feature_id): o for o in overrides_result.scalars().all()}
-
-    tier = str(org_license.tier) if org_license is not None else str(org.tier)
-    tier_enum = _coerce_license_tier(tier)
-
-    org_rank = TIER_RANK.get(tier_enum, 0)
-
-    features: dict[str, bool] = {}
-    flags_by_key = {str(flag.key): flag for flag in all_flags}
-    for flag in all_flags:
-        feature_key = str(flag.key)
-        if is_explicit_purchase_feature(feature_key):
-            features[feature_key] = False
-            continue
-        min_tier = _coerce_license_tier(flag.min_tier)
-        features[feature_key] = bool(flag.is_enabled) and org_rank >= TIER_RANK.get(
-            min_tier, 0
+        tier = str(org_license.tier) if org_license is not None else str(org.tier)
+        tier_enum = _coerce_license_tier(tier)
+        feature_keys = set(get_features_for_tier(tier_enum))
+        feature_keys.update(stored_feature_keys)
+        if org_license is not None and org_license.features_override:
+            feature_keys.update(_coerce_bool_map(org_license.features_override))
+        decisions = await evaluate_org_features_async(
+            session,
+            org_uuid,
+            sorted(feature_keys),
         )
 
-    if org_license and org_license.features_override:
-        for key, enabled in _coerce_bool_map(org_license.features_override).items():
-            override_flag = flags_by_key.get(key)
-            if override_flag is None:
-                features[key] = (
-                    False
-                    if key == _CUSTOMER_PUSH_FEATURE
-                    or is_explicit_purchase_feature(key)
-                    else bool(enabled)
-                )
-                continue
-            if is_explicit_purchase_feature(key):
-                features[key] = bool(enabled) and bool(override_flag.is_enabled)
-                continue
-            min_tier = _coerce_license_tier(override_flag.min_tier)
-            tier_allowed = org_rank >= TIER_RANK.get(min_tier, 0)
-            features[key] = (
-                bool(enabled) and bool(override_flag.is_enabled) and tier_allowed
-            )
-
-    for override in org_overrides.values():
-        for flag in all_flags:
-            if str(flag.id) == str(override.feature_id):
-                now = datetime.now().astimezone()
-                if override.expires_at and override.expires_at < now:
-                    continue
-                feature_key = str(flag.key)
-                if is_explicit_purchase_feature(feature_key):
-                    features[feature_key] = bool(override.is_enabled) and bool(
-                        flag.is_enabled
-                    )
-                    break
-                min_tier = _coerce_license_tier(flag.min_tier)
-                tier_allowed = org_rank >= TIER_RANK.get(min_tier, 0)
-                features[feature_key] = (
-                    bool(override.is_enabled) and bool(flag.is_enabled) and tier_allowed
-                )
-                break
+    features = {key: decision.allowed for key, decision in decisions.items()}
 
     limits = _coerce_limits_map(
         TIER_LIMITS.get(tier_enum, TIER_LIMITS[LicenseTier.COMMUNITY])

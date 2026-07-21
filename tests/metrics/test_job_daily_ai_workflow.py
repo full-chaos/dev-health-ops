@@ -156,8 +156,8 @@ def test_mapped_canonical_incident_is_deduplicated_before_ai_linkage() -> None:
         ) -> list[dict[str, Any]]:
             if "operational_incidents" in query:
                 assert parameters["org_id"] == ORG_ID
-                assert "mapping.repo_id IS NOT NULL" in query
-                assert "mapping.org_id = {org_id:String}" in query
+                assert "repo_id IS NOT NULL" in query
+                assert query.count("WHERE org_id = {org_id:String}") >= 2
                 canonical_row = {
                     "repo_id": REPO_ID,
                     "incident_id": "pd-1",

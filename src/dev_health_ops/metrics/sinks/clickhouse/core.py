@@ -486,6 +486,8 @@ class ClickHouseCore(BaseMetricsSink):
                     raise
             elif path.suffix == ".py":
                 # Execute python migration script
+                from dev_health_ops.migrations.clickhouse import MigrationDeferred
+
                 try:
                     import importlib.util
 
@@ -496,6 +498,12 @@ class ClickHouseCore(BaseMetricsSink):
                         if hasattr(module, "upgrade"):
                             logger.info(f"Executing Python migration: {path.name}")
                             module.upgrade(self.client)
+                except MigrationDeferred:
+                    logger.info(
+                        "clickhouse_migration_deferred",
+                        extra={"migration": version},
+                    )
+                    continue
                 except Exception as e:
                     logger.error(f"Failed to apply python migration {path.name}: {e}")
                     raise

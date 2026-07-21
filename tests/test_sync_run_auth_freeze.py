@@ -29,12 +29,14 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    Organization,
     SyncRun,
     SyncRunMode,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import set_watermark
@@ -44,7 +46,8 @@ from dev_health_ops.workers.sync_bootstrap import (
     SyncTaskBootstrap,
 )
 
-ORG_ID = "auth-freeze-org"
+ORG_UUID = uuid.UUID("00000000-0000-0000-0000-000000002755")
+ORG_ID = str(ORG_UUID)
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +63,33 @@ def db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        feature = FeatureFlag(
+            key="canonical_incident_ingestion",
+            name="Canonical Incident Ingestion",
+            category="integrations",
+            min_tier="community",
+            is_enabled=True,
+        )
+        session.add_all(
+            (
+                Organization(
+                    id=ORG_UUID,
+                    slug="auth-freeze-org",
+                    name="Auth Freeze Org",
+                    tier="team",
+                ),
+                feature,
+            )
+        )
+        session.flush()
+        session.add(
+            OrgFeatureOverride(
+                org_id=ORG_UUID,
+                feature_id=feature.id,
+                is_enabled=True,
+            )
+        )
+        session.commit()
         yield session
     engine.dispose()
 

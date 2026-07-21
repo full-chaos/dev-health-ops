@@ -107,7 +107,12 @@ sequenceDiagram
     Note over Relay: If publish fails here, task is lost (At-Most-Once)
     Relay->>Broker: Publish post_sync fanout tasks
 
-    Note over DB, Worker: Case 5: Eligible Linear backfill expired lease (Retry, not Fail) [CHAOS-2710]
+    Note over DB, Worker: Case 5: Permanent feature denial (Consumed, no publication)
+    Worker->>DB: Terminalize run, units, discovery, and observers atomically
+    Worker->>DB: Mark discovery/finalize outbox rows dispatched with feature_disabled
+    Note over Relay: Denied rows are terminal and never claimable or re-armed
+
+    Note over DB, Worker: Case 6: Eligible Linear backfill expired lease (Retry, not Fail) [CHAOS-2710]
     Worker->>DB: run_sync_unit holds lease; worker dies mid-chunk, lease expires
     Relay->>DB: Expired-lease loop finds RUNNING unit with dead lease
     Note over Relay: Eligible? provider=linear AND mode=backfill AND work-item family AND retry-SAFE surfaces AND count < max
@@ -162,6 +167,12 @@ The outbox kinds have different delivery guarantees depending on their idempoten
 | `dispatch_sync_run` | At-Least-Once | Unit claim guards prevent duplicate execution. Capped units remain in `PLANNED` status. |
 | `finalize_sync_run` | At-Least-Once | The `SyncRunPostDispatch` ledger enforces once-only finalization. |
 | `post_sync` | At-Most-Once | The relay marks the row as dispatched before publishing. It never re-arms on publish failure. |
+
+A permanent authorization denial consumes the transition using the existing
+`dispatched` status and stores `feature_disabled` as the durable reason. These
+rows are excluded from relay claims, and `upsert_outbox_wakeup` preserves that
+terminal denial rather than re-arming it. A pending finalizer remains recoverable
+after other terminal outcomes without reopening feature-denied work.
 
 ### At-Most-Once post_sync Semantics
 

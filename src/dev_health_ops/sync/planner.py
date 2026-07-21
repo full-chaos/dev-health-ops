@@ -57,6 +57,10 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.sync.canonical_incident_gate import (
+    require_canonical_incident_feature_sync,
+    sync_datasets_require_canonical_incident_feature,
+)
 from dev_health_ops.sync.datasets import (
     DatasetKey,
     DatasetSpec,
@@ -160,6 +164,12 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
 
     integration = _load_integration(session, request.integration_id, request.org_id)
     mode = _validate_mode(request.mode)
+    gate_datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
+    if sync_datasets_require_canonical_incident_feature(
+        str(integration.provider),
+        (str(dataset.dataset_key) for dataset in gate_datasets),
+    ):
+        require_canonical_incident_feature_sync(session, integration.org_id)
     # Freeze this run's auth at plan time (CHAOS-2755): resolve the credential
     # ONCE here so every later phase reads the run-stamped credential and a
     # mid-run credential edit can never produce a mixed-auth run.

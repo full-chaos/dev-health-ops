@@ -29,6 +29,7 @@ from dev_health_ops.providers.operational_migration import (
     write_operational_batch,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from dev_health_ops.storage.operational_current import current_operational_rows_sql
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +88,7 @@ async def _without_existing_incidents(
     assert store.client is not None
     result = await asyncio.to_thread(
         store.client.query,
-        "SELECT id FROM operational_incidents FINAL WHERE org_id = {org_id:String}",
+        f"SELECT id FROM {current_operational_rows_sql('operational_incidents')}",
         parameters={"org_id": store.org_id},
     )
     existing_ids = {str(row[0]) for row in result.result_rows}

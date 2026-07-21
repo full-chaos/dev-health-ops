@@ -331,26 +331,25 @@ class TestSyncDispatchDstFold:
         db_session.add(job)
         db_session.flush()
 
-        dispatch_mock = MagicMock()
+        trigger_mock = MagicMock(
+            return_value=SyncExecutionTriggerResult(
+                sync_run_id="run-1", job_run_id="job-run-1", total_units=1
+            )
+        )
         monkeypatch.setattr(
             sync_scheduler, "organization_exists_sync", lambda *_a: True
         )
         monkeypatch.setattr(
             "dev_health_ops.sync.execution_trigger.create_sync_execution_trigger",
-            lambda *a, **k: SyncExecutionTriggerResult(
-                sync_run_id="run-1", job_run_id="job-run-1", total_units=1
-            ),
-        )
-        monkeypatch.setattr(
-            "dev_health_ops.workers.sync_units.dispatch_sync_run", dispatch_mock
+            trigger_mock,
         )
 
-        # First fold instant: due -> dispatched exactly once.
+        # First fold instant: due -> planned exactly once for outbox publication.
         assert (
             sync_scheduler._maybe_dispatch_config(db_session, config, first_fold)
             is True
         )
-        assert dispatch_mock.apply_async.call_count == 1
+        assert trigger_mock.call_count == 1
         # The marker advanced past the repeated hour to the next day's slot.
         marker = job.next_run_at
         assert marker is not None
@@ -358,9 +357,9 @@ class TestSyncDispatchDstFold:
             marker = marker.replace(tzinfo=timezone.utc)
         assert marker == datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)
 
-        # Second fold instant (same wall-clock 01:30): must NOT re-dispatch.
+        # Second fold instant (same wall-clock 01:30): must NOT plan again.
         assert (
             sync_scheduler._maybe_dispatch_config(db_session, config, second_fold)
             is False
         )
-        assert dispatch_mock.apply_async.call_count == 1
+        assert trigger_mock.call_count == 1

@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import Any, TypeVar
 
+from dev_health_ops.storage.operational_current import current_operational_rows_sql
+
 ProjectedIncidentRow = TypeVar("ProjectedIncidentRow", bound=Mapping[str, Any])
 
 
@@ -42,9 +44,9 @@ def active_incidents_query(
                 "AND resolved_at < {end:DateTime64(3, 'UTC')}"
             )
             canonical_time_filter = (
-                "incident.resolved_at IS NOT NULL "
-                "AND incident.resolved_at >= {start:DateTime64(3, 'UTC')} "
-                "AND incident.resolved_at < {end:DateTime64(3, 'UTC')}"
+                "resolved_at IS NOT NULL "
+                "AND resolved_at >= {start:DateTime64(3, 'UTC')} "
+                "AND resolved_at < {end:DateTime64(3, 'UTC')}"
             )
         case IncidentWindow.STARTED:
             legacy_time_filter = (
@@ -52,8 +54,8 @@ def active_incidents_query(
                 "AND started_at < {end:DateTime64(3, 'UTC')}"
             )
             canonical_time_filter = (
-                "incident.started_at >= {start:DateTime64(3, 'UTC')} "
-                "AND incident.started_at < {end:DateTime64(3, 'UTC')}"
+                "started_at >= {start:DateTime64(3, 'UTC')} "
+                "AND started_at < {end:DateTime64(3, 'UTC')}"
             )
 
     legacy_org_filter = "org_id = {org_id:String} AND" if org_id else ""
@@ -70,6 +72,18 @@ def active_incidents_query(
             WHERE 1 = 1{repo_filter}
         """
 
+    current_incidents = current_operational_rows_sql(
+        "operational_incidents", ("is_deleted = 0", canonical_time_filter)
+    )
+    current_mappings = current_operational_rows_sql(
+        "operational_service_repository_mappings",
+        (
+            "repo_id IS NOT NULL",
+            "is_active = 1",
+            "valid_from <= {as_of:DateTime64(6, 'UTC')}",
+            "(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
+        ),
+    )
     canonical_projection = f"""
         SELECT
             mapping.repo_id,
@@ -79,21 +93,13 @@ def active_incidents_query(
             incident.resolved_at,
             incident.last_synced AS synced_at,
             0 AS source_priority
-        FROM operational_incidents AS incident FINAL
-        INNER JOIN operational_service_repository_mappings AS mapping FINAL
+        FROM {current_incidents} AS incident
+        INNER JOIN {current_mappings} AS mapping
             ON incident.org_id = mapping.org_id
            AND incident.service_id = mapping.service_id
         INNER JOIN repos AS repo FINAL
             ON mapping.org_id = repo.org_id
            AND mapping.repo_id = repo.id
-        WHERE incident.org_id = {{org_id:String}}
-          AND mapping.org_id = {{org_id:String}}
-          AND incident.is_deleted = 0
-          AND mapping.repo_id IS NOT NULL
-          AND mapping.is_active = 1
-          AND mapping.valid_from <= {{as_of:DateTime64(6, 'UTC')}}
-          AND (mapping.valid_to IS NULL OR mapping.valid_to > {{as_of:DateTime64(6, 'UTC')}})
-          AND {canonical_time_filter}
     """
     return f"""
         WITH projected_incidents AS (
@@ -101,17 +107,14 @@ def active_incidents_query(
             UNION ALL
             {canonical_projection}
         )
-        SELECT
-            repo_id,
-            incident_id,
-            argMax(status, (source_priority, synced_at)) AS status,
-            argMax(started_at, (source_priority, synced_at)) AS started_at,
-            argMax(resolved_at, (source_priority, synced_at)) AS resolved_at,
-            argMax(synced_at, (source_priority, synced_at)) AS last_synced
-        FROM projected_incidents
-        WHERE 1 = 1{repo_filter}
-        GROUP BY repo_id, incident_id
-        HAVING repo_id IS NOT NULL
+        SELECT repo_id, incident_id, status, started_at, resolved_at, synced_at AS last_synced
+        FROM (
+            SELECT *
+            FROM projected_incidents
+            WHERE repo_id IS NOT NULL{repo_filter}
+            ORDER BY repo_id, incident_id, source_priority DESC, synced_at DESC
+            LIMIT 1 BY repo_id, incident_id
+        )
         ORDER BY repo_id, incident_id
     """
 

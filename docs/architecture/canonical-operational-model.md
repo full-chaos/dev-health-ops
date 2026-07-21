@@ -49,13 +49,29 @@ text are untrusted evidence, never executable instructions.
 is required and case-sensitive. This identifier deliberately excludes mutable labels,
 status, URLs, and external-push `source_id`.
 
-Every table uses `ReplacingMergeTree(source_version_at)` with `(org_id, id)` as its
-sorting and idempotency key. Providers set `source_version_at` from their update or
-webhook event time, or from a snapshot start time when no source update time exists.
-`last_synced` is ingestion observability only. Equal source versions may be duplicated
-only when their semantic payload is identical; conflicting equal-version payloads must
-be quarantined by the producer rather than relying on engine tie selection. Mutable
-resources retain tombstones through `is_deleted` and `deleted_at`.
+Every entity derives four non-null ordering fields at construction and validates them
+again at the shared typed ClickHouse writer:
+
+- `source_revision UInt128` is `(timestamp_us << 64) | (operation_rank << 56) |
+  tie56`. Rank is create `0`, active/update `1`, or tombstone `2`; `tie56` is the first
+  56 bits of `SHA256("operational-source-revision-v1" || source_conflict_key_bytes)`.
+- `source_conflict_key String` is lowercase hex of the injective
+  `operational-conflict-v1` TLV. It includes the family and every persisted source or
+  business field in dataclass/DDL order except `id`, the four ordering fields,
+  `observed_at`, and `last_synced`. Runtime types have distinct tags, including separate
+  tags for lists and tuples.
+- `ingest_revision UInt128` is `(last_synced_us << 64) | observed_at_us` and controls
+  replay compaction only.
+- `ordering_contract UInt8` is exactly `2`.
+
+All timestamps are UTC microseconds in the ClickHouse 25.1 `DateTime64(6)` range from the
+Unix epoch through `2299-12-31T23:59:59.999999Z`. Invalid ranks, non-UTC or out-of-range
+values, and numeric overflow are terminal typed errors. Each table uses
+`ReplacingMergeTree(ingest_revision)`, `PRIMARY KEY (org_id, id)`, and
+`ORDER BY (org_id, id, source_revision, source_conflict_key)`. Distinct equal-time
+candidates therefore remain separate sorting-key rows; identical replays share a key
+and compact by `ingest_revision`. Mutable resources retain tombstones through
+`is_deleted` and `deleted_at`.
 
 ## Service and repository scope
 
@@ -69,7 +85,8 @@ heuristic.
 
 ## Storage
 
-Migration `066_operational_canonical.sql` creates one ClickHouse table per entity:
+Migration `066_operational_canonical.sql` is the immutable legacy baseline. Migration
+`067_operational_ordering_contract.py` rebuilds one ClickHouse table per entity:
 
 | Entity | Table |
 | --- | --- |
@@ -86,11 +103,10 @@ Migration `066_operational_canonical.sql` creates one ClickHouse table per entit
 | `OperationalUser` | `operational_users` |
 | `ServiceRepositoryMapping` | `operational_service_repository_mappings` |
 
-`ClickHouseStore` exposes one `insert_operational_*` method per table. It writes
-dataclass columns without an adapter and rejects rows whose `org_id` conflicts with
-the store context. `OperationalBatch` rejects any row whose organization, provider, or
-provider instance differs from its envelope. The work-item `ProviderBatch` remains
-unchanged.
+`ClickHouseStore` exposes one `insert_operational_*` method per table. It validates the
+derived ordering tuple, table family, and organization before writing dataclass columns.
+`OperationalBatch` rejects any row whose organization, provider, or provider instance
+differs from its envelope. The work-item `ProviderBatch` remains unchanged.
 
 ## Compatibility seam
 
@@ -102,11 +118,44 @@ await store.load_operational_incidents_started_between(org_id, start, end)
 await store.load_operational_incidents_overlapping(org_id, start, end)
 ```
 
-All readers query `operational_incidents FINAL`, scope by `org_id`, and exclude
-tombstones. Resolved windows are for MTTR and DORA. Started windows are for incident
-creation analysis. Overlap windows are for lifecycle and active-incident analysis.
-`load_operational_incidents()` remains a resolved-window compatibility alias. These
-reads intentionally coexist with legacy `incidents` and `atlassian_ops_*` readers.
+All canonical current-row readers use `current_operational_rows_sql()`. In contract 2 it
+scopes the candidate set by `org_id`, then orders by `(org_id, id, source_revision DESC,
+source_conflict_key DESC, ingest_revision DESC)` and applies `LIMIT 1 BY org_id, id`.
+During the contract-1 bridge, the same seam reads migration-066 tables with legacy
+`FINAL` selection, omits the absent v2 columns, and derives their values only after typed
+hydration. Tombstone, active, source, and domain-time filters run only after winner
+selection in both modes, so an older active row cannot reappear behind a tombstone.
+Resolved windows are for MTTR and DORA. Started windows are for incident creation
+analysis. Overlap windows are for lifecycle and active-incident analysis.
+`load_operational_incidents()` remains a resolved-window compatibility alias. These reads
+intentionally coexist with legacy `incidents` and `atlassian_ops_*` readers.
+
+## Ordering-contract rollout and recovery
+
+Omitted `OPERATIONAL_ORDERING_CONTRACT` is rollout-safe contract 1 and keeps migration-066
+writers, `FINAL` readers, and schema unchanged. Explicit `1` has the same bridge behavior.
+Only an explicit `OPERATIONAL_ORDERING_CONTRACT=2`, set after the maintenance boundary,
+admits candidate-preserving writers and makes migration 067 eligible. Any other configured
+value fails startup. Omitted or explicit contract 1 defers migration 067 without recording
+it as applied.
+
+Before applying migration 067 in a populated environment, quiesce ingress, stop every
+write-capable and canonical-reader replica, and drain queued work. The migration streams
+every surviving raw row in candidate-grouping order without a collapsing read, derives the
+v2 tuple through the same builder, and retains only scalar candidate/logical counts plus one
+maximum tuple in Python memory. ClickHouse-side aggregates verify those values before the
+atomic shadow exchange. The migration resumes safely from an exchanged leftover shadow.
+Restart only replicas whose configured contract matches the stored table contract. An
+explicit contract-1 bridge presented with a v2 table fails admission with
+`operational_old_writer_rejected`; its bounded log fields are only `table`, `service`,
+and `version`.
+
+The raw migration cannot recreate conflicting facts already removed by a legacy
+`ReplacingMergeTree(source_version_at)` merge. After the swap, schedule an authoritative
+full resync for every provider/source represented in the canonical tables before source
+cutover. Record that resync with the migration evidence. Rollback uses the same bridge
+binary in contract-2 mode; never lower the insert constraint or restart an original
+contract-1 binary.
 ## Producer migration rollout
 
 CHAOS-2963 adds an opt-in, additive producer seam for GitHub and GitLab
@@ -134,4 +183,4 @@ Historical GitHub/GitLab rows retain status and lifecycle timestamps, but legacy
 `incidents` has no labels, issue URL, number, title, or description; those canonical
 fields are null or empty after backfill. Enabled live dual-write supplies that richer
 issue metadata going forward. The backfill's deterministic canonical ids make
-repeated runs idempotent under ClickHouse `FINAL` reads.
+repeated runs idempotent under the centralized current-row selector.

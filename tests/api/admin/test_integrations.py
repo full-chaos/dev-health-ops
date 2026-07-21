@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.licensing import FeatureDecisionReason
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.integrations import (
     Integration,
@@ -32,6 +34,9 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
+from dev_health_ops.sync.canonical_incident_gate import (
+    CanonicalIncidentFeatureDisabledError,
+)
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
@@ -356,6 +361,52 @@ async def test_discover_integration_not_found(client):
     assert resp.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_discover_integration_sanitizes_provider_error(client, caplog):
+    ac, _ = client
+    created = await _create_integration(ac)
+    secret = "ghp_" + "FAKE1234567890abcdefghijklmnopqrst"
+    malicious_fragments = (
+        "MaliciousDiscoveryError",
+        "internal-db.example",
+        "/srv/private/config.json",
+        "SELECT token FROM credentials",
+        "https://admin:password@internal.example/discover",
+        secret,
+        'payload={"access_token":"private"}',
+    )
+
+    class MaliciousDiscoveryError(RuntimeError):
+        pass
+
+    malicious_message = " | ".join(malicious_fragments[1:])
+
+    with caplog.at_level(
+        logging.ERROR,
+        logger="dev_health_ops.api.admin.routers.integrations",
+    ):
+        with patch(
+            "dev_health_ops.api.admin.routers.integrations.discover_sources_for_integration",
+            side_effect=MaliciousDiscoveryError(malicious_message),
+        ):
+            response = await ac.post(
+                f"/api/v1/admin/integrations/{created['id']}/discover"
+            )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "integration_discovery_failed",
+            "message": "Integration discovery failed",
+        }
+    }
+    captured = f"{response.text} {caplog.text} " + " ".join(
+        str(record.__dict__) for record in caplog.records
+    )
+    for fragment in malicious_fragments:
+        assert fragment not in captured
+
+
 # ---------------------------------------------------------------------------
 # Source enable/disable tests
 # ---------------------------------------------------------------------------
@@ -536,6 +587,52 @@ async def test_trigger_sync_org_scoped(client, seeded_state):
     # org_id must come from auth, not client
     assert captured_request["org_id"] == seeded_state["org_id"]
     assert captured_request["mode"] == "incremental"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path_suffix", "payload"),
+    [
+        ("sync", {}),
+        (
+            "backfill",
+            {
+                "since": "2024-01-01T00:00:00Z",
+                "before": "2024-02-01T00:00:00Z",
+            },
+        ),
+    ],
+)
+async def test_integration_triggers_translate_feature_denial_to_403(
+    client,
+    path_suffix,
+    payload,
+):
+    ac, _ = client
+    created = await _create_integration(ac)
+    denial = CanonicalIncidentFeatureDisabledError(
+        FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED
+    )
+    mock_dispatch = MagicMock()
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+            side_effect=denial,
+        ),
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
+            mock_dispatch,
+        ),
+    ):
+        response = await ac.post(
+            f"/api/v1/admin/integrations/{created['id']}/{path_suffix}",
+            json=payload,
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == str(denial)
+    mock_dispatch.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio

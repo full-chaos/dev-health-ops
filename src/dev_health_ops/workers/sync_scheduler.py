@@ -5,6 +5,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from dev_health_ops.sync.canonical_incident_gate import (
+    CANONICAL_INCIDENT_FEATURE_KEY,
+    CanonicalIncidentFeatureDisabledError,
+    is_canonical_incident_feature_enabled_sync,
+    require_canonical_incident_feature_sync,
+    sync_targets_require_canonical_incident_feature,
+)
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.task_utils import (
@@ -159,6 +166,19 @@ def _maybe_dispatch_config(
 
     if not organization_exists_sync(session, config.org_id):
         return False
+    sync_targets = [str(target) for target in (config.sync_targets or [])]
+    if sync_targets_require_canonical_incident_feature(
+        sync_targets
+    ) and not is_canonical_incident_feature_enabled_sync(session, config.org_id):
+        logger.warning(
+            "sync_scheduler.feature_disabled",
+            extra={
+                "config_id": str(config.id),
+                "org_id": str(config.org_id),
+                "feature_key": CANONICAL_INCIDENT_FEATURE_KEY,
+            },
+        )
+        return False
 
     # Manual-only configs (no explicit schedule_cron in sync_options) are
     # never auto-dispatched (CHAOS-2297). The config is the source of truth:
@@ -251,7 +271,9 @@ def _maybe_dispatch_config(
     session.commit()
 
     from dev_health_ops.sync.execution_trigger import create_sync_execution_trigger
-    from dev_health_ops.workers.sync_units import dispatch_sync_run
+    from dev_health_ops.workers.sync_units import (
+        terminalize_feature_disabled_plan,
+    )
 
     logger.info("Routing config %s through fan-out planner", config.id)
     try:
@@ -268,22 +290,53 @@ def _maybe_dispatch_config(
                 config.id,
             )
             return False
-        session.commit()
     except Exception:
         logger.exception("Fan-out planner failed for config %s", config.id)
         session.rollback()
         return False
 
     try:
-        getattr(dispatch_sync_run, "apply_async")(
-            args=(trigger.sync_run_id,), queue="sync"
-        )
-    except Exception:
+        if sync_targets_require_canonical_incident_feature(sync_targets):
+            require_canonical_incident_feature_sync(session, config.org_id)
+    except CanonicalIncidentFeatureDisabledError as exc:
+        try:
+            transition = terminalize_feature_disabled_plan(
+                session,
+                trigger.sync_run_id,
+                exc,
+            )
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception(
+                "sync_scheduler.feature_denial_terminalization_failed",
+                extra={
+                    "config_id": str(config.id),
+                    "org_id": str(config.org_id),
+                    "feature_key": CANONICAL_INCIDENT_FEATURE_KEY,
+                    "sync_run_id": trigger.sync_run_id,
+                },
+            )
+            raise
         logger.warning(
-            "sync_scheduler.dispatch_fastpath_failed",
-            extra={"config_id": str(config.id), "sync_run_id": trigger.sync_run_id},
-            exc_info=True,
+            "sync_scheduler.feature_disabled_before_enqueue",
+            extra={
+                "config_id": str(config.id),
+                "org_id": str(config.org_id),
+                "feature_key": CANONICAL_INCIDENT_FEATURE_KEY,
+                "sync_run_id": trigger.sync_run_id,
+                "failed_units": transition.failed_units,
+            },
         )
+        return False
+
+    try:
+        session.commit()
+    except Exception:
+        logger.exception("Fan-out planner commit failed for config %s", config.id)
+        session.rollback()
+        return False
+
     return True
 
 

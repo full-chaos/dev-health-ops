@@ -1,3 +1,13 @@
+from dev_health_ops.licensing.feature_decisions import (
+    evaluate_org_feature_async,
+    evaluate_org_feature_sync,
+    is_org_feature_enabled_async,
+    is_org_feature_enabled_sync,
+)
+from dev_health_ops.licensing.feature_policy import (
+    FeatureDecision,
+    FeatureDecisionReason,
+)
 from dev_health_ops.licensing.gating import (
     FeatureNotLicensedError,
     LicenseManager,
@@ -19,6 +29,7 @@ from dev_health_ops.licensing.generator import (
     sign_payload,
 )
 from dev_health_ops.licensing.registry import (
+    CANONICAL_INCIDENT_INGESTION_FEATURE,
     STANDARD_FEATURES,
     get_features_for_tier,
 )
@@ -45,8 +56,15 @@ __all__ = [
     "DEFAULT_LIMITS",
     "GRACE_DAYS",
     "FeatureCategory",
+    "CANONICAL_INCIDENT_INGESTION_FEATURE",
     "STANDARD_FEATURES",
     "get_features_for_tier",
+    "FeatureDecision",
+    "FeatureDecisionReason",
+    "evaluate_org_feature_sync",
+    "evaluate_org_feature_async",
+    "is_org_feature_enabled_sync",
+    "is_org_feature_enabled_async",
     # Validator
     "LicenseValidator",
     "LicenseValidationError",

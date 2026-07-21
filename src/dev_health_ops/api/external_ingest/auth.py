@@ -233,7 +233,11 @@ async def _customer_push_feature_state(db: AsyncSession, org_id: str) -> str:
     return await db.run_sync(_state)
 
 
-def require_ingest_scope(scope: str):
+def require_ingest_scope(
+    scope: str,
+    *,
+    require_customer_push_feature: bool = True,
+):
     """Single dependency factory for CHAOS-2690's data-plane scope checks.
 
     Bound once per required scope at router import time (see
@@ -318,21 +322,22 @@ def require_ingest_scope(scope: str):
                 f"Token is missing required scope: {scope}",
             )
 
-        feature_state = await _customer_push_feature_state(db, token.org_id)
-        if feature_state != "enabled":
-            _record_auth_failure_hit(request)
-            await _emit_failure_audit(
-                db,
-                request,
-                org_id=token.org_id,
-                token_id=str(token.id),
-                reason=f"feature_not_enabled:{_CUSTOMER_PUSH_FEATURE}",
-            )
-            raise ExternalIngestError(
-                403,
-                "feature_not_enabled",
-                "Customer push ingest is not enabled for this organization",
-            )
+        if require_customer_push_feature:
+            feature_state = await _customer_push_feature_state(db, token.org_id)
+            if feature_state != "enabled":
+                _record_auth_failure_hit(request)
+                await _emit_failure_audit(
+                    db,
+                    request,
+                    org_id=token.org_id,
+                    token_id=str(token.id),
+                    reason=f"feature_not_enabled:{_CUSTOMER_PUSH_FEATURE}",
+                )
+                raise ExternalIngestError(
+                    403,
+                    "feature_not_enabled",
+                    "Customer push ingest is not enabled for this organization",
+                )
 
         ctx = IngestAuthContext(
             org_id=token.org_id,

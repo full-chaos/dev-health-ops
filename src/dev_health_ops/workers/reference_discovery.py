@@ -23,13 +23,17 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.sync.canonical_incident_gate import (
+    CanonicalIncidentFeatureDisabledError,
+    require_canonical_incident_feature_for_update_sync,
+    sync_run_requires_canonical_incident_feature,
+)
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
     upsert_outbox_wakeup,
 )
-from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.sync_bootstrap import resolve_run_auth
 from dev_health_ops.workers.task_utils import _get_db_url
@@ -43,6 +47,7 @@ DISCOVERY_STATUS_RETRYING = "retrying"
 DISCOVERY_STATUS_SUCCESS = "success"
 DISCOVERY_STATUS_FAILED = "failed"
 REFERENCE_DISCOVERY_ERROR_CATEGORY = "reference_discovery_failed"
+REFERENCE_DISCOVERY_ERROR_MESSAGE = "Reference discovery failed"
 
 
 @celery_app.task(
@@ -62,6 +67,33 @@ def run_sync_reference_discovery(sync_run_id: str) -> dict[str, Any]:
     heartbeat_thread: threading.Thread | None = None
     try:
         with get_postgres_session_sync() as session:
+            run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
+            if run is None:
+                return {
+                    "status": "skipped",
+                    "sync_run_id": sync_run_id,
+                    "reason": "missing_run",
+                }
+            if sync_run_requires_canonical_incident_feature(session, run):
+                try:
+                    require_canonical_incident_feature_for_update_sync(
+                        session, run.org_id
+                    )
+                except CanonicalIncidentFeatureDisabledError as exc:
+                    from dev_health_ops.workers.sync_units import (
+                        terminalize_feature_disabled_plan,
+                    )
+
+                    transition = terminalize_feature_disabled_plan(
+                        session,
+                        sync_run_id,
+                        exc,
+                    )
+                    return {
+                        "status": "feature_disabled",
+                        "sync_run_id": sync_run_id,
+                        "failed_units": transition.failed_units,
+                    }
             ledger = _ensure_reference_discovery(session, run_uuid, now=started_at)
             claim_result = session.execute(
                 update(SyncRunReferenceDiscovery)
@@ -158,13 +190,13 @@ def run_sync_reference_discovery(sync_run_id: str) -> dict[str, Any]:
                 if _is_retryable_discovery_error(exc)
                 else "failed",
                 "sync_run_id": sync_run_id,
-                "error": sanitize_error_text(exc),
+                "error": REFERENCE_DISCOVERY_ERROR_MESSAGE,
             }
         return {
             "status": "skipped",
             "sync_run_id": sync_run_id,
             "reason": "lease_lost",
-            "error": sanitize_error_text(exc),
+            "error": REFERENCE_DISCOVERY_ERROR_MESSAGE,
         }
     finally:
         if heartbeat_stop is not None:
@@ -369,7 +401,7 @@ def _handle_reference_discovery_failure(
                     lease_owner=None,
                     lease_expires_at=None,
                     last_heartbeat_at=now,
-                    error=sanitize_error_text(exc),
+                    error=REFERENCE_DISCOVERY_ERROR_MESSAGE,
                     updated_at=now,
                 )
                 .execution_options(synchronize_session=False)
@@ -399,7 +431,7 @@ def _handle_reference_discovery_failure(
                 lease_expires_at=None,
                 last_heartbeat_at=now,
                 completed_at=now,
-                error=sanitize_error_text(exc),
+                error=REFERENCE_DISCOVERY_ERROR_MESSAGE,
                 result={
                     "error_category": REFERENCE_DISCOVERY_ERROR_CATEGORY,
                     "retryable": retryable,
@@ -411,11 +443,15 @@ def _handle_reference_discovery_failure(
         )
         if _rowcount(result) == 0:
             return False
-        sanitized_error = sanitize_error_text(exc)
-        _fail_nonterminal_units(session, run_uuid, now=now, error=sanitized_error)
+        _fail_nonterminal_units(
+            session,
+            run_uuid,
+            now=now,
+            error=REFERENCE_DISCOVERY_ERROR_MESSAGE,
+        )
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is not None:
-            run.error = f"Reference discovery failed: {sanitized_error}"
+            run.error = REFERENCE_DISCOVERY_ERROR_MESSAGE
         upsert_outbox_wakeup(
             session,
             sync_run_id=run_uuid,
@@ -561,9 +597,12 @@ def _heartbeat_reference_discovery(
                 if _rowcount(result) == 0:
                     stop_event.set()
         except Exception:
-            logger.exception(
+            logger.error(
                 "run_sync_reference_discovery.heartbeat_failed",
-                extra={"sync_run_id": sync_run_id},
+                extra={
+                    "error_code": REFERENCE_DISCOVERY_ERROR_CATEGORY,
+                    "sync_run_id": sync_run_id,
+                },
             )
 
 

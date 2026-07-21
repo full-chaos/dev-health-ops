@@ -78,6 +78,10 @@ def test_pagerduty_worker_deletes_stream_entry_only_after_persistence(
         patch("dev_health_ops.api.ingest.streams.get_redis_client", return_value=redis),
         patch("dev_health_ops.storage.run_with_store", return_value=MagicMock()),
         patch("dev_health_ops.workers.system_webhooks.run_async", return_value=True),
+        patch(
+            "dev_health_ops.workers.system_webhooks._canonical_incident_ingestion_allowed",
+            return_value=True,
+        ),
     ):
         task = cast(Any, system_webhooks.process_pagerduty_webhook_event)
         result = task.run(

@@ -5,7 +5,7 @@
 **Linear:** CHAOS-3033 / Go Worker Runtime Migration  
 **Last updated:** 2026-07-20  
 **Product requirements:** [Go Worker Migration PRD](../product/go-worker-migration-prd.md)  
-**Delivery plan:** [Go Worker Migration Implementation Plan](../plans/go-worker-migration-implementation-plan.md)
+**Delivery plan:** Repository-only [Go Worker Migration Implementation Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-migration-implementation-plan.md)
 
 ## 1. Decision summary
 
@@ -527,6 +527,8 @@ A coordinator queue is always consumed by a low-latency profile so provider satu
 
 Per-queue `MaxWorkers` is local to a process. Fleet-wide limits are enforced by the existing database/Valkey budget layer keyed by provider, organization, host, and cost class.
 
+The current Celery `monitoring` queue is coexistence-only and has no target Go profile. `monitor_queue_depths` becomes native River/stream telemetry, while `external_ingest_stream_health` becomes stream-runner telemetry. Both Beat tasks remain registered and covered until their replacement metrics and alerts pass parity, then the queue is removed.
+
 ## 10. Scheduling design
 
 ### 10.1 Schedule evaluation
@@ -609,12 +611,16 @@ sequenceDiagram
 
 The existing `sync_dispatch_outbox` stays because it expresses domain-level recovery and distinct delivery semantics. The reconciler changes its transport adapter from Celery publish to River insert.
 
+For dispatch, finalize, and discovery rows, the reconciler inserts the River job and marks the outbox row dispatched in the same PostgreSQL transaction. The River job uses a deterministic unique insertion key derived from the outbox row and kind. An insert or mark failure rolls the transaction back and leaves the row eligible for reconciliation.
+
 - `dispatch_sync_run`: at-least-once queue insertion; unit claims prevent duplicate provider work.
 - `finalize_sync_run`: at-least-once queue insertion; finalization ledger prevents duplicate finalization.
 - `post_sync`: mark-before-insert/at-most-once until CHAOS-2596 closes.
 - eligible Linear backfill expired leases: continue `RUNNING -> RETRYING` with current eligibility matrix.
 
 No second generic sync workflow is introduced in River.
+
+`post_sync` is the deliberate exception to atomic insert-and-mark during coexistence: its current mark-before-insert loss window and non-retryable behavior remain until CHAOS-2596 makes every downstream consumer replay-safe.
 
 ## 12. Post-sync and analytics idempotency
 
@@ -692,17 +698,19 @@ A separate issue must define partition keys, consumer identity, pending-entry ow
 
 Use two PostgreSQL pools in Go worker processes:
 
-1. **Queue-control pool (`WORKER_DATABASE_URI`)**
+1. **Queue-control pool (proposed `WORKER_DATABASE_URI`)**
    - production default: direct PostgreSQL or session-mode pool;
    - small bounded connection count;
    - used by River for `LISTEN/NOTIFY`, leadership, maintenance, and queue operations.
 
-2. **Domain pool (`DATABASE_URI`)**
+2. **Domain pool (`POSTGRES_URI`)**
    - existing PgBouncer transaction-mode endpoint;
    - used by application repositories and domain transactions;
    - prepared statements disabled where required by current deployment.
 
 For environments that expose only transaction-mode PgBouncer, River may run with `PollOnly=true`. The compatibility spike must set and load-test `FetchPollInterval`; the expected trade-off is additional queue-start latency and polling load.
+
+`WORKER_DATABASE_URI` is an additive configuration contract introduced by CHAOS-3037, not a name accepted by the current Python runtime. Until that issue lands, `POSTGRES_URI` and the documented compatibility aliases remain authoritative; CHAOS-3037 must update the configuration and database-pooling documentation in the same change.
 
 ### 14.2 Transactional insertion from Python
 
@@ -1120,26 +1128,32 @@ Rollback does not downgrade database schema or delete River rows.
 | `finalize_sync_run` | `sync.finalize_run` coordinator | latency/sync coordinator | once-only ledger |
 | post-sync relay | `sync.post_sync` coordinator | heavy | CHAOS-2596 for durable retry |
 | `run_post_sync_team_autoimport` | command | sync | ClickHouse authority preserved |
+| `sync_team_drift` | `sync.team_drift` command | sync | provider matrix + fail-closed auth + ClickHouse projection parity |
 | daily metrics dispatch | coordinator | heavy | deterministic partition identity |
 | daily metrics batch | command | heavy | write/read dedup matrix |
 | daily metrics finalize | coordinator | heavy | once-only run completion |
 | complexity | command | heavy | historical limitation preserved |
 | DORA / release impact | command/coordinator | heavy | output parity |
 | work graph | command | heavy | edge parity and dedup |
-| investment materialize | command | heavy | LLM adapter/telemetry parity |
+| `run_investment_materialize` / `dispatch_investment_materialize_partitioned` | command/coordinator | heavy | direct + partitioned orchestration parity |
+| `run_investment_materialize_chunk` | command | heavy | checkpoint + LLM adapter/telemetry parity |
+| `finalize_investment_materialize_partitioned` | coordinator | heavy | aggregation + follow-on membership parity |
 | membership backfill | command/coordinator | heavy | bounded partitions |
 | capacity forecast | command | heavy | numeric parity |
 | recommendations | command | heavy | output parity |
 | `execute_saved_report` | `report.execute` command | latency/heavy | `ReportRun` uniqueness |
 | report scheduler | scheduler | scheduler | occurrence uniqueness |
 | `process_webhook_event` | command | latency | webhook-event idempotency |
+| `process_pagerduty_webhook_event` | `webhook.pagerduty.process` command | latency | stream read/delete + retry/dead-letter parity |
 | billing notification | command | latency/ops | external provider idempotency |
 | heartbeat | command | ops | unique occurrence |
 | retention jobs | command | ops | bounded delete/checkpoint |
 | ingest consumer | stream runner | stream-ingest | checkpoint/reclaim parity |
 | product telemetry consumer | stream runner | stream-ingest | checkpoint/reclaim parity |
 | external ingest consumer | stream runner | stream-external | singleton invariant |
-| queue monitor | native exporter | all | alert parity |
+| `flush_external_ingest_recompute` | bounded control job | latency | SETNX/GETDEL debounce + persisted outcome parity |
+| `external_ingest_stream_health` | native stream telemetry | stream-external | lag/alert parity |
+| `monitor_queue_depths` | native exporter | all | alert parity |
 | health check | endpoint | all | dependency readiness |
 
 ## 25. Test strategy
@@ -1213,6 +1227,7 @@ Measure:
 |---|---|
 | API transaction rolls back | River job is not visible/committed |
 | API commits but worker is down | Job remains available in PostgreSQL |
+| Dispatch/finalize/discovery River insert or outbox mark fails | transaction rolls back; outbox row remains eligible and no partial job is committed |
 | River worker crashes before domain claim | Job retries; no domain effect |
 | Worker crashes after sync unit claim | domain lease expires; reconciler applies current retry/fail rules |
 | Worker crashes after ClickHouse write before domain completion | retry allowed only if sink/read path is proven idempotent; otherwise terminal/manual path |

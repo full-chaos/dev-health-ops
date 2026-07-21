@@ -5,7 +5,7 @@
 **Linear:** CHAOS-3033 / Go Worker Runtime Migration  
 **Last updated:** 2026-07-20  
 **Technical design:** [Go Worker Runtime TRD](../architecture/go-worker-runtime-trd.md)  
-**Delivery plan:** [Go Worker Migration Implementation Plan](../plans/go-worker-migration-implementation-plan.md)
+**Delivery plan:** Repository-only [Go Worker Migration Implementation Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-migration-implementation-plan.md)
 
 ## 1. Executive summary
 
@@ -156,11 +156,11 @@ Until a task family completes its stability gate, routing can be returned to its
 
 #### Workload migration
 
-- sync scheduler, reconciler, dispatcher, unit execution, finalizer, and post-sync relay;
+- sync scheduler, reconciler, dispatcher, unit execution, finalizer, post-sync relay, and provider team-drift projection;
 - daily metrics, complexity, DORA, release impact, capacity, recommendations, work graph, investment, and membership jobs;
 - reports and report scheduling;
 - webhooks, billing notifications, heartbeat, retention, and administrative background work;
-- internal ingest, product telemetry, and external ingest stream consumers;
+- internal ingest, product telemetry, and external ingest stream consumers, including external-ingest recompute debounce and health behavior;
 - queue monitoring and health behavior, converted to native runtime telemetry/endpoints;
 - provider-specific and cost-class routing and concurrency policy.
 
@@ -338,13 +338,14 @@ Promotion requires documented parity thresholds and zero unresolved correctness 
 | Sync planning and dispatch | Celery coordinators + DB outbox | Coordinator jobs | Preserve outbox, claim/lease, cost class, provider routing, and bounded fan-out |
 | Sync unit execution | Long bounded provider work | Command jobs in `sync` profile | Explicit credentials, rate budgets, lease heartbeats, retry matrix |
 | Sync finalization/post-sync | Celery callbacks/relay | Coordinator jobs | Preserve once-only ledgers; post-sync remains at-most-once until CHAOS-2596 |
+| Team drift/autoimport | Provider discovery + ClickHouse projection tasks | Sync commands/coordinators | Preserve provider matrix, fail-closed auth, and ClickHouse authority |
 | Daily and extra metrics | Fan-out/batch/finalize | Coordinator + heavy command jobs | Deterministic partitions, generation identity, ClickHouse dedup |
 | Work graph/investment | Heavy compute and LLM calls | Heavy command jobs | Persisted run identity, LLM adapter parity, bounded concurrency |
 | Reports | Scheduled and on-demand | Latency/heavy command jobs | `ReportRun` is authoritative; schedule uniqueness |
-| Webhooks/billing | Short side effects | Latency command jobs | Idempotency keys for external side effects |
+| Webhooks/billing | Short side effects, including PagerDuty stream-backed processing | Latency command jobs | Idempotency keys plus stream delete/retry/dead-letter parity |
 | Heartbeat/retention | Periodic operations | Scheduler + command jobs | Unique schedule occurrence and safe retry policy |
 | Ingest/product telemetry | Repeated blocking Celery tasks | Stream runners | Long-lived lifecycle, consumer groups, bounded checkpoint/reclaim |
-| External ingest | Singleton Celery consumer | Dedicated stream runner | Preserve singleton until reclaim model is redesigned and validated |
+| External ingest | Singleton Celery consumer + recompute debounce + health task | Dedicated stream runner + bounded control job/native telemetry | Preserve singleton and atomic debounce consumption until reclaim is redesigned and validated |
 | Queue monitoring | Celery monitoring task | Native metrics/exporter | No monitoring job competing with monitored work |
 | Worker health | Celery task/inspect | HTTP health/readiness + CLI | No broker round trip required for process health |
 
@@ -374,7 +375,7 @@ After full cutover:
 ### Add or change
 
 - River schema in PostgreSQL.
-- `WORKER_DATABASE_URI` for a small direct/session queue-control pool; `PollOnly` is the fallback for transaction-mode PgBouncer deployments.
+- A proposed `WORKER_DATABASE_URI`, introduced by CHAOS-3037, for a small direct/session queue-control pool; `PollOnly` is the fallback for transaction-mode PgBouncer deployments.
 - Go worker and scheduler images or targets.
 - job queue and stream telemetry exporters.
 - HPA signals based on oldest job age, available/running count, execution saturation, and stream lag.

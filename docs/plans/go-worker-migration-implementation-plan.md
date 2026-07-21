@@ -210,6 +210,8 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 #### Work
 
 - Add pinned River migrations to the one-shot migration path.
+- Add the proposed `WORKER_DATABASE_URI` queue-control DSN while retaining `POSTGRES_URI` as the canonical domain DSN and preserving documented compatibility aliases.
+- Update configuration examples and `docs/ops/database-connection-pooling.md` in the same change that introduces the new variable.
 - Add queue-control and domain database roles/DSNs.
 - Implement direct/session queue-control connection and PollOnly fallback.
 - Configure River job retention and maintenance.
@@ -279,7 +281,8 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 #### Work
 
 - Inventory side effects and idempotency for:
-  - webhook processing;
+  - generic webhook processing;
+  - `process_pagerduty_webhook_event`, including its Valkey stream read/delete, retry, and dead-letter behavior;
   - billing alert email;
   - heartbeat;
   - retention cleanup;
@@ -289,12 +292,13 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 - Implement Go handlers and provider/email adapters.
 - Shadow using recorded inputs or compare-only sinks.
 - Canary per job kind and organization.
-- Remove queue-monitor and health tasks in favor of native telemetry/endpoints.
+- Replace `monitor_queue_depths` and the queue-based health task with native telemetry/endpoints; keep the coexistence-only `monitoring` queue covered until both replacements pass parity.
 
 #### Acceptance
 
 - External side effects use stable idempotency keys or are explicitly non-retryable.
 - Webhook duplicate-delivery tests pass.
+- PagerDuty crash-window tests preserve the source entry until success or terminal dead-lettering, then delete it exactly once.
 - Health no longer depends on a queue round trip.
 - Queue telemetry is native and low-cardinality.
 - Each kind has a one-command rollback route.
@@ -347,6 +351,8 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 
 - Port schema registry, validation, authorization linkage, dedup, and sinks.
 - Preserve one replica, one consumer identity, and concurrency 1.
+- Port `flush_external_ingest_recompute` as a bounded control job, preserving the SETNX guard, atomic GETDEL consumption, coalesced scope, and persisted batch outcomes.
+- Replace `external_ingest_stream_health` with equivalent stream-runner lag, depth, and alert telemetry.
 - Test pending-entry behavior across crash and rollout.
 - Add deployment validation that rejects multiple replicas.
 - Document a separate future scaling design rather than changing reclaim semantics here.
@@ -358,6 +364,8 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 - Customer-facing ingest status remains coherent.
 - Quarantine/error behavior matches the current contract.
 - External ingest backlog cannot starve internal ingest or bounded jobs.
+- Recompute debounce crash-window tests prove a newer pending scope cannot be deleted by an older flush.
+- No external-ingest health Beat task remains after replacement telemetry passes parity.
 
 ## 8. Phase 4 — provider and sync migration
 
@@ -422,7 +430,7 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 
 #### Work
 
-- Implement `sync.dispatch_run`, `sync.finalize_run`, reference discovery, and post-sync team autoimport.
+- Implement `sync.dispatch_run`, `sync.finalize_run`, reference discovery, `sync_team_drift`, and post-sync team autoimport.
 - Generate provider/cost queue routing from the registry.
 - Preserve exact cross-run concurrency and budget behavior.
 - Replace Celery group/chord assumptions with explicit domain counts and finalization outbox rows.
@@ -436,6 +444,7 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 - Queue coverage tests prove every provider/cost route has a consumer.
 - Product/admin status matches domain truth under success, partial failure, cancel, and worker loss.
 - No Celery chord/result backend is required by the canonical sync path.
+- Team-drift discovery preserves `{jira, gitlab, github, linear}` coverage, fail-closed credential handling, and ClickHouse projection authority.
 
 ## 9. Phase 5 — analytics, graph, and LLM workloads
 
@@ -482,7 +491,7 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 #### Work
 
 - Port work graph edge construction and persistence.
-- Port investment materialization orchestration.
+- Port the direct investment task and the complete partitioned path: dispatcher, chunk worker, and finalizer.
 - Implement Go LLM provider adapters or an approved narrow temporary service boundary.
 - Preserve prompts, structured outputs, taxonomy, quality, cost, and trace metadata.
 - Add deterministic fixture/evaluation corpus.
@@ -495,6 +504,7 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 - LLM model/config, token/cost, retry, and failure metadata remain observable.
 - No UX-time recategorization is introduced.
 - Temporary Python boundary, if used, is explicit and not a generic task executor.
+- Registry and routing tests prove all four current investment entrypoints have an explicit target or are retired at cutover.
 
 ## 10. Phase 6 — post-sync, infrastructure, and production readiness
 
@@ -587,11 +597,12 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 
 | Current family | Existing source area | Target package | First safe validation | Cutover dependency |
 |---|---|---|---|---|
-| Scheduled sync dispatch | `workers/sync_scheduler.py` | `internal/scheduler/sync` | duplicate concurrent tick test | P1 foundation |
-| Sync outbox reconciler | `workers/sync_reconciler.py` | `internal/reconciler/sync` | lost insert / expired claim tests | P1 database |
-| Sync dispatch | `workers/sync_dispatcher.py` | `internal/jobs/sync/dispatch` | duplicate coordinator fixture | reconciler |
-| Sync unit | `workers/sync_unit.py`, providers | `internal/jobs/sync/unit` | provider fixture shadow | provider foundation |
-| Sync finalizer | `workers/sync_finalizer.py` | `internal/jobs/sync/finalize` | duplicate finalizer | sync units |
+| Scheduled sync dispatch | `src/dev_health_ops/workers/sync_scheduler.py` | `internal/scheduler/sync` | duplicate concurrent tick test | P1 foundation |
+| Sync outbox reconciler | `src/dev_health_ops/workers/sync_reconciler.py` | `internal/reconciler/sync` | lost insert / expired claim tests | P1 database |
+| Sync dispatch | `src/dev_health_ops/workers/sync_units.py` (`dispatch_sync_run`) | `internal/jobs/sync/dispatch` | duplicate coordinator fixture | reconciler |
+| Sync unit | `src/dev_health_ops/workers/sync_units.py` (`run_sync_unit`), providers | `internal/jobs/sync/unit` | provider fixture shadow | provider foundation |
+| Sync finalizer | `src/dev_health_ops/workers/sync_units.py` (`finalize_sync_run`) | `internal/jobs/sync/finalize` | duplicate finalizer | sync units |
+| Team drift | `src/dev_health_ops/workers/team_drift_sync.py` (`sync_team_drift`) | `internal/jobs/sync/teamdrift` | provider/auth/projection matrix | provider foundation |
 | Post-sync | metrics/autoimport tasks | `internal/jobs/sync/postsync` | duplicate generation | CHAOS-2596 |
 | Daily metrics | metrics jobs | `internal/jobs/metrics/daily` | seeded parity | replay matrix |
 | Extra metrics | metrics jobs | `internal/jobs/metrics/extra` | seeded parity | replay matrix |
@@ -599,17 +610,22 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 | DORA/release | DORA/release jobs | `internal/jobs/metrics/dora` | seeded parity | replay matrix |
 | Capacity/recommendations | capacity/recommendation jobs | `internal/jobs/metrics/planning` | numeric/output parity | replay matrix |
 | Work graph | work graph tasks | `internal/jobs/workgraph` | edge fixture parity | storage adapters |
-| Investment | investment tasks | `internal/jobs/investment` | evaluation corpus | LLM adapter |
+| Investment direct/dispatch | `src/dev_health_ops/workers/work_graph_tasks.py` (`run_investment_materialize`, `dispatch_investment_materialize_partitioned`) | `internal/jobs/investment` | direct/partitioned routing fixtures | LLM adapter |
+| Investment chunk | `src/dev_health_ops/workers/work_graph_tasks.py` (`run_investment_materialize_chunk`) | `internal/jobs/investment/chunk` | checkpoint + evaluation corpus | LLM adapter |
+| Investment finalizer | `src/dev_health_ops/workers/work_graph_tasks.py` (`finalize_investment_materialize_partitioned`) | `internal/jobs/investment/finalize` | aggregate/follow-on fixture | investment chunks |
 | Membership | membership tasks | `internal/jobs/membership` | partition resume | replay matrix |
 | Reports | report tasks/scheduler | `internal/jobs/reports` | artifact parity | contracts |
-| Webhooks | webhook task | `internal/jobs/webhooks` | duplicate event | idempotency row |
+| Webhooks | `src/dev_health_ops/workers/system_webhooks.py` (`process_webhook_event`) | `internal/jobs/webhooks` | duplicate event | idempotency row |
+| PagerDuty webhooks | `src/dev_health_ops/workers/system_webhooks.py` (`process_pagerduty_webhook_event`) | `internal/jobs/webhooks/pagerduty` | stream retry/dead-letter fixture | stream + provider adapters |
 | Billing email | billing task | `internal/jobs/notifications` | provider sandbox | idempotency key |
 | Heartbeat | system task | `internal/jobs/system` | unique occurrence | scheduler |
 | Retention | retention tasks | `internal/jobs/system/retention` | bounded delete fixture | scheduler |
 | Ingest | ingest consumer task | `internal/streams/ingest` | crash/reclaim | stream runtime |
 | Product telemetry | telemetry consumer task | `internal/streams/product` | crash/reclaim | stream runtime |
 | External ingest | external consumer task | `internal/streams/external` | singleton crash/reclaim | stream runtime |
-| Queue monitor | monitoring task | `internal/platform/telemetry` | dashboard parity | runtime |
+| External recompute flush | `src/dev_health_ops/workers/external_ingest_recompute.py` | `internal/jobs/externalingest/recompute` | debounce/crash-window fixture | external stream runtime |
+| External stream health | `src/dev_health_ops/workers/system_ops.py` | `internal/streams/external` telemetry | lag/alert parity | external stream runtime |
+| Queue monitor | `src/dev_health_ops/workers/queue_monitor.py` | `internal/platform/telemetry` | dashboard parity | runtime |
 | Worker health | health task/inspect | `internal/platform/health` | dependency failure tests | runtime |
 
 ## 13. Infrastructure file checklist
@@ -639,6 +655,7 @@ tests/test_compose_config.py
 tests/deploy/
 docs/ops/workers.md
 docs/ops/deployment-guide.md
+docs/ops/database-connection-pooling.md
 docs/architecture/dispatch-outbox.md
 docs/architecture/worker-scaling-readiness.md
 AGENTS.md

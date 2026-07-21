@@ -31,28 +31,36 @@ class OperationalOrderingEntity(Protocol):
     __dataclass_fields__: ClassVar[dict[str, Field[ConflictValue]]]
 
     @property
-    def entity_family(self) -> str: ...
+    def entity_family(self) -> str:
+        raise NotImplementedError
 
     @property
-    def source_version_at(self) -> datetime: ...
+    def source_version_at(self) -> datetime:
+        raise NotImplementedError
 
     @property
-    def observed_at(self) -> datetime: ...
+    def observed_at(self) -> datetime:
+        raise NotImplementedError
 
     @property
-    def last_synced(self) -> datetime: ...
+    def last_synced(self) -> datetime:
+        raise NotImplementedError
 
     @property
-    def source_revision(self) -> SourceRevision: ...
+    def source_revision(self) -> SourceRevision:
+        raise NotImplementedError
 
     @property
-    def source_conflict_key(self) -> SourceConflictKey: ...
+    def source_conflict_key(self) -> SourceConflictKey:
+        raise NotImplementedError
 
     @property
-    def ingest_revision(self) -> IngestRevision: ...
+    def ingest_revision(self) -> IngestRevision:
+        raise NotImplementedError
 
     @property
-    def ordering_contract(self) -> int: ...
+    def ordering_contract(self) -> int:
+        raise NotImplementedError
 
 
 __all__ = [

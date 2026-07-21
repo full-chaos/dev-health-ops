@@ -149,7 +149,7 @@ evidence artifact.
 These checks do not start the compatibility services:
 
 ```bash
-bash -n tests/compatibility/river/run.sh
+bash -n tests/compatibility/river/run.sh tests/compatibility/river/record.sh
 shellcheck tests/compatibility/river/run.sh tests/compatibility/river/record.sh
 docker compose \
   --project-name rivercompat-static-check \
@@ -159,4 +159,6 @@ docker compose \
 
 The live runner is intentionally separate from ordinary unit tests because it
 starts pinned PostgreSQL and PgBouncer containers and performs a real process
-kill.
+kill. The repository's Go workflow runs this live matrix as its own job for
+relevant pull requests, pushes, merge-queue candidates, and manual dispatches,
+then uploads only the sanitized JSON result.

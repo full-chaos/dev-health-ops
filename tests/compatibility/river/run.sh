@@ -78,7 +78,11 @@ require_command mktemp
 
 [ -f "${COMPOSE_FILE}" ] || die "the pinned Compose file is missing"
 [ -f "${PYTHON_CLI}" ] || die "the Python compatibility CLI is missing"
-[ -x "${PYTHON_BIN}" ] || die "the compatibility Python executable is unavailable"
+if [[ "${PYTHON_BIN}" == */* ]]; then
+  [ -x "${PYTHON_BIN}" ] || die "the compatibility Python executable is unavailable"
+else
+  PYTHON_BIN="$(command -v -- "${PYTHON_BIN}")" || die "the compatibility Python executable is unavailable"
+fi
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
 
 temp_root="${TMPDIR:-/tmp}"

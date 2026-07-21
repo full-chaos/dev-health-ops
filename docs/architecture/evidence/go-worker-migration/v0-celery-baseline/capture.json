@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "evidence_version": "v0-celery-baseline",
+  "capture_status": "not_recorded",
+  "scope": "production",
+  "authoritative_for_canary": false,
+  "captured_at": null,
+  "source_revision": null,
+  "window": {
+    "start": null,
+    "end": null,
+    "timezone": "UTC",
+    "contains_worker_deployment": null
+  },
+  "sources": {
+    "promql_file": "queries.promql",
+    "prometheus_backend": null,
+    "log_backend": null,
+    "restricted_raw_evidence_reference": null,
+    "known_local_gap_reference": "local-resource-snapshot.json",
+    "label_substitutions": [],
+    "missing_series": []
+  },
+  "measurements": {
+    "enqueue_to_start_seconds_by_profile": null,
+    "oldest_queue_age_seconds_by_profile": null,
+    "queue_depth_by_profile": null,
+    "task_outcome_rates_by_family": null,
+    "successful_task_duration_seconds_by_family": null,
+    "process_crash_recovery_seconds": null,
+    "deployment_drain_and_recovery_seconds": null,
+    "sync_unit_lease_expiry_rate": null,
+    "stream_pending_count_by_group": null,
+    "stream_lag_by_group": null,
+    "stream_oldest_pending_seconds_by_group": null,
+    "worker_cpu_cores_by_profile": null,
+    "worker_memory_bytes_by_profile": null,
+    "postgres_connections": null,
+    "postgres_transactions_per_second": null,
+    "postgres_lock_or_io_pressure": null
+  },
+  "review": {
+    "reviewed_by": [],
+    "reviewed_at": null,
+    "parity_thresholds_approved": false
+  },
+  "gates": {
+    "phase_1_foundation": "not_blocked_by_missing_production_baseline",
+    "production_canary": "blocked_until_capture_and_threshold_review"
+  },
+  "redaction": {
+    "contains_raw_logs": false,
+    "contains_credentials_or_dsns": false,
+    "contains_tenant_identifiers": false
+  }
+}

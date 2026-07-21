@@ -5,13 +5,17 @@
 **Linear:** CHAOS-3033 / Go Worker Runtime Migration  
 **Last updated:** 2026-07-20  
 **Product requirements:** [Go Worker Migration PRD](../product/go-worker-migration-prd.md)  
-**Delivery plan:** Repository-only [Go Worker Migration Implementation Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-migration-implementation-plan.md)
+**Delivery plan:** Repository-only [Go Worker Migration Implementation Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-migration-implementation-plan.md)  
+**Phase 0 decision:** [CHAOS-3034 River compatibility ADR](../decisions/chaos-3034-river-compatibility.md)
 
 ## 1. Decision summary
 
 Adopt a hybrid Go execution platform:
 
-1. **River OSS backed by the existing PostgreSQL database** for bounded jobs.
+1. **Adopt River OSS 0.40.0 backed by the existing PostgreSQL database** for
+   bounded jobs, with a mandatory direct/session queue-control endpoint.
+   Transaction-mode PgBouncer `PollOnly` is not an acceptable sole production
+   path because it failed running-job cancellation propagation.
 2. **Dedicated Go stream runners over the existing Valkey/Redis Streams** for internal ingest, product telemetry, and external ingest.
 3. **A Go scheduler and reconciler** for periodic evaluation and database-backed repair.
 4. **The existing `SyncRun`, `SyncRunUnit`, claim/lease, concurrency-budget, and dispatch-outbox model remains authoritative.**
@@ -19,7 +23,7 @@ Adopt a hybrid Go execution platform:
 6. **Temporal, NATS JetStream, and Asynq are not introduced in phase 1.**
 7. **Valkey database 0 is removed only after Celery is fully decommissioned.** Valkey database 1 remains for cache, provider rate-limit state, and streams.
 
-River is selected because the bounded-job system already depends on PostgreSQL as the durable source of truth and because transactional enqueue removes a distributed commit boundary between application state and an external broker. River also provides typed Go workers, multiple queues, delayed jobs, retries, uniqueness, periodic jobs, and job telemetry without adding a new service.
+River is selected because the bounded-job system already depends on PostgreSQL as the durable source of truth and because transactional enqueue removes a distributed commit boundary between application state and an external broker. River also provides typed Go workers, multiple queues, delayed jobs, retries, uniqueness, periodic jobs, and job telemetry without adding a new service. The [Phase 0 evidence](evidence/go-worker-migration/v1-river-spike/README.md) makes direct/session connectivity a hard boundary of that decision.
 
 The design deliberately does not delegate domain correctness to River. River owns job availability and attempt execution. Domain tables own product state and idempotency.
 
@@ -143,6 +147,7 @@ flowchart TB
         River[(River job tables)]
         Domain[(JobRun / SyncRun / SyncRunUnit<br/>ReportRun / schedules)]
         Outbox[(sync_dispatch_outbox)]
+        GenericOutbox[(worker_job_outbox)]
     end
 
     subgraph GoRuntime["Go worker runtime"]
@@ -150,6 +155,7 @@ flowchart TB
         Sync[profile: sync]
         Heavy[profile: heavy]
         Ops[profile: ops]
+        Relay[generic outbox relay]
     end
 
     subgraph Streams["Long-lived Go stream runners"]
@@ -157,15 +163,18 @@ flowchart TB
         External[stream-external<br/>singleton initially]
     end
 
-    API -->|insert_tx via Python client| River
     API --> Domain
     API -->|existing sync transaction| Outbox
+    API -->|domain write + outbox row<br/>same transaction| GenericOutbox
     GoAPI -->|InsertTx| River
     Sched --> Domain
     Sched -->|InsertTx| River
     Recon --> Outbox
     Recon --> Domain
     Recon --> River
+    GenericOutbox --> Relay
+    Relay -->|River InsertTx| River
+    Relay -->|mark delivered<br/>same transaction| GenericOutbox
 
     River --> Latency
     River --> Sync
@@ -708,39 +717,42 @@ Use two PostgreSQL pools in Go worker processes:
    - used by application repositories and domain transactions;
    - prepared statements disabled where required by current deployment.
 
-For environments that expose only transaction-mode PgBouncer, River may run with `PollOnly=true`. The compatibility spike must set and load-test `FetchPollInterval`; the expected trade-off is additional queue-start latency and polling load.
+An environment that exposes only transaction-mode PgBouncer does not satisfy
+the selected runtime contract. The Phase 0 harness showed that
+`riverpgxv5` 0.40.0 with `PollOnly=true` can execute, retry, schedule, and
+recover work at a 250 ms interval, but neither cross-client nor same-client
+`JobCancel` reaches an already-running worker context. Infrastructure must
+provide the direct/session queue-control pool before a worker profile becomes
+ready. A separately designed cancellation control plane may replace this
+condition only after equivalent cross-process and crash tests pass.
 
 `WORKER_DATABASE_URI` is an additive configuration contract introduced by CHAOS-3037, not a name accepted by the current Python runtime. Until that issue lands, `POSTGRES_URI` and the documented compatibility aliases remain authoritative; CHAOS-3037 must update the configuration and database-pooling documentation in the same change.
 
-### 14.2 Transactional insertion from Python
+### 14.2 Transactional enqueue from Python
 
-Preferred transition:
+Phase 0 rejects `riverqueue` 0.7.0 as a production dependency. Its standard
+insert, same-transaction commit, rollback, queue, priority, attempts, and
+scheduled-state behavior passed through direct PostgreSQL and PgBouncer
+transaction mode. Its required unique insertion is incompatible with the River
+0.40.0 migration-006 index shape, so Python must not write River tables or
+depend on their internal columns/indexes.
 
-```python
-async with session.begin():
-    # domain write
-    session.add(report_run)
+The selected transition is an ops-owned, language-neutral
+`worker_job_outbox`:
 
-    # same SQLAlchemy transaction
-    await river_client.insert_tx(
-        session,
-        ExecuteReportArgs(
-            contract_version=1,
-            report_run_id=str(report_run.id),
-            organization_id=str(report_run.organization_id),
-        ),
-    )
-```
+1. a producer writes domain state and one versioned outbox row in the same
+   PostgreSQL transaction;
+2. a Go relay claims due rows with an expiring lease;
+3. the relay calls River's supported Go `InsertTx` API and marks the outbox row
+   delivered in the same PostgreSQL transaction;
+4. deterministic dedupe identity and lease reconciliation converge retries to
+   one River job;
+5. payloads remain bounded JSON identifiers/options with no credentials.
 
-Requirements:
-
-- pin a Python client version validated against the selected River schema;
-- run migration compatibility tests in CI;
-- validate uniqueness/advisory-lock behavior through PgBouncer transaction mode;
-- do not let Python code depend on undocumented River table columns;
-- fall back to a generic `worker_job_outbox` + Go relay only if the supported client cannot meet compatibility or transactional requirements.
-
-The sync path continues using its existing domain outbox rather than direct insertion.
+The exact table fields, states, crash windows, and reconciliation rules are
+normative in the [CHAOS-3034 ADR](../decisions/chaos-3034-river-compatibility.md#worker-job-outbox-contract).
+The sync path continues using its existing domain outbox rather than the generic
+bridge.
 
 ### 14.3 River migrations
 
@@ -1098,7 +1110,8 @@ Flags are validated against the registry and may be scoped to canary organizatio
 
 During migration:
 
-- Python producers may enqueue River jobs.
+- Python producers enqueue versioned `worker_job_outbox` rows in their domain
+  transactions; the Go relay is the only cross-language River writer.
 - Go coordinators may enqueue Go child jobs.
 - Celery producers and consumers remain only for families still routed to Celery.
 - No job kind is consumed by both runtimes in write mode.
@@ -1184,7 +1197,8 @@ Rollback does not downgrade database schema or delete River rows.
 Use testcontainers for:
 
 - PostgreSQL with River migrations;
-- PgBouncer transaction mode and River `PollOnly`;
+- PgBouncer transaction mode and River `PollOnly`, including the checked-in
+  running-cancellation blocker regression;
 - direct/session queue-control pool;
 - ClickHouse writes and dedup reads;
 - Valkey Streams consumer groups and reclaim;
@@ -1204,7 +1218,8 @@ Use testcontainers for:
 Measure:
 
 - job enqueue throughput;
-- queue-start latency under PgBouncer PollOnly and direct notification modes;
+- queue-start latency under direct notifications and the unsupported PollOnly
+  comparison profile;
 - PostgreSQL CPU, locks, I/O, table growth, and vacuum;
 - worker memory/goroutine growth;
 - ClickHouse connection/write pressure;
@@ -1225,7 +1240,7 @@ Measure:
 
 | Failure | Expected behavior |
 |---|---|
-| API transaction rolls back | River job is not visible/committed |
+| API transaction rolls back | Neither domain state nor a generic outbox/River job is committed |
 | API commits but worker is down | Job remains available in PostgreSQL |
 | Dispatch/finalize/discovery River insert or outbox mark fails | transaction rolls back; outbox row remains eligible and no partial job is committed |
 | River worker crashes before domain claim | Job retries; no domain effect |
@@ -1233,7 +1248,7 @@ Measure:
 | Worker crashes after ClickHouse write before domain completion | retry allowed only if sink/read path is proven idempotent; otherwise terminal/manual path |
 | Scheduler replica crashes while holding rows | transaction rollback releases locks; another replica evaluates |
 | Direct queue pool unavailable | profile not ready; jobs remain in PostgreSQL |
-| PgBouncer-only PollOnly deployment | processing continues with bounded polling latency |
+| PgBouncer-only PollOnly deployment | readiness fails because running cancellation is unsupported; no production profile starts |
 | Valkey rate-limit store unavailable | provider jobs fail closed/defer according to existing policy |
 | Stream runner crashes before ack | message remains pending and is reclaimed per policy |
 | External stream singleton is duplicated | readiness/config validation fails deployment |
@@ -1244,7 +1259,7 @@ Measure:
 
 ## 27. Performance and capacity requirements
 
-The implementation must baseline before choosing numeric production defaults. Capacity configuration includes:
+The implementation must baseline before choosing numeric production defaults. The checked-in [v0 Celery capture](evidence/go-worker-migration/v0-celery-baseline/README.md) distinguishes command rehearsal from production evidence; no production canary may start while its production capture remains unrecorded. Capacity configuration includes:
 
 - queue-control pool connections per profile;
 - domain pool connections;
@@ -1259,8 +1274,14 @@ Default configurations must keep total worst-case connections below the document
 
 ## 28. Implementation gates
 
-1. **Architecture gate:** River/PgBouncer/Python client spike passes; licensing path recorded.
-2. **Foundation gate:** registry, contracts, runtime, health, telemetry, migrations, and container verification pass.
+1. **Architecture gate:** River direct, N/N-1, worker-failure, load, and
+   cross-language fixture harnesses pass; PollOnly running cancellation is an
+   explicit NO-GO; direct/session queue control is mandatory; MPL-2.0 and
+   clean-room provenance paths are recorded. The Python River client is also
+   an explicit NO-GO, not a pending requirement.
+2. **Foundation gate:** registry, contracts, runtime, health, telemetry,
+   migrations, generic-outbox crash-window reconciliation, and container
+   verification pass.
 3. **Low-risk gate:** operational/report/webhook jobs pass shadow/canary and rollback.
 4. **Stream gate:** dedicated consumers pass crash/reclaim and lag tests.
 5. **Analytics gate:** each table/read path has replay classification and parity evidence.
@@ -1271,10 +1292,8 @@ Default configurations must keep total worst-case connections below the document
 
 ## 29. Open technical decisions
 
-- exact Go and River versions;
 - direct PostgreSQL versus session-mode pooler implementation for queue control;
-- acceptable PollOnly fetch interval for self-hosted transaction-pool deployments;
-- whether the Python River client is sufficiently maintained/compatible or whether to build the generic outbox fallback;
+- whether a future application-owned cancellation plane is worth validating;
 - whether scheduler and reconciler share a binary/image;
 - whether River UI can be safely deployed;
 - how to expose operator commands—existing `dev-hops` CLI, a Go CLI, or authenticated internal HTTP;
@@ -1286,6 +1305,8 @@ Default configurations must keep total worst-case connections below the document
 
 ### Repository references
 
+- `docs/decisions/chaos-3034-river-compatibility.md`
+- `docs/architecture/evidence/go-worker-migration/`
 - `docs/architecture/dispatch-outbox.md`
 - `docs/architecture/worker-scaling-readiness.md`
 - `docs/architecture/data-pipeline.md`

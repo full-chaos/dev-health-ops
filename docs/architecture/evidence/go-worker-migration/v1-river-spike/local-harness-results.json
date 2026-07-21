@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "recorded_date_local": "2026-07-21",
+  "evidence_scope": "local_ephemeral_compatibility_harness",
+  "production_performance_evidence": false,
+  "command": "GOTOOLCHAIN=go1.25.9 tests/compatibility/river/run.sh",
+  "status": "complete_with_architecture_blocker",
+  "architecture_blocker": "poll_only_running_cancel_not_propagated",
+  "versions": {
+    "go_runtime": "go1.25.9",
+    "river_current": "0.40.0",
+    "river_n_minus_1": "0.39.0",
+    "river_current_schema": 7,
+    "river_n_minus_1_schema": 6,
+    "fetch_poll_interval_ms": 250,
+    "samples_per_mode": 20
+  },
+  "go_version": "go1.25.9",
+  "gate_truth_table": {
+    "direct": {
+      "backend_connection_delta_at_most_six": true,
+      "canceled_acquires_zero": true,
+      "enqueue_p95_within_limit": true,
+      "new_connections_at_most_six": true,
+      "cross_client_running_cancel": true,
+      "same_client_running_cancel": null
+    },
+    "poll_only": {
+      "backend_connection_delta_at_most_six": true,
+      "canceled_acquires_zero": true,
+      "enqueue_p95_within_limit": true,
+      "new_connections_at_most_six": true,
+      "cross_client_running_cancel": false,
+      "same_client_running_cancel": false
+    }
+  },
+  "profiles": {
+    "direct_postgresql": {
+      "execution": "pass",
+      "retry": "pass",
+      "scheduled_state": "pass",
+      "cross_client_running_cancel": "pass",
+      "queue_start_latency_ms": {
+        "min": 2.193,
+        "p50": 3.882,
+        "p95": 28.269,
+        "max": 219.46,
+        "p95_limit": 100,
+        "within_limit": true
+      },
+      "postgres_delta": {
+        "backend_connections": 6,
+        "blocks_hit": 8047,
+        "blocks_read": 8,
+        "sessions": 6,
+        "xact_commit": 154,
+        "xact_rollback": 0
+      },
+      "pool_delta": {
+        "acquire_count": 144,
+        "canceled_acquire_count": 0,
+        "new_connections": 6,
+        "total_connections": 5
+      }
+    },
+    "pgbouncer_transaction_poll_only": {
+      "execution": "pass",
+      "retry": "pass",
+      "scheduled_state": "pass",
+      "cross_client_running_cancel": "fail",
+      "same_client_running_cancel": "fail",
+      "test_only_release_used": true,
+      "queue_start_latency_ms": {
+        "min": 6.61,
+        "p50": 158.603,
+        "p95": 233.811,
+        "max": 236.009,
+        "p95_limit": 600,
+        "within_limit": true
+      },
+      "running_cancel_observation_ms": {
+        "cross_client": 751.037,
+        "same_client": 750.044
+      },
+      "postgres_delta": {
+        "backend_connections": 2,
+        "blocks_hit": 6719,
+        "blocks_read": 0,
+        "sessions": 2,
+        "xact_commit": 129,
+        "xact_rollback": 0
+      },
+      "pool_delta": {
+        "acquire_count": 131,
+        "canceled_acquire_count": 0,
+        "new_connections": 4,
+        "total_connections": 4
+      }
+    }
+  },
+  "rolling_compatibility": {
+    "status": "pass",
+    "river_0_39_migrated_fresh_database_through_schema_6": true,
+    "river_0_39_worker_completed_work_on_schema_6": true,
+    "river_0_40_upgraded_schema_6_to_7": true,
+    "river_0_39_inserted_on_schema_7": true,
+    "river_0_40_consumed_0_39_job_on_schema_7": true
+  },
+  "python_transactions": {
+    "direct_commit_domain_rows": 1,
+    "direct_commit_jobs": 1,
+    "direct_rollback_domain_rows": 0,
+    "direct_rollback_jobs": 0,
+    "pgbouncer_commit_domain_rows": 1,
+    "pgbouncer_commit_jobs": 1,
+    "pgbouncer_rollback_domain_rows": 0,
+    "pgbouncer_rollback_jobs": 0,
+    "queue_priority_attempts_and_tags_preserved": true,
+    "go_consumed_python_payload_in_both_profiles": true,
+    "unique_insert": "unsupported_riverqueue_0_7_index_contract"
+  },
+  "process_failure": {
+    "direct": {
+      "termination": "SIGKILL",
+      "exit_code": 137,
+      "recovered_attempt": 2,
+      "error_count": 1,
+      "enqueue_to_recovered_start_ms": 21937.612
+    },
+    "poll_only": {
+      "termination": "SIGKILL",
+      "exit_code": 137,
+      "recovered_attempt": 2,
+      "error_count": 1,
+      "enqueue_to_recovered_start_ms": 22034.889
+    }
+  },
+  "redaction": {
+    "contains_raw_logs": false,
+    "contains_credentials_or_dsns": false,
+    "contains_job_payloads": false,
+    "contains_dynamic_ports": false,
+    "contains_container_or_project_ids": false,
+    "contains_job_or_marker_ids": false
+  }
+}

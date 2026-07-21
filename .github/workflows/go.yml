@@ -1,0 +1,54 @@
+name: Go
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'tests/compatibility/river/**'
+      - 'ci/check_go.sh'
+      - 'ci/local_validate.sh'
+      - 'Makefile'
+      - '.github/workflows/go.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'tests/compatibility/river/**'
+      - 'ci/check_go.sh'
+      - 'ci/local_validate.sh'
+      - 'Makefile'
+      - '.github/workflows/go.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Run Go quality gate
+        run: bash ci/check_go.sh all

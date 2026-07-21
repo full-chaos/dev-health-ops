@@ -130,37 +130,61 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 
 **Purpose:** remove the assumptions that could invalidate the architecture.
 
-#### Work
+**Recorded decision:** [CHAOS-3034 River compatibility ADR](../decisions/chaos-3034-river-compatibility.md)  
+**Evidence:** [versioned Go worker migration evidence](../architecture/evidence/go-worker-migration/README.md)
 
-- Pin candidate Go, River, pgx, ClickHouse, Redis, OTel, and testcontainers versions.
-- Install River migrations in an isolated test database.
-- Validate River with:
-  - direct PostgreSQL;
-  - PgBouncer transaction mode with `PollOnly=true`;
-  - rolling clients at N/N-1 schema compatibility.
-- Measure queue-start latency and PostgreSQL load for direct notifications and PollOnly intervals.
-- Validate the Python `riverqueue` async SQLAlchemy client against the selected River schema:
-  - insert;
-  - insert in the same transaction as a domain write;
-  - rollback;
-  - uniqueness/advisory locks;
-  - priority, queue, attempts, scheduled availability;
-  - PgBouncer transaction mode.
-- Prove that a Go worker can decode Python fixtures and that Python can validate Go fixtures.
-- Document the fallback generic `worker_job_outbox` relay if the client is not acceptable.
-- Record River MPL-2.0 obligations.
-- Record that private ACR code is reference-only; choose clean implementation in ops or an approved public shared module.
-- Establish production baselines for current Celery queue latency, retry rates, resource use, stream lag, and deploy behavior.
-- Produce an architecture decision record and go/no-go recommendation.
+#### Completed
 
-#### Acceptance
+- Recorded candidate pins for Go 1.25.9, River/`riverpgxv5` 0.40.0,
+  River N-1 0.39.0, pgx 5.10.0 (5.9.2 at N-1), ClickHouse Go 2.47.0, `valkey-go`
+  1.0.76, OTel Go 1.44.0, `testcontainers-go` 0.43.0, and the pinned
+  PostgreSQL/PgBouncer test images.
+- Verified `riverqueue` 0.7.0 with SQLAlchemy 2.0.49 and `asyncpg` 0.31.0
+  on Python 3.13.14. Direct PostgreSQL and PgBouncer transaction mode both
+  commit exactly one standard River job, preserve queue/priority/attempts/
+  schedule policy, and create no job on rollback. The PgBouncer path uses
+  `NullPool`, disabled statement caches, and unique prepared-statement names.
+- Rejected `riverqueue` as a production dependency: unique insertion fails on
+  the River 0.40.0 schema because its `ON CONFLICT (kind, unique_key)` target
+  was removed by River migration 006.
+- Selected the language-neutral `worker_job_outbox` plus Go relay as the
+  Python-to-Go transactional bridge. Python must not write River tables
+  directly.
+- Recorded River MPL-2.0 distribution obligations and the public clean-room
+  ACR boundary; no private code is copied or imported.
+- Ran the checked-in Go 1.25.9 harness with 20 samples per mode. Direct
+  PostgreSQL passed execution, retry, scheduled state, running cancellation,
+  connection, and load gates. PollOnly passed execution, retry, scheduled
+  state, connection, and load gates at a 250 ms interval.
+- Proved the River 0.39 schema-6 to River 0.40 schema-7 rolling window, Python
+  and Go contract interoperability, and real `SIGKILL` rescue to attempt 2 in
+  both connection profiles.
+- Recorded a GO for River 0.40.0 with mandatory direct/session queue control.
+  Rejected transaction-mode PgBouncer PollOnly as the sole production path:
+  neither cross-client nor same-client cancellation reached a running worker.
 
-- Compatibility matrix is checked into the repository.
-- Load/failure test results support the selected queue-control connection mode.
-- A committed Python transaction creates exactly one runnable Go job; rollback creates none.
-- Selected versions and migration policy are documented.
-- Licensing/code-provenance decision is approved.
-- No unresolved P0 risk can require a different broker without an explicit architecture re-review.
+#### Remaining production evidence
+
+- Populate the checked-in Celery baseline capture from real production data.
+
+The generic outbox claim/insert/mark crash-window matrix is a Phase 1
+foundation acceptance item because Phase 1 owns the relay implementation. It
+must pass before foundation closes, but it does not make starting Phase 1
+circular.
+
+#### Acceptance and sequencing
+
+- The checked-in compatibility matrix is the Phase 0 gate record. Its PollOnly
+  running-cancellation failure is an architecture boundary, not an unmeasured
+  row.
+- Phase 1 foundation may proceed only with direct/session queue control as a
+  hard deployment prerequisite, or after a separately approved cancellation
+  plane passes equivalent tests. Missing production Celery baseline values do
+  not independently block foundation work.
+- Shadow-to-canary promotion and every production canary remain blocked until
+  the real Celery baseline and parity thresholds are recorded and reviewed.
+- Any failed compatibility row that can require a different broker reopens the
+  architecture decision before implementation proceeds.
 
 ## 5. Phase 1 — Go platform foundation
 
@@ -213,7 +237,8 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 - Add the proposed `WORKER_DATABASE_URI` queue-control DSN while retaining `POSTGRES_URI` as the canonical domain DSN and preserving documented compatibility aliases.
 - Update configuration examples and `docs/ops/database-connection-pooling.md` in the same change that introduces the new variable.
 - Add queue-control and domain database roles/DSNs.
-- Implement direct/session queue-control connection and PollOnly fallback.
+- Implement mandatory direct/session queue-control connectivity and fail
+  readiness when only the transaction-mode domain pool is configured.
 - Configure River job retention and maintenance.
 - Add database growth, index, vacuum, backup, and restore tests.
 - Add migration prefix/suffix compatibility checks modeled after ACR.
@@ -223,7 +248,8 @@ Promotion state is tracked in the registry or a generated migration manifest. CI
 
 - Long-running processes do not auto-migrate.
 - Queue work survives process and broker-equivalent outages.
-- Transaction-mode PgBouncer deployment works in PollOnly mode.
+- A PgBouncer-only PollOnly deployment fails readiness with an actionable
+  queue-control configuration error.
 - Production default direct/session pool is least-privilege and bounded.
 - Restore test preserves runnable and terminal job state.
 - Maximum configured connections stay within documented budgets.
@@ -732,9 +758,9 @@ Before each family enters canary:
 
 | Decision | Required by | Default if not decided |
 |---|---|---|
-| River version/support window | P0 close | no implementation start |
-| Python client vs generic outbox fallback | P0 close | generic outbox spike only |
-| direct/session queue DB availability | P1 database | PollOnly with explicit SLO |
+| River version/support window | Resolved in P0 | River 0.40.0 with N-1 0.39.0; rerun the matrix on any pin change |
+| Python client vs generic outbox fallback | Resolved in P0 | use `worker_job_outbox`; no direct Python River writes |
+| direct/session queue DB availability | P1 database | block worker readiness and P1 deployment; PollOnly is not the sole fallback |
 | shared Go module extraction | after first two families | keep in ops |
 | River UI deployment | P6 infra | do not deploy; use sanitized CLI/endpoints |
 | temporary Python algorithm service | before affected P5 issue | keep task on Celery |

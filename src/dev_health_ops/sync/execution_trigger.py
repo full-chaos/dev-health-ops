@@ -14,6 +14,10 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.sync.canonical_incident_gate import (
+    require_canonical_incident_feature_sync,
+    sync_targets_require_canonical_incident_feature,
+)
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.planner import SyncRunPlan, plan_sync_run
 from dev_health_ops.sync.trigger_routing import planner_request_for_config_if_routed
@@ -137,6 +141,9 @@ def create_sync_execution_trigger(
     before: datetime | None = None,
     initial_job_result: dict[str, Any] | None = None,
 ) -> SyncExecutionTriggerResult | None:
+    sync_targets = [str(target) for target in (config.sync_targets or [])]
+    if sync_targets_require_canonical_incident_feature(sync_targets):
+        require_canonical_incident_feature_sync(session, org_id)
     request = planner_request_for_config_if_routed(
         session, config, triggered_by=triggered_by, mode=mode
     )

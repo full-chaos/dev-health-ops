@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import NoReturn
 
@@ -20,6 +21,32 @@ logger = logging.getLogger(__name__)
 # well within an hour.
 _MAX_RETRY_COUNTDOWN_SECONDS = 3600
 _PAGERDUTY_WEBHOOK_DLQ_MAXLEN = 100_000
+
+
+class CanonicalIncidentIngestionDisabledError(RuntimeError):
+    __slots__ = ()
+
+
+def _canonical_incident_ingestion_allowed(org_id: str) -> bool:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.licensing import is_org_feature_enabled_sync
+    from dev_health_ops.licensing.registry import CANONICAL_INCIDENT_INGESTION_FEATURE
+
+    try:
+        parsed_org_id = uuid.UUID(org_id)
+    except ValueError:
+        return False
+    try:
+        with get_postgres_session_sync() as session:
+            return is_org_feature_enabled_sync(
+                session,
+                parsed_org_id,
+                CANONICAL_INCIDENT_INGESTION_FEATURE,
+            )
+    except SQLAlchemyError:
+        return False
 
 
 @celery_app.task(
@@ -212,9 +239,10 @@ def process_pagerduty_webhook_event(
         )
         if not entries:
             raise RuntimeError("pagerduty webhook stream entry missing")
-        _, fields = entries[0]
-        parsed = PagerDutyV3Webhook.model_validate(json.loads(fields["payload"]))
-        processed_at = datetime.fromisoformat(fields["received_at"])
+        _, entry_fields = entries[0]
+        fields = dict(entry_fields)
+        parsed = PagerDutyV3Webhook.model_validate(json.loads(entry_fields["payload"]))
+        processed_at = datetime.fromisoformat(entry_fields["received_at"])
     except Exception as exc:
         _retry_or_dead_letter_pagerduty_webhook(
             task=self,
@@ -223,6 +251,17 @@ def process_pagerduty_webhook_event(
             stream_entry_id=stream_entry_id,
             fields=fields,
             error=exc,
+        )
+
+    if not _canonical_incident_ingestion_allowed(org_id):
+        _retry_or_dead_letter_pagerduty_webhook(
+            task=self,
+            redis_client=redis_client,
+            stream_name=stream_name,
+            stream_entry_id=stream_entry_id,
+            fields=fields,
+            error=CanonicalIncidentIngestionDisabledError(),
+            retryable=False,
         )
 
     if not token or not clickhouse_url:
@@ -278,8 +317,9 @@ def _retry_or_dead_letter_pagerduty_webhook(
     stream_entry_id: str,
     fields: dict[str, str] | None,
     error: Exception,
+    retryable: bool = True,
 ) -> NoReturn:
-    if task.request.retries < task.max_retries:
+    if retryable and task.request.retries < task.max_retries:
         raise task.retry(
             exc=error,
             countdown=30 * (2**task.request.retries),
@@ -302,12 +342,19 @@ def _retry_or_dead_letter_pagerduty_webhook(
         approximate=True,
     )
     redis_client.xdel(stream_name, stream_entry_id)
-    logger.error(
-        "pagerduty_webhook.persistence_failed event_id=%s stream_entry_id=%s retries=%s",
-        event_id,
-        stream_entry_id,
-        task.request.retries,
-    )
+    if retryable:
+        logger.error(
+            "pagerduty_webhook.persistence_failed event_id=%s stream_entry_id=%s retries=%s",
+            event_id,
+            stream_entry_id,
+            task.request.retries,
+        )
+    else:
+        logger.warning(
+            "pagerduty_webhook.feature_disabled event_id=%s stream_entry_id=%s",
+            event_id,
+            stream_entry_id,
+        )
     raise RuntimeError("pagerduty webhook persistence exhausted") from error
 
 

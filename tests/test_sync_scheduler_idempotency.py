@@ -31,6 +31,7 @@ from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
 )
 from dev_health_ops.models.settings import (
@@ -218,25 +219,16 @@ class TestDispatchIdempotency:
 
         task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
-        def assert_marker_stamped_before_enqueue(*_args, **_kwargs) -> None:
-            assert job.next_run_at is not None
-            assert _aware(job.next_run_at) > now
-
-        dispatch_mock.apply_async.side_effect = assert_marker_stamped_before_enqueue
-
         first = _call(task)
         assert str(config.id) in first["dispatched"]
-        assert dispatch_mock.apply_async.call_count == 1
-        # Fan-out dispatch enqueues the planner run on the shared sync queue.
-        assert dispatch_mock.apply_async.call_args.kwargs["queue"] == "sync"
-        sync_run_id = dispatch_mock.apply_async.call_args.kwargs["args"][0]
-        # The dispatch marker was stamped to the next cron occurrence.
+        dispatch_mock.apply_async.assert_not_called()
         assert job.next_run_at is not None
         assert _aware(job.next_run_at) > now
 
-        sync_run = db_session.query(SyncRun).filter(SyncRun.id == sync_run_id).one()
+        sync_run = db_session.query(SyncRun).one()
         runs = db_session.query(JobRun).filter(JobRun.job_id == job.id).all()
         assert sync_run is not None
+        assert db_session.query(SyncDispatchOutbox).count() == 1
         assert len(runs) == 1
         assert runs[0].status == JobRunStatus.PENDING.value
         assert runs[0].triggered_by == "schedule"
@@ -244,8 +236,9 @@ class TestDispatchIdempotency:
 
         second = _call(task)
         assert second["dispatched"] == []
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
         assert db_session.query(JobRun).count() == 1
+        assert db_session.query(SyncDispatchOutbox).count() == 1
 
     def test_expired_dispatch_marker_allows_redispatch(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
@@ -260,7 +253,8 @@ class TestDispatchIdempotency:
 
         result = _call(task)
         assert str(config.id) in result["dispatched"]
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 1
         assert job.next_run_at is not None
         assert _aware(job.next_run_at) > now
 
@@ -295,13 +289,14 @@ class TestDispatchIdempotency:
 
         first = _call(task)
         assert str(config.id) in first["dispatched"]
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
 
         # The re-dispatch stamps next_run_at, so even with the flag still
         # wedged the config is enqueued at most once per cron interval.
         second = _call(task)
         assert second["dispatched"] == []
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 1
 
     def test_completed_run_resets_cycle_without_redispatch(
         self, monkeypatch, db_session
@@ -315,7 +310,8 @@ class TestDispatchIdempotency:
         task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
 
         _call(task)
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 1
 
         # Simulate the consumer terminal transition: the run completed,
         # is_running cleared, last_sync_at advanced.
@@ -326,7 +322,8 @@ class TestDispatchIdempotency:
         # Still inside the same cron interval: nothing to dispatch.
         second = _call(task)
         assert second["dispatched"] == []
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 1
 
         # Next cron interval reached (marker expired AND config due again).
         job.next_run_at = now - timedelta(seconds=1)
@@ -335,7 +332,8 @@ class TestDispatchIdempotency:
 
         third = _call(task)
         assert str(config.id) in third["dispatched"]
-        assert dispatch_mock.apply_async.call_count == 2
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 2
 
     def test_creates_scheduled_job_row_when_missing(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
@@ -350,7 +348,8 @@ class TestDispatchIdempotency:
 
         first = _call(task)
         assert str(config.id) in first["dispatched"]
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 1
 
         job = (
             db_session.query(ScheduledJob)
@@ -366,7 +365,8 @@ class TestDispatchIdempotency:
 
         second = _call(task)
         assert second["dispatched"] == []
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 1
 
 
 class TestDispatchErrorIsolation:
@@ -389,7 +389,8 @@ class TestDispatchErrorIsolation:
         assert result["errors"] == 1
         assert str(good_config.id) in result["dispatched"]
         assert str(bad_config.id) not in result["dispatched"]
-        assert dispatch_mock.apply_async.call_count == 1
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(SyncDispatchOutbox).count() == 1
 
 
 class TestUnmigratedConfigsSkipped:

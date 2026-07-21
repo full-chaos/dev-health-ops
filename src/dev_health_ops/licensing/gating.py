@@ -5,20 +5,19 @@ import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
 from typing import Any, ParamSpec, TypeVar, cast
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.licensing.feature_decisions import evaluate_org_features_async
 from dev_health_ops.licensing.registry import (
     EXPLICIT_PURCHASE_FEATURES,
     get_features_for_tier,
 )
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
-    TIER_ORDER,
     LicensePayload,
     LicenseTier,
 )
@@ -28,12 +27,6 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 logger = logging.getLogger(__name__)
-
-
-def _coerce_bool_map(value: object) -> dict[str, bool]:
-    if not isinstance(value, dict):
-        return {}
-    return {str(key): bool(enabled) for key, enabled in value.items()}
 
 
 class LicenseAuditLogger:
@@ -354,11 +347,7 @@ def get_entitlements() -> dict:
 async def get_org_entitlements_from_db(
     org_id: uuid.UUID, session: AsyncSession
 ) -> dict[str, Any]:
-    from dev_health_ops.models.licensing import (
-        FeatureFlag,
-        OrgFeatureOverride,
-        OrgLicense,
-    )
+    from dev_health_ops.models.licensing import OrgLicense
     from dev_health_ops.models.subscriptions import Subscription
     from dev_health_ops.models.users import Organization
 
@@ -395,63 +384,10 @@ async def get_org_entitlements_from_db(
     features = get_features_for_tier(tier)
     limits = DEFAULT_LIMITS[tier]
 
-    customer_push_flag_result = await session.execute(
-        select(FeatureFlag).filter_by(key="customer_push_ingest")
-    )
-    customer_push_flag = customer_push_flag_result.scalar_one_or_none()
-    features["customer_push_ingest"] = False
-    if customer_push_flag is not None:
-        min_tier = LicenseTier(customer_push_flag.min_tier)
-        tier_allowed = TIER_ORDER.index(tier) >= TIER_ORDER.index(min_tier)
-        customer_push_enabled = bool(customer_push_flag.is_enabled) and tier_allowed
-        if org_license is not None and org_license.features_override:
-            feature_overrides = _coerce_bool_map(org_license.features_override)
-            if "customer_push_ingest" in feature_overrides:
-                customer_push_enabled = (
-                    bool(feature_overrides["customer_push_ingest"])
-                    if customer_push_flag.is_enabled and tier_allowed
-                    else False
-                )
-        org_override_result = await session.execute(
-            select(OrgFeatureOverride).filter_by(
-                org_id=org_id, feature_id=customer_push_flag.id
-            )
-        )
-        org_override = org_override_result.scalar_one_or_none()
-        if org_override is not None:
-            now = datetime.now(timezone.utc)
-            if not org_override.expires_at or org_override.expires_at >= now:
-                customer_push_enabled = (
-                    bool(org_override.is_enabled)
-                    if customer_push_flag.is_enabled and tier_allowed
-                    else False
-                )
-        features["customer_push_ingest"] = customer_push_enabled
-
-    for feature_key in EXPLICIT_PURCHASE_FEATURES:
-        explicit_flag_result = await session.execute(
-            select(FeatureFlag).filter_by(key=feature_key)
-        )
-        explicit_flag = explicit_flag_result.scalar_one_or_none()
-        features[feature_key] = False
-        if explicit_flag is None or not explicit_flag.is_enabled:
-            continue
-
-        if org_license is not None and org_license.features_override:
-            feature_overrides = _coerce_bool_map(org_license.features_override)
-            if feature_key in feature_overrides:
-                features[feature_key] = feature_overrides[feature_key]
-
-        org_override_result = await session.execute(
-            select(OrgFeatureOverride).filter_by(
-                org_id=org_id, feature_id=explicit_flag.id
-            )
-        )
-        org_override = org_override_result.scalar_one_or_none()
-        if org_override is not None:
-            now = datetime.now(timezone.utc)
-            if not org_override.expires_at or org_override.expires_at >= now:
-                features[feature_key] = bool(org_override.is_enabled)
+    decision_keys = sorted(EXPLICIT_PURCHASE_FEATURES | {"customer_push_ingest"})
+    decisions = await evaluate_org_features_async(session, org_id, decision_keys)
+    for feature_key, decision in decisions.items():
+        features[feature_key] = decision.allowed
 
     subscription_result = await session.execute(
         select(Subscription)

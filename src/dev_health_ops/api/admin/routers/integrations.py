@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid as _uuid
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +32,9 @@ from dev_health_ops.api.services.integrations import (
     IntegrationSourceService,
     SyncRunService,
 )
+from dev_health_ops.sync.canonical_incident_gate import (
+    CanonicalIncidentFeatureDisabledError,
+)
 from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.trigger_routing import map_sync_mode
@@ -39,6 +43,9 @@ from dev_health_ops.workers.sync_units import dispatch_sync_run
 from .common import get_session
 
 logger = logging.getLogger(__name__)
+
+INTEGRATION_DISCOVERY_ERROR_CODE: Final = "integration_discovery_failed"
+INTEGRATION_DISCOVERY_ERROR_MESSAGE: Final = "Integration discovery failed"
 
 
 router = APIRouter()
@@ -281,14 +288,18 @@ async def discover_integration_sources(
                 _uuid.UUID(integration_id),
             )
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.exception(
+    except Exception:
+        logger.error(
             "integration_discovery.failed",
-            extra={"error_type": type(exc).__name__},
+            extra={"error_code": INTEGRATION_DISCOVERY_ERROR_CODE},
         )
-        raise HTTPException(status_code=503, detail=f"Discovery failed: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": INTEGRATION_DISCOVERY_ERROR_CODE,
+                "message": INTEGRATION_DISCOVERY_ERROR_MESSAGE,
+            },
+        ) from None
 
     return DiscoverResponse(
         integration_id=integration_id,
@@ -433,6 +444,8 @@ async def trigger_integration_sync(
         plan = await session.run_sync(
             lambda sync_session: plan_sync_run(sync_session, request)
         )
+    except CanonicalIncidentFeatureDisabledError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -498,6 +511,8 @@ async def trigger_integration_backfill(
         plan = await session.run_sync(
             lambda sync_session: plan_sync_run(sync_session, request)
         )
+    except CanonicalIncidentFeatureDisabledError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

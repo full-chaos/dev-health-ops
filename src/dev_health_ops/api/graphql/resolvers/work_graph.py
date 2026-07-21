@@ -9,6 +9,7 @@ from typing import Any
 
 from dev_health_ops.api.queries.scopes import resolve_repo_ids
 from dev_health_ops.api.services.identity import looks_like_uuid
+from dev_health_ops.storage.operational_current import current_operational_rows_sql
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -390,12 +391,9 @@ async def _batch_resolve_display_names(
         try:
             inc_rows = await query_dicts(
                 client,
-                """
+                f"""
                 SELECT id AS incident_id, normalized_status AS status, title
-                FROM operational_incidents FINAL
-                WHERE org_id = %(org_id)s
-                  AND is_deleted = 0
-                  AND id IN %(inc_ids)s
+                FROM {current_operational_rows_sql("operational_incidents", ("is_deleted = 0", "id IN %(inc_ids)s"), "org_id = %(org_id)s")}
                 UNION ALL
                 SELECT incident_id, status, '' AS title
                 FROM incidents FINAL

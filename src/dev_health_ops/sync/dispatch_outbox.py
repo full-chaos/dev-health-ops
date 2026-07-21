@@ -50,6 +50,7 @@ OUTBOX_STATUS_PENDING = "pending"
 OUTBOX_STATUS_DISPATCHED = "dispatched"
 
 _MAX_ERROR_LENGTH = 2000
+_TERMINAL_DENIAL_ERROR = "feature_disabled"
 
 
 @dataclass(frozen=True)
@@ -114,21 +115,48 @@ def upsert_outbox_wakeup(
     table: Any = SyncDispatchOutbox.__table__
     stmt = dialect_insert(table).values(**insert_values)
     live_claim = _live_claim_condition(table, upsert_now)
+    terminal_denial = _terminal_denial_condition(table)
     stmt = stmt.on_conflict_do_update(
         index_elements=["sync_run_id", "kind"],
         set_={
             "available_at": case(
+                (
+                    terminal_denial,
+                    table.c.available_at,
+                ),
                 (
                     stmt.excluded.available_at < table.c.available_at,
                     stmt.excluded.available_at,
                 ),
                 else_=table.c.available_at,
             ),
-            "status": OUTBOX_STATUS_PENDING,
-            "dispatched_at": None,
-            "claim_token": case((live_claim, table.c.claim_token), else_=None),
+            "status": case(
+                (
+                    terminal_denial,
+                    OUTBOX_STATUS_DISPATCHED,
+                ),
+                else_=OUTBOX_STATUS_PENDING,
+            ),
+            "dispatched_at": case(
+                (
+                    terminal_denial,
+                    table.c.dispatched_at,
+                ),
+                else_=None,
+            ),
+            "claim_token": case(
+                (
+                    ~terminal_denial & live_claim,
+                    table.c.claim_token,
+                ),
+                else_=None,
+            ),
             "claim_expires_at": case(
-                (live_claim, table.c.claim_expires_at), else_=None
+                (
+                    ~terminal_denial & live_claim,
+                    table.c.claim_expires_at,
+                ),
+                else_=None,
             ),
             "updated_at": upsert_now,
         },
@@ -186,11 +214,13 @@ def _execute_claim_aware_rearm_update(
 ) -> None:
     table = SyncDispatchOutbox.__table__
     live_claim = _live_claim_condition(table, now)
+    terminal_denial = _terminal_denial_condition(table)
     session.execute(
         update(SyncDispatchOutbox)
         .where(
             SyncDispatchOutbox.sync_run_id == run_uuid,
             SyncDispatchOutbox.kind == kind,
+            ~terminal_denial,
         )
         .values(
             available_at=case(
@@ -230,6 +260,13 @@ def _insert_values(
 
 def _live_claim_condition(table: Any, now: datetime) -> Any:
     return and_(table.c.claim_expires_at.isnot(None), table.c.claim_expires_at > now)
+
+
+def _terminal_denial_condition(table: Any) -> Any:
+    return and_(
+        table.c.status == OUTBOX_STATUS_DISPATCHED,
+        table.c.last_error == _TERMINAL_DENIAL_ERROR,
+    )
 
 
 def claim_due_outbox_rows(
@@ -304,6 +341,26 @@ def claim_due_outbox_rows(
         )
     session.flush()
     return claimed
+
+
+def lock_outbox_claim_for_publish(
+    session: Session,
+    row_id: str | uuid.UUID,
+    claim_token: str,
+) -> bool:
+    publish_now = _utcnow()
+    locked_id = session.scalar(
+        select(SyncDispatchOutbox.id)
+        .where(
+            SyncDispatchOutbox.id == uuid.UUID(str(row_id)),
+            SyncDispatchOutbox.claim_token == claim_token,
+            SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
+            SyncDispatchOutbox.claim_expires_at.is_not(None),
+            SyncDispatchOutbox.claim_expires_at > publish_now,
+        )
+        .with_for_update()
+    )
+    return locked_id is not None
 
 
 def mark_outbox_dispatched(

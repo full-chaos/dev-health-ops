@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-
-_fake_croniter_mod = MagicMock()
-if "croniter" not in sys.modules:
-    sys.modules["croniter"] = _fake_croniter_mod
 
 from dev_health_ops.models.git import Base  # noqa: E402
 from dev_health_ops.models.settings import (  # noqa: E402

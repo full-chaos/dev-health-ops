@@ -46,7 +46,7 @@ credentials_router = importlib.import_module(
     "dev_health_ops.api.admin.routers.credentials"
 )
 
-_ORG_ID = "pagerduty-oauth-test-org"
+_ORG_ID = "00000000-0000-0000-0000-000000003024"
 _USER_ID = "pagerduty-oauth-test-user"
 _CONFIG = PagerDutyOAuthConfig(
     client_id="test-client-id",
@@ -91,6 +91,11 @@ async def client(
         pagerduty_router.PagerDutyOAuthConfig,
         "from_env",
         classmethod(lambda _: _CONFIG),
+    )
+    monkeypatch.setattr(
+        pagerduty_router,
+        "is_org_feature_enabled_async",
+        AsyncMock(return_value=True),
     )
 
     app = FastAPI()

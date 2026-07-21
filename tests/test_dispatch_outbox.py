@@ -25,6 +25,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     ClaimedOutboxRow,
     backoff_seconds,
     claim_due_outbox_rows,
+    lock_outbox_claim_for_publish,
     mark_outbox_dispatched,
     mark_outbox_publish_failed,
     upsert_outbox_wakeup,
@@ -208,6 +209,29 @@ def test_upsert_conflict_rearms_dispatched_and_keeps_earliest_available_at(
     assert row.attempts == 3
 
 
+def test_upsert_preserves_dispatched_feature_denial(db_session):
+    now = datetime(2026, 6, 21, 12, tzinfo=timezone.utc)
+    row = _seed_outbox(db_session, available_at=now)
+    row.status = OUTBOX_STATUS_DISPATCHED
+    row.dispatched_at = now
+    row.last_error = "feature_disabled"
+    db_session.flush()
+
+    upsert_outbox_wakeup(
+        db_session,
+        sync_run_id=row.sync_run_id,
+        kind=row.kind,
+        available_at=now - timedelta(minutes=5),
+        now=now + timedelta(minutes=1),
+    )
+
+    db_session.refresh(row)
+    assert row.status == OUTBOX_STATUS_DISPATCHED
+    assert _aware(row.dispatched_at) == now
+    assert row.last_error == "feature_disabled"
+    assert row.claim_token is None
+
+
 def test_upsert_rearm_preserves_live_claim(db_session):
     now = datetime(2026, 6, 21, 12, tzinfo=timezone.utc)
     row = _seed_outbox(db_session, available_at=now)
@@ -296,6 +320,52 @@ def test_sequential_claims_do_not_double_claim_unexpired_row(db_session):
     assert len(first_claim) == 1
     assert first_claim[0].id == row.id
     assert second_claim == []
+
+
+def test_publish_lock_rejects_wrong_and_null_lease_owner(db_session):
+    now = datetime.now(timezone.utc)
+    row = _seed_outbox(db_session, available_at=now)
+    claimed = claim_due_outbox_rows(db_session, now=now, limit=1)
+    token = claimed[0].claim_token
+
+    assert lock_outbox_claim_for_publish(db_session, row.id, "wrong-token") is False
+
+    db_session.refresh(row)
+    row.claim_token = None
+    row.claim_expires_at = None
+    db_session.flush()
+    assert lock_outbox_claim_for_publish(db_session, row.id, token) is False
+
+
+def test_publish_lock_rejects_repeated_dispatch_after_mark(db_session):
+    now = datetime.now(timezone.utc)
+    row = _seed_outbox(db_session, available_at=now)
+    claimed = claim_due_outbox_rows(db_session, now=now, limit=1)
+    token = claimed[0].claim_token
+
+    assert lock_outbox_claim_for_publish(db_session, row.id, token) is True
+    assert (
+        mark_outbox_dispatched(
+            db_session,
+            row_id=row.id,
+            claim_token=token,
+        )
+        is True
+    )
+    assert lock_outbox_claim_for_publish(db_session, row.id, token) is False
+
+
+def test_publish_lock_remains_retryable_after_transaction_rollback(db_session):
+    now = datetime.now(timezone.utc)
+    row = _seed_outbox(db_session, available_at=now)
+    claimed = claim_due_outbox_rows(db_session, now=now, limit=1)
+    token = claimed[0].claim_token
+    db_session.commit()
+
+    assert lock_outbox_claim_for_publish(db_session, row.id, token) is True
+    db_session.rollback()
+
+    assert lock_outbox_claim_for_publish(db_session, row.id, token) is True
 
 
 def test_claim_returns_authoritative_post_increment_attempts(db_session):

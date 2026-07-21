@@ -685,6 +685,65 @@ def test_reconciler_rearms_expired_reference_discovery_lease(db_session, monkeyp
     assert discovery_row.status == OUTBOX_STATUS_DISPATCHED
 
 
+def test_reconciler_discovery_publish_failure_is_opaque(
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    from dev_health_ops.workers import reference_discovery, sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    db_session.delete(running)
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    ledger.status = "planned"
+    ledger.completed_at = None
+    ledger.available_at = datetime.now(timezone.utc)
+    upsert_outbox_wakeup(
+        db_session,
+        sync_run_id=run.id,
+        kind=OUTBOX_KIND_DISCOVERY,
+        available_at=datetime.now(timezone.utc),
+    )
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    secret = "ghp_" + "FAKE1234567890abcdefghijklmnopqrst"
+    malicious_fragments = (
+        "MaliciousDiscoveryPublishError",
+        "internal-broker.example",
+        "/srv/private/broker.json",
+        "https://admin:password@internal.example/broker",
+        secret,
+        'payload={"access_token":"private"}',
+    )
+
+    class MaliciousDiscoveryPublishError(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        reference_discovery.run_sync_reference_discovery,
+        "apply_async",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            MaliciousDiscoveryPublishError(" | ".join(malicious_fragments[1:]))
+        ),
+    )
+    monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", lambda **_: None)
+    monkeypatch.setattr(sync_units.finalize_sync_run, "apply_async", lambda **_: None)
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    discovery_row = _outbox_row(db_session, run, OUTBOX_KIND_DISCOVERY)
+    assert result["publish_failures"] == 1
+    assert discovery_row.status == OUTBOX_STATUS_PENDING
+    assert discovery_row.last_error == "Reference discovery failed"
+    captured = f"{caplog.text} " + " ".join(
+        str(record.__dict__) for record in caplog.records
+    )
+    for fragment in malicious_fragments:
+        assert fragment not in captured
+
+
 def test_reconciler_rearms_discovery_when_dispatch_blocked_on_ledger(
     db_session, monkeypatch
 ):

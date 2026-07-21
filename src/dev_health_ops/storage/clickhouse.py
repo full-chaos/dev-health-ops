@@ -4,9 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -40,6 +41,11 @@ from dev_health_ops.models.operational import (
     ServiceRepositoryMapping,
     operational_columns,
 )
+from dev_health_ops.models.operational_ordering import (
+    operation_rank_from_revision,
+    validate_operational_entity_ordering,
+)
+from dev_health_ops.models.operational_ordering_types import ORDERING_FIELD_NAMES
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -47,6 +53,13 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 
+from .operational_current import current_operational_rows_sql
+from .operational_ordering_guard import (
+    OperationalOrderingContract,
+    configured_operational_ordering_contract,
+    guard_operational_writer_tables,
+    operational_ordering_contract_is_explicit,
+)
 from .utils import _parse_date_value, _parse_datetime_value
 
 logger = logging.getLogger(__name__)
@@ -85,6 +98,7 @@ class ClickHouseStore:
         self.org_id: str | None = None
         self._lock = asyncio.Lock()
         self._settings = settings or {}
+        self._operational_ordering_contract = configured_operational_ordering_contract()
 
     async def __aenter__(self) -> ClickHouseStore:
         import clickhouse_connect
@@ -94,6 +108,14 @@ class ClickHouseStore:
         )
         self.client = client
         await self._ensure_tables()
+        if operational_ordering_contract_is_explicit():
+            await asyncio.to_thread(
+                guard_operational_writer_tables,
+                client,
+                self._operational_ordering_contract,
+                os.environ.get("SERVICE_NAME", "dev-health-ops"),
+                os.environ.get("SERVICE_VERSION", "unknown"),
+            )
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -228,6 +250,8 @@ class ClickHouseStore:
                     # Dynamic import and execution for Python migrations
                     import importlib.util
 
+                    from dev_health_ops.migrations.clickhouse import MigrationDeferred
+
                     spec = importlib.util.spec_from_file_location(
                         f"migrations.clickhouse.{path.stem}", path
                     )
@@ -235,7 +259,14 @@ class ClickHouseStore:
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                         if hasattr(module, "upgrade"):
-                            await asyncio.to_thread(module.upgrade, self.client)
+                            try:
+                                await asyncio.to_thread(module.upgrade, self.client)
+                            except MigrationDeferred:
+                                logger.info(
+                                    "clickhouse_migration_deferred",
+                                    extra={"migration": version},
+                                )
+                                continue
 
                 # Record migration
                 await asyncio.to_thread(
@@ -2335,6 +2366,14 @@ class ClickHouseStore:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
+    def _operational_columns_for_contract(
+        self, entity_type: type[CanonicalOperationalEntity]
+    ) -> tuple[str, ...]:
+        columns = operational_columns(entity_type)
+        if self._operational_ordering_contract is OperationalOrderingContract.CURRENT:
+            return columns
+        return tuple(name for name in columns if name not in ORDERING_FIELD_NAMES)
+
     async def _insert_operational_rows(
         self,
         table: str,
@@ -2346,9 +2385,14 @@ class ClickHouseStore:
         entity_type = type(entities[0])
         if any(type(entity) is not entity_type for entity in entities):
             raise ValueError("operational insert batches must contain one entity type")
+        expected_table = OPERATIONAL_ENTITY_TABLES.get(entity_type)
+        if expected_table != table:
+            raise OperationalContractError("table", str(expected_table), table)
         if self.org_id and any(entity.org_id != self.org_id for entity in entities):
             raise OperationalContractError("org_id", self.org_id, "mismatched row")
-        columns = list(operational_columns(entity_type))
+        for entity in entities:
+            validate_operational_entity_ordering(entity)
+        columns = list(self._operational_columns_for_contract(entity_type))
         rows = []
         for entity in entities:
             row = asdict(entity)
@@ -2361,6 +2405,38 @@ class ClickHouseStore:
                 }
             )
         await self._insert_rows(table, columns, rows)
+
+    @staticmethod
+    def _hydrate_operational_entity(
+        entity_type: type[T], columns: Sequence[str], row: Sequence[Any]
+    ) -> T:
+        values = dict(zip(columns, row, strict=True))
+        constructor = {
+            item.name: values[item.name] for item in fields(entity_type) if item.init
+        }
+        stored_ordering_fields = ORDERING_FIELD_NAMES.intersection(values)
+        if stored_ordering_fields and stored_ordering_fields != ORDERING_FIELD_NAMES:
+            raise OperationalContractError(
+                "ordering_fields",
+                str(ORDERING_FIELD_NAMES),
+                str(stored_ordering_fields),
+            )
+        rank = (
+            operation_rank_from_revision(values["source_revision"])
+            if stored_ordering_fields
+            else None
+        )
+        entity = entity_type(operation_rank=rank, **constructor)
+        checked_fields = ("id", *sorted(stored_ordering_fields))
+        for field_name in checked_fields:
+            if getattr(entity, field_name) != values[field_name]:
+                raise OperationalContractError(
+                    field_name,
+                    str(values[field_name]),
+                    str(getattr(entity, field_name)),
+                )
+        validate_operational_entity_ordering(entity)
+        return entity
 
     async def insert_operational_services(
         self, services: list[OperationalService]
@@ -2378,27 +2454,25 @@ class ClickHouseStore:
         include_deleted: bool = False,
     ) -> list[T]:
         assert self.client is not None
-        columns = operational_columns(entity_type)
+        columns = self._operational_columns_for_contract(entity_type)
         table = OPERATIONAL_ENTITY_TABLES[entity_type]
-        # Entities carry either is_deleted (services/incidents/...) or is_active
-        # (service->repo mappings); pick the column the table actually has so the
-        # generated SQL never references a non-existent column.
         if include_deleted:
             active_filter = ""
         elif "is_deleted" in columns:
-            active_filter = "AND is_deleted = 0"
+            active_filter = "is_deleted = 0"
         elif "is_active" in columns:
-            active_filter = "AND is_active = 1"
+            active_filter = "is_active = 1"
         else:
             active_filter = ""
+        filters = (
+            "provider = {provider:String}",
+            "provider_instance_id = {provider_instance_id:String}",
+            "source_entity_type = {source_entity_type:String}",
+            *((active_filter,) if active_filter else ()),
+        )
         query = f"""
         SELECT {", ".join(columns)}
-        FROM {table} FINAL
-        WHERE org_id = {{org_id:String}}
-          AND provider = {{provider:String}}
-          AND provider_instance_id = {{provider_instance_id:String}}
-          AND source_entity_type = {{source_entity_type:String}}
-          {active_filter}
+        FROM {current_operational_rows_sql(table, filters, ordering_contract=self._operational_ordering_contract)}
         """
         parameters = {
             "org_id": org_id,
@@ -2412,9 +2486,7 @@ class ClickHouseStore:
             )
         entities: list[T] = []
         for row in result.result_rows or []:
-            values = dict(zip(columns, row, strict=True))
-            values.pop("id")
-            entities.append(entity_type(**values))
+            entities.append(self._hydrate_operational_entity(entity_type, columns, row))
         return entities
 
     async def insert_operational_incidents(
@@ -2483,8 +2555,8 @@ class ClickHouseStore:
     ) -> list[ServiceRepositoryMapping]:
         """Load active mapping evidence scoped to an organization and optional endpoint."""
         assert self.client is not None
-        columns = operational_columns(ServiceRepositoryMapping)
-        predicates = ["org_id = {org_id:String}", "is_active = 1"]
+        columns = self._operational_columns_for_contract(ServiceRepositoryMapping)
+        predicates = ["is_active = 1"]
         parameters: dict[str, str] = {"org_id": org_id}
         if service_id is not None:
             predicates.append("service_id = {service_id:String}")
@@ -2494,8 +2566,7 @@ class ClickHouseStore:
             parameters["repo_id"] = str(repo_id)
         query = f"""
         SELECT {", ".join(columns)}
-        FROM operational_service_repository_mappings FINAL
-        WHERE {" AND ".join(predicates)}
+        FROM {current_operational_rows_sql("operational_service_repository_mappings", predicates, ordering_contract=self._operational_ordering_contract)}
         """
         async with self._lock:
             result = await asyncio.to_thread(
@@ -2505,9 +2576,9 @@ class ClickHouseStore:
             )
         mappings: list[ServiceRepositoryMapping] = []
         for row in result.result_rows or []:
-            values = dict(zip(columns, row, strict=True))
-            values.pop("id")
-            mappings.append(ServiceRepositoryMapping(**values))
+            mappings.append(
+                self._hydrate_operational_entity(ServiceRepositoryMapping, columns, row)
+            )
         return mappings
 
     async def load_operational_incidents(
@@ -2575,13 +2646,10 @@ class ClickHouseStore:
     ) -> list[OperationalIncident]:
         """Load current incident rows using a fixed domain-time predicate."""
         assert self.client is not None
-        columns = operational_columns(OperationalIncident)
+        columns = self._operational_columns_for_contract(OperationalIncident)
         query = f"""
         SELECT {", ".join(columns)}
-        FROM operational_incidents FINAL
-        WHERE org_id = {{org_id:String}}
-          AND is_deleted = 0
-          AND {domain_time_filter}
+        FROM {current_operational_rows_sql("operational_incidents", ("is_deleted = 0", domain_time_filter), ordering_contract=self._operational_ordering_contract)}
         """
         parameters = {
             "org_id": org_id,
@@ -2596,9 +2664,9 @@ class ClickHouseStore:
             )
         incidents: list[OperationalIncident] = []
         for row in result.result_rows or []:
-            values = dict(zip(columns, row, strict=True))
-            values.pop("id")
-            incidents.append(OperationalIncident(**values))
+            incidents.append(
+                self._hydrate_operational_entity(OperationalIncident, columns, row)
+            )
         return incidents
 
     async def get_all_teams(self) -> list[Team]:

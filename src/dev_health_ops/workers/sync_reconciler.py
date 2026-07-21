@@ -121,6 +121,7 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         OUTBOX_KIND_FINALIZE,
         OUTBOX_KIND_POST_SYNC,
         claim_due_outbox_rows,
+        lock_outbox_claim_for_publish,
         mark_outbox_dispatched,
         mark_outbox_publish_failed,
         upsert_outbox_wakeup,
@@ -129,7 +130,11 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         _dispatch_post_sync_tasks,
         build_post_sync_dispatch_payload,
     )
-    from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
+    from dev_health_ops.workers.reference_discovery import (
+        REFERENCE_DISCOVERY_ERROR_CATEGORY,
+        REFERENCE_DISCOVERY_ERROR_MESSAGE,
+        run_sync_reference_discovery,
+    )
     from dev_health_ops.workers.sync_units import (
         _expired_lease_retry_backoff_seconds,
         _failed_retry_result_payload,
@@ -340,6 +345,14 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         session.commit()
         session.expire_all()
         for row in claimed_rows:
+            if not lock_outbox_claim_for_publish(
+                session,
+                row.id,
+                row.claim_token,
+            ):
+                session.rollback()
+                session.expire_all()
+                continue
             if row.kind == OUTBOX_KIND_POST_SYNC:
                 post_sync_marked = mark_outbox_dispatched(
                     session,
@@ -393,19 +406,32 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                 )
             except Exception as exc:
                 publish_failures += 1
-                logger.exception(
-                    "reconcile_sync_dispatch.outbox_publish_failed",
-                    extra={
-                        "outbox_id": str(row.id),
-                        "sync_run_id": str(row.sync_run_id),
-                        "kind": row.kind,
-                    },
-                )
+                persisted_error: BaseException | str = exc
+                if row.kind == OUTBOX_KIND_DISCOVERY:
+                    persisted_error = REFERENCE_DISCOVERY_ERROR_MESSAGE
+                    logger.error(
+                        "reconcile_sync_dispatch.discovery_publish_failed",
+                        extra={
+                            "error_code": REFERENCE_DISCOVERY_ERROR_CATEGORY,
+                            "outbox_id": str(row.id),
+                            "sync_run_id": str(row.sync_run_id),
+                            "kind": row.kind,
+                        },
+                    )
+                else:
+                    logger.exception(
+                        "reconcile_sync_dispatch.outbox_publish_failed",
+                        extra={
+                            "outbox_id": str(row.id),
+                            "sync_run_id": str(row.sync_run_id),
+                            "kind": row.kind,
+                        },
+                    )
                 mark_outbox_publish_failed(
                     session,
                     row_id=row.id,
                     claim_token=row.claim_token,
-                    error=exc,
+                    error=persisted_error,
                     attempts=row.attempts,
                     now=datetime.now(timezone.utc),
                 )
@@ -774,11 +800,37 @@ def _publish_claimed_outbox_row(
     run_sync_reference_discovery,
     upsert_outbox_wakeup,
 ) -> str | None:
+    from dev_health_ops.sync.canonical_incident_gate import (
+        CanonicalIncidentFeatureDisabledError,
+        require_canonical_incident_feature_for_update_sync,
+        sync_run_requires_canonical_incident_feature,
+    )
     from dev_health_ops.sync.dispatch_outbox import (
         OUTBOX_KIND_DISCOVERY,
         OUTBOX_KIND_DISPATCH,
         OUTBOX_KIND_FINALIZE,
     )
+    from dev_health_ops.workers.sync_units import terminalize_feature_disabled_plan
+
+    if row.kind in {OUTBOX_KIND_DISCOVERY, OUTBOX_KIND_DISPATCH}:
+        run = session.query(SyncRun).filter(SyncRun.id == row.sync_run_id).one_or_none()
+        if run is not None and sync_run_requires_canonical_incident_feature(
+            session, run
+        ):
+            try:
+                require_canonical_incident_feature_for_update_sync(session, run.org_id)
+            except CanonicalIncidentFeatureDisabledError as exc:
+                terminalize_feature_disabled_plan(session, str(run.id), exc)
+                logger.warning(
+                    "reconcile_sync_dispatch.feature_disabled_before_publish",
+                    extra={
+                        "outbox_id": str(row.id),
+                        "sync_run_id": str(run.id),
+                        "org_id": str(run.org_id),
+                        "kind": row.kind,
+                    },
+                )
+                return None
 
     if row.kind == OUTBOX_KIND_DISCOVERY:
         getattr(run_sync_reference_discovery, "apply_async")(
@@ -926,13 +978,7 @@ def _run_has_dispatchable_units(
 def _run_is_finalizable(session, sync_run_id: str | uuid.UUID) -> bool:
     run_uuid = uuid.UUID(str(sync_run_id))
     run_exists = (
-        session.query(SyncRun.id)
-        .filter(
-            SyncRun.id == run_uuid,
-            SyncRun.status.not_in(_TERMINAL_RUN_STATUSES),
-        )
-        .first()
-        is not None
+        session.query(SyncRun.id).filter(SyncRun.id == run_uuid).first() is not None
     )
     if not run_exists:
         return False

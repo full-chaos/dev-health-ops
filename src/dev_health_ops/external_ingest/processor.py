@@ -45,7 +45,11 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.api.external_ingest.schemas import SCHEMA_VERSION, BatchEnvelope
+from dev_health_ops.api.external_ingest.schemas import (
+    OPERATIONAL_RECORD_KINDS,
+    SCHEMA_VERSION,
+    BatchEnvelope,
+)
 from dev_health_ops.api.external_ingest.status import (
     RejectedRecord,
     complete_batch,
@@ -55,6 +59,10 @@ from dev_health_ops.api.external_ingest.status import (
 )
 from dev_health_ops.db import get_postgres_session, require_clickhouse_uri
 from dev_health_ops.external_ingest.errors import PermanentProcessingError
+from dev_health_ops.external_ingest.feature_gate import (
+    CanonicalIncidentIngestionDisabledError,
+    external_operational_ingestion_allowed,
+)
 from dev_health_ops.external_ingest.normalize import (
     ALLOWED_KINDS_BY_SYSTEM,
     NormalizationResult,
@@ -75,6 +83,13 @@ logger = logging.getLogger(__name__)
 SINK_RETRY_BACKOFF_SECONDS: tuple[float, ...] = (2.0, 4.0, 8.0)
 
 _TERMINAL_STATUS_VALUES = {s.value for s in TERMINAL_STATUSES}
+
+
+async def _operational_ingestion_allowed(
+    session: AsyncSession,
+    org_id: str,
+) -> bool:
+    return await external_operational_ingestion_allowed(session, org_id)
 
 
 class TransientSinkWriteError(RuntimeError):
@@ -328,6 +343,18 @@ async def process_batch(
                 "already cleaned up) — batch cannot be processed"
             )
         envelope = _parse_envelope(payload, ingestion_id=ingestion_id)
+        if any(record.kind in OPERATIONAL_RECORD_KINDS for record in envelope.records):
+            if not await _operational_ingestion_allowed(session, org_id):
+                error = CanonicalIncidentIngestionDisabledError()
+                await mark_failed(
+                    session,
+                    org_id=org_id,
+                    ingestion_id=batch_uuid,
+                    reason=str(error),
+                )
+                await delete_payload(session, ingestion_id=batch_uuid)
+                await session.commit()
+                raise error
         source_id = await _resolve_source_id(
             session,
             org_id=org_id,

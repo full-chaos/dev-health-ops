@@ -12,13 +12,18 @@ import hmac
 import json
 import logging
 import os
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from dev_health_ops.api.ingest.streams import get_redis_client
 from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.db import get_postgres_session
+from dev_health_ops.licensing import is_org_feature_enabled_async
+from dev_health_ops.licensing.registry import CANONICAL_INCIDENT_INGESTION_FEATURE
 from dev_health_ops.workers.system_webhooks import process_pagerduty_webhook_event
 
 from .pagerduty_models import (
@@ -32,6 +37,26 @@ logger = logging.getLogger(__name__)
 MAX_WEBHOOK_BODY_BYTES = 1_048_576
 MAX_SIGNATURE_CANDIDATES = 8
 router = APIRouter(prefix="/pagerduty")
+
+_FEATURE_DISABLED_DETAIL = (
+    "Canonical incident ingestion is not enabled for this organization"
+)
+
+
+async def _canonical_incident_ingestion_allowed(org_id: str) -> bool:
+    try:
+        parsed_org_id = uuid.UUID(org_id)
+    except ValueError:
+        return False
+    try:
+        async with get_postgres_session() as session:
+            return await is_org_feature_enabled_async(
+                session,
+                parsed_org_id,
+                CANONICAL_INCIDENT_INGESTION_FEATURE,
+            )
+    except SQLAlchemyError:
+        return False
 
 
 def _configuration() -> tuple[str | None, str | None, str | None]:
@@ -198,6 +223,12 @@ async def pagerduty_webhook(
     webhook, org_id, provider_instance_id = await _validated_webhook(
         request, x_pagerduty_signature
     )
+    if not await _canonical_incident_ingestion_allowed(org_id):
+        logger.warning("pagerduty_webhook.audit rejected reason=feature_disabled")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_FEATURE_DISABLED_DETAIL,
+        )
     received_at = datetime.now(UTC)
     try:
         stream_entry_id = _enqueue_event(

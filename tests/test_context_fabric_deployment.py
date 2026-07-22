@@ -74,7 +74,14 @@ def test_context_fabric_values_reference_existing_secrets_only() -> None:
     )
 
     raw = _VALUES.read_text(encoding="utf-8")
-    for forbidden in ("postgres://", "postgresql://", "clickhouse://", "fcacr_", "svc_acr_"):
+    forbidden_values = (
+        "postgres://",
+        "postgresql://",
+        "clickhouse://",
+        "fcacr_",
+        "svc_acr_",
+    )
+    for forbidden in forbidden_values:
         assert forbidden not in raw
 
 
@@ -94,7 +101,24 @@ def test_context_fabric_render_uses_canonical_acr_chart(tmp_path: Path) -> None:
     assert "deploy/helm/acr" in result.stdout
     assert f"image.reference={_VALID_IMAGE}" in result.stdout
     assert "config.entitlement.url=https://ops.dev-health.test" in result.stdout
+    assert "networkPolicy.egress.entitlementPort=443" in result.stdout
     assert str(_VALUES) in result.stdout
+
+
+def test_context_fabric_render_aligns_custom_entitlement_port(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        "render",
+        "--image",
+        _VALID_IMAGE,
+        "--entitlement-url",
+        "https://ops.dev-health.test:8443",
+        helm='#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "config.entitlement.url=https://ops.dev-health.test:8443" in result.stdout
+    assert "networkPolicy.egress.entitlementPort=8443" in result.stdout
 
 
 def test_context_fabric_render_rejects_mutable_image(tmp_path: Path) -> None:

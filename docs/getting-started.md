@@ -83,24 +83,59 @@ CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
 OpenAPI is available at `http://localhost:8000/docs`; GraphQL is served at
 `/graphql` for `dev-health-web`.
 
-## Test Context Fabric locally
+## Run Context Fabric in containers
 
-Context Fabric/ACR is a separate private service and is not part of the default
-Ops Compose project. With sibling `dev-health-{ops,acr,web}` checkouts, start the
-isolated TLS fixture from this repository:
+Context Fabric/ACR is a private, opt-in service. Keep
+`dev-health-{ops,acr,web}` as sibling checkouts for the default paths.
+
+### Docker Compose and local plugins
+
+Start the complete local fixture from this repository:
 
 ```bash
 bash scripts/context-fabric-local.sh
 ```
 
-The launcher builds this Ops checkout, provisions a temporary organization and
-`agent_context_runtime` entitlement, seeds deterministic evidence, verifies the
-ACR API and MCP sidecar, and keeps the service alive for OpenCode, Claude Code,
-Codex, or Cursor testing. It prints a `client.env` path; source that path in the
-shell that launches the client.
+The launcher renders this checkout's real `compose.yml`, layers the canonical
+ACR Compose services and generated TLS configuration, runs `acr-api` in Docker,
+creates a temporary organization and entitlement, seeds evidence, builds the
+host-local `acr-mcp`, and prints a `client.env` path for OpenCode, Claude Code,
+Codex, or Cursor.
 
-See [Test Context Fabric locally](context-fabric-local.md) for path overrides,
-client setup, security boundaries, and cleanup behavior.
+```bash
+source <printed-client-env-path>
+acr-mcp doctor --live
+```
+
+### Kubernetes and Helm
+
+Render the ACR workload using the chart in the sibling ACR checkout:
+
+```bash
+bash scripts/context-fabric-kubernetes.sh render \
+  --image "$ACR_IMAGE" \
+  --entitlement-url "$OPS_HTTPS_ORIGIN" \
+  > /tmp/context-fabric.yaml
+```
+
+Install or upgrade after provisioning the required namespace and existing
+Secrets:
+
+```bash
+bash scripts/context-fabric-kubernetes.sh apply \
+  --image "$ACR_IMAGE" \
+  --entitlement-url "$OPS_HTTPS_ORIGIN"
+```
+
+Kubernetes ACR requires TLS PostgreSQL with separate migration/runtime roles, a
+TLS-native read-only ClickHouse endpoint, an HTTPS Ops entitlement origin, and
+the Secret contract in `deploy/context-fabric/README.md`. The default Ops API
+Service and ClickHouse manifests are plaintext and are not sufficient on their
+own.
+
+See [Run Context Fabric with Dev Health Ops](context-fabric-local.md) for the
+full Docker lifecycle, Kubernetes prerequisites, credential creation,
+port-forward plugin testing, and cleanup commands.
 
 ## Environment notes
 

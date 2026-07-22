@@ -273,12 +273,7 @@ class PagerDutyOAuthAuthorizationRequest(Base):
 
     state_hash: Mapped[str] = mapped_column(Text, primary_key=True)
     org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    credential_name: Mapped[str] = mapped_column(Text, nullable=False)
     code_verifier_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    enabled_datasets: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    region: Mapped[str] = mapped_column(Text, nullable=False)
-    subdomain: Mapped[str | None] = mapped_column(Text, nullable=True)
-    initiated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

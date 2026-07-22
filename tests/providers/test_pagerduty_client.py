@@ -17,7 +17,7 @@ def test_oauth_bearer_and_api_token_headers() -> None:
 
 def test_authorization_request_uses_pkce_and_read_scopes() -> None:
     config = PagerDutyOAuthConfig("client", "secret", "https://example.test/callback")
-    request = build_authorization_request(config, {"incidents", "users"})
+    request = build_authorization_request(config)
 
     assert "code_challenge_method=S256" in request.url
     assert request.state in request.url

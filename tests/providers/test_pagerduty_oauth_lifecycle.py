@@ -236,11 +236,11 @@ def test_callback_rejects_provider_error_and_missing_code() -> None:
 def test_authorization_request_always_requests_full_operational_read_scope_bundle() -> (
     None
 ):
-    # Given: a setup flow that initially selected only one dataset.
+    # Given: a published OAuth setup flow with no browser-selected datasets.
     config = PagerDutyOAuthConfig("id", "secret", "uri")
 
     # When: the OAuth authorization URL is created.
-    request = build_authorization_request(config, {"incidents"})
+    request = build_authorization_request(config)
 
     # Then: every canonical read scope is required before a connection can exist.
     from urllib.parse import parse_qs, urlparse

@@ -49,22 +49,14 @@ async def test_consume_returns_encrypted_pkce_context(session: AsyncSession) -> 
     await store.create(
         org_id="org-1",
         state="opaque-state",
-        credential_name="primary",
         code_verifier="pkce-verifier",
-        enabled_datasets=["incidents", "services"],
-        region="us",
-        subdomain="acme",
         now=_NOW,
     )
 
     consumed = await store.consume(org_id="org-1", state="opaque-state", now=_NOW)
 
     assert consumed is not None
-    assert consumed.credential_name == "primary"
     assert consumed.code_verifier == "pkce-verifier"
-    assert consumed.enabled_datasets == ["incidents", "services"]
-    assert consumed.region == "us"
-    assert consumed.subdomain == "acme"
 
 
 @pytest.mark.anyio
@@ -78,10 +70,7 @@ async def test_create_persists_only_state_hash_and_ciphertext(
     await store.create(
         org_id="org-1",
         state=state,
-        credential_name="primary",
         code_verifier=code_verifier,
-        enabled_datasets=["incidents"],
-        region="us",
         now=_NOW,
     )
 
@@ -102,10 +91,7 @@ async def test_consume_returns_none_after_request_is_used(
     await store.create(
         org_id="org-1",
         state="single-use-state",
-        credential_name="primary",
         code_verifier="pkce-verifier",
-        enabled_datasets=["incidents"],
-        region="us",
         now=_NOW,
     )
     first_consume = await store.consume(
@@ -127,10 +113,7 @@ async def test_consume_removes_expired_request(session: AsyncSession) -> None:
     await store.create(
         org_id="org-1",
         state="expired-state",
-        credential_name="primary",
         code_verifier="pkce-verifier",
-        enabled_datasets=["incidents"],
-        region="us",
         ttl=timedelta(seconds=0),
         now=_NOW,
     )
@@ -150,10 +133,7 @@ async def test_consume_preserves_request_for_other_organizations(
     await store.create(
         org_id="org-1",
         state="organization-scoped-state",
-        credential_name="primary",
         code_verifier="pkce-verifier",
-        enabled_datasets=["incidents"],
-        region="us",
         now=_NOW,
     )
 
@@ -185,20 +165,14 @@ async def test_purge_expired_keeps_active_requests(session: AsyncSession) -> Non
     await store.create(
         org_id="org-1",
         state="expired-state",
-        credential_name="primary",
         code_verifier="expired-verifier",
-        enabled_datasets=["incidents"],
-        region="us",
         ttl=timedelta(seconds=0),
         now=_NOW,
     )
     await store.create(
         org_id="org-1",
         state="active-state",
-        credential_name="primary",
         code_verifier="active-verifier",
-        enabled_datasets=["services"],
-        region="eu",
         ttl=timedelta(minutes=1),
         now=_NOW,
     )
@@ -219,20 +193,14 @@ async def test_create_purges_expired_requests_for_same_organization(
     await store.create(
         org_id="org-1",
         state="expired",
-        credential_name="primary",
         code_verifier="old",
-        enabled_datasets=[],
-        region="us",
         ttl=timedelta(seconds=0),
         now=_NOW,
     )
     await store.create(
         org_id="org-1",
         state="active",
-        credential_name="primary",
         code_verifier="new",
-        enabled_datasets=[],
-        region="us",
         now=_NOW + timedelta(seconds=1),
     )
 

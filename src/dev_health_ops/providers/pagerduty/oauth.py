@@ -14,24 +14,24 @@ from pydantic import BaseModel, ConfigDict
 
 READ_SCOPES = frozenset(
     {
-        "Incidents.read",
-        "Services.read",
-        "Escalation_policies.read",
-        "Schedules.read",
-        "Oncalls.read",
-        "Users.read",
-        "Teams.read",
+        "incidents.read",
+        "services.read",
+        "escalation_policies.read",
+        "schedules.read",
+        "oncalls.read",
+        "users.read",
+        "teams.read",
     }
 )
 DATASET_SCOPES = {
-    "incidents": frozenset({"Incidents.read"}),
-    "services": frozenset({"Services.read"}),
-    "business_services": frozenset({"Services.read"}),
-    "escalation_policies": frozenset({"Escalation_policies.read"}),
-    "schedules": frozenset({"Schedules.read"}),
-    "oncalls": frozenset({"Oncalls.read"}),
-    "users": frozenset({"Users.read"}),
-    "teams": frozenset({"Teams.read"}),
+    "incidents": frozenset({"incidents.read"}),
+    "services": frozenset({"services.read"}),
+    "business_services": frozenset({"services.read"}),
+    "escalation_policies": frozenset({"escalation_policies.read"}),
+    "schedules": frozenset({"schedules.read"}),
+    "oncalls": frozenset({"oncalls.read"}),
+    "users": frozenset({"users.read"}),
+    "teams": frozenset({"teams.read"}),
 }
 DATASET_OAUTH_FAMILIES = {
     "incidents": "incidents",

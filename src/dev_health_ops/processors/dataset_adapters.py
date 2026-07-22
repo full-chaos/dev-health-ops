@@ -491,22 +491,29 @@ def _run_pagerduty_dataset(
             else None,
         }
 
-    sync_error: Exception | None = None
+    async def _run_and_close() -> dict[str, Any]:
+        sync_error: Exception | None = None
+        try:
+            return await _run_with_reused_or_new_store(context, runtime, _handler)
+        except Exception as exc:
+            sync_error = exc
+            raise
+        finally:
+            try:
+                # httpx binds its connection pool to the loop that performs the
+                # requests. Close on that same loop; a second run_async() call
+                # creates a fresh loop after the first one has been closed.
+                await client.close()
+            except Exception:
+                if sync_error is None:
+                    raise
+
     try:
-        sync_result = run_async(
-            _run_with_reused_or_new_store(context, runtime, _handler)
-        )
+        sync_result = run_async(_run_and_close())
     except Exception as exc:
-        sync_error = exc
         usage_sink.extend(client.drain_usage_observations())
         _attach_usage_sink_to_exception(exc, usage_sink)
         raise
-    finally:
-        try:
-            run_async(client.close())
-        except Exception:
-            if sync_error is None:
-                raise
     result: dict[str, Any] = {
         "provider": context.provider,
         "dataset": context.dataset_key,

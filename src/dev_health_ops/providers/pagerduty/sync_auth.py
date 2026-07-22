@@ -165,6 +165,13 @@ async def hydrate_pagerduty_credentials_async(
                 result["access_token"] = await get_valid_access_token(
                     repository, config
                 )
+                current = await repository.get()
+                granted_scopes = (
+                    current.tokens.granted_scopes
+                    if current is not None
+                    else versioned.tokens.granted_scopes
+                )
+                result["granted_scopes"] = sorted(granted_scopes)
         case "client_credentials":
             config = PagerDutyOAuthConfig(
                 client_id=mapping["client_id"],
@@ -192,6 +199,7 @@ async def hydrate_pagerduty_credentials_async(
                 config,
                 request,
             )
+            result["granted_scopes"] = sorted(READ_SCOPES)
         case _:
             pass
     return result
@@ -226,6 +234,13 @@ def hydrate_pagerduty_credentials(
                 store,
                 config,
             )
+            current = anyio.run(store.get)
+            granted_scopes = (
+                current.tokens.granted_scopes
+                if current is not None
+                else versioned.tokens.granted_scopes
+            )
+            result["granted_scopes"] = sorted(granted_scopes)
         return result
     if auth_mode == "client_credentials":
         config = PagerDutyOAuthConfig(
@@ -255,4 +270,5 @@ def hydrate_pagerduty_credentials(
             config,
             request,
         )
+        result["granted_scopes"] = sorted(READ_SCOPES)
     return result

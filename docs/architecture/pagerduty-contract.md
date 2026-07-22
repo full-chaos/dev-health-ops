@@ -51,14 +51,14 @@ scope strings:
 
 | Family | Dataset keys | Scope |
 | --- | --- | --- |
-| incidents | `incidents`, `incident-alerts`, `incident-log-entries`, `incident-notes` | `Incidents.read` |
-| services | `services` | `Services.read` |
-| business services | `business-services` | `Services.read` |
-| escalation policies | `escalation-policies` | `Escalation_policies.read` |
-| schedules | `schedules` | `Schedules.read` |
-| on calls | `on-calls` | `Oncalls.read` |
-| users | `users` | `Users.read` |
-| teams | `teams` | `Teams.read` |
+| incidents | `incidents`, `incident-alerts`, `incident-log-entries`, `incident-notes` | `incidents.read` |
+| services | `services` | `services.read` |
+| business services | `business-services` | `services.read` |
+| escalation policies | `escalation-policies` | `escalation_policies.read` |
+| schedules | `schedules` | `schedules.read` |
+| on calls | `on-calls` | `oncalls.read` |
+| users | `users` | `users.read` |
+| teams | `teams` | `teams.read` |
 
 The hyphenated registry key `business-services` maps explicitly to the
 `business_services` family. No caller may guess a dataset key or scope.

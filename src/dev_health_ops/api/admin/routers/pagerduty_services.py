@@ -169,7 +169,7 @@ async def list_pagerduty_services(
     except PagerDutyInsufficientScopeError as exc:
         raise HTTPException(
             status_code=403,
-            detail="PagerDuty credential is missing Services.read permission",
+            detail="PagerDuty credential is missing services.read permission",
         ) from exc
     except AuthenticationException as exc:
         raise HTTPException(

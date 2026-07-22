@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -772,6 +773,49 @@ def test_pagerduty_dataset_closes_client_when_store_setup_fails() -> None:
         run_dataset_unit(ctx, _runtime())
 
     client.close.assert_awaited_once()
+
+
+def test_pagerduty_dataset_closes_client_on_request_event_loop() -> None:
+    from dev_health_ops.providers.pagerduty.sync import PagerDutySyncResult
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="services",
+        source_external_id="acme",
+    )
+    loop_ids: list[int] = []
+    client = Mock()
+    client.drain_usage_observations.return_value = []
+
+    async def run_sync(*_: object, **__: object) -> PagerDutySyncResult:
+        loop_ids.append(id(asyncio.get_running_loop()))
+        return PagerDutySyncResult(
+            dataset_key="services",
+            persisted=1,
+            watermark_at=WINDOW_END,
+            degraded=False,
+            observations=(),
+        )
+
+    async def close_client() -> None:
+        loop_ids.append(id(asyncio.get_running_loop()))
+
+    client.close = AsyncMock(side_effect=close_client)
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.providers.pagerduty.sync.PagerDutyOperationalSync"
+        ) as sync,
+    ):
+        sync.return_value.run = AsyncMock(side_effect=run_sync)
+        run_dataset_unit(ctx, _runtime())
+
+    assert len(loop_ids) == 2
+    assert loop_ids[0] == loop_ids[1]
 
 
 def test_pagerduty_dataset_rejects_source_id_without_verified_account_identity() -> (

@@ -68,6 +68,7 @@ async def test_async_oauth_hydration_uses_the_running_event_loop(
     )
 
     assert hydrated["access_token"] == "oauth-token"
+    assert hydrated["granted_scopes"] == sorted(READ_SCOPES)
 
 
 @pytest.mark.anyio
@@ -109,3 +110,4 @@ async def test_async_client_credentials_hydration_mints_scoped_token(
     )
 
     assert hydrated["access_token"] == "machine-token"
+    assert hydrated["granted_scopes"] == sorted(READ_SCOPES)

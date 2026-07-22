@@ -46,7 +46,7 @@ def test_validate_api_token_uses_one_least_privileged_service_read() -> None:
         partial(
             validate_pagerduty_credential,
             credential,
-            required_scopes=frozenset({"Services.read"}),
+            required_scopes=frozenset({"services.read"}),
             transport=httpx.MockTransport(handler),
         )
     )
@@ -67,7 +67,7 @@ def test_validate_oauth_derives_canonical_account_identity_from_service_response
         source=CredentialSource.DATABASE,
         auth_mode="oauth",
         access_token="oauth-token",
-        granted_scopes=("Services.read",),
+        granted_scopes=("services.read",),
         subdomain="caller-controlled-label",
     )
 
@@ -76,7 +76,7 @@ def test_validate_oauth_derives_canonical_account_identity_from_service_response
         partial(
             validate_pagerduty_credential,
             credential,
-            required_scopes=frozenset({"Services.read"}),
+            required_scopes=frozenset({"services.read"}),
             transport=httpx.MockTransport(
                 lambda _: httpx.Response(
                     200,
@@ -109,7 +109,7 @@ def test_validate_rejects_empty_service_response_without_account_identity() -> N
         source=CredentialSource.DATABASE,
         auth_mode="oauth",
         access_token="oauth-token",
-        granted_scopes=("Services.read",),
+        granted_scopes=("services.read",),
     )
 
     # When: the live capability check contains no service to prove its account.
@@ -118,7 +118,7 @@ def test_validate_rejects_empty_service_response_without_account_identity() -> N
             partial(
                 validate_pagerduty_credential,
                 credential,
-                required_scopes=frozenset({"Services.read"}),
+                required_scopes=frozenset({"services.read"}),
                 transport=httpx.MockTransport(
                     lambda _: httpx.Response(200, json={"services": []})
                 ),
@@ -135,7 +135,7 @@ def test_validate_oauth_rejects_missing_required_scopes_without_request() -> Non
         source=CredentialSource.DATABASE,
         auth_mode="oauth",
         access_token="oauth-token",
-        granted_scopes=("Users.read",),
+        granted_scopes=("users.read",),
     )
 
     # When: validation is requested for the operational scope set.
@@ -144,7 +144,7 @@ def test_validate_oauth_rejects_missing_required_scopes_without_request() -> Non
             partial(
                 validate_pagerduty_credential,
                 credential,
-                required_scopes=frozenset({"Services.read"}),
+                required_scopes=frozenset({"services.read"}),
                 transport=httpx.MockTransport(
                     lambda _: (_ for _ in ()).throw(AssertionError("must not request"))
                 ),
@@ -175,7 +175,7 @@ def test_validate_client_credentials_exchanges_then_reads_without_mutation() -> 
                 json={
                     "access_token": "machine-token",
                     "expires_in": 3600,
-                    "scope": "Services.read Users.read",
+                    "scope": "services.read users.read",
                 },
             )
         return httpx.Response(
@@ -198,7 +198,7 @@ def test_validate_client_credentials_exchanges_then_reads_without_mutation() -> 
         partial(
             validate_pagerduty_credential,
             credential,
-            required_scopes=frozenset({"Services.read", "Users.read"}),
+            required_scopes=frozenset({"services.read", "users.read"}),
             transport=httpx.MockTransport(handler),
         )
     )

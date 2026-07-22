@@ -190,6 +190,13 @@ def planner_request_for_config_if_routed(
         request is not None
         and bool(getattr(config, "planner_managed", False))
         and getattr(config, "source_id", None) is None
+        # PagerDuty is account-scoped. Its one canonical IntegrationSource is
+        # repaired transactionally inside plan_sync_run and therefore cannot
+        # carry this config's planner tag when the request is built. Leaving
+        # source_ids unset lets the planner consume that verified account
+        # source; applying repository-style tag scoping here produces a
+        # permanent zero-unit run.
+        and str(getattr(config, "provider", "")).lower() != "pagerduty"
     ):
         request = dataclasses.replace(
             request, source_ids=_planner_scoped_source_ids(session, config)

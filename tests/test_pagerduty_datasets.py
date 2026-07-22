@@ -37,13 +37,13 @@ def test_pagerduty_registry_dataset_keys_normalize_to_oauth_families() -> None:
 
     # Then: eight endpoint families collapse to PagerDuty's seven read scopes.
     assert scopes == {
-        "Incidents.read",
-        "Services.read",
-        "Escalation_policies.read",
-        "Schedules.read",
-        "Oncalls.read",
-        "Users.read",
-        "Teams.read",
+        "incidents.read",
+        "services.read",
+        "escalation_policies.read",
+        "schedules.read",
+        "oncalls.read",
+        "users.read",
+        "teams.read",
     }
 
 

@@ -29,6 +29,9 @@ from dev_health_ops.exceptions import (
 )
 from dev_health_ops.providers.github.client import GitHubAuth
 from dev_health_ops.providers.github.code_client import GitHubCodeClient
+from dev_health_ops.providers.pagerduty.sync_auth import (
+    hydrate_pagerduty_credentials_async,
+)
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
 from .common import get_session
@@ -364,6 +367,11 @@ async def test_connection(
         elif payload.provider == "launchdarkly":
             success, details = await _test_launchdarkly_connection(creds)
         elif payload.provider == "pagerduty":
+            # OAuth access tokens live in the separately encrypted provider
+            # OAuth store, while client-credential descriptors require a token
+            # exchange.  The generic credential row intentionally contains
+            # neither ephemeral token, so hydrate it before the live probe.
+            creds = await hydrate_pagerduty_credentials_async(creds, org_id=org_id)
             success, details = await _test_pagerduty_connection(creds)
         else:
             error = f"Unknown provider: {payload.provider}"
@@ -745,6 +753,38 @@ async def _test_pagerduty_connection(
     )
     client = PagerDutyClient(auth, region=str(creds.get("region", "us")))
     datasets = [str(value) for value in creds.get("enabled_datasets", [])]
+    if not datasets:
+        # Stored PagerDuty credentials are created before an integration's
+        # dataset selection exists, so they intentionally do not carry
+        # ``enabled_datasets``.  A credential-level connection test must still
+        # prove a live read instead of recording a false failure that later
+        # blocks sync preflight.  Prefer the smallest stable account resource,
+        # then fall back to any resource covered by the OAuth grant.  API
+        # tokens do not expose scopes, so services is their live probe too.
+        probe_candidates = (
+            "services",
+            "incidents",
+            "escalation-policies",
+            "schedules",
+            "on-calls",
+            "users",
+            "teams",
+            "business-services",
+        )
+        if api_token:
+            datasets = ["services"]
+        else:
+            granted = {str(value) for value in creds.get("granted_scopes", [])}
+            selected = next(
+                (
+                    dataset
+                    for dataset in probe_candidates
+                    if not missing_read_scopes({dataset}, granted)
+                ),
+                None,
+            )
+            if selected is not None:
+                datasets = [selected]
     unknown = set(datasets).difference(DATASET_OAUTH_FAMILIES)
     if unknown:
         await client.close()
@@ -759,7 +799,7 @@ async def _test_pagerduty_connection(
         if missing:
             return False, {"records_checked": 0, "missing_scopes": missing}
         if not datasets:
-            return False, {"error": "Select at least one PagerDuty dataset"}
+            return False, {"error": "PagerDuty credential has no supported read scope"}
         records_count = 0
         match pagerduty_oauth_family(datasets[0]):
             case "incidents":

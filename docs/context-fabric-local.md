@@ -1,30 +1,11 @@
-# Test Context Fabric locally
+# Run Context Fabric with Dev Health Ops
 
-Context Fabric, also called the Agent Context Runtime (ACR), is a separate
-private service that reads Dev Health evidence and organization entitlements
-from `dev-health-ops`. It is not part of the default open-source/self-hosted Ops
-Compose stack.
+Context Fabric, also called the Agent Context Runtime (ACR), is a private,
+opt-in service that reads engineering evidence and organization entitlements
+from `dev-health-ops`. The MCP adapter (`acr-mcp`) remains a host-local STDIO
+process for OpenCode, Claude Code, Codex, or Cursor.
 
-Use the isolated developer fixture when you need to test the hosted ACR API,
-the host-local MCP sidecar, and one of the bundled OpenCode, Claude Code, Codex,
-or Cursor packages together.
-
-## Why the fixture is separate
-
-The normal `compose.yml` is optimized for Ops development and exposes
-ClickHouse without transport TLS. ACR deliberately requires certificate-
-verified ClickHouse and HTTPS service boundaries. Adding the ACR containers to
-the normal project would either weaken that contract or require every Ops
-contributor to run private ACR infrastructure.
-
-The local launcher instead creates a unique `acr-e2e-*` Compose project with
-its own containers, volumes, network, databases, entitlement, credentials, and
-seed data. It builds the current Ops checkout, but it does not join or mutate a
-running `dev-health` project.
-
-## Checkout layout
-
-Keep the repositories as siblings for the zero-configuration path:
+The supported setup uses sibling checkouts:
 
 ```text
 workspace/
@@ -33,95 +14,184 @@ workspace/
   dev-health-web/
 ```
 
-Developers without access to the private `dev-health-acr` repository can use
-the normal Ops and Web development paths but cannot start this fixture.
+Set `DEV_HEALTH_ACR_DIR` or `DEV_HEALTH_WEB_DIR` when the repositories are in a
+different layout.
 
-## Prerequisites
+## Container support
 
-- Docker Engine or Docker Desktop with Compose v2 and Buildx
-- Go 1.25 or newer
-- `openssl`, `curl`, `git`, `jq`, `python3`, and `pgrep`
-- at least one supported client CLI for interactive plugin testing
+| Environment | How ACR runs | Status |
+| --- | --- | --- |
+| Docker Compose | ACR API container layered onto the real Ops Compose definition | Supported for complete local plugin testing |
+| Kubernetes | ACR Helm Deployment and migration Job in the Ops namespace | Supported with caller-provided TLS dependencies and Secrets |
+| Kustomize | ACR-owned overlays from `dev-health-acr` | Supported for ACR operators |
+| Docker Swarm | No ACR stack is defined | Not supported by this integration |
 
-Node.js and pnpm are required only for the separate Web harness.
+## Docker Compose quick start
 
-## Start from Ops
+From `dev-health-ops`:
 
 ```bash
 bash scripts/context-fabric-local.sh
 ```
 
-For a different checkout layout:
+The launcher does not use a copied Ops stack. It renders this checkout's actual
+`compose.yml`, selects the Ops services required by the test lifecycle, and
+layers the canonical ACR Compose file from
+`dev-health-acr/deploy/compose/acr.compose.yml` together with generated TLS and
+file-backed secrets.
 
-```bash
-DEV_HEALTH_ACR_DIR="../dev-health-acr" \
-DEV_HEALTH_WEB_DIR="../dev-health-web" \
-  bash scripts/context-fabric-local.sh
-```
+The services run under a unique `acr-e2e-*` Compose project. That preserves the
+real Ops service definitions while preventing the test from mutating an
+already-running default `dev-health` project or reusing its volumes.
 
-The script delegates to ACR's verified Compose lifecycle using this Ops checkout
-as the API and entitlement source. It builds the current sources, starts the
-isolated TLS stack, creates an organization, assigns the
-`agent_context_runtime` entitlement, seeds `acme/live-e2e`, creates and rotates
-a scoped ACR credential, and verifies both MCP read tools.
+The command:
 
-When ready, it prints a generated `client.env` path and keeps the stack alive.
-The environment file contains paths, not token contents.
+1. builds the current Ops and ACR sources;
+2. starts containerized PostgreSQL, PgBouncer, ClickHouse, Valkey, Ops API, ACR
+   migrations, and `acr-api`;
+3. enables certificate-verified local service and data boundaries;
+4. creates an organization and grants `agent_context_runtime`;
+5. seeds `acme/live-e2e` on branch `main`;
+6. creates and rotates a repository-scoped ACR credential;
+7. builds the host-local `acr-mcp` binary and verifies both read tools; and
+8. prints a generated `client.env` path before holding the stack open.
 
-## Connect a sidecar or plugin
-
-In another shell, source the exact path printed by the launcher:
+In another shell:
 
 ```bash
 source <printed-client-env-path>
 acr-mcp doctor --live
+acr-mcp metadata
 ```
 
-Use this explicit test request in the client:
+Install a bundled package using
+`$DEV_HEALTH_ACR_DIR/clients/<client>/README.md`, then test with:
 
-> Use Context Fabric for repository `acme/live-e2e` on branch `main` to inspect
-> live evidence. Call `context_for_task`, then expand one evidence ID returned by
-> that response with `source_evidence`.
+> Use Context Fabric for repository `acme/live-e2e` on branch `main`. Call
+> `context_for_task`, then expand one returned evidence ID with
+> `source_evidence`.
 
-The generated environment exports `DEV_HEALTH_ACR_DIR`, so the client package
-instructions are available at:
+Press Ctrl-C in the launcher terminal to remove only the generated containers,
+volumes, network, credentials, and environment file.
 
-```text
-$DEV_HEALTH_ACR_DIR/docs/local-development.md
-$DEV_HEALTH_ACR_DIR/clients/<client>/README.md
-```
+## Kubernetes quick start
 
-The client configuration registers `acr-mcp serve`; it does not store the ACR
-credential in the project. Returned evidence remains untrusted data, pre-plan is
-explicit opt-in, and writeback remains disabled by default.
+The Ops-owned entrypoint consumes the canonical private Helm chart from the ACR
+checkout and the non-secret values file at
+`deploy/context-fabric/helm-values.yaml`.
 
-## Use an existing ACR image
-
-The launcher builds the current ACR checkout unless `ACR_E2E_IMAGE` is set to an
-immutable image reference:
+Render without a cluster:
 
 ```bash
-ACR_E2E_IMAGE="registry.example/acr-api@sha256:<digest>" \
-  bash scripts/context-fabric-local.sh
+bash scripts/context-fabric-kubernetes.sh render \
+  --image "$ACR_IMAGE" \
+  --entitlement-url "$OPS_HTTPS_ORIGIN" \
+  > /tmp/context-fabric.yaml
 ```
 
-A mutable tag is rejected. The Ops API image is always built from the selected
-Ops checkout so the entitlement and fixture behavior match the code under test.
+Install or upgrade after the required namespace and Secrets exist:
 
-## Stop and clean up
+```bash
+bash scripts/context-fabric-kubernetes.sh apply \
+  --image "$ACR_IMAGE" \
+  --entitlement-url "$OPS_HTTPS_ORIGIN"
 
-Press Ctrl-C in the launcher terminal. The lifecycle trap removes only resources
-owned by the generated `acr-e2e-*` project. It reports a failure if any owned
-container, volume, or network remains.
+bash scripts/context-fabric-kubernetes.sh status
+```
 
-Installed client packages are user-scoped and intentionally survive fixture
-teardown. Use each package's uninstall command when finished.
+The image must be an immutable `@sha256` reference, and the entitlement value
+must be an HTTPS origin with no path. `apply` checks for the required Secrets,
+runs the chart's migration hook, and waits atomically for the API Deployment.
 
-## Web testing
+### Kubernetes dependency boundary
 
-The MCP fixture does not place Web assertion keys into this checkout or into
-`dev-health-web`. Run the Web-owned Context Fabric browser/BFF harness
-separately:
+The default Ops Kubernetes manifests are not, by themselves, an ACR backing
+stack:
+
+- `dev-health-api` is exposed inside the cluster over HTTP;
+- the bundled ClickHouse manifest exposes plaintext ports; and
+- the Ops Kubernetes stack does not provision ACR PostgreSQL state.
+
+Before applying ACR, provide an HTTPS Ops origin, TLS-native read-only
+ClickHouse, and TLS PostgreSQL with separate runtime and migration roles. Create
+these existing Secrets in the target namespace:
+
+| Secret | Keys |
+| --- | --- |
+| `acr-runtime-credentials` | `ACR_POSTGRES_DSN`, `ACR_CLICKHOUSE_DSN`, `ACR_EVIDENCE_ID_ACTIVE_KID`, `ACR_EVIDENCE_ID_KEYS` |
+| `acr-migration-credentials` | `ACR_POSTGRES_MIGRATION_DSN` |
+| `acr-entitlement-token` | `token` |
+| `acr-postgres-ca` | `ca.crt` |
+| `acr-clickhouse-ca` | `ca.crt` |
+| `acr-entitlement-ca` | `ca.crt` |
+| `acr-registry-pull` | `.dockerconfigjson` |
+
+Use an external secret manager in shared environments. File-backed `kubectl`
+examples, entitlement setup, credential rotation boundaries, and the exact
+Secret contract are in `deploy/context-fabric/README.md`.
+
+### Test a local plugin against Kubernetes
+
+After the ACR Deployment is ready, create a repository-scoped token file:
+
+```bash
+token_dir="${XDG_CONFIG_HOME:-$HOME/.config}/dev-health/context-fabric"
+install -d -m 700 "$token_dir"
+
+bash scripts/context-fabric-kubernetes.sh create-credential \
+  --org-id "$ORG_ID" \
+  --repository acme/repository \
+  --output "$token_dir/acr-token"
+```
+
+Build `acr-mcp` from the ACR checkout:
+
+```bash
+(
+  cd "$DEV_HEALTH_ACR_DIR"
+  go build -o "$token_dir/acr-mcp" ./cmd/acr-mcp
+)
+export PATH="$token_dir:$PATH"
+```
+
+Keep a loopback port-forward running:
+
+```bash
+bash scripts/context-fabric-kubernetes.sh port-forward --local-port 18080
+```
+
+In the client shell:
+
+```bash
+export ACR_API_URL=http://127.0.0.1:18080
+export ACR_API_ALLOW_INSECURE_LOOPBACK=true
+export ACR_API_TOKEN_FILE="$token_dir/acr-token"
+export ACR_LOCAL_INDEX_PROVIDER=disabled
+export ACR_ENABLE_WRITEBACK=false
+export ACR_SIDECAR_VERSION=1.0.0
+export ACR_SIDECAR_CLIENT_VERSION=1.0.0
+
+acr-mcp doctor --live
+```
+
+Plain HTTP is allowed only because `kubectl port-forward` is bound to loopback.
+The cluster dependency boundaries remain TLS-verified. Install the selected
+client package from `$DEV_HEALTH_ACR_DIR/clients/<client>/README.md` after
+exporting the environment.
+
+Remove the ACR workloads with:
+
+```bash
+bash scripts/context-fabric-kubernetes.sh delete
+```
+
+The uninstall retains caller-owned Secrets, databases, evidence, and Ops
+entitlements. Revoke the generated ACR and Ops service credentials separately.
+
+## Web verification
+
+The MCP setup does not place Web assertion keys in either repository. Run the
+Web-owned Context Fabric browser/BFF harness separately:
 
 ```bash
 cd ../dev-health-web
@@ -130,19 +200,4 @@ pnpm install --frozen-lockfile
 pnpm test:e2e:context-fabric
 ```
 
-The full live Web assertion path remains owned by the ACR SVS suite.
-
-## Troubleshooting
-
-- **Launcher not found:** set `DEV_HEALTH_ACR_DIR` to the private ACR checkout.
-- **Web checkout not found:** set `DEV_HEALTH_WEB_DIR`; the path is recorded for
-  the follow-on Web checks even though the plugin fixture does not start Web.
-- **Docker resource collision:** choose another isolated name with
-  `bash scripts/context-fabric-local.sh --project acr-e2e-local-<suffix>`.
-- **ACR image build rejects a dirty tree:** the developer launcher opts into
-  dirty local builds and labels the image accordingly. An explicit environment
-  override can still set `CONTAINER_ALLOW_DIRTY=0` to require a clean checkout.
-- **Client cannot find `acr-mcp`:** source the generated `client.env` in the same
-  shell before launching the client.
-- **Client gets an authorization error:** use the seeded repository
-  `acme/live-e2e`; the generated credential is intentionally scoped to it.
+The live Web assertion path remains part of the ACR service verification suite.

@@ -7,9 +7,11 @@ from typing import Any
 from dev_health_ops.credentials.resolver import (
     github_credentials_from_mapping,
     gitlab_credentials_from_mapping,
+    jira_credentials_from_mapping,
     pagerduty_credentials_from_mapping,
     resolve_gitlab_url,
 )
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.providers.usage import (
     PROVIDER_USAGE_OBSERVATION_KEY,
     attach_partial_observations,
@@ -199,6 +201,44 @@ def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
     if not provider_instance_id:
         raise ValueError("PagerDuty dataset unit requires an account subdomain")
     return PagerDutyClient(auth, region=credentials.region), provider_instance_id
+
+
+def _jira_client(context: SyncTaskContext) -> tuple[Any, str, str]:
+    from dev_health_ops.providers.jira.client import JiraAuth, JiraClient
+
+    credentials = jira_credentials_from_mapping(_credentials_mapping(context))
+    if credentials is None:
+        raise ValueError("Missing Jira credentials for incident dataset unit")
+    credential_mapping = _credentials_mapping(context)
+    cloud_id = str(
+        credential_mapping.get("cloud_id") or credential_mapping.get("cloudId") or ""
+    ).strip()
+    if not cloud_id:
+        raise ValueError("Jira incident dataset unit requires a cloud_id")
+    site_url = credentials.base_url.rstrip("/")
+    return (
+        JiraClient(
+            auth=JiraAuth(
+                base_url=site_url,
+                email=credentials.email,
+                api_token=credentials.api_token,
+                cloud_id=cloud_id,
+            ),
+            org_id=context.org_id,
+        ),
+        cloud_id,
+        site_url,
+    )
+
+
+def _require_jira_incident_entitlement(context: SyncTaskContext) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.sync.canonical_incident_gate import (
+        require_canonical_incident_feature_for_update_sync,
+    )
+
+    with get_postgres_session_sync() as session:
+        require_canonical_incident_feature_for_update_sync(session, context.org_id)
 
 
 def _window_backfill_days(context: SyncTaskContext) -> int:
@@ -485,6 +525,78 @@ def _run_pagerduty_dataset(
     return result
 
 
+def _run_jira_incident_dataset(
+    context: SyncTaskContext, runtime: ProviderRuntime
+) -> dict[str, Any]:
+    from dev_health_ops.providers.jira.jsm_incidents import JsmIncidentProducer
+
+    _require_jira_incident_entitlement(context)
+    if context.window_start is None or context.window_end is None:
+        raise ValueError("Jira incident dataset unit requires a bounded window")
+    if context.window_start >= context.window_end:
+        raise ValueError(
+            "Jira incident dataset unit requires a non-empty bounded window"
+        )
+    client, cloud_id, site_url = _jira_client(context)
+    usage_sink: list[dict[str, Any]] = []
+    sync_error: Exception | None = None
+
+    async def _handler(store: Any) -> int:
+        batch = await JsmIncidentProducer(
+            client=client,
+            org_id=context.org_id,
+            provider_instance_id=cloud_id,
+            base_url=site_url,
+            window_start=context.window_start,
+            window_end=context.window_end,
+            observed_at=context.window_end
+            or context.window_start
+            or datetime.now(timezone.utc),
+            allowed_project_keys=(context.source_external_id,),
+        ).collect()
+        _require_jira_incident_entitlement(context)
+        await IngestionSink(store).insert_operational_batch(batch)
+        return len(batch.incidents)
+
+    try:
+        persisted = run_async(_run_with_reused_or_new_store(context, runtime, _handler))
+    except Exception as exc:
+        sync_error = exc
+        raise
+    finally:
+        drain_error: Exception | None = None
+        try:
+            usage_sink.extend(client.drain_usage_observations())
+            if sync_error is not None:
+                _attach_usage_sink_to_exception(sync_error, usage_sink)
+        except Exception as exc:
+            drain_error = exc
+            raise
+        finally:
+            try:
+                client.close()
+            except Exception:
+                if sync_error is None and drain_error is None:
+                    raise
+
+    result: dict[str, Any] = {
+        "provider": context.provider,
+        "dataset": context.dataset_key,
+        "source": context.source_external_id,
+        "provider_instance_id": cloud_id,
+        "persisted": persisted,
+        "window_start": context.window_start.isoformat()
+        if context.window_start is not None
+        else None,
+        "window_end": context.window_end.isoformat()
+        if context.window_end is not None
+        else None,
+    }
+    if usage_sink:
+        result["observations"] = {PROVIDER_USAGE_OBSERVATION_KEY: usage_sink}
+    return result
+
+
 def _attach_usage_sink_to_exception(
     exc: BaseException, usage_sink: list[dict[str, Any]]
 ) -> None:
@@ -581,6 +693,9 @@ def run_dataset_unit(
 
     if provider == "pagerduty" and dataset_key in _PAGERDUTY_DATASETS:
         return _run_pagerduty_dataset(context, runtime)
+
+    if provider == "jira" and dataset_key == DatasetKey.INCIDENTS.value:
+        return _run_jira_incident_dataset(context, runtime)
 
     if dataset_key in _CODE_DATASETS:
         if provider == "github":

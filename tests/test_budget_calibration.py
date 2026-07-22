@@ -121,6 +121,34 @@ def test_budget_comparison_attached_per_route_family():
     assert jql_row["incomplete"] is False
 
 
+def test_jira_native_incident_admission_actuals_join_the_admission_budget():
+    budget_audit = [
+        _estimate(
+            provider="jira",
+            route_family="jira_jsm_incident_admission",
+            dimension="rest_core",
+            estimated_units=100_000,
+        )
+    ]
+    provider_usage = [
+        _actual(
+            route_family="jira_jsm_incident_admission",
+            dimension="rest_core",
+            request_count=3,
+        )
+    ]
+
+    comparisons = _join_budget_estimates_with_actuals(budget_audit, provider_usage)
+
+    assert len(comparisons) == 1
+    row = comparisons[0]
+    assert row["route_family"] == "jira_jsm_incident_admission"
+    assert row["estimated_units"] == 100_000
+    assert row["actual_requests"] == 3
+    assert row["unbudgeted_actual"] is False
+    assert row["underestimated"] is False
+
+
 def test_non_assessable_dimension_does_not_claim_underestimation():
     """graphql_cost (query-cost/complexity points) and other abstract-unit
     dimensions must never produce ``underestimated: True`` from a raw

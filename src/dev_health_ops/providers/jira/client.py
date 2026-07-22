@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import urlparse
+from datetime import datetime
+from functools import partial
+from typing import Any, Literal
+from urllib.parse import quote, urlparse
+
+import requests
+from anyio.to_thread import run_sync
+from pydantic import JsonValue
 
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
@@ -16,6 +22,7 @@ from dev_health_ops.providers._ratelimit import (
     parse_retry_after_header,
     penalize_from_response,
 )
+from dev_health_ops.providers.jira.jsm_models import parse_jsm_native_incident
 from dev_health_ops.providers.usage import UsageRecorder
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 from dev_health_ops.sync.budget_types import BudgetDimension
@@ -34,6 +41,20 @@ _DIAGNOSTIC_HEADER_NAMES = (
     "x-request-id",
     "atl-traceid",
 )
+
+_MAX_JSM_PAGES = 1_000
+_MAX_JSM_ROWS = 100_000
+_JSM_INCIDENT_FIELDS = (
+    "id",
+    "key",
+    "summary",
+    "created",
+    "updated",
+    "resolutiondate",
+    "status",
+    "priority",
+)
+_JSM_INCIDENTS_API_ORIGIN = "https://api.atlassian.com"
 
 
 def _require_jira() -> Any:
@@ -76,11 +97,40 @@ def _diagnostic_headers(headers: object) -> dict[str, str]:
     return {name: lowered[name] for name in _DIAGNOSTIC_HEADER_NAMES if name in lowered}
 
 
-@dataclass(frozen=True)
+def validate_jsm_cloud_origin(value: str) -> str:
+    """Return a trusted bare Jira Cloud origin for JSM incident reads only."""
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeError(
+            "JSM incident reads require a bare HTTPS *.atlassian.net origin"
+        ) from error
+    hostname = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or hostname is None
+        or not hostname.casefold().endswith(".atlassian.net")
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            "JSM incident reads require a bare HTTPS *.atlassian.net origin"
+        )
+    return f"https://{hostname.casefold()}"
+
+
+@dataclass(frozen=True, slots=True)
 class JiraAuth:
     base_url: str
     email: str
     api_token: str
+    cloud_id: str | None = None
 
 
 class JiraClient:
@@ -126,6 +176,7 @@ class JiraClient:
         self.session = requests.Session()
         self.session.auth = (auth.email, auth.api_token)
         self.session.headers.update({"Accept": "application/json"})
+        self._jsm_cloud_id: str | None = None
 
     @classmethod
     def from_env(cls, *, org_id: str | None = None) -> JiraClient:
@@ -159,7 +210,16 @@ class JiraClient:
     def _url(self, path: str) -> str:
         return f"{self.auth.base_url}{path}"
 
-    def _request_json(self, *, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _request_json(
+        self,
+        *,
+        path: str,
+        params: Mapping[str, str | int] | None = None,
+        method: Literal["GET", "POST"] = "GET",
+        json: dict[str, JsonValue] | None = None,
+        allow_redirects: bool = True,
+        allow_list: bool = False,
+    ) -> dict[str, JsonValue]:
         import requests
 
         url = self._url(path)
@@ -167,12 +227,25 @@ class JiraClient:
         for attempt in range(attempts):
             self.gate.wait_sync()
             try:
-                resp = self.session.get(
-                    url, params=params, timeout=self.timeout_seconds
-                )
+                if method == "GET":
+                    resp = self.session.get(
+                        url,
+                        params=params,
+                        timeout=self.timeout_seconds,
+                        allow_redirects=allow_redirects,
+                    )
+                else:
+                    resp = self.session.post(
+                        url,
+                        json=json,
+                        timeout=self.timeout_seconds,
+                        allow_redirects=allow_redirects,
+                    )
                 self._record_rest_usage(
-                    f"GET {path}", headers=resp.headers, status=resp.status_code
+                    f"{method} {path}", headers=resp.headers, status=resp.status_code
                 )
+                if not allow_redirects and 300 <= resp.status_code < 400:
+                    raise RuntimeError("JSM incident reads do not follow redirects")
                 if resp.status_code == 429:
                     retry_after = parse_retry_after_header(resp.headers)
                     applied = penalize_from_response(self.gate, resp)
@@ -207,18 +280,18 @@ class JiraClient:
                 resp.raise_for_status()
                 self.gate.reset()
                 data = resp.json()
-                return data if isinstance(data, dict) else {}
+                if isinstance(data, dict):
+                    return data
+                if allow_list and isinstance(data, list):
+                    return {"_legacy_list": data}
+                if not isinstance(data, dict):
+                    raise RuntimeError("Jira response JSON must be an object")
             except requests.HTTPError as exc:
-                try:
-                    body = exc.response.text if exc.response is not None else ""
-                except Exception:
-                    body = ""
                 logger.debug(
-                    "Jira request failed: %s %s params=%s body=%s",
-                    "GET",
-                    url,
-                    params,
-                    body,
+                    "Jira request failed: method=%s path=%s status=%s",
+                    method,
+                    path,
+                    exc.response.status_code if exc.response is not None else "unknown",
                 )
                 raise
         raise RuntimeError("Jira request retry loop exited without a result")
@@ -415,7 +488,12 @@ class JiraClient:
             if project_key:
                 params["projectKeyOrId"] = project_key
             page = self._request_json(path="/rest/agile/1.0/board", params=params)
-            boards = list((page or {}).get("values") or [])
+            board_values = page.get("values")
+            boards = (
+                [board for board in board_values if isinstance(board, dict)]
+                if isinstance(board_values, list)
+                else []
+            )
             if not boards:
                 break
             yield from boards
@@ -430,7 +508,12 @@ class JiraClient:
                 path=f"/rest/agile/1.0/board/{board_id}/sprint",
                 params={"startAt": start_at, "maxResults": self.per_page},
             )
-            sprints = list((page or {}).get("values") or [])
+            sprint_values = page.get("values")
+            sprints = (
+                [sprint for sprint in sprint_values if isinstance(sprint, dict)]
+                if isinstance(sprint_values, list)
+                else []
+            )
             if not sprints:
                 break
             yield from sprints
@@ -443,12 +526,12 @@ class JiraClient:
         Fetch all visible projects from Jira.
         Uses GET /rest/api/3/project/search for pagination.
         """
-        projects = []
+        projects: list[dict[str, Any]] = []
         start_at = 0
         max_results = 50
 
         while True:
-            params = {
+            params: dict[str, str | int] = {
                 "startAt": start_at,
                 "maxResults": max_results,
                 "expand": "description,lead",
@@ -460,7 +543,11 @@ class JiraClient:
                     path="/rest/api/3/project/search", params=params
                 )
                 page = data.get("values", [])
-            except Exception:
+            except requests.HTTPError as error:
+                response = error.response
+                status_code = response.status_code if response is not None else None
+                if status_code not in {404, 405, 410}:
+                    raise
                 # Fallback to non-paginated (or differently paginated) /project endpoint
                 # which usually returns all projects if the list is small, or
                 # strictly follows deprecated behavior.
@@ -468,21 +555,282 @@ class JiraClient:
                 logger.warning(
                     "Jira project/search failed, trying /project (may be unpaginated)"
                 )
-                return self._request_json(path="/rest/api/3/project", params={})  # type: ignore
+                legacy_response = self._request_json(
+                    path="/rest/api/3/project", params={}, allow_list=True
+                )
+                legacy_projects = legacy_response.get("_legacy_list")
+                if not isinstance(legacy_projects, list):
+                    raise RuntimeError("Jira legacy project response must be a list")
+                return [
+                    project for project in legacy_projects if isinstance(project, dict)
+                ]
 
-            if not page:
+            if not isinstance(page, list):
+                raise RuntimeError("Jira project search response values must be a list")
+            projects_page = [project for project in page if isinstance(project, dict)]
+            if not projects_page:
                 break
 
-            projects.extend(page)
+            projects.extend(projects_page)
             if data.get("isLast"):
                 break
 
-            start_at += len(page)
+            start_at += len(projects_page)
             # Safety break for massive instances if isLast isn't reliable
-            if len(page) < max_results:
+            if len(projects_page) < max_results:
                 break
 
         return projects
+
+    async def iter_service_desks(self) -> AsyncIterator[str]:
+        """Enumerate all Jira Service Management service project keys."""
+        await self._ensure_jsm_cloud_identity()
+        start = 0
+        pages = 0
+        rows_seen = 0
+        while True:
+            if pages >= _MAX_JSM_PAGES:
+                raise RuntimeError("JSM service desk pagination exceeded page cap")
+            page = await self._request_jsm_json(
+                path="/rest/servicedeskapi/servicedesk",
+                params={"start": start, "limit": self.per_page},
+            )
+            values = page.get("values")
+            if not isinstance(values, list):
+                raise RuntimeError("JSM service desk response values must be a list")
+            is_last_page = page.get("isLastPage")
+            if not isinstance(is_last_page, bool):
+                raise RuntimeError(
+                    "JSM service desk response isLastPage must be a boolean"
+                )
+            rows = values
+            pages += 1
+            rows_seen += len(rows)
+            if rows_seen > _MAX_JSM_ROWS:
+                raise RuntimeError("JSM service desk pagination exceeded row cap")
+            project_keys: list[str] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    project_key = row.get("projectKey")
+                    if isinstance(project_key, str):
+                        project_keys.append(project_key)
+            for project_key in project_keys:
+                yield project_key
+            if is_last_page:
+                return
+            if not rows:
+                raise RuntimeError(
+                    "JSM service desk pagination ended without terminal marker"
+                )
+            next_start = start + len(rows)
+            if next_start <= start:
+                raise RuntimeError("JSM service desk pagination did not advance")
+            start = next_start
+
+    async def iter_jsm_incident_issues(
+        self,
+        *,
+        project_keys: tuple[str, ...],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> AsyncIterator[dict[str, object]]:
+        """Search JSM incident issues through enhanced JQL token pagination."""
+        if not project_keys:
+            return
+        await self._ensure_jsm_cloud_identity()
+        if window_start >= window_end:
+            raise RuntimeError("JSM enhanced JQL requires a non-empty updated window")
+        jql = (
+            f'project in ({", ".join(project_keys)}) AND "Ticket category" = Incidents '
+            f'AND updated >= "{window_start.isoformat()}" '
+            f'AND updated < "{window_end.isoformat()}" '
+            "ORDER BY updated ASC, key ASC"
+        )
+        token: str | None = None
+        seen_tokens: set[str] = set()
+        pages = 0
+        rows_seen = 0
+        while True:
+            if pages >= _MAX_JSM_PAGES:
+                raise RuntimeError("JSM enhanced JQL pagination exceeded page cap")
+            body: dict[str, JsonValue] = {
+                "jql": jql,
+                "maxResults": self.per_page,
+                "fields": list(_JSM_INCIDENT_FIELDS),
+            }
+            if token is not None:
+                body["nextPageToken"] = token
+            page = await self._request_jsm_json(
+                method="POST", path="/rest/api/3/search/jql", json=body
+            )
+            issues = page.get("issues")
+            if not isinstance(issues, list):
+                raise RuntimeError("JSM enhanced JQL response issues must be a list")
+            is_last = page.get("isLast")
+            if not isinstance(is_last, bool):
+                raise RuntimeError("JSM enhanced JQL response isLast must be a boolean")
+            rows = issues
+            pages += 1
+            rows_seen += len(rows)
+            if rows_seen > _MAX_JSM_ROWS:
+                raise RuntimeError("JSM enhanced JQL pagination exceeded row cap")
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise RuntimeError("JSM enhanced JQL issue rows must be objects")
+                yield dict(row)
+            next_token = page.get("nextPageToken")
+            if is_last:
+                return
+            if (
+                not isinstance(next_token, str)
+                or not next_token
+                or next_token in seen_tokens
+            ):
+                raise RuntimeError("JSM enhanced JQL nextPageToken did not advance")
+            seen_tokens.add(next_token)
+            token = next_token
+
+    async def admit_jsm_incident(self, *, issue_id: str) -> bool:
+        """Public admission boundary: native success alone accepts a JQL candidate."""
+        cloud_id = await self._ensure_jsm_cloud_identity()
+        return await run_sync(
+            partial(
+                self._admit_jsm_incident_sync,
+                cloud_id=cloud_id,
+                issue_id=issue_id,
+            )
+        )
+
+    def _admit_jsm_incident_sync(self, *, cloud_id: str, issue_id: str) -> bool:
+        """Use a fresh fixed-host request so the Jira-site session cannot cross hosts."""
+        if not issue_id.isdecimal():
+            raise RuntimeError(
+                "JSM native incident admission requires a numeric issue ID"
+            )
+        path = (
+            "/jsm/incidents/cloudId/"
+            f"{quote(cloud_id, safe='')}/v1/incident/{quote(issue_id, safe='')}"
+        )
+        url = f"{_JSM_INCIDENTS_API_ORIGIN}{path}"
+        attempts = self.max_retries_429 + 1
+        for attempt in range(attempts):
+            self.gate.wait_sync()
+            response = requests.get(
+                url,
+                auth=(self.auth.email, self.auth.api_token),
+                headers={"Accept": "application/json"},
+                timeout=self.timeout_seconds,
+                allow_redirects=False,
+            )
+            self._record_rest_usage(
+                f"jira_jsm_incident_admission:GET {url}",
+                headers=response.headers,
+                status=response.status_code,
+            )
+            if 300 <= response.status_code < 400:
+                raise RuntimeError("JSM incident reads do not follow redirects")
+            if response.status_code == 404:
+                self.gate.reset()
+                return False
+            if response.status_code == 429:
+                retry_after = parse_retry_after_header(response.headers)
+                applied = penalize_from_response(self.gate, response)
+                logger.info(
+                    "Jira rate limited; backoff %.1fs (HTTP 429, attempt %d/%d)",
+                    applied,
+                    attempt + 1,
+                    attempts,
+                )
+                if attempt + 1 < attempts:
+                    continue
+                raise RateLimitException(
+                    f"Jira rate limited: giving up after {attempts} attempts (HTTP 429)",
+                    retry_after_seconds=retry_after,
+                    signal=RateLimitSignal(
+                        provider="jira",
+                        host="api.atlassian.com",
+                        dimension=BudgetDimension.REST_CORE,
+                        retry_after_seconds=retry_after,
+                        reset_at=RateLimitSignal.reset_at_from_iso8601(
+                            response.headers.get("X-RateLimit-Reset")
+                        ),
+                        reason="primary",
+                        request_id=response.headers.get("X-AREQUESTID"),
+                    ),
+                )
+            if response.status_code != 200:
+                response.raise_for_status()
+                raise RuntimeError("JSM native incident admission requires HTTP 200")
+            self.gate.reset()
+            response_body = response.json()
+            if not isinstance(response_body, dict):
+                raise RuntimeError(
+                    "JSM native incident response JSON must be an object"
+                )
+            parse_jsm_native_incident(response_body)
+            return True
+        raise RuntimeError(
+            "JSM native incident admission retry loop exited without a result"
+        )
+
+    async def _request_jsm_json(
+        self,
+        *,
+        path: str,
+        params: Mapping[str, str | int] | None = None,
+        method: Literal["GET", "POST"] = "GET",
+        json: dict[str, JsonValue] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Run JSM's synchronous HTTP and rate-gate work off the event loop."""
+        return await run_sync(
+            partial(
+                self._request_json,
+                path=path,
+                params=params,
+                method=method,
+                json=json,
+                allow_redirects=False,
+            )
+        )
+
+    def discover_jsm_cloud_id(self, *, expected_cloud_id: str | None = None) -> str:
+        """Discover and optionally verify the Cloud ID from the trusted tenant endpoint."""
+        validate_jsm_cloud_origin(self.auth.base_url)
+        tenant_info = self._request_json(
+            path="/_edge/tenant_info", allow_redirects=False
+        )
+        cloud_id = tenant_info.get("cloudId")
+        if not isinstance(cloud_id, str) or not cloud_id:
+            raise RuntimeError("JSM tenant info response must contain cloudId")
+        if expected_cloud_id is not None and cloud_id != expected_cloud_id:
+            raise RuntimeError(
+                "JSM discovered cloud ID does not match configured cloud ID"
+            )
+        return cloud_id
+
+    async def _ensure_jsm_cloud_identity(self) -> str:
+        """Discover the JSM tenant in a worker thread before incident-only reads."""
+        if self._jsm_cloud_id is not None:
+            return self._jsm_cloud_id
+        validate_jsm_cloud_origin(self.auth.base_url)
+        tenant_info = await self._request_jsm_json(path="/_edge/tenant_info")
+        cloud_id = tenant_info.get("cloudId")
+        if not isinstance(cloud_id, str) or not cloud_id:
+            raise RuntimeError("JSM tenant info response must contain cloudId")
+        expected_cloud_id = self.auth.cloud_id
+        if expected_cloud_id is not None and cloud_id != expected_cloud_id:
+            raise RuntimeError(
+                "JSM discovered cloud ID does not match configured cloud ID"
+            )
+        self._jsm_cloud_id = cloud_id
+        return cloud_id
+
+
+def discover_jsm_cloud_id(
+    client: JiraClient, *, expected_cloud_id: str | None = None
+) -> str:
+    """Discover the trusted Jira Cloud ID for a configured JSM client."""
+    return client.discover_jsm_cloud_id(expected_cloud_id=expected_cloud_id)
 
 
 def build_jira_jql(

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,13 +19,23 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.api.admin.middleware import get_admin_org_id, get_admin_user
-from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.admin.middleware import (  # noqa: F401
+    get_admin_org_id,
+    get_admin_user,
+)
 from dev_health_ops.api.services.configuration import IntegrationCredentialsService
+from dev_health_ops.credentials.types import CredentialSource, PagerDutyCredentials
 from dev_health_ops.licensing import is_org_feature_enabled_async
 from dev_health_ops.licensing.registry import CANONICAL_INCIDENT_INGESTION_FEATURE
+from dev_health_ops.providers.pagerduty.credential_validation import (
+    PagerDutyCredentialValidationError,
+    ValidatedPagerDutyCredential,
+    validate_pagerduty_credential,
+)
 from dev_health_ops.providers.pagerduty.oauth import (
+    DATASET_OAUTH_FAMILIES,
     DATASET_SCOPES,
+    READ_SCOPES,
     OAuthCallbackValidationError,
     OAuthTokens,
     PagerDutyOAuthConfig,
@@ -37,6 +48,9 @@ from dev_health_ops.providers.pagerduty.oauth import (
 from dev_health_ops.providers.pagerduty.oauth_authorization_store import (
     PagerDutyAuthorizationRequestStore,
 )
+from dev_health_ops.providers.pagerduty.oauth_revocations import (
+    PagerDutyOAuthRevocationRepository,
+)
 from dev_health_ops.providers.pagerduty.oauth_storage import (
     PagerDutyOAuthCredentialRepository,
 )
@@ -48,6 +62,16 @@ router = APIRouter()
 _FEATURE_DISABLED_DETAIL = (
     "Canonical incident ingestion is not enabled for this organization"
 )
+_OAUTH_CREDENTIAL_NAME: Final = "default"
+_PAGERDUTY_REGIONS: Final = ("us", "eu")
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedOAuthIdentity:
+    """PagerDuty identity proof paired with the server-selected API region."""
+
+    validated: ValidatedPagerDutyCredential
+    region: str
 
 
 async def _require_canonical_incident_ingestion(
@@ -71,22 +95,9 @@ async def _require_canonical_incident_ingestion(
 
 
 class PagerDutyAuthorizeRequest(BaseModel):
-    """Inputs required to begin a server-bound PagerDuty PKCE flow."""
+    """Empty published-app OAuth request; setup details are provider-derived."""
 
-    model_config = ConfigDict(extra="forbid")
-
-    credential_name: str = "default"
-    region: Literal["us", "eu"] = "us"
-    subdomain: str = Field(min_length=1)
-    enabled_datasets: list[str]
-
-    @field_validator("credential_name", "subdomain")
-    @classmethod
-    def normalize_required_text(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("value must not be blank")
-        return normalized
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class PagerDutyAuthorizeResponse(BaseModel):
@@ -258,20 +269,9 @@ async def authorize_pagerduty(
     body: PagerDutyAuthorizeRequest,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    admin_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> PagerDutyAuthorizeResponse:
     """Create a one-time authorization context and return PagerDuty's URL."""
     await _require_canonical_incident_ingestion(session, org_id)
-    enabled_datasets = set(body.enabled_datasets)
-    unknown_datasets = enabled_datasets.difference(DATASET_SCOPES)
-    if unknown_datasets:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unknown PagerDuty datasets: {', '.join(sorted(unknown_datasets))}"
-            ),
-        )
-
     config = PagerDutyOAuthConfig.from_env()
     if config is None:
         raise HTTPException(
@@ -279,16 +279,11 @@ async def authorize_pagerduty(
             detail="PAGER_DUTY_CLIENT_ID is not configured",
         )
 
-    authorization_request = build_authorization_request(config, enabled_datasets)
+    authorization_request = build_authorization_request(config)
     await PagerDutyAuthorizationRequestStore(session).create(
         org_id=org_id,
         state=authorization_request.state,
-        credential_name=body.credential_name,
         code_verifier=authorization_request.code_verifier,
-        enabled_datasets=body.enabled_datasets,
-        region=body.region,
-        subdomain=body.subdomain,
-        initiated_by=admin_user.user_id or None,
     )
     return PagerDutyAuthorizeResponse(authorize_url=authorization_request.url)
 
@@ -302,7 +297,14 @@ async def complete_pagerduty_authorization(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyCallbackResponse:
-    """Consume a one-time state and persist the encrypted OAuth binding."""
+    """Consume a one-time state and persist the encrypted OAuth binding.
+
+    The feature gate is enforced only at ``authorize`` (the true setup-mutation
+    entry point). A flag flip between authorize and callback must not strand
+    an already-consumed one-time state or a single-use PagerDuty authorization
+    code;
+    the gate having passed at authorize time is sufficient.
+    """
     consumed = await PagerDutyAuthorizationRequestStore(session).consume(
         org_id=org_id,
         state=body.state,
@@ -326,13 +328,6 @@ async def complete_pagerduty_authorization(
             detail="PagerDuty OAuth configuration is unavailable",
         )
 
-    subdomain = consumed.subdomain
-    if subdomain is None:
-        raise HTTPException(
-            status_code=400,
-            detail="PagerDuty OAuth state is missing account context",
-        )
-
     try:
         tokens = await exchange_code(
             config,
@@ -354,10 +349,7 @@ async def complete_pagerduty_authorization(
             status_code=503,
             detail="PagerDuty OAuth service is unavailable",
         ) from exc
-    missing_scopes = missing_read_scopes(
-        set(consumed.enabled_datasets),
-        set(tokens.granted_scopes),
-    )
+    missing_scopes = READ_SCOPES.difference(tokens.granted_scopes)
     if missing_scopes:
         await _revoke_tokens(config, tokens)
         raise HTTPException(
@@ -367,35 +359,52 @@ async def complete_pagerduty_authorization(
                 f"{', '.join(sorted(missing_scopes))}"
             ),
         )
-
+    try:
+        identity = await _validate_oauth_identity(tokens)
+    except PagerDutyCredentialValidationError as exc:
+        await _revoke_tokens(config, tokens)
+        raise HTTPException(
+            status_code=400,
+            detail="PagerDuty OAuth account validation failed",
+        ) from exc
+    credential_name = _oauth_credential_name(identity.validated)
+    repository = PagerDutyOAuthCredentialRepository(
+        session,
+        org_id,
+        credential_name,
+    )
+    revocations = PagerDutyOAuthRevocationRepository(session, org_id, credential_name)
     binding_id = uuid.uuid4().hex
     try:
-        await PagerDutyOAuthCredentialRepository(
-            session,
-            org_id,
-            consumed.credential_name,
-        ).create_or_replace(
+        replacement = await repository.replace_and_capture(
             tokens,
             binding_id=binding_id,
-            account_id=subdomain,
-            account_display=subdomain,
+            account_id=identity.validated.account_id,
+            account_display=identity.validated.account_display,
         )
+        if replacement.replaced_tokens is not None:
+            await revocations.enqueue(
+                replacement.replaced_tokens.refresh_token
+                or replacement.replaced_tokens.access_token,
+                purpose="replacement",
+            )
         await IntegrationCredentialsService(session, org_id).set(
             provider="pagerduty",
-            name=consumed.credential_name,
+            name=credential_name,
             credentials={
                 "auth_mode": "oauth",
-                "oauth_credential_name": consumed.credential_name,
+                "oauth_credential_name": credential_name,
                 "oauth_binding_id": binding_id,
-                "subdomain": subdomain,
-                "region": consumed.region,
-                "account_id": subdomain,
+                "subdomain": identity.validated.subdomain,
+                "region": identity.region,
+                "account_id": identity.validated.account_id,
             },
             config={
                 "auth_mode": "oauth",
-                "region": consumed.region,
-                "subdomain": subdomain,
-                "account_id": subdomain,
+                "region": identity.region,
+                "subdomain": identity.validated.subdomain,
+                "account_id": identity.validated.account_id,
+                "account_display": identity.validated.account_display,
                 "granted_scopes": sorted(tokens.granted_scopes),
             },
             is_active=True,
@@ -405,14 +414,45 @@ async def complete_pagerduty_authorization(
         await session.rollback()
         await _revoke_tokens(config, tokens)
         raise
+    await revocations.retry_pending(config)
+    await session.commit()
 
     return PagerDutyCallbackResponse(
         connected=True,
-        credential_name=consumed.credential_name,
-        region=consumed.region,
-        subdomain=subdomain,
+        credential_name=credential_name,
+        region=identity.region,
+        subdomain=identity.validated.subdomain,
         granted_scopes=sorted(tokens.granted_scopes),
     )
+
+
+async def _validate_oauth_identity(tokens: OAuthTokens) -> ValidatedOAuthIdentity:
+    """Resolve the authenticated PagerDuty account through server-controlled regions."""
+    validation_error: PagerDutyCredentialValidationError | None = None
+    for region in _PAGERDUTY_REGIONS:
+        try:
+            validated = await validate_pagerduty_credential(
+                PagerDutyCredentials(
+                    source=CredentialSource.DATABASE,
+                    auth_mode="oauth",
+                    access_token=tokens.access_token,
+                    granted_scopes=tuple(tokens.granted_scopes),
+                    region=region,
+                ),
+                required_scopes=READ_SCOPES,
+            )
+        except PagerDutyCredentialValidationError as exc:
+            validation_error = exc
+        else:
+            return ValidatedOAuthIdentity(validated=validated, region=region)
+    if validation_error is not None:
+        raise validation_error
+    raise PagerDutyCredentialValidationError("missing_account_identity")
+
+
+def _oauth_credential_name(validated: ValidatedPagerDutyCredential) -> str:
+    """Use PagerDuty's account display unless it is absent."""
+    return validated.account_display or _OAUTH_CREDENTIAL_NAME
 
 
 async def _revoke_access_token(config: PagerDutyOAuthConfig, access_token: str) -> None:
@@ -426,6 +466,31 @@ async def _revoke_access_token(config: PagerDutyOAuthConfig, access_token: str) 
 async def _revoke_tokens(config: PagerDutyOAuthConfig, tokens: OAuthTokens) -> None:
     """Compensate a failed OAuth setup using the refresh token when available."""
     await _revoke_access_token(config, tokens.refresh_token or tokens.access_token)
+
+
+def _require_verified_subdomain(
+    validated: ValidatedPagerDutyCredential, requested_subdomain: str
+) -> None:
+    """Reject a caller-selected account label that differs from live PagerDuty proof."""
+    if validated.subdomain.casefold() != requested_subdomain.casefold():
+        raise HTTPException(
+            status_code=400,
+            detail="PagerDuty credential belongs to a different account",
+        )
+
+
+async def _validate_manual_pagerduty_credential(
+    candidate: PagerDutyCredentials,
+) -> ValidatedPagerDutyCredential:
+    try:
+        return await validate_pagerduty_credential(
+            candidate, required_scopes=READ_SCOPES
+        )
+    except PagerDutyCredentialValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="PagerDuty credential validation failed",
+        ) from exc
 
 
 async def _remove_oauth_binding(
@@ -541,21 +606,12 @@ async def disconnect_pagerduty(
 ) -> PagerDutyDisconnectResponse:
     """Revoke PagerDuty secrets and retain only an inactive descriptor tombstone."""
     credentials = IntegrationCredentialsService(session, org_id)
-    descriptor = await credentials.get("pagerduty", body.credential_name)
-    repository = PagerDutyOAuthCredentialRepository(
-        session, org_id, body.credential_name
-    )
-    config = PagerDutyOAuthConfig.from_env()
-    token_to_revoke = await _remove_oauth_binding(repository, config)
-    if descriptor is not None:
-        descriptor.is_active = False
-        descriptor.credentials_encrypted = None
-        await session.flush()
-    # Commit the local removal BEFORE remote revocation so a commit failure
-    # cannot leave an active-looking local binding whose remote token is dead.
-    await session.commit()
-    if config is not None and token_to_revoke is not None:
-        await _revoke_access_token(config, token_to_revoke)
+    disconnected = await credentials.disconnect_pagerduty(body.credential_name)
+    if disconnected is False:
+        raise HTTPException(
+            status_code=503,
+            detail="PagerDuty remote revocation is pending retry",
+        )
     return PagerDutyDisconnectResponse(
         disconnected=True,
         credential_name=body.credential_name,
@@ -572,7 +628,7 @@ async def preflight_pagerduty(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyPreflightResponse:
     """Report requested dataset scopes without imposing unrelated requirements."""
-    unknown_datasets = set(body.enabled_datasets).difference(DATASET_SCOPES)
+    unknown_datasets = set(body.enabled_datasets).difference(DATASET_OAUTH_FAMILIES)
     if unknown_datasets:
         raise HTTPException(
             status_code=400,
@@ -593,7 +649,7 @@ async def preflight_pagerduty(
     )
     datasets = []
     for dataset in body.enabled_datasets:
-        required_scopes = sorted(DATASET_SCOPES[dataset])
+        required_scopes = sorted(DATASET_SCOPES[DATASET_OAUTH_FAMILIES[dataset]])
         grantable = auth_mode in {"api_token", "client_credentials"}
         missing_scopes = (
             frozenset()
@@ -628,27 +684,45 @@ async def set_pagerduty_client_credentials(
 ) -> PagerDutyConnectionResponse:
     """Persist a non-OAuth PagerDuty client-credentials descriptor."""
     await _require_canonical_incident_ingestion(session, org_id)
+    credentials = IntegrationCredentialsService(session, org_id)
+    validated = await _validate_manual_pagerduty_credential(
+        PagerDutyCredentials(
+            source=CredentialSource.DATABASE,
+            credential_name=body.credential_name,
+            auth_mode="client_credentials",
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            subdomain=body.subdomain,
+            region=body.region,
+        ),
+    )
+    _require_verified_subdomain(validated, body.subdomain)
     config = PagerDutyOAuthConfig.from_env()
     token_to_revoke = await _remove_oauth_binding(
         PagerDutyOAuthCredentialRepository(session, org_id, body.credential_name),
         config,
     )
-    await IntegrationCredentialsService(session, org_id).set(
+    await credentials.set(
         provider="pagerduty",
         name=body.credential_name,
         credentials={
             "auth_mode": "client_credentials",
             "client_id": body.client_id,
             "client_secret": body.client_secret,
-            "subdomain": body.subdomain,
+            "subdomain": validated.subdomain,
             "region": body.region,
         },
         config={
             "auth_mode": "client_credentials",
             "region": body.region,
-            "subdomain": body.subdomain,
+            "subdomain": validated.subdomain,
+            "account_id": validated.account_id,
+            "account_display": validated.account_display,
         },
         is_active=True,
+    )
+    await credentials.update_test_result(
+        "pagerduty", success=True, name=body.credential_name
     )
     await session.commit()
     if config is not None and token_to_revoke is not None:
@@ -658,7 +732,7 @@ async def set_pagerduty_client_credentials(
         credential_name=body.credential_name,
         auth_mode="client_credentials",
         region=body.region,
-        subdomain=body.subdomain,
+        subdomain=validated.subdomain,
     )
 
 
@@ -673,26 +747,43 @@ async def set_pagerduty_api_token(
 ) -> PagerDutyConnectionResponse:
     """Persist a non-OAuth PagerDuty API-token descriptor."""
     await _require_canonical_incident_ingestion(session, org_id)
+    credentials = IntegrationCredentialsService(session, org_id)
+    validated = await _validate_manual_pagerduty_credential(
+        PagerDutyCredentials(
+            source=CredentialSource.DATABASE,
+            credential_name=body.credential_name,
+            auth_mode="api_token",
+            api_token=body.api_token,
+            subdomain=body.subdomain,
+            region=body.region,
+        ),
+    )
+    _require_verified_subdomain(validated, body.subdomain)
     config = PagerDutyOAuthConfig.from_env()
     token_to_revoke = await _remove_oauth_binding(
         PagerDutyOAuthCredentialRepository(session, org_id, body.credential_name),
         config,
     )
-    await IntegrationCredentialsService(session, org_id).set(
+    await credentials.set(
         provider="pagerduty",
         name=body.credential_name,
         credentials={
             "auth_mode": "api_token",
             "api_token": body.api_token,
-            "subdomain": body.subdomain,
+            "subdomain": validated.subdomain,
             "region": body.region,
         },
         config={
             "auth_mode": "api_token",
             "region": body.region,
-            "subdomain": body.subdomain,
+            "subdomain": validated.subdomain,
+            "account_id": validated.account_id,
+            "account_display": validated.account_display,
         },
         is_active=True,
+    )
+    await credentials.update_test_result(
+        "pagerduty", success=True, name=body.credential_name
     )
     await session.commit()
     if config is not None and token_to_revoke is not None:
@@ -702,5 +793,5 @@ async def set_pagerduty_api_token(
         credential_name=body.credential_name,
         auth_mode="api_token",
         region=body.region,
-        subdomain=body.subdomain,
+        subdomain=validated.subdomain,
     )

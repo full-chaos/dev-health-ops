@@ -290,6 +290,19 @@ def _maybe_dispatch_config(
                 config.id,
             )
             return False
+        if not trigger.dispatch_required:
+            session.commit()
+            logger.warning(
+                "sync_scheduler.pagerduty_sync_disabled",
+                extra={
+                    "config_id": str(config.id),
+                    "org_id": str(config.org_id),
+                    "job_run_id": trigger.job_run_id,
+                    "sync_run_id": trigger.sync_run_id,
+                    "reason": trigger.terminal_reason,
+                },
+            )
+            return False
     except Exception:
         logger.exception("Fan-out planner failed for config %s", config.id)
         session.rollback()

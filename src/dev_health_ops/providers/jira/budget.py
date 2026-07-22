@@ -21,6 +21,7 @@ _DEFAULT_BASE_URL = "https://atlassian.net"
 _CONFIDENCE_HIGH = "high"
 _CONFIDENCE_MEDIUM = "medium"
 _CONFIDENCE_LOW = "low"
+_MAX_JSM_INCIDENT_ADMISSION_CANDIDATES = 100_000
 
 
 class JiraBudgetEstimator:
@@ -72,6 +73,38 @@ def _dataset_estimates(
                 1,
                 _CONFIDENCE_HIGH,
                 "jira_metadata",
+            ),
+        )
+
+    if dataset_key == DatasetKey.INCIDENTS.value:
+        return (
+            _estimate(
+                bucket(BudgetDimension.REST_CORE),
+                _scaled_units(1, span_days),
+                _CONFIDENCE_MEDIUM,
+                "jira_metadata",
+                notes=(
+                    "JSM incident collection enumerates service desks before enhanced JQL search",
+                ),
+            ),
+            _estimate(
+                bucket(BudgetDimension.SEARCH),
+                _scaled_units(1, span_days),
+                _CONFIDENCE_MEDIUM,
+                "jira_jql",
+                notes=(
+                    "JSM incident collection fetches incident issues through enhanced JQL search",
+                ),
+            ),
+            _estimate(
+                bucket(BudgetDimension.REST_CORE),
+                _MAX_JSM_INCIDENT_ADMISSION_CANDIDATES,
+                _CONFIDENCE_LOW,
+                "jira_jsm_incident_admission",
+                notes=(
+                    "JSM native incident admission performs one bounded GET per JQL candidate; "
+                    "the client planner caps candidates at 100000 per sync unit",
+                ),
             ),
         )
 
@@ -305,6 +338,12 @@ JIRA_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         operation_markers=("/search/jql",),
     ),
     UsageRouteFamily(
+        "jira_jsm_incident_admission",
+        BudgetDimension.REST_CORE,
+        transport="rest",
+        operation_markers=("/jsm/incidents/",),
+    ),
+    UsageRouteFamily(
         "jira_comments",
         BudgetDimension.REST_CORE,
         transport="rest",
@@ -326,7 +365,13 @@ JIRA_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         "jira_metadata",
         BudgetDimension.REST_CORE,
         transport="rest",
-        operation_markers=("/project", "/agile/", "/board", "/sprint"),
+        operation_markers=(
+            "/project",
+            "/agile/",
+            "/board",
+            "/sprint",
+            "/servicedeskapi/servicedesk",
+        ),
     ),
     UsageRouteFamily("jira_gql_enrichment", BudgetDimension.GRAPHQL_COST),
 )

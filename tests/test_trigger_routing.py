@@ -296,6 +296,25 @@ def test_planner_managed_parent_with_zero_tagged_enabled_sources_syncs_nothing(
     assert req.source_ids == ()
 
 
+def test_planner_managed_pagerduty_parent_keeps_account_scope_unset(db_session):
+    integration_id = uuid.uuid4()
+    _integration(db_session, integration_id, provider="pagerduty")
+    config = _config(
+        db_session,
+        provider="pagerduty",
+        sync_targets=["operational"],
+        integration_id=integration_id,
+        planner_managed=True,
+    )
+
+    req = planner_request_for_config_if_routed(
+        db_session, config, triggered_by="manual"
+    )
+
+    assert req is not None
+    assert req.source_ids is None
+
+
 def test_non_planner_managed_parent_keeps_all_enabled_semantics(
     db_session,
 ):

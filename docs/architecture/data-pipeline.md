@@ -23,9 +23,9 @@ All paths below are relative to `src/dev_health_ops/`.
 | Provider | Module | Sync Targets |
 |----------|--------|--------------|
 | Local Git | `connectors/local.py` | git, blame |
-| GitHub | `connectors/github.py` | git, prs, cicd, deployments, incidents, work-items |
-| GitLab | `connectors/gitlab.py` | git, prs, cicd, deployments, incidents, work-items |
-| Jira | `connectors/jira.py` | work-items |
+| GitHub | `connectors/github.py` | git, prs, cicd, deployments, work-items |
+| GitLab | `connectors/gitlab.py` | git, prs, cicd, deployments, native incidents, work-items |
+| Jira | `connectors/jira.py` | work-items, JSM native incidents |
 | Synthetic | `connectors/synthetic.py` | fixtures generation |
 
 ### Rules

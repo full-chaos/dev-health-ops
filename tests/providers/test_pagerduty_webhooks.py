@@ -78,6 +78,20 @@ class Client:
         raise AssertionError(incident_id)
 
 
+class RejectingPreWriteReadStore(Store):
+    async def load_active_operational_entities(
+        self,
+        entity_type: type[CanonicalOperationalEntity],
+        *,
+        org_id: str,
+        provider: str,
+        provider_instance_id: str,
+        source_entity_type: str,
+        include_deleted: bool = False,
+    ) -> list[CanonicalOperationalEntity]:
+        raise AssertionError("webhook persistence must not read current rows")
+
+
 def _incident_event(occurred_at: datetime) -> PagerDutyV3Webhook:
     return PagerDutyV3Webhook.model_validate(
         {
@@ -97,7 +111,39 @@ def _incident_event(occurred_at: datetime) -> PagerDutyV3Webhook:
 
 
 @pytest.mark.anyio
-async def test_out_of_order_incident_does_not_regress_current_entity() -> None:
+async def test_webhook_persists_incident_without_prewrite_current_row_lookup() -> None:
+    # Given: a writer boundary that only accepts canonical ordered rows.
+    occurred_at = datetime(2026, 7, 17, tzinfo=UTC)
+    store = RejectingPreWriteReadStore(
+        OperationalIncident(
+            org_id="org-1",
+            provider="pagerduty",
+            provider_instance_id="acme",
+            source_entity_type="incident",
+            external_id="incident-1",
+            source_version_at=datetime(2026, 7, 18, tzinfo=UTC),
+        )
+    )
+
+    # When: a PagerDuty incident webhook is reconciled.
+    processed = await reconcile_pagerduty_webhook(
+        webhook=_incident_event(occurred_at),
+        org_id="org-1",
+        provider_instance_id="acme",
+        received_at=datetime(2026, 7, 19, tzinfo=UTC),
+        store=store,
+        client=Client(),
+    )
+
+    # Then: persistence receives an ordering-contract row without a SELECT dependency.
+    assert processed is True
+    assert len(store.incidents) == 1
+    assert store.incidents[0].ordering_contract == 2
+    assert store.incidents[0].source_revision > 0
+
+
+@pytest.mark.anyio
+async def test_out_of_order_incident_persists_as_a_stale_ordered_version() -> None:
     occurred_at = datetime(2026, 7, 17, tzinfo=UTC)
     store = Store(
         OperationalIncident(
@@ -120,8 +166,9 @@ async def test_out_of_order_incident_does_not_regress_current_entity() -> None:
         client=Client(),
     )
 
-    assert processed is False
-    assert store.incidents == []
+    assert processed is True
+    assert len(store.incidents) == 1
+    assert store.incidents[0].source_revision < store.current.source_revision
 
 
 @pytest.mark.anyio
@@ -164,7 +211,7 @@ async def test_service_delete_writes_versioned_tombstone() -> None:
 
 
 @pytest.mark.anyio
-async def test_stale_service_update_cannot_resurrect_a_tombstone() -> None:
+async def test_stale_service_update_persists_below_the_current_tombstone() -> None:
     store = Store(
         OperationalService(
             org_id="org-1",
@@ -198,5 +245,7 @@ async def test_stale_service_update_cannot_resurrect_a_tombstone() -> None:
         client=Client(),
     )
 
-    assert processed is False
-    assert store.services == []
+    assert processed is True
+    assert len(store.services) == 1
+    assert store.services[0].is_deleted is False
+    assert store.services[0].source_revision < store.current.source_revision

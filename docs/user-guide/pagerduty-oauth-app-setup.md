@@ -21,6 +21,12 @@ and incident that Dev Health should ingest.
 | Private automation without interactive consent | Client credentials | Register a private scoped PagerDuty app and enter its client ID, client secret, account subdomain, and region in Dev Health. |
 | Compatibility only | REST API token | Use the explicit API-token fallback only when OAuth is unavailable. |
 
+PagerDuty app visibility does not determine whether browser authorization is
+available. A private Scoped OAuth app may use PKCE user authorization within the
+PagerDuty account that created it, or use client credentials without interactive
+consent. Publishing is only relevant when distributing an eligible app to other
+PagerDuty accounts.
+
 The rest of this guide covers the recommended authorization-code flow.
 
 ## 1. Register the app in PagerDuty
@@ -51,13 +57,13 @@ app.
 
 | PagerDuty resource | OAuth scope | Dev Health datasets |
 | --- | --- | --- |
-| Incidents | `Incidents.read` | Incidents, alerts, timeline entries, and notes |
-| Services | `Services.read` | Services and business services |
-| Escalation policies | `Escalation_policies.read` | Escalation policies |
-| Schedules | `Schedules.read` | Schedules |
-| On-calls | `Oncalls.read` | On-call assignments |
-| Users | `Users.read` | Users and responder identity |
-| Teams | `Teams.read` | Teams |
+| Incidents | `incidents.read` | Incidents, alerts, timeline entries, and notes |
+| Services | `services.read` | Services and business services |
+| Escalation policies | `escalation_policies.read` | Escalation policies |
+| Schedules | `schedules.read` | Schedules |
+| On-calls | `oncalls.read` | On-call assignments |
+| Users | `users.read` | Users and responder identity |
+| Teams | `teams.read` | Teams |
 
 8. Register the app.
 9. Copy or download the **Client ID** and **Client Secret** immediately and store
@@ -105,17 +111,11 @@ Do not expose `PAGER_DUTY_SECRET` through browser-visible environment variables.
 
 1. Sign in to Dev Health as an organization admin.
 2. Open **Admin → Integrations → PagerDuty**.
-3. Leave the credential name as `default` unless the organization intentionally
-   connects multiple PagerDuty accounts.
-4. Enter the PagerDuty account subdomain. For
-   `https://acme.pagerduty.com`, enter `acme`.
-5. Select the account region, `us` or `eu`.
-6. Select the datasets to sync.
-7. Keep **OAuth** selected and choose **Connect PagerDuty**.
-8. In PagerDuty, review the read-only permissions and authorize the app.
-9. After Dev Health reports that the connection is complete, return to the
+3. Select **OAuth authorization**.
+4. In PagerDuty, review the read-only permissions and authorize the app.
+5. After Dev Health reports that the connection is complete, return to the
    PagerDuty integration page and load its status.
-10. Run permission preflight for every selected dataset.
+6. Run permission preflight for every selected dataset.
 
 The callback stores an encrypted access token, refresh token when provided,
 expiration, granted scopes, account identity, region, and subdomain. The normal
@@ -133,8 +133,8 @@ A healthy OAuth connection reports:
   "region": "us",
   "subdomain": "acme",
   "granted_scopes": [
-    "Incidents.read",
-    "Services.read"
+    "incidents.read",
+    "services.read"
   ],
   "has_refresh_token": true
 }

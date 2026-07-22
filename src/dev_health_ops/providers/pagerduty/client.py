@@ -130,13 +130,23 @@ class PagerDutyClient:
             yield page
 
     async def list_incident_notes(self, incident_id: str) -> list[Note]:
-        return await self._many(f"/incidents/{incident_id}/notes", "notes", Note, None)
+        return await self._many(
+            f"/incidents/{incident_id}/notes",
+            "notes",
+            Note,
+            None,
+            paginated=False,
+        )
 
     async def iter_incident_note_pages(
         self, incident_id: str
     ) -> AsyncIterator[PagerDutyPage[Note]]:
         async for page in self._iter_many(
-            f"/incidents/{incident_id}/notes", "notes", Note, None
+            f"/incidents/{incident_id}/notes",
+            "notes",
+            Note,
+            None,
+            paginated=False,
         ):
             yield page
 
@@ -175,19 +185,37 @@ class PagerDutyClient:
         return model.model_validate(response.json()[key])
 
     async def _many(
-        self, path: str, key: str, model: type[T], params: dict[str, str] | None
+        self,
+        path: str,
+        key: str,
+        model: type[T],
+        params: dict[str, str] | None,
+        *,
+        paginated: bool = True,
     ) -> list[T]:
         values: list[T] = []
-        async for page in self._iter_many(path, key, model, params):
+        async for page in self._iter_many(
+            path, key, model, params, paginated=paginated
+        ):
             values.extend(page)
         return values
 
     async def _iter_many(
-        self, path: str, key: str, model: type[T], params: dict[str, str] | None
+        self,
+        path: str,
+        key: str,
+        model: type[T],
+        params: dict[str, str] | None,
+        *,
+        paginated: bool = True,
     ) -> AsyncIterator[PagerDutyPage[T]]:
         offset = 0
         while True:
-            query = {**(params or {}), "limit": "100", "offset": str(offset)}
+            query = (
+                {**(params or {}), "limit": "100", "offset": str(offset)}
+                if paginated
+                else params
+            )
             response = await self._core.request(
                 "GET",
                 path,
@@ -201,8 +229,17 @@ class PagerDutyClient:
                     f"PagerDuty pagination envelope for {path} must be an object"
                 )
             raw_page = payload.get(key)
+            if not isinstance(raw_page, list):
+                raise PaginationException(
+                    f"PagerDuty pagination envelope for {path} is malformed"
+                )
+            if not paginated:
+                yield PagerDutyPage(
+                    [model.model_validate(value) for value in raw_page], more=False
+                )
+                return
             more = payload.get("more")
-            if not isinstance(raw_page, list) or not isinstance(more, bool):
+            if not isinstance(more, bool):
                 raise PaginationException(
                     f"PagerDuty pagination envelope for {path} is malformed"
                 )

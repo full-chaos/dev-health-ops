@@ -1,7 +1,7 @@
 """Add durable payload-free worker operator audit records.
 
-Revision ID: 0044
-Revises: 0043
+Revision ID: 0047
+Revises: 0046
 """
 
 from collections.abc import Sequence
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "0044"
-down_revision: str | None = "0043"
+revision: str = "0047"
+down_revision: str | None = "0046"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

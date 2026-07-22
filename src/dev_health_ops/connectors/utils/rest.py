@@ -521,6 +521,9 @@ class GitLabRESTClient(RESTClient):
         self,
         project_id: int,
         labels: str | None = None,
+        issue_type: str | None = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
         state: str | None = None,
         page: int = 1,
         per_page: int = 100,
@@ -535,6 +538,12 @@ class GitLabRESTClient(RESTClient):
         }
         if labels:
             params["labels"] = labels
+        if issue_type:
+            params["issue_type"] = issue_type
+        if updated_after:
+            params["updated_after"] = updated_after
+        if updated_before:
+            params["updated_before"] = updated_before
         if state:
             params["state"] = state
         if order_by:

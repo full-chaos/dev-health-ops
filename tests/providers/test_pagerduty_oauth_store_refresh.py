@@ -46,7 +46,7 @@ def tokens(
     *,
     refresh_token: str | None = "refresh",
     expires_at: datetime | None = None,
-    granted_scopes: frozenset[str] = frozenset({"Users.read"}),
+    granted_scopes: frozenset[str] = frozenset({"users.read"}),
 ) -> OAuthTokens:
     return OAuthTokens(
         access_token=access_token,
@@ -122,7 +122,7 @@ async def test_get_status_metadata_does_not_decrypt_tokens(
             updated_at=now,
             binding_id="binding",
             expires_at=now + timedelta(hours=1),
-            granted_scopes=["Users.read", "Incidents.read"],
+            granted_scopes=["users.read", "incidents.read"],
             has_refresh_token=True,
             account_id="account",
             account_display="Operations",
@@ -140,7 +140,7 @@ async def test_get_status_metadata_does_not_decrypt_tokens(
 
     assert metadata is not None
     assert metadata.binding_id == "binding"
-    assert metadata.granted_scopes == frozenset({"Incidents.read", "Users.read"})
+    assert metadata.granted_scopes == frozenset({"incidents.read", "users.read"})
     assert metadata.has_refresh_token is True
     assert metadata.account_id == "account"
     assert metadata.account_display == "Operations"
@@ -256,8 +256,8 @@ async def test_keyed_client_credentials_cache_does_not_cross_account_boundaries(
     )
     registry = ClientCredentialsTokenCacheRegistry()
     config = PagerDutyOAuthConfig("id", "secret", "uri")
-    request_one = ClientCredentialsRequest(frozenset({"Users.read"}), "one", "us")
-    request_two = ClientCredentialsRequest(frozenset({"Users.read"}), "two", "us")
+    request_one = ClientCredentialsRequest(frozenset({"users.read"}), "one", "us")
+    request_two = ClientCredentialsRequest(frozenset({"users.read"}), "two", "us")
     key_one: ClientCredentialsCacheKey = (
         "org-one",
         "primary",

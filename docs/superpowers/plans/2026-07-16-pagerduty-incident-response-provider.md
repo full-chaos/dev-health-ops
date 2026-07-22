@@ -168,6 +168,14 @@ No PagerDuty write/mutation methods are added to the client or UI in V1.
 
 ## PagerDuty REST API coverage
 
+The backend Task 2 contract names the V1 target `operational`, with exactly
+eleven datasets including `incidents`: `services`, `business-services`,
+`escalation-policies`, `schedules`, `on-calls`, `users`, `teams`, `incidents`,
+`incident-alerts`, `incident-log-entries`, and `incident-notes`. The eight
+scope families resolve to seven distinct scope strings. The explicit
+hyphenated `business-services` to `business_services` mapping is documented in
+the [backend contract](../../architecture/pagerduty-contract.md).
+
 Initial read coverage:
 
 ```text
@@ -234,17 +242,49 @@ service.deleted
 
 Webhook requirements:
 
+- accept only the exact authenticated official `pagey.ping` for candidate/ready
+  binding readiness; readiness is never inferred from a generic event;
 - verify `x-pagerduty-signature`;
+- read the trusted `x-webhook-subscription` binding before signature authority;
 - store secrets through the encrypted credential/configuration boundary;
 - validate event type and V3 payload shape;
-- deduplicate by provider instance plus PagerDuty event ID;
-- protect against replay with a bounded event-ID retention window;
+- use the route UUID as the sole binding lookup, then compare the trusted
+  subscription header with the persisted subscription before authorization;
+- deduplicate with trusted subscription, canonical binding UUID, and hashed,
+  bounded event identity;
+- store `pending:<raw-body-sha256>` then `accepted:<raw-body-sha256>`, retain
+  both states for exactly 30 days, retry pending claims, and use raw-body hash
+  fallback for blank event IDs;
+- return 202 with no enqueue for accepted same-body replay; audit and return
+  409 for same identity with a different body;
 - preserve `occurred_at`, received time, and processed time separately;
 - durable asynchronous processing;
 - targeted REST hydration when payloads omit required state;
 - out-of-order events must not regress a newer canonical state;
 - REST reconciliation repairs dropped events;
 - service deletion uses tombstone/disabled semantics.
+
+Binding create, rotate, activate, and readiness setup endpoints are
+feature-gated. The lifecycle is candidate → verified ping → ready → active.
+Revoke and disconnect cleanup are ungated. Revoked binding rows remain
+immutable nullable history and preserve `revoked_at`; candidate revoke and
+locks use deterministic UUID order. Credential detach nulls the credential
+before encrypted secret deletion. Organization deletion orders binding
+revoke/detach, OAuth and integration credential cleanup, and analytics cleanup.
+Migration 0044 is the head and adds an encrypted OAuth revocation outbox with
+retry metadata and locked delivery. OAuth reconnect commits the new grant
+before revoking the superseded grant, proves live account identity and full
+scopes, handles concurrent replacement, and revokes the new grant if rollback
+occurs. Client credentials validate every `READ_SCOPES` permission without
+mutating prior state on failure.
+
+Canonical source identity is derived only from the verified PagerDuty
+subdomain/account identity. Legacy dataset/source repair is idempotent and
+disables malformed targets. Malformed repair is a terminal zero-unit
+`SyncRunPlan` with persisted evidence and no enqueue/outbox work. Binding,
+source, integration, and credential locks follow that order through
+persistence; the async-native worker hydrates and revalidates the graph before
+the ClickHouse write, then retains a completed receipt for seven days.
 
 Do not support V1/V2 webhook extensions.
 
@@ -431,7 +471,9 @@ Use the existing Provider workflow:
 4. Select datasets and history window
 5. Discover PagerDuty services
 6. Map services to repositories
-7. Configure V3 webhooks or select REST-only mode
+7. Configure V3 webhooks or select REST-only mode; setup mutations are
+   feature-gated and use the opaque binding route
+   `POST /api/v1/webhooks/pagerduty/{binding_id}`
 8. Review and start initial sync
 9. Display REST sync/backfill health and webhook health separately
 
@@ -443,7 +485,7 @@ Required states:
 - optional feature unavailable by plan/permission;
 - unmapped services;
 - REST-only;
-- webhook pending/success/failure;
+- webhook candidate/ready/active/revoked pending/success/failure;
 - rate limited;
 - initial sync partial/failed/complete.
 

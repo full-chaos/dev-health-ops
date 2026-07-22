@@ -35,6 +35,14 @@ class OAuthStatusMetadata:
     version: int
 
 
+@dataclass(frozen=True, slots=True)
+class OAuthBindingReplacement:
+    """The committed new binding and encrypted predecessor captured under one lock."""
+
+    version: int
+    replaced_tokens: OAuthTokens | None
+
+
 class PagerDutyOAuthCredentialRepository:
     """Persists one encrypted PagerDuty OAuth payload per named organization credential."""
 
@@ -162,6 +170,50 @@ class PagerDutyOAuthCredentialRepository:
             credential.account_display = account_display
         await self._session.flush()
         return credential.version
+
+    async def replace_and_capture(
+        self,
+        tokens: OAuthTokens,
+        *,
+        binding_id: str,
+        account_id: str | None = None,
+        account_display: str | None = None,
+        now: datetime | None = None,
+    ) -> OAuthBindingReplacement:
+        """Replace a grant while retaining its predecessor for durable revocation."""
+        timestamp = now or datetime.now(UTC)
+        credential = await self._locked_credential()
+        previous = self._versioned_tokens(credential).tokens if credential else None
+        payload = encrypt_value(tokens.model_dump_json())
+        if credential is None:
+            credential = ProviderOAuthCredential(
+                org_id=self._org_id,
+                provider="pagerduty",
+                credential_name=self._credential_name,
+                token_encrypted=payload,
+                version=1,
+                created_at=timestamp,
+                updated_at=timestamp,
+                binding_id=binding_id,
+                expires_at=tokens.expires_at,
+                granted_scopes=sorted(tokens.granted_scopes),
+                has_refresh_token=bool(tokens.refresh_token),
+                account_id=account_id,
+                account_display=account_display,
+            )
+            self._session.add(credential)
+        else:
+            credential.token_encrypted = payload
+            credential.version += 1
+            credential.binding_id = binding_id
+            credential.updated_at = timestamp
+            credential.expires_at = tokens.expires_at
+            credential.granted_scopes = sorted(tokens.granted_scopes)
+            credential.has_refresh_token = bool(tokens.refresh_token)
+            credential.account_id = account_id
+            credential.account_display = account_display
+        await self._session.flush()
+        return OAuthBindingReplacement(credential.version, previous)
 
     async def get_status_metadata(self) -> OAuthStatusMetadata | None:
         """Read non-secret credential metadata without decrypting the token payload."""

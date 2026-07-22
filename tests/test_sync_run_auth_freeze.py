@@ -113,12 +113,15 @@ def _make_credential(
     name: str = "default",
     is_active: bool = True,
 ) -> IntegrationCredential:
+    config = (
+        {"account_id": "acme", "subdomain": "acme"} if provider == "pagerduty" else {}
+    )
     credential = IntegrationCredential(
         provider=provider,
         name=name,
         org_id=ORG_ID,
         credentials_encrypted=encrypt_value(json.dumps({"token": token})),
-        config={},
+        config=config,
         is_active=is_active,
     )
     session.add(credential)
@@ -217,7 +220,11 @@ def _plan(
     assert run is not None
     unit = (
         session.query(SyncRunUnit)
-        .filter(SyncRunUnit.sync_run_id == plan.sync_run_id)
+        .filter(
+            SyncRunUnit.sync_run_id == plan.sync_run_id,
+            SyncRunUnit.provider == integration.provider,
+            SyncRunUnit.dataset_key == dataset_key,
+        )
         .one()
     )
     return run, unit
@@ -251,6 +258,25 @@ def test_full_resync_bootstrap_ignores_persisted_watermark(db_session: Session) 
     assert context.resume_cursor is None
 
 
+def test_pagerduty_executable_plan_rejects_missing_credential(
+    db_session: Session,
+) -> None:
+    integration = _make_integration(db_session, provider="pagerduty")
+    _make_source(db_session, integration, external_id="acme")
+    _make_dataset(db_session, integration, dataset_key="incidents")
+
+    with pytest.raises(ValueError, match="organization-scoped credential"):
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="manual",
+            ),
+        )
+
+
 def test_bootstrap_loads_persisted_dataset_options(db_session: Session) -> None:
     credential = _make_credential(db_session, token="tok-A", provider="pagerduty")
     integration = _make_integration(
@@ -267,7 +293,11 @@ def test_bootstrap_loads_persisted_dataset_options(db_session: Session) -> None:
 
     context = SyncTaskBootstrap.load(db_session, str(unit.id))
 
-    assert context.dataset_options == {"enrichment_cap": 2, "enabled": False}
+    assert context.dataset_options == {
+        "enrichment_cap": 2,
+        "enabled": False,
+        "legacy_targets": ["operational"],
+    }
 
 
 def test_midrun_credential_repoint_does_not_change_stamped_run_auth(db_session):

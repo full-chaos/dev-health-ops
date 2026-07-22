@@ -13,10 +13,10 @@ The web snapshot was exported through now-closed review PR [full-chaos/dev-healt
 
 ## Current factual inventory
 
-- `dev-health-ops` rows: **508**
-- Current-site Markdown pages: **224**
+- `dev-health-ops` rows: **510**
+- Current-site Markdown pages: **226**
 - Prototype pages: **169**
-- Current pages classified as public today: **172**
+- Current pages classified as public today: **174**
 - Unclassified current sources: **0**
 
 ## Frozen Phase 1 reviewed disposition

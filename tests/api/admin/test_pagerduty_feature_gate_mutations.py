@@ -38,12 +38,7 @@ def _canonical_incident_feature_enabled(monkeypatch: pytest.MonkeyPatch) -> None
     (
         (
             "/api/v1/admin/integrations/pagerduty/authorize",
-            {
-                "credential_name": "operations",
-                "region": "us",
-                "subdomain": "acme",
-                "enabled_datasets": ["incidents"],
-            },
+            {},
         ),
         (
             "/api/v1/admin/integrations/pagerduty/client-credentials",
@@ -116,7 +111,7 @@ async def test_pagerduty_gate_fails_closed_when_evaluator_storage_fails(
     # When
     response = await client.post(
         "/api/v1/admin/integrations/pagerduty/authorize",
-        json={"subdomain": "acme", "enabled_datasets": ["incidents"]},
+        json={},
     )
 
     # Then

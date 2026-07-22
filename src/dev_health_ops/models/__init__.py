@@ -66,6 +66,7 @@ from .licensing import (
     OrgLicense,
 )
 from .org_invite import OrgInvite
+from .pagerduty_webhook_binding import PagerDutyWebhookBinding
 from .rate_limit_observations import ProviderRateLimitObservation
 from .refresh_token import RefreshToken
 from .refunds import Refund, RefundStatus
@@ -172,6 +173,7 @@ __all__ = [
     "OrgIPAllowlist",
     "OrgLicense",
     "OrgRetentionPolicy",
+    "PagerDutyWebhookBinding",
     "ProviderRateLimitObservation",
     "Refund",
     "RefundStatus",

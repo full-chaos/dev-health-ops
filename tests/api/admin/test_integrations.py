@@ -612,6 +612,61 @@ async def test_trigger_sync_org_scoped(client, seeded_state):
         ),
     ],
 )
+async def test_integration_trigger_returns_terminal_plan_without_enqueue(
+    client, path_suffix, payload
+):
+    # Given: the planner has terminalized a malformed PagerDuty configuration.
+    ac, _ = client
+    created = await _create_integration(ac)
+    terminal_plan = MagicMock(
+        sync_run_id=str(uuid.uuid4()),
+        total_units=0,
+        unit_ids=(),
+        dispatch_required=False,
+        terminal_reason="PagerDuty target was disabled",
+    )
+    dispatch = MagicMock()
+
+    # When: either direct integration trigger receives that plan.
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+            return_value=terminal_plan,
+        ),
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
+            dispatch,
+        ),
+    ):
+        response = await ac.post(
+            f"/api/v1/admin/integrations/{created['id']}/{path_suffix}", json=payload
+        )
+
+    # Then: callers receive persisted-run identity without a broker enqueue.
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "disabled",
+        "integration_id": created["id"],
+        "sync_run_id": terminal_plan.sync_run_id,
+        "total_units": 0,
+    }
+    dispatch.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path_suffix", "payload"),
+    [
+        ("sync", {}),
+        (
+            "backfill",
+            {
+                "since": "2024-01-01T00:00:00Z",
+                "before": "2024-02-01T00:00:00Z",
+            },
+        ),
+    ],
+)
 async def test_integration_triggers_translate_feature_denial_to_403(
     client,
     path_suffix,

@@ -5,6 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -43,6 +44,7 @@ from dev_health_ops.models.invoices import Invoice, InvoiceLineItem
 from dev_health_ops.models.ip_allowlist import OrgIPAllowlist
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.org_invite import OrgInvite
+from dev_health_ops.models.pagerduty_webhook_binding import PagerDutyWebhookBinding
 from dev_health_ops.models.refresh_token import RefreshToken
 from dev_health_ops.models.refunds import Refund
 from dev_health_ops.models.reports import ReportRun, SavedReport
@@ -51,6 +53,9 @@ from dev_health_ops.models.settings import (
     GithubAppInstallation,
     IntegrationCredential,
     JobRun,
+    PagerDutyOAuthAuthorizationRequest,
+    ProviderOAuthCredential,
+    ProviderOAuthRevocation,
     ScheduledJob,
     Setting,
     SyncConfiguration,
@@ -106,6 +111,10 @@ _TABLES = tables_of(
     OrgIPAllowlist,
     OrgFeatureOverride,
     OrgLicense,
+    PagerDutyWebhookBinding,
+    PagerDutyOAuthAuthorizationRequest,
+    ProviderOAuthCredential,
+    ProviderOAuthRevocation,
 )
 
 _INTEGRATION_ORG_MODELS: tuple[Any, ...] = (
@@ -565,6 +574,81 @@ async def test_org_deletion_credentials_removal(session_maker):
 
 
 @pytest.mark.asyncio
+async def test_org_deletion_removes_pagerduty_binding_and_oauth_records(
+    session_maker, monkeypatch: pytest.MonkeyPatch
+):
+    from dev_health_ops.core.encryption import encrypt_value
+    from dev_health_ops.providers.pagerduty.oauth import (
+        OAuthTokens,
+        PagerDutyOAuthConfig,
+    )
+
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "pagerduty-oauth-test-encryption-key")
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.org_deletion.PagerDutyOAuthConfig.from_env",
+        classmethod(lambda _: PagerDutyOAuthConfig("id", "secret", "uri")),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.org_deletion.revoke_token", AsyncMock()
+    )
+    async with session_maker() as session:
+        org1_id, _org2_id = await _seed_org_pair(session)
+        credential = (
+            await session.execute(
+                select(IntegrationCredential).where(
+                    IntegrationCredential.org_id == org1_id
+                )
+            )
+        ).scalar_one()
+        source = (
+            await session.execute(
+                select(IntegrationSource).where(IntegrationSource.org_id == org1_id)
+            )
+        ).scalar_one()
+        session.add_all(
+            [
+                PagerDutyWebhookBinding(
+                    org_id=uuid.UUID(org1_id),
+                    integration_source_id=source.id,
+                    credential_id=credential.id,
+                    provider_subscription_id="subscription-1",
+                    signing_secret_encrypted="ciphertext",
+                    signing_secret_key_version="v1",
+                    status="active",
+                ),
+                ProviderOAuthCredential(
+                    org_id=org1_id,
+                    provider="pagerduty",
+                    credential_name="operations",
+                    token_encrypted=encrypt_value(
+                        OAuthTokens(
+                            access_token="access-token",
+                            expires_at=datetime.now(timezone.utc),
+                        ).model_dump_json()
+                    ),
+                    version=1,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                ),
+                PagerDutyOAuthAuthorizationRequest(
+                    state_hash="state-hash",
+                    org_id=org1_id,
+                    code_verifier_encrypted="ciphertext",
+                    created_at=datetime.now(timezone.utc),
+                    expires_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        await session.flush()
+
+        result = await OrganizationDeletionService(session).delete(org1_id)
+
+        assert result.postgres.tables["pagerduty_webhook_bindings"] == 1
+        assert result.postgres.tables["provider_oauth_credentials"] == 1
+        assert result.postgres.tables["pagerduty_oauth_authorization_requests"] == 1
+
+
+@pytest.mark.asyncio
 async def test_org_deletion_clickhouse_dry_run_counts_without_delete(session_maker):
     async with session_maker() as session:
         org1_id, _org2_id = await _seed_org_pair(session)
@@ -711,6 +795,7 @@ def test_postgres_targets_do_not_overlap_clickhouse_tables():
     # cannot silently turn this guard into a no-op false pass.
     assert ch_tables, "ClickHouse migration table catalog must not be empty"
     assert "teams" in ch_tables, "`teams` must be in the ClickHouse purge catalog"
+    assert "incidents" not in ch_tables
     overlap = pg_tables & ch_tables
     assert not overlap, (
         "Postgres deletion targets must not reference ClickHouse tables "

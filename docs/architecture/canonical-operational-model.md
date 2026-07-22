@@ -4,8 +4,9 @@
 
 The canonical operational model is the ClickHouse-only contract for provider-neutral
 services, incidents, alerts, on-call data, and their evidence. It is the durable seam
-between provider ingestion and operational metrics. It does not fetch provider APIs,
-normalize provider payloads, or replace legacy producers.
+between provider ingestion and operational metrics. It does not fetch provider APIs or
+normalize provider payloads. All supported ClickHouse incident producers and consumers use
+this contract; migration 068 removes the old repository-scoped `incidents` table.
 
 ## Entity contract
 
@@ -127,8 +128,10 @@ hydration. Tombstone, active, source, and domain-time filters run only after win
 selection in both modes, so an older active row cannot reappear behind a tombstone.
 Resolved windows are for MTTR and DORA. Started windows are for incident creation
 analysis. Overlap windows are for lifecycle and active-incident analysis.
-`load_operational_incidents()` remains a resolved-window compatibility alias. These reads
-intentionally coexist with legacy `incidents` and `atlassian_ops_*` readers.
+`load_operational_incidents()` remains a resolved-window compatibility alias. Runtime
+metrics, work-graph display resolution, and completeness audits project repository scope
+only through active `ServiceRepositoryMapping` rows. They never union the legacy
+`incidents` table.
 
 ## Ordering-contract rollout and recovery
 
@@ -156,31 +159,77 @@ full resync for every provider/source represented in the canonical tables before
 cutover. Record that resync with the migration evidence. Rollback uses the same bridge
 binary in contract-2 mode; never lower the insert constraint or restart an original
 contract-1 binary.
-## Producer migration rollout
 
-CHAOS-2963 adds an opt-in, additive producer seam for GitHub and GitLab
-issue-derived incidents and for historical Atlassian Ops rows. Set
-`OPERATIONAL_INCIDENT_DUAL_WRITE=true` to write canonical rows alongside the
-legacy `incidents` write; this flag never suppresses the legacy write.
+## Producer cutover and legacy retirement
 
-`providers.operational_migration` maps GitHub and GitLab records with
-`source_entity_type="issue"`, a repository-derived `OperationalService`, and a
-`ServiceRepositoryMapping`. The incident has no `repo_id`; repository linkage is
-the explicit mapping edge. Atlassian Ops backfill maps its legacy incidents,
+GitLab native incidents are selected with the provider-native
+`issue_type=incident` filter and persist canonical operational batches directly.
+Labels are metadata and never classify ordinary GitLab issues as incidents. GitHub
+does not expose a native incident source, so its former issue-label proxy is not a
+supported dataset; GitHub issues remain work items. PagerDuty, JSM, External Push,
+the repository ingest API, and ClickHouse fixtures also write canonical operational
+batches directly. There is no incident dual-write feature flag or supported
+ClickHouse legacy writer.
+
+Repository-associated sources produce a repository-derived `OperationalService`
+and `ServiceRepositoryMapping`. The incident has no `repo_id`; repository linkage
+is the explicit mapping edge. Atlassian Ops backfill maps its legacy incidents,
 alerts, and schedules with `provider="atlassian"` and their native source entity
 types. Deterministic canonical ids make repeated source snapshots idempotent.
 
-The migration does not change incident-correlation, Sankey, DORA, MTTR, or
-deployment-edge consumers. Those consumers continue reading legacy tables until
-their explicit cutover gate. Historical migration runs through
-`dev-health-ops backfill operational --org <org-id>` and joins `incidents` to
-`repos` on `repo_id` before mapping GitHub/GitLab issue incidents. The CLI accepts
-explicit provider-instance ids because the legacy incident row does not carry
-instance provenance. Atlassian Ops incidents, alerts, and schedules are read from
-their legacy tables and mapped through the same canonical writer.
+`dev-health-ops backfill operational --org <org-id>` migrates only Atlassian Ops
+incidents, alerts, and schedules from their provider-specific legacy tables through
+the canonical writer. Deterministic canonical ids and post-write identity checks make
+repeated runs idempotent and fail closed if the canonical write is incomplete.
 
-Historical GitHub/GitLab rows retain status and lifecycle timestamps, but legacy
-`incidents` has no labels, issue URL, number, title, or description; those canonical
-fields are null or empty after backfill. Enabled live dual-write supplies that richer
-issue metadata going forward. The backfill's deterministic canonical ids make
-repeated runs idempotent under the centralized current-row selector.
+Migration 068 removes the former ClickHouse `incidents` table. Fresh installations
+do not create it, and current runtime code has no reader, writer, or backfill path for
+it. GitHub issues are work items; GitLab native incidents and every other supported
+incident producer write `operational_incidents` directly.
+
+## Jira Service Management incident source contract
+
+Jira Service Management (JSM) incidents are an `OperationalIncident` source, not a
+general-purpose alert source. A JSM issue can remain a Jira `WorkItem` for ordinary work-item
+analytics and, separately, be admitted as an `OperationalIncident` only after the native JSM
+Incident API accepts it. These are two persisted semantics, not two names for one record.
+
+The implementation draft uses this bounded candidate query, with the values substituted for
+each sync window:
+
+```text
+project in (<allowed_service_project_keys>) AND "Ticket category" = Incidents AND updated >= "<window_start>" AND updated < "<window_end>" ORDER BY updated ASC, key ASC
+```
+
+`<allowed_service_project_keys>` is the configured JSM allowlist intersected with the
+service-project keys returned by JSM service desk enumeration. A configured key absent from
+that enumeration fails the sync closed. `<window_start>` is inclusive and `<window_end>` is
+exclusive. The query must never become a
+broad text search, a project-only query, an unbounded category query, or an issue-key-prefix
+heuristic. The candidate query is not admission evidence.
+
+For every candidate, admission is a GET to the fixed Atlassian host and native Incident path:
+
+```text
+GET https://api.atlassian.com/jsm/incidents/cloudId/<cloud_id>/v1/incident/<issue_id>
+```
+
+Only HTTP 200 admits the candidate as an `OperationalIncident`. HTTP 404 is a negative
+admission result. It is not a tombstone and must not delete, suppress, or rewrite a prior
+canonical row. Any other status, transport failure, malformed response, cloud ID mismatch,
+or authentication error fails closed for the sync. The provider must not substitute the Jira
+issue GET, a second corroborating endpoint, or an alert lookup for native admission.
+
+The canonical capability outcome is **BLOCKED** because no tenant or live API proof is
+available. The implementation draft may be **GO** for code and unit contracts, but merge and
+release readiness remain **BLOCKED** until a bounded tenant sync proves both a 200 admission
+and a 404 negative admission, with request and response evidence. This document records the
+draft contract and blocker, not a live-proof result.
+
+JSM incidents are distinct from JSM Ops Alerts and Opsgenie alerts. Alerts are not ingested by
+this slice, are not corroborating evidence, and are never converted into incidents. See the
+[JSM provider contract](../providers/jira-service-management.md) for the complete matrix,
+lifecycle, and live-proof rules.
+
+[jsm-service-desks]: https://developer.atlassian.com/cloud/jira/service-desk/rest/api-group-servicedesk/#api-rest-servicedeskapi-servicedesk-get
+[jira-jql-search]: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/

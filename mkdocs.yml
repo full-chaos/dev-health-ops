@@ -56,6 +56,8 @@ nav:
       - Understand provider limits: providers/rate-limit-policy.md
   - Reference & history:
       - Architecture overview: architecture.md
+      - Canonical operational model: architecture/canonical-operational-model.md
+      - Jira Service Management provider contract: providers/jira-service-management.md
       - API field mapping: api/view-mapping.md
       - Canonical metrics: canonical-metrics.md
       - Investment taxonomy: product/investment-taxonomy.md

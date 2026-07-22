@@ -17,6 +17,7 @@ from dev_health_ops.models import (
     SyncConfiguration,
 )
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
+from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Organization
 
 FEATURE_KEY = "canonical_incident_ingestion"
@@ -96,12 +97,22 @@ def create_canonical_graph(
     *,
     with_config: bool = False,
 ) -> CanonicalGraph:
+    credential = IntegrationCredential(
+        provider="pagerduty",
+        name="default",
+        org_id=str(org_id),
+        config={"account_id": "acme", "subdomain": "acme"},
+        is_active=True,
+    )
+    state.session.add(credential)
+    state.session.flush()
     integration = Integration(
         org_id=str(org_id),
         provider="pagerduty",
         name="PagerDuty",
         config={},
         is_active=True,
+        credential_id=credential.id,
     )
     state.session.add(integration)
     state.session.flush()

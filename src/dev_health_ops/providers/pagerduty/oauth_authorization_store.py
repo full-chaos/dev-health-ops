@@ -24,11 +24,7 @@ def _utc_time(now: datetime | None) -> datetime:
 class ConsumedAuthorizationRequest:
     """Authorization context available only after a successful one-time consume."""
 
-    credential_name: str
     code_verifier: str
-    enabled_datasets: list[str]
-    region: str
-    subdomain: str | None
 
 
 class PagerDutyAuthorizationRequestStore:
@@ -42,12 +38,7 @@ class PagerDutyAuthorizationRequestStore:
         *,
         org_id: str,
         state: str,
-        credential_name: str,
         code_verifier: str,
-        enabled_datasets: list[str],
-        region: str,
-        subdomain: str | None = None,
-        initiated_by: str | None = None,
         ttl: timedelta = timedelta(minutes=15),
         now: datetime | None = None,
     ) -> None:
@@ -63,12 +54,7 @@ class PagerDutyAuthorizationRequestStore:
             PagerDutyOAuthAuthorizationRequest(
                 state_hash=hashlib.sha256(state.encode()).hexdigest(),
                 org_id=org_id,
-                credential_name=credential_name,
                 code_verifier_encrypted=encrypt_value(code_verifier),
-                enabled_datasets=enabled_datasets,
-                region=region,
-                subdomain=subdomain,
-                initiated_by=initiated_by,
                 created_at=created_at,
                 expires_at=created_at + ttl,
             )
@@ -102,11 +88,7 @@ class PagerDutyAuthorizationRequestStore:
             return None
 
         return ConsumedAuthorizationRequest(
-            credential_name=authorization_request.credential_name,
             code_verifier=decrypt_value(authorization_request.code_verifier_encrypted),
-            enabled_datasets=authorization_request.enabled_datasets,
-            region=authorization_request.region,
-            subdomain=authorization_request.subdomain,
         )
 
     async def purge_expired(self, *, now: datetime | None = None) -> int:

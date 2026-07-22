@@ -30,7 +30,6 @@ from dev_health_ops.models.git import (
     GitFile,
     GitPullRequest,
     GitPullRequestReview,
-    Incident,
     Repo,
 )
 from dev_health_ops.models.operational import (
@@ -64,6 +63,18 @@ from .utils import _parse_date_value, _parse_datetime_value
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=CanonicalOperationalEntity)
+
+
+def _canonical_operational_datetime(value: Any) -> Any:
+    """Restore ClickHouse DateTime64 values to the canonical UTC shape."""
+    if not isinstance(value, datetime):
+        return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.replace(fold=0)
+
 
 if TYPE_CHECKING:
     from dev_health_ops.models.atlassian_ops import (
@@ -1295,58 +1306,6 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_incidents(
-        self, incidents: Sequence[Incident | dict[str, Any]]
-    ) -> None:
-        if not incidents:
-            return
-        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: list[dict[str, Any]] = []
-        for item in incidents:
-            if isinstance(item, dict):
-                rows.append(
-                    {
-                        "repo_id": self._normalize_uuid(item.get("repo_id")),
-                        "incident_id": str(item.get("incident_id")),
-                        "status": item.get("status"),
-                        "started_at": self._normalize_datetime(item.get("started_at")),
-                        "resolved_at": self._normalize_datetime(
-                            item.get("resolved_at")
-                        ),
-                        "last_synced": self._normalize_datetime(
-                            item.get("last_synced") or synced_at_default
-                        ),
-                    }
-                )
-            else:
-                rows.append(
-                    {
-                        "repo_id": self._normalize_uuid(item.repo_id),
-                        "incident_id": str(item.incident_id),
-                        "status": getattr(item, "status", None),
-                        "started_at": self._normalize_datetime(item.started_at),
-                        "resolved_at": self._normalize_datetime(
-                            getattr(item, "resolved_at", None)
-                        ),
-                        "last_synced": self._normalize_datetime(
-                            getattr(item, "last_synced", None) or synced_at_default
-                        ),
-                    }
-                )
-
-        await self._insert_rows(
-            "incidents",
-            [
-                "repo_id",
-                "incident_id",
-                "status",
-                "started_at",
-                "resolved_at",
-                "last_synced",
-            ],
-            rows,
-        )
-
     async def insert_security_alerts(self, alerts: list) -> None:
         if not alerts:
             return
@@ -2412,7 +2371,9 @@ class ClickHouseStore:
     ) -> T:
         values = dict(zip(columns, row, strict=True))
         constructor = {
-            item.name: values[item.name] for item in fields(entity_type) if item.init
+            item.name: _canonical_operational_datetime(values[item.name])
+            for item in fields(entity_type)
+            if item.init
         }
         stored_ordering_fields = ORDERING_FIELD_NAMES.intersection(values)
         if stored_ordering_fields and stored_ordering_fields != ORDERING_FIELD_NAMES:

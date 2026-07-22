@@ -6,6 +6,7 @@ import pytest
 from dev_health_ops.audit.completeness import (
     build_git_commits_query,
     build_git_pull_requests_query,
+    build_incidents_query,
     build_transitions_query,
     build_work_items_query,
     compile_report,
@@ -26,6 +27,19 @@ def test_query_builders_include_tables(builder, expected_table):
     query = builder()
     assert expected_table in query
     assert "countIf" in query
+
+
+def test_incident_query_uses_canonical_service_mapping_projection(monkeypatch):
+    monkeypatch.setenv("OPERATIONAL_ORDERING_CONTRACT", "2")
+
+    query = build_incidents_query()
+
+    assert "operational_incidents" in query
+    assert "operational_service_repository_mappings" in query
+    assert "FROM incidents" not in query
+    assert "incident.service_id = mapping.service_id" in query
+    assert "is_active = 1" in query
+    assert query.count("WHERE org_id = {org_id:String}") >= 2
 
 
 def test_infer_repo_source_prefers_settings():

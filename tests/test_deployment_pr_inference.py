@@ -1,9 +1,8 @@
-"""CHAOS-2368/CHAOS-2369: deployment→PR inference + configurable incident labels.
+"""Deployment-to-PR inference and native GitLab incident selection.
 
 Deployment syncs previously ignored the deployed commit SHA, leaving
 ``deployments.pull_request_number`` NULL everywhere — so the PR↔deployment
-work-graph edges (#886) had no native source data. Incident syncs hardcoded
-the exact label ``incident`` with no diagnosability.
+work-graph edges (#886) had no native source data.
 """
 
 from __future__ import annotations
@@ -20,11 +19,7 @@ import pytest
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.connectors.utils.rest import GitLabRESTClient
-from dev_health_ops.processors.base_git import resolve_incident_labels
-from dev_health_ops.processors.github import (
-    _fetch_github_deployments_async,
-    _fetch_github_incidents_async,
-)
+from dev_health_ops.processors.github import _fetch_github_deployments_async
 from dev_health_ops.processors.gitlab import (
     _fetch_gitlab_incidents_sync,
     _resolve_gitlab_deployment_mr_from_items,
@@ -32,23 +27,6 @@ from dev_health_ops.processors.gitlab import (
 
 REPO_ID = uuid.uuid4()
 NOW = datetime(2026, 6, 12, tzinfo=timezone.utc)
-
-
-class _IssueClient:
-    def __init__(self, issues_by_label):
-        self.issues_by_label = issues_by_label
-        self.calls = []
-        self.close_called = False
-
-    async def iter_issues(self, owner, repo, *, state, labels, max_issues):
-        self.calls.append((owner, repo, state, labels, max_issues))
-        return self.issues_by_label[labels[0]][:max_issues]
-
-    def drain_usage_observations(self):
-        return []
-
-    async def close(self):
-        self.close_called = True
 
 
 class _NoWaitGate:
@@ -144,74 +122,24 @@ class TestGitLabDeploymentMRInference:
         assert merged_at is not None
 
 
-class TestIncidentLabels:
-    def test_default_label(self, monkeypatch) -> None:
-        monkeypatch.delenv("INCIDENT_LABELS", raising=False)
-        assert resolve_incident_labels() == ["incident"]
-
-    def test_env_override_and_whitespace(self, monkeypatch) -> None:
-        monkeypatch.setenv("INCIDENT_LABELS", " incident , outage ,sev1,")
-        assert resolve_incident_labels() == ["incident", "outage", "sev1"]
-
-    def test_empty_env_falls_back(self, monkeypatch) -> None:
-        monkeypatch.setenv("INCIDENT_LABELS", " , ")
-        assert resolve_incident_labels() == ["incident"]
-
-    @pytest.mark.asyncio
-    async def test_github_queries_each_label_and_dedupes(self, monkeypatch) -> None:
-        from dev_health_ops.processors import github
-
-        monkeypatch.setenv("INCIDENT_LABELS", "incident,outage")
-        shared = Mock(issue_id="1", state="closed", created_at=NOW, closed_at=NOW)
-        outage_only = Mock(issue_id="2", state="open", created_at=NOW, closed_at=None)
-        client = _IssueClient({"incident": [shared], "outage": [shared, outage_only]})
-        monkeypatch.setattr(
-            github, "_github_code_client_from_connector", lambda _connector: client
-        )
-
-        incidents = await _fetch_github_incidents_async(
-            Mock(), "octo", "repo", REPO_ID, 10, None
-        )
-
-        assert {i.incident_id for i in incidents} == {"1", "2"}
-        assert client.calls == [
-            ("octo", "repo", "all", ["incident"], 10),
-            ("octo", "repo", "all", ["outage"], 10),
-        ]
-        assert client.close_called is True
-
-    @pytest.mark.asyncio
-    async def test_github_filters_prs_carrying_incident_label(
-        self, monkeypatch
-    ) -> None:
-        from dev_health_ops.processors import github
-
-        monkeypatch.delenv("INCIDENT_LABELS", raising=False)
-        real_issue = Mock(issue_id="1", state="closed", created_at=NOW, closed_at=NOW)
-        client = _IssueClient({"incident": [real_issue]})
-        monkeypatch.setattr(
-            github, "_github_code_client_from_connector", lambda _connector: client
-        )
-
-        incidents = await _fetch_github_incidents_async(
-            Mock(), "octo", "repo", REPO_ID, 10, None
-        )
-
-        assert [i.incident_id for i in incidents] == ["1"]
-
-    def test_gitlab_queries_each_label_and_dedupes(self, monkeypatch) -> None:
+class TestGitLabNativeIncidents:
+    def test_gitlab_queries_native_incidents(self, monkeypatch) -> None:
         """rest_client is spec'd to the real GitLabRESTClient so a missing
         method (the original silent-no-op bug) fails loudly here."""
-        monkeypatch.setenv("INCIDENT_LABELS", "incident,outage")
-        shared = {"id": 1, "state": "closed", "created_at": "2026-06-12T00:00:00Z"}
-        outage_only = {"id": 2, "state": "opened", "created_at": "2026-06-12T01:00:00Z"}
+        incident = {
+            "id": 1,
+            "issue_type": "incident",
+            "state": "closed",
+            "created_at": "2026-06-12T00:00:00Z",
+        }
         connector = Mock()
         connector.rest_client = Mock(spec=GitLabRESTClient)
-        connector.rest_client.get_issues.side_effect = [[shared], [shared, outage_only]]
+        connector.rest_client.get_issues.return_value = [incident]
 
         incidents = _fetch_gitlab_incidents_sync(connector, 123, REPO_ID, 10, None)
 
-        assert {i.incident_id for i in incidents} == {"1", "2"}
-        assert connector.rest_client.get_issues.call_count == 2
-        first_call = connector.rest_client.get_issues.call_args_list[0]
-        assert first_call.kwargs["labels"] == "incident"
+        assert [i.incident_id for i in incidents] == ["1"]
+        connector.rest_client.get_issues.assert_called_once()
+        call = connector.rest_client.get_issues.call_args
+        assert call.kwargs["issue_type"] == "incident"
+        assert "labels" not in call.kwargs

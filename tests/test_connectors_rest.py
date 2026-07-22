@@ -195,6 +195,38 @@ def test_gitlab_get_merge_requests_passes_optional_ordering(monkeypatch):
     )
 
 
+def test_gitlab_get_issues_passes_native_incident_filters(monkeypatch):
+    client = GitLabRESTClient()
+    get_list = MagicMock(return_value=[])
+    monkeypatch.setattr(client, "get_list", get_list)
+
+    client.get_issues(
+        22,
+        issue_type="incident",
+        updated_after="2026-07-01T00:00:00Z",
+        updated_before="2026-07-02T00:00:00Z",
+        state="all",
+        page=2,
+        per_page=50,
+        order_by="updated_at",
+        sort="desc",
+    )
+
+    get_list.assert_called_once_with(
+        "projects/22/issues",
+        params={
+            "page": 2,
+            "per_page": 50,
+            "issue_type": "incident",
+            "updated_after": "2026-07-01T00:00:00Z",
+            "updated_before": "2026-07-02T00:00:00Z",
+            "state": "all",
+            "order_by": "updated_at",
+            "sort": "desc",
+        },
+    )
+
+
 def test_gitlab_get_merge_request_approvals_hits_endpoint(monkeypatch):
     client = GitLabRESTClient()
     get = MagicMock(return_value={"approved_by": []})

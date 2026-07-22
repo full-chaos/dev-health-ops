@@ -204,7 +204,6 @@ _PROVIDER_SUPPORTED_DATASETS: dict[str, frozenset[str]] = {
             DatasetKey.CICD.value,
             DatasetKey.TESTS.value,
             DatasetKey.DEPLOYMENTS.value,
-            DatasetKey.INCIDENTS.value,
             DatasetKey.SECURITY.value,
             DatasetKey.WORK_ITEMS.value,
             DatasetKey.WORK_ITEM_LABELS.value,

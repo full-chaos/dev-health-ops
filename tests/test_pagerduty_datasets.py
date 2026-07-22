@@ -48,15 +48,16 @@ def test_pagerduty_registry_dataset_keys_normalize_to_oauth_families() -> None:
 
 
 def test_operational_target_is_pagerduty_specific() -> None:
-    # Given: providers that historically schedule native incident ingestion.
+    # Given: providers with and without native incident ingestion.
 
     # When: their legacy targets are listed beside PagerDuty's REST target.
     github_targets = supported_legacy_targets("github")
     gitlab_targets = supported_legacy_targets("gitlab")
     pagerduty_targets = supported_legacy_targets("pagerduty")
 
-    # Then: PagerDuty alone expands its all-or-nothing operational collection.
-    assert "incidents" in github_targets
+    # Then: GitHub's removed label proxy is not advertised as a native incident
+    # dataset, while GitLab retains its native issue_type=incident target.
+    assert "incidents" not in github_targets
     assert "incidents" in gitlab_targets
     assert "operational" not in github_targets
     assert "operational" not in gitlab_targets

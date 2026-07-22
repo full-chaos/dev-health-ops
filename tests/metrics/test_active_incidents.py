@@ -26,7 +26,7 @@ def test_active_incidents_query_projects_mapped_canonical_rows_with_org_scope(
         repo_filter="",
     )
 
-    assert "FROM incidents FINAL" in query
+    assert "FROM incidents FINAL" not in query
     assert "FROM operational_incidents" in query
     assert "operational_service_repository_mappings" in query
     assert (
@@ -47,24 +47,19 @@ def test_active_incidents_query_projects_mapped_canonical_rows_with_org_scope(
     assert "incident.id AS incident_id" in query
 
 
-def test_active_incidents_query_does_not_project_canonical_rows_without_org_scope() -> (
-    None
-):
-    query = active_incidents_query(
-        window=IncidentWindow.STARTED,
-        org_id="",
-        repo_filter="",
-    )
-
-    assert "FROM incidents FINAL" in query
-    assert "operational_incidents" not in query
-    assert "operational_service_repository_mappings" not in query
+def test_active_incidents_query_rejects_missing_org_scope() -> None:
+    with pytest.raises(
+        ValueError, match="canonical incident projection requires org_id"
+    ):
+        active_incidents_query(
+            window=IncidentWindow.STARTED,
+            org_id="",
+            repo_filter="",
+        )
 
 
-def test_deduplicate_active_incidents_preserves_legacy_row_for_shared_identity() -> (
-    None
-):
-    legacy = {
+def test_deduplicate_active_incidents_preserves_first_row_for_shared_identity() -> None:
+    first = {
         "repo_id": REPO_ID,
         "incident_id": "shared-incident",
         "status": "resolved",
@@ -72,7 +67,7 @@ def test_deduplicate_active_incidents_preserves_legacy_row_for_shared_identity()
         "resolved_at": START,
         "last_synced": START,
     }
-    canonical = {
+    duplicate = {
         "repo_id": REPO_ID,
         "incident_id": "shared-incident",
         "status": "resolved",
@@ -81,9 +76,9 @@ def test_deduplicate_active_incidents_preserves_legacy_row_for_shared_identity()
         "last_synced": START,
     }
 
-    rows = deduplicate_active_incidents([legacy, canonical])
+    rows = deduplicate_active_incidents([first, duplicate])
 
-    assert rows == [legacy]
+    assert rows == [first]
 
 
 def test_deduplicate_active_incidents_keeps_mapped_repositories_separate() -> None:

@@ -2,13 +2,14 @@
 
 ## Install
 
-If you are using the project as a package:
+Use the published package:
 
 ```bash
 pip install dev-health-ops
+dev-hops --help
 ```
 
-If you are working from source:
+For source development:
 
 ```bash
 pip install -r requirements.txt
@@ -21,80 +22,110 @@ pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
-## Quick start
+## Start the local data services
+
+Dev Health uses PostgreSQL for semantic/application data and ClickHouse for
+engineering evidence and analytics. Valkey backs queues and runtime caches;
+PgBouncer is the transaction-mode PostgreSQL pooler used by the API.
+
+```bash
+docker compose up -d postgres clickhouse valkey pgbouncer
+
+export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
+export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
+
+dev-hops migrate postgres
+dev-hops migrate clickhouse
+```
+
+| Database | Purpose | Environment variable |
+| --- | --- | --- |
+| PostgreSQL | Users, organizations, settings, credentials | `POSTGRES_URI` |
+| ClickHouse | Commits, PRs/MRs, work items, metrics, graph data | `CLICKHOUSE_URI` |
+
+See [Database Architecture](architecture/database-architecture.md) for the full
+storage boundary.
+
+## Common development workflows
 
 ### Sync a local repository
 
 ```bash
-dev-hops sync git --provider local --db "<DB_CONN>" --repo-path /path/to/repo
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops sync git --provider local --repo-path /path/to/repo
 ```
 
 ### Sync work items from GitHub
 
 ```bash
-dev-hops sync work-items --provider github --auth "$GITHUB_TOKEN" -s "org/*" --db "<DB_CONN>"
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops sync work-items \
+  --provider github \
+  --auth "$GITHUB_TOKEN" \
+  -s "org/*"
 ```
 
 ### Compute daily metrics
 
 ```bash
-dev-hops metrics daily --db "<DB_CONN>"
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops metrics daily
 ```
 
-### Bring up Grafana dashboards
+### Run the API
 
 ```bash
-docker compose -f compose.yml up -d
+POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops api --reload
 ```
 
-## Database Architecture
+OpenAPI is available at `http://localhost:8000/docs`; GraphQL is served at
+`/graphql` for `dev-health-web`.
 
-Dev Health Ops uses a **dual-database architecture**:
+## Test Context Fabric locally
 
-| Database | Purpose | Env Var |
-|----------|---------|---------|
-| **PostgreSQL** | Users, orgs, settings, credentials | `POSTGRES_URI` |
-| **ClickHouse** | Commits, PRs, work items, metrics | `CLICKHOUSE_URI` |
+Context Fabric/ACR is a separate private service and is not part of the default
+Ops Compose project. With sibling `dev-health-{ops,acr,web}` checkouts, start the
+isolated TLS fixture from this repository:
 
 ```bash
-# Start databases
-docker compose up -d postgres clickhouse redis
-
-# Set environment
-export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
-export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
-
-# Run migrations (both databases)
-dev-hops migrate postgres
-dev-hops migrate clickhouse
+bash scripts/context-fabric-local.sh
 ```
 
-See [Database Architecture](architecture/database-architecture.md) for details.
+The launcher builds this Ops checkout, provisions a temporary organization and
+`agent_context_runtime` entitlement, seeds deterministic evidence, verifies the
+ACR API and MCP sidecar, and keeps the service alive for OpenCode, Claude Code,
+Codex, or Cursor testing. It prints a `client.env` path; source that path in the
+shell that launches the client.
+
+See [Test Context Fabric locally](context-fabric-local.md) for path overrides,
+client setup, security boundaries, and cleanup behavior.
 
 ## Environment notes
 
 CLI flags override environment variables.
 
 | Variable | Status | Purpose |
-|----------|--------|---------|
-| `POSTGRES_URI` | Required | Semantic data (users, settings, credentials) |
-| `CLICKHOUSE_URI` | Required | Analytics data (sync + metrics) |
+| --- | --- | --- |
+| `POSTGRES_URI` | Required for semantic/application operations | Users, organizations, settings, credentials |
+| `CLICKHOUSE_URI` | Required for analytics operations | Sync, evidence, metrics, and work graph data |
 | `DATABASE_URI` / `DATABASE_URL` | Deprecated fallback | Legacy resolver paths; keep only for compatibility |
-| `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, `LINEAR_API_KEY` | Optional | Provider auth for sync commands |
+| `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, `LINEAR_API_KEY` | Optional | Provider authentication |
 | `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM_ADDRESS` | Optional (`console` default) | Email delivery via [Resend](./email-setup.md) |
-| `APP_BASE_URL`, `JWT_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` | Optional in dev, required in production | API callback/auth/encryption settings |
-| `AUTH_AUTO_CREATE_ORG_ON_REGISTER` | Temporary compatibility flag (default `true`) | Set `false` for the first-run onboarding model where registration creates an identity only and workspace creation happens through `/api/v1/auth/onboard` |
+| `APP_BASE_URL`, `JWT_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` | Optional in development, required in production | API callback/auth/encryption settings |
+| `AUTH_AUTO_CREATE_ORG_ON_REGISTER` | Temporary compatibility flag (`true` by default) | Set `false` for identity-first onboarding through `/api/v1/auth/onboard` |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Required for billing | Stripe API and webhook verification |
 | `STRIPE_PRICE_ID_TEAM`, `STRIPE_PRICE_ID_ENTERPRISE` | Required for billing | Stripe Price IDs for checkout |
-| `TRIAL_DAYS` | Optional (default: 14) | Free trial duration for Team tier |
+| `TRIAL_DAYS` | Optional (`14` by default) | Team-tier free trial duration |
 
-## Billing & Free Trial Setup (SaaS mode)
+## Billing and free-trial setup
 
-To enable Stripe billing and the free trial flow:
+To enable Stripe billing locally:
 
-1. Get Stripe test keys from [Stripe Dashboard](https://dashboard.stripe.com/test/apikeys)
-2. Create two Products/Prices in Stripe (Team monthly, Enterprise monthly)
-3. Add to your `.env`:
+1. Get Stripe test keys from the Stripe test dashboard.
+2. Create Team and Enterprise products/prices.
+3. Add the values to `.env`:
 
 ```bash
 STRIPE_SECRET_KEY="sk_test_..."
@@ -104,48 +135,44 @@ APP_BASE_URL="http://localhost:3000"
 TRIAL_DAYS=14
 ```
 
-4. Forward webhooks locally:
+4. Forward the required events:
 
 ```bash
 stripe listen --forward-to http://127.0.0.1:8000/api/v1/billing/webhooks/stripe \
   --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,customer.subscription.trial_will_end,invoice.paid,invoice.payment_failed
 ```
 
-5. Set the webhook secret from `stripe listen` output:
+5. Set the webhook secret returned by the Stripe CLI:
 
 ```bash
 STRIPE_WEBHOOK_SECRET="whsec_..."
 ```
 
-6. Restart the stack: `docker compose up -d`
+6. Restart the relevant services.
 
-See [Stripe Billing Runbook](ops/stripe-billing-runbook.md) for the full operational guide including trial flow, abuse prevention, and email configuration.
+See [Stripe Billing Runbook](ops/stripe-billing-runbook.md) for trial behavior,
+abuse prevention, and email configuration.
 
-## Demo data (synthetic, end-to-end)
+## Demo data
 
-Generate a complete demo dataset: teams, git facts, work items, and derived metrics
-(including issue type, investment, hotspots, IC, CI/CD, and complexity).
+Generate a complete synthetic dataset with teams, git facts, work items, derived
+metrics, and work graph data:
 
 ```bash
 dev-hops fixtures generate \
-  --db "<DB_CONN>" \
+  --sink "clickhouse://ch:ch@localhost:8123/default" \
   --days 30 \
-  --with-metrics
+  --with-metrics \
+  --with-work-graph
 ```
 
-Notes:
-- `dev-hops` is available after `pip install dev-health-ops` or `pip install -e .`.
-- Synthetic teams are inserted automatically.
-- `--with-metrics` writes the same derived tables as `metrics daily`, plus
-  complexity snapshots and hotspot risk metrics for demo dashboards. It also
-  seeds AI workflow intelligence (`ai_attribution`, `ai_workflow_runs`,
-  `ai_workflow_artifact_edges`, `ai_workflow_issue_edges`) so the AI impact,
-  governance, and policy-event rollups populate end-to-end.
+The fixture generator inserts synthetic teams and writes the same derived
+families used by daily metrics, including complexity, hotspot, investment, and
+AI workflow evidence.
 
 ## Performance tuning
 
 Fixture generation uses batched inserts with concurrency for large datasets.
-Tune these environment variables when you need faster loads:
 
-- `BATCH_SIZE` (default: 1000) controls insert batch size.
-- `MAX_WORKERS` (default: 4) controls concurrent insert workers (non-SQL backends).
+- `BATCH_SIZE` (default `1000`) controls batch size.
+- `MAX_WORKERS` (default `4`) controls concurrent workers for non-SQL backends.

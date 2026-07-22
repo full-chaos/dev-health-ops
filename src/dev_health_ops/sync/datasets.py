@@ -160,6 +160,10 @@ _NO_WATERMARK_DATASETS = frozenset(
     }
 )
 
+_PAGERDUTY_LEGACY_TARGET_OVERRIDES: dict[str, frozenset[str]] = {
+    DatasetKey.INCIDENTS.value: frozenset({"operational"}),
+}
+
 _LEGACY_TARGET_ORDER = (
     "git",
     "prs",
@@ -277,7 +281,13 @@ def _build_spec(provider: str, dataset_key: str) -> DatasetSpec:
     return DatasetSpec(
         provider=provider,
         dataset_key=dataset_key,
-        legacy_targets=_LEGACY_TARGETS_BY_DATASET[dataset_key],
+        legacy_targets=(
+            _PAGERDUTY_LEGACY_TARGET_OVERRIDES.get(
+                dataset_key, _LEGACY_TARGETS_BY_DATASET[dataset_key]
+            )
+            if provider == "pagerduty"
+            else _LEGACY_TARGETS_BY_DATASET[dataset_key]
+        ),
         processor_flags=dict(_PROCESSOR_FLAGS_BY_DATASET.get(dataset_key, {})),
         default_cost_class=_cost_class(dataset_key),
         watermark_behavior=_watermark_behavior(dataset_key),

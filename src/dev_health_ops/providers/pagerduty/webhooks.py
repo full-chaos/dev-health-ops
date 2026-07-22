@@ -35,17 +35,6 @@ from dev_health_ops.providers.pagerduty.normalize import PagerDutyNormalizer
 
 
 class PagerDutyWebhookStore(Protocol):
-    async def load_active_operational_entities(
-        self,
-        entity_type: type[CanonicalOperationalEntity],
-        *,
-        org_id: str,
-        provider: str,
-        provider_instance_id: str,
-        source_entity_type: str,
-        include_deleted: bool = False,
-    ) -> list[CanonicalOperationalEntity]: ...
-
     async def insert_operational_services(
         self, values: list[OperationalService]
     ) -> None: ...
@@ -112,28 +101,9 @@ def _versioned(
     )
 
 
-async def _is_newer(
+async def _insert_entity(
     store: PagerDutyWebhookStore, entity: CanonicalOperationalEntity
 ) -> bool:
-    active = await store.load_active_operational_entities(
-        type(entity),
-        org_id=entity.org_id,
-        provider=entity.provider,
-        provider_instance_id=entity.provider_instance_id,
-        source_entity_type=entity.source_entity_type,
-        include_deleted=True,
-    )
-    for current in active:
-        if current.external_id == entity.external_id:
-            return entity.source_version_at > current.source_version_at
-    return True
-
-
-async def _insert_if_newer(
-    store: PagerDutyWebhookStore, entity: CanonicalOperationalEntity
-) -> bool:
-    if not await _is_newer(store, entity):
-        return False
     match entity:
         case OperationalService():
             await store.insert_operational_services([entity])
@@ -163,37 +133,7 @@ async def _tombstone_service(
     store: PagerDutyWebhookStore,
     service: OperationalService,
 ) -> bool:
-    active = await store.load_active_operational_entities(
-        OperationalService,
-        org_id=service.org_id,
-        provider=service.provider,
-        provider_instance_id=service.provider_instance_id,
-        source_entity_type="service",
-        include_deleted=True,
-    )
-    matching = next(
-        (row for row in active if row.external_id == service.external_id), None
-    )
-    match matching:
-        case OperationalService() if (
-            service.source_version_at <= matching.source_version_at
-        ):
-            return False
-        case OperationalService():
-            tombstone = replace(
-                matching,
-                source_version_at=service.source_version_at,
-                observed_at=service.observed_at,
-                last_synced=service.last_synced,
-                is_deleted=True,
-                deleted_at=service.source_version_at,
-            )
-        case None:
-            tombstone = replace(
-                service, is_deleted=True, deleted_at=service.source_version_at
-            )
-        case unexpected:
-            raise TypeError(f"Operational service lookup returned {type(unexpected)!r}")
+    tombstone = replace(service, is_deleted=True, deleted_at=service.source_version_at)
     await store.insert_operational_services([tombstone])
     return True
 
@@ -217,7 +157,7 @@ async def reconcile_pagerduty_webhook(
                 occurred_at=occurred_at,
                 received_at=received_at,
             )
-            return await _insert_if_newer(store, service_entity)
+            return await _insert_entity(store, service_entity)
         case PagerDutyEventType.SERVICE_DELETED:
             service_entity = _versioned(
                 normalizer.service(Service.model_validate(webhook.event.data)),
@@ -317,6 +257,9 @@ async def reconcile_pagerduty_webhook(
                             )
                         )
                 case PagerDutyEventType.STATUS_UPDATE_PUBLISHED:
+                    status_update_event_type = (
+                        PagerDutyEventType.STATUS_UPDATE_PUBLISHED
+                    )
                     update_payload = webhook.event.data
                     if update_payload:
                         entities.append(
@@ -330,7 +273,7 @@ async def reconcile_pagerduty_webhook(
                                     occurred_at=occurred_at,
                                     received_at=received_at,
                                 ),
-                                event_type=webhook.event.event_type.value,
+                                event_type=status_update_event_type.value,
                                 occurred_at=occurred_at,
                             )
                         )
@@ -338,7 +281,7 @@ async def reconcile_pagerduty_webhook(
                     pass
             inserted = False
             for entity in entities:
-                inserted = await _insert_if_newer(store, entity) or inserted
+                inserted = await _insert_entity(store, entity) or inserted
             return inserted
         case unreachable:
             raise AssertionError(f"Unhandled PagerDuty event type: {unreachable!r}")

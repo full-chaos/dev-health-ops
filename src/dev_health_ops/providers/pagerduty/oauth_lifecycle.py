@@ -150,6 +150,10 @@ async def get_client_credentials_access_token(
                 subdomain=request.subdomain,
                 region=request.region,
             )
+        if request.scopes.difference(cache.tokens.granted_scopes):
+            raise OAuthRotationConflictError(
+                "PagerDuty client credentials are missing required read scopes"
+            )
         return cache.tokens.access_token
 
 

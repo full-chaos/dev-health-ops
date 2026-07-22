@@ -103,24 +103,49 @@ def test_scheduler_terminalizes_plan_when_feature_flips_before_enqueue(
     result = sync_scheduler._maybe_dispatch_config(state.session, graph.config, NOW)
 
     run = state.session.query(SyncRun).one()
-    unit = state.session.query(SyncRunUnit).one()
+    units = (
+        state.session.query(SyncRunUnit)
+        .filter_by(sync_run_id=run.id)
+        .order_by(SyncRunUnit.dataset_key)
+        .all()
+    )
     discovery = state.session.query(SyncRunReferenceDiscovery).one()
     job_run = state.session.query(JobRun).one()
     outboxes = state.session.query(SyncDispatchOutbox).all()
     outbox_by_kind = {row.kind: row for row in outboxes}
     state.session.refresh(graph.config)
 
+    # Verify run-level terminal denial
     assert result is False
     dispatch.apply_async.assert_not_called()
     finalize.apply_async.assert_not_called()
     assert run.status == SyncRunStatus.FAILED.value
     assert run.result == {"error_category": "feature_disabled"}
     assert run.completed_at is not None
-    assert unit.status == SyncRunUnitStatus.FAILED.value
-    assert unit.result == {"error_category": "feature_disabled"}
-    assert unit.available_at is None
-    assert unit.lease_owner is None
-    assert unit.lease_expires_at is None
+
+    # Verify all emitted units are terminalized with denial semantics
+    expected_datasets = {
+        "incidents",
+        "services",
+        "business-services",
+        "escalation-policies",
+        "schedules",
+        "on-calls",
+        "users",
+        "teams",
+        "incident-alerts",
+        "incident-log-entries",
+        "incident-notes",
+    }
+    assert run.total_units == 11, f"Expected 11 units, got {run.total_units}"
+    assert len(units) == 11, f"Expected 11 SyncRunUnit rows, got {len(units)}"
+    assert {unit.dataset_key for unit in units} == expected_datasets
+    assert {unit.status for unit in units} == {SyncRunUnitStatus.FAILED.value}
+    assert all(unit.result == {"error_category": "feature_disabled"} for unit in units)
+    assert all(unit.available_at is None for unit in units)
+    assert all(unit.lease_owner is None for unit in units)
+    assert all(unit.lease_expires_at is None for unit in units)
+    assert all(unit.attempts == 0 for unit in units)
     assert discovery.status == "failed"
     assert discovery.result == {"error_category": "feature_disabled"}
     assert discovery.completed_at is not None

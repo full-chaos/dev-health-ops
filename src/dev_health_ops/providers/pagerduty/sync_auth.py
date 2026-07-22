@@ -9,7 +9,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
-from dev_health_ops.db import get_postgres_session_sync
+from dev_health_ops.db import get_postgres_session, get_postgres_session_sync
 from dev_health_ops.models.settings import ProviderOAuthCredential
 from dev_health_ops.providers.pagerduty.oauth import (
     READ_SCOPES,
@@ -24,6 +24,7 @@ from dev_health_ops.providers.pagerduty.oauth_lifecycle import (
 )
 from dev_health_ops.providers.pagerduty.oauth_storage import (
     OAuthRotationConflictError,
+    PagerDutyOAuthCredentialRepository,
     VersionedOAuthTokens,
 )
 
@@ -130,6 +131,72 @@ class _SyncSessionOAuthStore:
         )
 
 
+def _require_operational_read_scopes(granted_scopes: frozenset[str]) -> None:
+    if READ_SCOPES.difference(granted_scopes):
+        raise ValueError("PagerDuty OAuth credential is missing required read scopes")
+
+
+async def hydrate_pagerduty_credentials_async(
+    mapping: dict[str, Any], *, org_id: str
+) -> dict[str, Any]:
+    """Hydrate a PagerDuty descriptor without nesting an async runtime."""
+    result = mapping.copy()
+    auth_mode = mapping.get("auth_mode")
+    match auth_mode:
+        case "oauth":
+            config = PagerDutyOAuthConfig.from_env()
+            if config is None:
+                raise ValueError("PagerDuty OAuth app is not configured")
+            credential_name = mapping["oauth_credential_name"]
+            binding_id = mapping["oauth_binding_id"]
+            async with get_postgres_session() as session:
+                repository = PagerDutyOAuthCredentialRepository(
+                    session,
+                    org_id,
+                    credential_name,
+                    expected_binding_id=binding_id,
+                )
+                versioned = await repository.get()
+                if versioned is None:
+                    raise OAuthRotationConflictError(
+                        "PagerDuty OAuth credential was not found"
+                    )
+                _require_operational_read_scopes(versioned.tokens.granted_scopes)
+                result["access_token"] = await get_valid_access_token(
+                    repository, config
+                )
+        case "client_credentials":
+            config = PagerDutyOAuthConfig(
+                client_id=mapping["client_id"],
+                client_secret=mapping["client_secret"],
+                redirect_uri="",
+            )
+            request = ClientCredentialsRequest(
+                READ_SCOPES,
+                mapping["subdomain"],
+                mapping["region"],
+            )
+            key = (
+                org_id,
+                "client_credentials",
+                READ_SCOPES,
+                request.subdomain,
+                request.region,
+                hashlib.sha256(
+                    f"{config.client_id}:{config.client_secret}".encode()
+                ).hexdigest(),
+            )
+            result["access_token"] = await get_client_credentials_access_token_keyed(
+                _REGISTRY,
+                key,
+                config,
+                request,
+            )
+        case _:
+            pass
+    return result
+
+
 def hydrate_pagerduty_credentials(
     mapping: dict[str, Any], *, org_id: str
 ) -> dict[str, Any]:
@@ -142,14 +209,21 @@ def hydrate_pagerduty_credentials(
             raise ValueError("PagerDuty OAuth app is not configured")
         credential_name = mapping["oauth_credential_name"]
         with get_postgres_session_sync() as session:
+            store = _SyncSessionOAuthStore(
+                session,
+                org_id,
+                credential_name,
+                mapping["oauth_binding_id"],
+            )
+            versioned = anyio.run(store.get)
+            if versioned is None:
+                raise OAuthRotationConflictError(
+                    "PagerDuty OAuth credential was not found"
+                )
+            _require_operational_read_scopes(versioned.tokens.granted_scopes)
             result["access_token"] = anyio.run(
                 get_valid_access_token,
-                _SyncSessionOAuthStore(
-                    session,
-                    org_id,
-                    credential_name,
-                    mapping["oauth_binding_id"],
-                ),
+                store,
                 config,
             )
         return result

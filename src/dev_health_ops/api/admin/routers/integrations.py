@@ -453,6 +453,13 @@ async def trigger_integration_sync(
     # (a separate DB session) can see it; otherwise a fast worker returns
     # "missing" and the run is stranded as planned.
     await session.commit()
+    if not plan.dispatch_required:
+        return SyncTriggerResponse(
+            status="disabled",
+            integration_id=integration_id,
+            sync_run_id=plan.sync_run_id,
+            total_units=plan.total_units,
+        )
 
     try:
         getattr(dispatch_sync_run, "apply_async")(
@@ -518,6 +525,13 @@ async def trigger_integration_backfill(
 
     # Commit the planned backfill run before dispatch (see /sync rationale).
     await session.commit()
+    if not plan.dispatch_required:
+        return SyncTriggerResponse(
+            status="disabled",
+            integration_id=integration_id,
+            sync_run_id=plan.sync_run_id,
+            total_units=plan.total_units,
+        )
 
     try:
         getattr(dispatch_sync_run, "apply_async")(

@@ -9,9 +9,11 @@ import pytest
 
 from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth, OAuthBearerAuth
 from dev_health_ops.providers.pagerduty.oauth import (
+    READ_SCOPES,
     OAuthCallbackValidationError,
     OAuthTokens,
     PagerDutyOAuthConfig,
+    build_authorization_request,
     client_credentials,
     validate_callback,
 )
@@ -231,6 +233,24 @@ def test_callback_rejects_provider_error_and_missing_code() -> None:
     assert validate_callback(code="abc") == "abc"
 
 
+def test_authorization_request_always_requests_full_operational_read_scope_bundle() -> (
+    None
+):
+    # Given: a setup flow that initially selected only one dataset.
+    config = PagerDutyOAuthConfig("id", "secret", "uri")
+
+    # When: the OAuth authorization URL is created.
+    request = build_authorization_request(config, {"incidents"})
+
+    # Then: every canonical read scope is required before a connection can exist.
+    from urllib.parse import parse_qs, urlparse
+
+    granted_request = frozenset(
+        parse_qs(urlparse(request.url).query)["scope"][0].split()
+    )
+    assert granted_request == READ_SCOPES
+
+
 @pytest.mark.asyncio
 async def test_client_credentials_cache_renews_once_and_qualifies_account_scope(
     monkeypatch: pytest.MonkeyPatch,
@@ -244,6 +264,7 @@ async def test_client_credentials_cache_renews_once_and_qualifies_account_scope(
         return OAuthTokens(
             access_token="machine",
             expires_at=datetime.now(UTC) + timedelta(hours=1),
+            granted_scopes=frozenset({"Users.read"}),
         )
 
     monkeypatch.setattr(

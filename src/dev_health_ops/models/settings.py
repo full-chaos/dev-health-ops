@@ -235,6 +235,29 @@ class ProviderOAuthCredential(Base):
     account_display: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ProviderOAuthRevocation(Base):
+    """Encrypted remote OAuth revocation work retained until PagerDuty accepts it."""
+
+    __tablename__ = "provider_oauth_revocations"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    credential_name: Mapped[str] = mapped_column(Text, nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    token_key_version: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class PagerDutyOAuthAuthorizationRequest(Base):
     """Server-side PKCE authorization-request state for PagerDuty OAuth setup.
 

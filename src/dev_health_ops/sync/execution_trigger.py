@@ -19,7 +19,7 @@ from dev_health_ops.sync.canonical_incident_gate import (
     sync_targets_require_canonical_incident_feature,
 )
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
-from dev_health_ops.sync.planner import SyncRunPlan, plan_sync_run
+from dev_health_ops.sync.planner import plan_sync_run
 from dev_health_ops.sync.trigger_routing import planner_request_for_config_if_routed
 
 
@@ -28,6 +28,8 @@ class SyncExecutionTriggerResult:
     sync_run_id: str
     job_run_id: str
     total_units: int
+    dispatch_required: bool = True
+    terminal_reason: str = ""
 
 
 def ensure_pending_sync_job_run(
@@ -159,10 +161,25 @@ def create_sync_execution_trigger(
         triggered_by,
         initial_job_result,
     )
-    plan: SyncRunPlan = plan_sync_run(session, request)
-    merge_job_run_result(session, job_run_id, {"sync_run_id": plan.sync_run_id})
+    plan = plan_sync_run(session, request)
+    if not plan.dispatch_required:
+        merge_job_run_result(
+            session,
+            job_run_id,
+            {
+                "sync_run_id": plan.sync_run_id,
+                "terminal_status": "pagerduty_sync_disabled",
+                "reason": plan.terminal_reason,
+                "total_units": plan.total_units,
+            },
+        )
+        mark_job_run_failed(session, job_run_id, plan.terminal_reason)
+    else:
+        merge_job_run_result(session, job_run_id, {"sync_run_id": plan.sync_run_id})
     return SyncExecutionTriggerResult(
         sync_run_id=plan.sync_run_id,
         job_run_id=job_run_id,
         total_units=plan.total_units,
+        dispatch_required=plan.dispatch_required,
+        terminal_reason=plan.terminal_reason,
     )

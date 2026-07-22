@@ -1,0 +1,74 @@
+# Opt-in Dev Health Ops integration values for the private ACR Helm chart.
+# The launcher supplies image.reference and config.entitlement.url at render or
+# apply time. Every credential below is an existing Secret reference; this file
+# intentionally contains no bearer token, DSN, password, key, or certificate.
+
+fullnameOverride: context-fabric
+
+image:
+  reference: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: acr-registry-pull
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+
+config:
+  environment: development
+  logLevel: info
+  requireBackingStores: true
+  postgresConnectionKind: direct
+  enableEpisodeWriteback: false
+  entitlement:
+    url: ""
+    timeout: 5s
+  postgresCaBundle:
+    existingSecret: acr-postgres-ca
+    key: ca.crt
+  clickhouseCaBundle:
+    existingSecret: acr-clickhouse-ca
+    key: ca.crt
+  entitlementCaBundle:
+    existingSecret: acr-entitlement-ca
+    key: ca.crt
+
+credentials:
+  runtime:
+    existingSecret: acr-runtime-credentials
+    postgresDsnKey: ACR_POSTGRES_DSN
+    clickhouseDsnKey: ACR_CLICKHOUSE_DSN
+    evidenceIdActiveKidKey: ACR_EVIDENCE_ID_ACTIVE_KID
+    evidenceIdKeysKey: ACR_EVIDENCE_ID_KEYS
+  migration:
+    existingSecret: acr-migration-credentials
+    postgresDsnKey: ACR_POSTGRES_MIGRATION_DSN
+  entitlementToken:
+    existingSecret: acr-entitlement-token
+    key: token
+  rotationRevision: ""
+
+deployment:
+  replicaCount: 1
+
+gateway:
+  enabled: false
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelectors: []
+  egress:
+    dns: true
+    postgresPort: 5432
+    clickhousePort: 9440
+    entitlementPort: 443

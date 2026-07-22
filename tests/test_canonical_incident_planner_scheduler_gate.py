@@ -16,6 +16,7 @@ from dev_health_ops.models import (
     SyncRunMode,
     SyncRunUnit,
 )
+from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.sync import planner
 from dev_health_ops.sync.canonical_incident_gate import (
     sync_dataset_requires_canonical_incident_feature,
@@ -104,6 +105,11 @@ def test_planner_denies_disabled_jira_incidents_in_a_mixed_plan(
     # Given
     state = canonical_state
     graph = create_canonical_graph(state, state.disabled_org_id)
+    credential = state.session.get(
+        IntegrationCredential, graph.integration.credential_id
+    )
+    assert credential is not None
+    credential.provider = "jira"
     graph.integration.provider = "jira"
     graph.source.provider = "jira"
     state.session.add(
@@ -135,6 +141,11 @@ def test_planner_keeps_jira_work_items_ungated_when_feature_is_off(
     # Given
     state = canonical_state
     graph = create_canonical_graph(state, state.disabled_org_id)
+    credential = state.session.get(
+        IntegrationCredential, graph.integration.credential_id
+    )
+    assert credential is not None
+    credential.provider = "jira"
     graph.integration.provider = "jira"
     graph.source.provider = "jira"
     graph.dataset.dataset_key = "work-items"

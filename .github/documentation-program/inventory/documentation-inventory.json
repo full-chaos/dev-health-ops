@@ -2,13 +2,13 @@
   "schema_version": 2,
   "repository": "full-chaos/dev-health-ops",
   "generated_from": ".",
-  "row_count": 502,
+  "row_count": 503,
   "counts": {
     "artifact:browser-qa": 16,
     "artifact:configuration": 7,
     "artifact:external-gap": 1,
     "artifact:internal-program": 47,
-    "artifact:markdown-page": 218,
+    "artifact:markdown-page": 219,
     "artifact:prototype-asset": 5,
     "artifact:prototype-page": 169,
     "artifact:repository-entry-point": 2,
@@ -20,8 +20,8 @@
     "external-entry-point": 2,
     "gap-unverified": 1,
     "prototype-wip": 175,
-    "public-nav": 34,
-    "public-reference": 133,
+    "public-nav": 36,
+    "public-reference": 132,
     "supporting-artifact": 59
   },
   "rows": [
@@ -6541,7 +6541,10 @@
       "source_path": "docs/architecture/canonical-operational-model.md",
       "artifact_type": "markdown-page",
       "current_url": "https://docs.fullchaos.dev/architecture/canonical-operational-model/",
-      "current_nav_location": [],
+      "current_nav_location": [
+        "Reference & history",
+        "Canonical operational model"
+      ],
       "content_type": "architecture",
       "primary_audience": null,
       "secondary_audiences": [],
@@ -6550,13 +6553,15 @@
       "last_meaningful_review": null,
       "generated": false,
       "public_today": true,
-      "publication_classification": "public-reference",
+      "publication_classification": "public-nav",
       "duplicate_group": null,
       "known_accuracy_risk": null,
       "known_usability_risk": null,
       "build_dependencies": [],
       "links_in": [],
-      "links_out": [],
+      "links_out": [
+        "providers/jira-service-management.md"
+      ],
       "notes": null
     },
     {
@@ -9973,6 +9978,34 @@
       "known_usability_risk": null,
       "build_dependencies": [],
       "links_in": [],
+      "links_out": [],
+      "notes": null
+    },
+    {
+      "source_repo": "full-chaos/dev-health-ops",
+      "source_path": "docs/providers/jira-service-management.md",
+      "artifact_type": "markdown-page",
+      "current_url": "https://docs.fullchaos.dev/providers/jira-service-management/",
+      "current_nav_location": [
+        "Reference & history",
+        "Jira Service Management provider contract"
+      ],
+      "content_type": "explanation",
+      "primary_audience": null,
+      "secondary_audiences": [],
+      "product_area": "providers",
+      "owner": null,
+      "last_meaningful_review": null,
+      "generated": false,
+      "public_today": true,
+      "publication_classification": "public-nav",
+      "duplicate_group": null,
+      "known_accuracy_risk": null,
+      "known_usability_risk": null,
+      "build_dependencies": [],
+      "links_in": [
+        "architecture/canonical-operational-model.md"
+      ],
       "links_out": [],
       "notes": null
     },

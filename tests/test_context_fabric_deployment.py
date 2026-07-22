@@ -7,7 +7,6 @@ from pathlib import Path
 
 import yaml
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO_ROOT / "scripts" / "context-fabric-kubernetes.sh"
 _VALUES = _REPO_ROOT / "deploy" / "context-fabric" / "helm-values.yaml"

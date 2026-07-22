@@ -13,6 +13,7 @@ timeout="${CONTEXT_FABRIC_TIMEOUT:-10m}"
 kube_context="${KUBE_CONTEXT:-}"
 image=""
 entitlement_url=""
+entitlement_port="443"
 local_port="${CONTEXT_FABRIC_LOCAL_PORT:-18080}"
 org_id=""
 repository=""
@@ -108,12 +109,29 @@ require_chart() {
 }
 
 require_release_inputs() {
+  local authority parsed_port
   [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || {
     fail "--image must be an immutable image@sha256:<64 lowercase hex> reference"
   }
-  [[ "$entitlement_url" =~ ^https://[^/@?#]+$ ]] || {
+  [[ "$entitlement_url" == https://* ]] || {
     fail "--entitlement-url must be an HTTPS origin with no path, query, or fragment"
   }
+  authority="${entitlement_url#https://}"
+  [[ -n "$authority" && "$authority" != *'/'* && "$authority" != *'@'* && "$authority" != *'?'* && "$authority" != *'#'* ]] || {
+    fail "--entitlement-url must be an HTTPS origin with no path, query, or fragment"
+  }
+  parsed_port=""
+  if [[ "$authority" =~ ^\[[0-9A-Fa-f:]+\](:([0-9]+))?$ ]]; then
+    parsed_port="${BASH_REMATCH[2]:-443}"
+  elif [[ "$authority" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:([0-9]+))?$ ]]; then
+    parsed_port="${BASH_REMATCH[3]:-443}"
+  else
+    fail "--entitlement-url contains an invalid host or port"
+  fi
+  [[ "$parsed_port" =~ ^[0-9]+$ ]] && ((parsed_port >= 1 && parsed_port <= 65535)) || {
+    fail "--entitlement-url contains an invalid port"
+  }
+  entitlement_port="$parsed_port"
 }
 
 helm_value_args() {
@@ -121,6 +139,7 @@ helm_value_args() {
     -f "$values_file"
     --set-string "image.reference=$image"
     --set-string "config.entitlement.url=$entitlement_url"
+    --set "networkPolicy.egress.entitlementPort=$entitlement_port"
   )
 }
 

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "jobs": [
+    {
+      "kind": "system.heartbeat",
+      "state": "contract_frozen",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["ops"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden"]
+    },
+    {
+      "kind": "system.retention_cleanup",
+      "state": "contract_frozen",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["ops"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden"]
+    }
+  ]
+}

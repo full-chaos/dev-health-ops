@@ -263,7 +263,9 @@ web:
 # api/worker/beat never ambient-migrate. Set config.AUTO_RUN_MIGRATIONS
 # explicitly to override the computed value.
 #
-# The Postgres URI used for migrations must point DIRECTLY at Postgres
+# The preferred MIGRATION_DATABASE_URI used for Alembic plus River must point
+# DIRECTLY at Postgres. Legacy POSTGRES_URI / DATABASE_URI values remain
+# Alembic-only compatible. Every migration DSN must point
 # (port 5432), never at a transaction-mode pooler (PgBouncer/RDS Proxy) —
 # migrations run raw DDL. See docs/ops/database-connection-pooling.md.
 migrations:
@@ -281,6 +283,15 @@ migrations:
     # -- Extra environment variables for the migration Job (e.g. a direct
     #    POSTGRES_URI when the app's DATABASE_URI points at a pooler)
     extraEnv: []
+    # -- Dedicated secret values mounted only into the one-shot migration Job.
+    #    Setting MIGRATION_DATABASE_URI activates the pinned River migration.
+    secretData:
+      MIGRATION_DATABASE_URI: ""
+      POSTGRES_URI: ""
+      CLICKHOUSE_URI: ""
+    # -- Existing dedicated Secret when secrets.create=false. Falls back to
+    #    secrets.externalSecretName for backward compatibility when empty.
+    externalSecretName: ""
 
 # =============================================================================
 # CronJobs
@@ -385,6 +396,11 @@ config:
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
   OTEL_SERVICE_NAME: "dev-health-ops"
   OTEL_METRIC_EXPORT_INTERVAL: "60000"
+  # -- Go worker migration/database policy. Role names are non-secret; the
+  #    elevated migration DSN lives only under migrations.hook.secretData.
+  RIVER_DATABASE_SCHEMA: "river"
+  RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
+  RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
   # -- Celery (auto-set if valkey.enabled, override for external broker)
   CELERY_BROKER_URL: ""
   CELERY_RESULT_BACKEND: ""
@@ -430,6 +446,9 @@ secrets:
   # -- Name of an existing Secret to use instead of creating one
   externalSecretName: ""
   # -- Secret values (plaintext — Helm encodes to base64)
+  # MIGRATION_DATABASE_URI and MIGRATION_DATABASE_URI_FILE are rejected here;
+  # use migrations.hook.secretData or migrations.hook.externalSecretName so
+  # the elevated DSN reaches only the one-shot migration Job.
   data:
     DATABASE_URI: ""
     CLICKHOUSE_URI: ""

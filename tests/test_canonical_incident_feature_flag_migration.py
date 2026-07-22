@@ -104,12 +104,17 @@ def test_canonical_incident_feature_seed_is_global_only_and_idempotent() -> None
         engine.dispose()
 
 
-def test_canonical_incident_feature_seed_extends_single_alembic_head() -> None:
+def test_canonical_incident_feature_seed_is_in_single_head_graph() -> None:
     migration = _canonical_incident_migration_module()
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
+    revisions = {script.revision for script in scripts.walk_revisions()}
 
     assert migration.down_revision == "0041"
-    assert scripts.get_heads() == ["0045"]
+    assert migration.revision in revisions
+    assert scripts.get_heads() == ["0047"]
+    assert scripts.get_revision("0043").down_revision == "0042"
     assert scripts.get_revision("0044").down_revision == "0043"
     assert scripts.get_revision("0045").down_revision == "0044"
+    assert scripts.get_revision("0046").down_revision == "0045"
+    assert scripts.get_revision("0047").down_revision == "0046"

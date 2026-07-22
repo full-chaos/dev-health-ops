@@ -45,10 +45,12 @@ docker service update --force dev-health_migrate
 
 Notes:
 
-- `POSTGRES_URI` must point **directly** at Postgres (port 5432), never at a
-  transaction-mode pooler (PgBouncer/RDS Proxy) — migrations run raw DDL. See
-  `docs/ops/database-connection-pooling.md`. The Alembic step is skipped when
-  `POSTGRES_URI` is unset (ClickHouse-only stacks).
+- Set `MIGRATION_DATABASE_URI` to a dedicated migration-role DSN pointing
+  **directly** at Postgres (port 5432) to run Alembic plus the pinned River
+  migration. Existing Alembic-only stacks may keep a direct `POSTGRES_URI`;
+  without the dedicated DSN the additive River step is skipped. Never send
+  migration DDL through transaction-mode PgBouncer. See
+  `docs/ops/database-connection-pooling.md`.
 
 ## Scaling Services
 

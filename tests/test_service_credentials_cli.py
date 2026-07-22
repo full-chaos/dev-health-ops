@@ -91,6 +91,42 @@ def test_service_credential_cli_create_reveals_token_once_and_list_redacts_it(
     assert token not in capsys.readouterr().out
 
 
+def test_worker_operator_credentials_have_service_bound_scopes_and_prefix():
+    parser = cli.build_parser()
+    ns = parser.parse_args(
+        [
+            "service-credentials",
+            "create",
+            "--service",
+            "worker-operator",
+            "--scope",
+            "workers:read",
+            "--scope",
+            "workers:operate",
+        ]
+    )
+    assert service_credentials._scopes(ns.service, ns.scope) == [
+        "workers:operate",
+        "workers:read",
+    ]
+    credential, token = InternalServiceCredential.issue(
+        service_name=ns.service,
+        scopes=ns.scope,
+        created_by_user_id=None,
+    )
+    assert token.startswith("svc_worker_")
+    assert credential.token_prefix.startswith("svc_worker_")
+
+
+@pytest.mark.parametrize(
+    ("service", "scope"),
+    [("acr", "workers:read"), ("worker-operator", "entitlements:read")],
+)
+def test_service_credential_scopes_cannot_cross_service_boundary(service, scope):
+    with pytest.raises(ValueError, match="unsupported"):
+        service_credentials._scopes(service, [scope])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("inactive_field", ["revoked_at", "expires_at"])
 async def test_rotate_rejects_an_inactive_credential_before_creating_a_replacement(

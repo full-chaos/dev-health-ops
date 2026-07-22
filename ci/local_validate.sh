@@ -13,9 +13,10 @@
 #   1. ruff format --check .         (== lint.yml)
 #   2. ruff check .                  (== lint.yml)
 #   3. mypy --install-types ... .    (== typecheck.yml)
-#   4. the FULL unit tier, byte-for-byte as ci/run_tests.sh unit_tests() runs it
+#   4. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
+#   5. the FULL unit tier, byte-for-byte as ci/run_tests.sh unit_tests() runs it
 #      (== test.yml test-matrix), with the local socks5h proxy neutralized.
-#   5. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
+#   6. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
 #      apply the schema to a SCRATCH db, run the clickhouse-marked attribution
 #      tests, AND execute the new argMax query against a real engine. The scratch
 #      db is DROPPED on exit via a trap.
@@ -126,6 +127,8 @@ preflight() {
 gate_lint_format() { "${RUFF}" format --check .; }
 gate_lint_check()  { "${RUFF}" check .; }
 gate_typecheck()   { "${MYPY}" --install-types --non-interactive .; }
+gate_go_fast()     { bash "${ROOT}/ci/check_go.sh" fast; }
+gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 
 # --- The FULL unit suite — the CHAOS-2604 fix. NOT a file subset. ------------------
 # Byte-for-byte the marker filter + ignores of ci/run_tests.sh unit_tests().
@@ -317,6 +320,8 @@ main() {
   run_stage "lint: ruff format --check"  gate_lint_format
   run_stage "lint: ruff check"           gate_lint_check
   run_stage "typecheck: mypy"            gate_typecheck
+  run_stage "go: format + vet + test"     gate_go_fast
+  run_stage "river: static compatibility harness" gate_river_compat_static
   ch_provision   # scratch db + migrations; exports CLICKHOUSE_URI when available
   run_stage "unit suite (FULL, not subset)" gate_unit_suite
   ch_tests       # argMax live-exec proof on the real engine (reuses the scratch db)

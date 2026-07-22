@@ -11,7 +11,7 @@ trends over absolutes; every metric traces to evidence.
 
 | Project | Purpose | Stack |
 | --- | --- | --- |
-| `ops/` | Ingest, metrics, API, and jobs | Python, FastAPI, Strawberry |
+| `ops/` | Ingest, metrics, API, and jobs | Python, FastAPI, Strawberry; additive Go worker runtime |
 | `web/` | Visualization and exploration | Next.js, React, TypeScript |
 | `dev-health-panels/` | Grafana panel plugin | TypeScript, React |
 | `dev-health-examples/` | Demo-data seeding | Python, Terraform |
@@ -19,6 +19,26 @@ trends over absolutes; every metric traces to evidence.
 Providers own raw fetch, authentication, pagination, retry, and normalization.
 Processors orchestrate provider calls. Sinks are the only persistence path.
 ClickHouse is the analytics backend; PostgreSQL is the semantic layer.
+
+### Ops runtime ownership
+
+Python owns the FastAPI and GraphQL surfaces, provider fetch and normalization,
+processors, domain behavior, and every currently routed Celery job. The Go
+worker runtime is additive infrastructure for bounded background execution; it
+does not move API or provider ownership and it does not authorize a second
+normalization or persistence path.
+
+A job remains on Celery until its migration issue implements the versioned
+contract and handler, changes routing behind rollback controls, and passes the
+documented shadow, parity, and canary gates. A compiling or healthy Go process
+is foundation evidence only, not proof that any production job has migrated or
+that a canary may start.
+
+River queue control requires a small direct PostgreSQL connection introduced
+with the River migrations and dual-pool work in CHAOS-3037. Transaction-mode
+PgBouncer remains valid for domain access but is not, by itself, a
+production-ready River queue-control path. Long-running processes never apply
+River migrations.
 
 ## Product contracts
 

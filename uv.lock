@@ -830,6 +830,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
+    { name = "riverqueue" },
     { name = "ruff" },
 ]
 enterprise-sso = [
@@ -886,6 +887,7 @@ requires-dist = [
     { name = "radon", specifier = ">=6.0.1" },
     { name = "requests", specifier = ">=2.34.0" },
     { name = "resend", specifier = ">=2.5.0" },
+    { name = "riverqueue", marker = "extra == 'dev'", specifier = "==0.7.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["celery", "fastapi"], specifier = ">=2.0.0" },
     { name = "signxml", marker = "extra == 'enterprise-sso'", specifier = ">=3.0.0" },
@@ -2644,6 +2646,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
+]
+
+[[package]]
+name = "riverqueue"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sqlalchemy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/92/2a89f8ef7a5ce059458afd9de57d4efffb6e402ba20491ed7a8c3edcc815/riverqueue-0.7.0.tar.gz", hash = "sha256:de29a635abd171c6cf962851ab4cd1bdf8e56fd0f0c3667aca112329c0443787", size = 41332, upload-time = "2024-08-31T04:55:04.25Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/29/1c/45e82666d46c1b04ad42fb5c30a7d527faddca79212d508521605703e921/riverqueue-0.7.0-py3-none-any.whl", hash = "sha256:b934762afa417ce77dc092b19028ad5f49b721d9ad2b15d76fb4311b16b6f10b", size = 30444, upload-time = "2024-08-31T04:55:02.619Z" },
 ]
 
 [[package]]

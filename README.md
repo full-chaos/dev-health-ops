@@ -40,6 +40,12 @@ Providers → Processors → Sinks → Metrics → API / Visualization
 - **API/GraphQL** serves persisted analytics to `dev-health-web` and other
   consumers.
 
+Python remains the owner of the API, GraphQL schema, provider fetch and
+normalization, processors, and current Celery job implementations. The
+repository also contains an additive Go worker-runtime foundation under `cmd/`
+and `internal/`; adding those process shells does not move a job out of Python
+or change its routing.
+
 The primary visualization surface is now `dev-health-web`. Grafana is optional,
 and this repository no longer ships the old sample dashboard gallery in this
 README.
@@ -163,7 +169,7 @@ running. GraphQL is served by the API for the web app.
 
 ### Run workers
 
-Background jobs use Celery with Valkey/Redis:
+All production background jobs currently use Celery with Valkey/Redis:
 
 ```bash
 POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
@@ -172,6 +178,23 @@ CELERY_BROKER_URL="redis://localhost:6379/0" \
 CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
   dev-hops workers start-worker --queues default metrics sync reports
 ```
+
+Phase 1 of the [Go worker migration plan](docs/plans/go-worker-migration-implementation-plan.md)
+adds the Go runtime, River migration, dual-pool, job-contract, middleware, and
+operator foundations for future worker, scheduler, reconciler, and
+stream-runner processes. Every Go deployment profile remains disabled and all
+registered jobs still route to Celery. A binary building—or even reporting its
+storage dependencies healthy—does not make a job migrated or canary-ready.
+Keep the required Celery workers and Beat schedules running until the issue for
+that job explicitly changes its route and passes the documented parity gates.
+
+Go River processes use `POSTGRES_URI` for domain state and the separate,
+least-privilege `WORKER_DATABASE_URI` for direct queue control. The latter is a
+Go runtime setting, not a replacement Python database alias. River schema is
+applied only by the one-shot migration path when `MIGRATION_DATABASE_URI` and
+the two runtime role names are supplied. See [Workers](docs/ops/workers.md) and
+the [Go worker runtime TRD](docs/architecture/go-worker-runtime-trd.md) for the
+coexistence boundary.
 
 ## Test tiers
 

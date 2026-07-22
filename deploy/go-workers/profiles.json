@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "deployment_state": "coexistence_disabled",
+  "registry": "contracts/jobs/v1/registry.json",
+  "runtime_role_env": [
+    "RIVER_DOMAIN_DATABASE_ROLE",
+    "RIVER_QUEUE_DATABASE_ROLE"
+  ],
+  "postgres_budget": {
+    "server_max_connections": 100,
+    "server_reserved_connections": 15,
+    "pgbouncer_default_pool_size": 25,
+    "pgbouncer_server_pool_count": 2,
+    "pgbouncer_max_client_connections": 1000
+  },
+  "migration_job": {
+    "name": "go-worker-migrations",
+    "binary": "dev-hops",
+    "max_connections": 2,
+    "config_env": [
+      "RIVER_DATABASE_SCHEMA",
+      "RIVER_DOMAIN_DATABASE_ROLE",
+      "RIVER_QUEUE_DATABASE_ROLE"
+    ],
+    "secret_env": [
+      "CLICKHOUSE_URI",
+      "MIGRATION_DATABASE_URI"
+    ]
+  },
+  "operator_cli": {
+    "name": "worker-operator",
+    "binary": "dev-health-workerctl",
+    "max_concurrent_invocations": 1,
+    "queue_control_max_connections": 2,
+    "domain_max_connections": 2,
+    "config_env": [
+      "PGBOUNCER_TRANSACTION_MODE",
+      "RIVER_DATABASE_SCHEMA",
+      "RIVER_DOMAIN_DATABASE_ROLE",
+      "RIVER_QUEUE_DATABASE_ROLE",
+      "WORKER_DATABASE_MODE"
+    ],
+    "secret_env": [
+      "POSTGRES_URI",
+      "WORKER_DATABASE_URI",
+      "WORKER_OPERATOR_TOKEN"
+    ]
+  },
+  "processes": [
+    {
+      "name": "heavy",
+      "binary": "dev-health-worker",
+      "runtime": "river",
+      "registry_profile": "heavy",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 1,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 2,
+      "domain_max_connections": 4,
+      "requires_clickhouse": true,
+      "requires_valkey": false,
+      "secret_env": [
+        "CLICKHOUSE_URI",
+        "POSTGRES_URI",
+        "WORKER_DATABASE_URI"
+      ]
+    },
+    {
+      "name": "latency",
+      "binary": "dev-health-worker",
+      "runtime": "river",
+      "registry_profile": "latency",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 2,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 2,
+      "domain_max_connections": 4,
+      "requires_clickhouse": false,
+      "requires_valkey": false,
+      "secret_env": [
+        "POSTGRES_URI",
+        "WORKER_DATABASE_URI"
+      ]
+    },
+    {
+      "name": "ops",
+      "binary": "dev-health-worker",
+      "runtime": "river",
+      "registry_profile": "ops",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 1,
+      "queues": [
+        "heartbeat",
+        "retention"
+      ],
+      "queue_workers": [
+        {
+          "queue": "heartbeat",
+          "max_workers": 1
+        },
+        {
+          "queue": "retention",
+          "max_workers": 1
+        }
+      ],
+      "job_kinds": [
+        "system.heartbeat",
+        "system.retention_cleanup"
+      ],
+      "queue_control_max_connections": 2,
+      "domain_max_connections": 4,
+      "requires_clickhouse": false,
+      "requires_valkey": false,
+      "secret_env": [
+        "POSTGRES_URI",
+        "WORKER_DATABASE_URI"
+      ]
+    },
+    {
+      "name": "reconciler",
+      "binary": "dev-health-reconciler",
+      "runtime": "control",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 2,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 2,
+      "domain_max_connections": 4,
+      "requires_clickhouse": false,
+      "requires_valkey": false,
+      "secret_env": [
+        "POSTGRES_URI",
+        "WORKER_DATABASE_URI"
+      ]
+    },
+    {
+      "name": "scheduler",
+      "binary": "dev-health-scheduler",
+      "runtime": "control",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 2,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 2,
+      "domain_max_connections": 4,
+      "requires_clickhouse": false,
+      "requires_valkey": false,
+      "secret_env": [
+        "POSTGRES_URI",
+        "WORKER_DATABASE_URI"
+      ]
+    },
+    {
+      "name": "stream-external",
+      "binary": "dev-health-stream-runner",
+      "runtime": "stream",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 1,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 0,
+      "domain_max_connections": 4,
+      "requires_clickhouse": true,
+      "requires_valkey": true,
+      "secret_env": [
+        "CLICKHOUSE_URI",
+        "POSTGRES_URI",
+        "VALKEY_URI"
+      ]
+    },
+    {
+      "name": "stream-ingest",
+      "binary": "dev-health-stream-runner",
+      "runtime": "stream",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 1,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 0,
+      "domain_max_connections": 4,
+      "requires_clickhouse": true,
+      "requires_valkey": true,
+      "secret_env": [
+        "CLICKHOUSE_URI",
+        "POSTGRES_URI",
+        "VALKEY_URI"
+      ]
+    },
+    {
+      "name": "sync",
+      "binary": "dev-health-worker",
+      "runtime": "river",
+      "registry_profile": "sync",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 2,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 2,
+      "domain_max_connections": 4,
+      "requires_clickhouse": true,
+      "requires_valkey": true,
+      "secret_env": [
+        "CLICKHOUSE_URI",
+        "POSTGRES_URI",
+        "VALKEY_URI",
+        "WORKER_DATABASE_URI"
+      ]
+    }
+  ]
+}

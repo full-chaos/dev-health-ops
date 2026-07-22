@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dev-health.example.invalid/schemas/v0-celery-baseline-capture.schema.json",
+  "title": "Sanitized Celery baseline capture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_version",
+    "capture_status",
+    "scope",
+    "authoritative_for_baseline",
+    "authoritative_for_canary",
+    "captured_at",
+    "source_revision",
+    "runtime",
+    "window",
+    "sources",
+    "measurements",
+    "observability_gaps",
+    "review",
+    "gates",
+    "redaction"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "evidence_version": {
+      "const": "v0-celery-baseline"
+    },
+    "capture_status": {
+      "enum": [
+        "recorded",
+        "recorded_with_explicit_observability_gaps"
+      ]
+    },
+    "scope": {
+      "const": "production_equivalent_local"
+    },
+    "authoritative_for_baseline": {
+      "const": true
+    },
+    "authoritative_for_canary": {
+      "type": "boolean"
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "compose_project",
+        "dataset_scope",
+        "runtime_kind",
+        "source_revision_basis",
+        "source_worktree_dirty",
+        "services"
+      ]
+    },
+    "window": {
+      "type": "object",
+      "required": [
+        "start",
+        "end",
+        "timezone",
+        "contains_worker_deployment",
+        "live_sampling"
+      ]
+    },
+    "sources": {
+      "type": "object",
+      "required": [
+        "recorder",
+        "task_outcomes",
+        "queue_state",
+        "stream_state",
+        "worker_resources",
+        "postgres",
+        "sync_leases",
+        "raw_evidence_retained",
+        "missing_series"
+      ]
+    },
+    "measurements": {
+      "type": "object",
+      "required": [
+        "enqueue_to_start_seconds_by_profile",
+        "oldest_queue_age_seconds_by_profile",
+        "queue_depth_by_profile",
+        "task_outcome_rates_by_family",
+        "successful_task_duration_seconds_by_family",
+        "process_crash_recovery_seconds",
+        "deployment_drain_and_recovery_seconds",
+        "sync_unit_lease_expiry_rate",
+        "stream_pending_count_by_group",
+        "stream_lag_by_group",
+        "stream_oldest_pending_seconds_by_group",
+        "worker_cpu_cores_by_profile",
+        "worker_memory_bytes_by_profile",
+        "postgres_connections",
+        "postgres_transactions_per_second",
+        "postgres_lock_or_io_pressure"
+      ]
+    },
+    "observability_gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "effect"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "effect": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "required": [
+        "reviewed_by",
+        "reviewed_at",
+        "parity_thresholds_approved"
+      ]
+    },
+    "gates": {
+      "type": "object",
+      "required": [
+        "phase_1_foundation",
+        "production_canary"
+      ]
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contains_raw_logs",
+        "contains_task_args_results_or_payloads",
+        "contains_credentials_or_dsns",
+        "contains_tenant_identifiers",
+        "contains_stream_keys",
+        "automated_validation"
+      ],
+      "properties": {
+        "contains_raw_logs": {
+          "const": false
+        },
+        "contains_task_args_results_or_payloads": {
+          "const": false
+        },
+        "contains_credentials_or_dsns": {
+          "const": false
+        },
+        "contains_tenant_identifiers": {
+          "const": false
+        },
+        "contains_stream_keys": {
+          "const": false
+        },
+        "automated_validation": {
+          "const": "pass"
+        }
+      }
+    }
+  }
+}

@@ -633,10 +633,7 @@ async def test_org_deletion_removes_pagerduty_binding_and_oauth_records(
                 PagerDutyOAuthAuthorizationRequest(
                     state_hash="state-hash",
                     org_id=org1_id,
-                    credential_name="operations",
                     code_verifier_encrypted="ciphertext",
-                    enabled_datasets=["incidents"],
-                    region="us",
                     created_at=datetime.now(timezone.utc),
                     expires_at=datetime.now(timezone.utc),
                 ),

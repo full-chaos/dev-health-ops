@@ -121,7 +121,7 @@ async def client(
             access_token=None,
             granted_scopes=required_scopes,
             account_id="acme",
-            account_display="Acme Operations",
+            account_display="operations",
             subdomain="acme",
         )
 
@@ -162,15 +162,10 @@ async def client(
     app.dependency_overrides.clear()
 
 
-async def _authorize(client: AsyncClient, *, datasets: list[str]) -> str:
+async def _authorize(client: AsyncClient, *, datasets: list[str] | None = None) -> str:
     response = await client.post(
         "/api/v1/admin/integrations/pagerduty/authorize",
-        json={
-            "credential_name": "operations",
-            "region": "eu",
-            "subdomain": "acme",
-            "enabled_datasets": datasets,
-        },
+        json={},
     )
     assert response.status_code == 200
     return parse_qs(urlparse(response.json()["authorize_url"]).query)["state"][0]
@@ -194,7 +189,7 @@ async def test_authorize_returns_url_and_persists_hashed_request(
     client: AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    state = await _authorize(client, datasets=["incidents", "services"])
+    state = await _authorize(client)
 
     async with session_maker() as session:
         persisted = (
@@ -203,11 +198,11 @@ async def test_authorize_returns_url_and_persists_hashed_request(
 
     assert persisted.state_hash == hashlib.sha256(state.encode()).hexdigest()
     assert persisted.state_hash != state
-    assert persisted.credential_name == "operations"
-    assert persisted.region == "eu"
-    assert persisted.subdomain == "acme"
-    assert persisted.enabled_datasets == ["incidents", "services"]
-    assert persisted.initiated_by == _USER_ID
+    assert not hasattr(persisted, "credential_name")
+    assert not hasattr(persisted, "region")
+    assert not hasattr(persisted, "subdomain")
+    assert not hasattr(persisted, "enabled_datasets")
+    assert not hasattr(persisted, "initiated_by")
 
 
 @pytest.mark.asyncio
@@ -217,10 +212,10 @@ async def test_authorize_rejects_unknown_dataset(
 ) -> None:
     response = await client.post(
         "/api/v1/admin/integrations/pagerduty/authorize",
-        json={"subdomain": "acme", "enabled_datasets": ["unknown"]},
+        json={"enabled_datasets": ["unknown"]},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 422
     async with session_maker() as session:
         assert (
             await session.execute(select(PagerDutyOAuthAuthorizationRequest))
@@ -241,7 +236,7 @@ async def test_authorize_rejects_missing_registered_app_config(
 
     response = await client.post(
         "/api/v1/admin/integrations/pagerduty/authorize",
-        json={"subdomain": "acme", "enabled_datasets": ["incidents"]},
+        json={},
     )
 
     assert response.status_code == 400
@@ -278,7 +273,7 @@ async def test_callback_persists_oauth_token_and_safe_descriptor(
     assert response.json() == {
         "connected": True,
         "credential_name": "operations",
-        "region": "eu",
+        "region": "us",
         "subdomain": "acme",
         "granted_scopes": sorted(READ_SCOPES),
     }
@@ -294,7 +289,7 @@ async def test_callback_persists_oauth_token_and_safe_descriptor(
         ).scalar_one()
 
     assert oauth_credential.account_id == "acme"
-    assert oauth_credential.account_display == "Acme Operations"
+    assert oauth_credential.account_display == "operations"
     assert integration_credential.is_active is True
     assert descriptor is not None
     assert descriptor == {
@@ -302,17 +297,17 @@ async def test_callback_persists_oauth_token_and_safe_descriptor(
         "oauth_credential_name": "operations",
         "oauth_binding_id": oauth_credential.binding_id,
         "subdomain": "acme",
-        "region": "eu",
+        "region": "us",
         "account_id": "acme",
     }
     assert "access_token" not in descriptor
     assert "refresh_token" not in descriptor
     assert integration_credential.config == {
         "auth_mode": "oauth",
-        "region": "eu",
+        "region": "us",
         "subdomain": "acme",
         "account_id": "acme",
-        "account_display": "Acme Operations",
+        "account_display": "operations",
         "granted_scopes": sorted(READ_SCOPES),
     }
 
@@ -642,7 +637,7 @@ async def test_client_credentials_persists_exact_descriptor(
         "region": "eu",
         "subdomain": "acme",
         "account_id": "acme",
-        "account_display": "Acme Operations",
+        "account_display": "operations",
     }
 
 
@@ -678,7 +673,7 @@ async def test_api_token_persists_exact_descriptor(
         "region": "us",
         "subdomain": "acme",
         "account_id": "acme",
-        "account_display": "Acme Operations",
+        "account_display": "operations",
     }
 
 
@@ -1375,7 +1370,7 @@ async def _connect_oauth(
 
 
 @pytest.mark.asyncio
-async def test_callback_rejects_missing_subdomain_before_exchange(
+async def test_callback_derives_account_context_after_exchange(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     session_maker: async_sessionmaker[AsyncSession],
@@ -1384,15 +1379,15 @@ async def test_callback_rejects_missing_subdomain_before_exchange(
         await pagerduty_router.PagerDutyAuthorizationRequestStore(session).create(
             org_id=_ORG_ID,
             state="state-without-subdomain",
-            credential_name="operations",
             code_verifier="verifier",
-            enabled_datasets=["incidents"],
-            region="eu",
-            subdomain=None,
-            initiated_by=_USER_ID,
         )
         await session.commit()
-    exchange = AsyncMock(side_effect=AssertionError("exchange must not run"))
+    tokens = OAuthTokens(
+        access_token="access-token",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        granted_scopes=READ_SCOPES,
+    )
+    exchange = AsyncMock(return_value=tokens)
     monkeypatch.setattr(pagerduty_router, "exchange_code", exchange)
 
     response = await client.post(
@@ -1400,12 +1395,12 @@ async def test_callback_rejects_missing_subdomain_before_exchange(
         json={"state": "state-without-subdomain", "code": "authorization-code"},
     )
 
-    assert response.status_code == 400
-    exchange.assert_not_awaited()
+    assert response.status_code == 200
+    exchange.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_callback_rejects_mismatched_verified_account_without_persistence(
+async def test_callback_uses_authenticated_account_without_browser_comparison(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     session_maker: async_sessionmaker[AsyncSession],
@@ -1442,9 +1437,9 @@ async def test_callback_rejects_mismatched_verified_account_without_persistence(
         json={"state": state, "code": "authorization-code"},
     )
 
-    assert response.status_code == 400
-    assert await _persisted_counts(session_maker) == (0, 0)
-    revoke.assert_awaited_once_with(_CONFIG, "refresh-token")
+    assert response.status_code == 200
+    assert await _persisted_counts(session_maker) == (1, 1)
+    revoke.assert_not_awaited()
 
 
 @pytest.mark.asyncio

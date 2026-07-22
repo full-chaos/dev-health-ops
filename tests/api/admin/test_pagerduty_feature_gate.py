@@ -52,12 +52,7 @@ async def test_authorize_rejects_when_canonical_incident_feature_is_off(
     # When
     response = await client.post(
         "/api/v1/admin/integrations/pagerduty/authorize",
-        json={
-            "credential_name": "operations",
-            "region": "eu",
-            "subdomain": "acme",
-            "enabled_datasets": ["incidents"],
-        },
+        json={},
     )
 
     # Then

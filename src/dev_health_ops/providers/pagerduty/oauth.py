@@ -118,9 +118,7 @@ def missing_read_scopes(
     return required_read_scopes(enabled_datasets).difference(granted_scopes)
 
 
-def build_authorization_request(
-    config: PagerDutyOAuthConfig, _enabled_datasets: set[str]
-) -> AuthorizationRequest:
+def build_authorization_request(config: PagerDutyOAuthConfig) -> AuthorizationRequest:
     verifier = secrets.token_urlsafe(64)
     challenge = (
         base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())

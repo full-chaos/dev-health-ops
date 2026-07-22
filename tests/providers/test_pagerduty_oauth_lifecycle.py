@@ -264,7 +264,7 @@ async def test_client_credentials_cache_renews_once_and_qualifies_account_scope(
         return OAuthTokens(
             access_token="machine",
             expires_at=datetime.now(UTC) + timedelta(hours=1),
-            granted_scopes=frozenset({"Users.read"}),
+            granted_scopes=frozenset({"users.read"}),
         )
 
     monkeypatch.setattr(
@@ -272,7 +272,7 @@ async def test_client_credentials_cache_renews_once_and_qualifies_account_scope(
         exchange,
     )
     cache = ClientCredentialsTokenCache()
-    request = ClientCredentialsRequest(frozenset({"Users.read"}), "acme", "eu")
+    request = ClientCredentialsRequest(frozenset({"users.read"}), "acme", "eu")
     config = PagerDutyOAuthConfig("id", "secret", "uri")
 
     assert (
@@ -281,7 +281,7 @@ async def test_client_credentials_cache_renews_once_and_qualifies_account_scope(
     assert (
         await get_client_credentials_access_token(cache, config, request) == "machine"
     )
-    assert calls == [({"Users.read"}, "acme", "eu")]
+    assert calls == [({"users.read"}, "acme", "eu")]
 
 
 def test_auth_strategies_use_only_supported_header_forms() -> None:
@@ -318,7 +318,7 @@ async def test_client_credentials_posts_scoped_region_and_subdomain(
     )
     await client_credentials(
         PagerDutyOAuthConfig("id", "secret", "uri"),
-        scopes={"Users.read"},
+        scopes={"users.read"},
         subdomain="acme",
         region="eu",
     )

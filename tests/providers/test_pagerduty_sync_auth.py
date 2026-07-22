@@ -119,7 +119,11 @@ def test_hydrate_oauth_uses_stored_non_expired_token_without_mutating_mapping(
 
     hydrated = hydrate_pagerduty_credentials(mapping, org_id="oauth-org")
 
-    assert hydrated == {**mapping, "access_token": "stored-token"}
+    assert hydrated == {
+        **mapping,
+        "access_token": "stored-token",
+        "granted_scopes": sorted(READ_SCOPES),
+    }
     assert hydrated is not mapping
     assert mapping == {
         "auth_mode": "oauth",
@@ -190,7 +194,7 @@ def test_hydrate_oauth_rejects_a_token_missing_operational_scopes(
 ) -> None:
     # Given: a persisted OAuth token that lacks one required operational scope.
     seed_credential(
-        session, tokens("stored-token", granted_scopes=frozenset({"Users.read"}))
+        session, tokens("stored-token", granted_scopes=frozenset({"users.read"}))
     )
     patch_sync_session(monkeypatch, session)
     monkeypatch.setenv("PAGER_DUTY_CLIENT_ID", "client-id")
@@ -247,7 +251,11 @@ def test_hydrate_client_credentials_mints_machine_token(
 
     hydrated = hydrate_pagerduty_credentials(mapping, org_id="client-org")
 
-    assert hydrated == {**mapping, "access_token": "machine-token"}
+    assert hydrated == {
+        **mapping,
+        "access_token": "machine-token",
+        "granted_scopes": sorted(READ_SCOPES),
+    }
     assert hydrated is not mapping
 
 
@@ -268,7 +276,7 @@ def test_hydrate_client_credentials_rejects_a_partial_scope_grant(
         return tokens(
             "partial-machine-token",
             refresh_token=None,
-            granted_scopes=frozenset({"Users.read"}),
+            granted_scopes=frozenset({"users.read"}),
         )
 
     monkeypatch.setattr(

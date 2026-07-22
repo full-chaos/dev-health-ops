@@ -230,6 +230,33 @@ def test_store_inserts_a_canonical_service_with_org_id_parity() -> None:
     assert row[columns.index("org_id")] == "org-example"
 
 
+def test_store_hydrates_clickhouse_datetimes_as_canonical_utc() -> None:
+    canonical = OperationalService(
+        org_id="org-example",
+        provider="pagerduty",
+        provider_instance_id="pd-example",
+        source_entity_type="service",
+        external_id="payments-api",
+        source_version_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
+        observed_at=datetime(2026, 7, 17, 1, tzinfo=timezone.utc),
+        last_synced=datetime(2026, 7, 17, 2, tzinfo=timezone.utc),
+        name="Payments API",
+    )
+    columns = tuple(field.name for field in fields(OperationalService))
+    row = tuple(
+        value.replace(tzinfo=None) if isinstance(value, datetime) else value
+        for value in (getattr(canonical, column) for column in columns)
+    )
+
+    hydrated = _current_store()._hydrate_operational_entity(
+        OperationalService, columns, row
+    )
+
+    assert hydrated == canonical
+    assert hydrated.source_version_at.tzinfo is timezone.utc
+    assert hydrated.source_version_at.fold == 0
+
+
 def test_store_rejects_mixed_canonical_entity_batches() -> None:
     # Given: two distinct entity types from the same canonical lifecycle.
     lifecycle = equivalent_operational_lifecycles()[0]

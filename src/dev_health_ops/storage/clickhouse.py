@@ -65,6 +65,18 @@ from .utils import _parse_date_value, _parse_datetime_value
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=CanonicalOperationalEntity)
 
+
+def _canonical_operational_datetime(value: Any) -> Any:
+    """Restore ClickHouse DateTime64 values to the canonical UTC shape."""
+    if not isinstance(value, datetime):
+        return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.replace(fold=0)
+
+
 if TYPE_CHECKING:
     from dev_health_ops.models.atlassian_ops import (
         AtlassianOpsAlert,
@@ -2412,7 +2424,9 @@ class ClickHouseStore:
     ) -> T:
         values = dict(zip(columns, row, strict=True))
         constructor = {
-            item.name: values[item.name] for item in fields(entity_type) if item.init
+            item.name: _canonical_operational_datetime(values[item.name])
+            for item in fields(entity_type)
+            if item.init
         }
         stored_ordering_fields = ORDERING_FIELD_NAMES.intersection(values)
         if stored_ordering_fields and stored_ordering_fields != ORDERING_FIELD_NAMES:

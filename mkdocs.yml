@@ -51,6 +51,7 @@ nav:
       - Diagnose ingestion: ops/runbook-ingestion-failures.md
   - Develop & extend:
       - Set up a contributor environment: getting-started.md
+      - Test Context Fabric locally: context-fabric-local.md
       - Use the GraphQL API: api/graphql-overview.md
       - Build an ingestion integration: customer-push-ingestion/api-reference.md
       - Understand provider limits: providers/rate-limit-policy.md

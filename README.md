@@ -161,22 +161,38 @@ CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
 OpenAPI docs are available at <http://localhost:8000/docs> when the API is
 running. GraphQL is served by the API for the web app.
 
-### Test Context Fabric locally
+### Run Context Fabric in containers
 
-Context Fabric/ACR is a separate private service and is not added to the normal
-Ops Compose project. With sibling `dev-health-{ops,acr,web}` checkouts, start the
-isolated TLS fixture from this repository:
+Context Fabric/ACR is a private, opt-in service. With sibling
+`dev-health-{ops,acr,web}` checkouts, start the complete Docker plugin fixture
+from this repository:
 
 ```bash
 bash scripts/context-fabric-local.sh
 ```
 
-The launcher builds this Ops checkout, creates a temporary organization and
-`agent_context_runtime` entitlement, seeds deterministic evidence, verifies the
-ACR API and host-local MCP sidecar, and keeps the stack available for OpenCode,
-Claude Code, Codex, or Cursor testing. See
-[`docs/context-fabric-local.md`](docs/context-fabric-local.md) for path
-overrides, client setup, security boundaries, and cleanup behavior.
+The launcher renders this checkout's actual `compose.yml`, layers the canonical
+ACR Compose services and TLS configuration, runs `acr-api` in Docker, verifies
+the host-local MCP process, and keeps the stack available for OpenCode, Claude
+Code, Codex, or Cursor testing.
+
+For Kubernetes, render or apply the ACR Helm integration from Ops:
+
+```bash
+bash scripts/context-fabric-kubernetes.sh render \
+  --image "$ACR_IMAGE" \
+  --entitlement-url "$OPS_HTTPS_ORIGIN"
+
+bash scripts/context-fabric-kubernetes.sh apply \
+  --image "$ACR_IMAGE" \
+  --entitlement-url "$OPS_HTTPS_ORIGIN"
+```
+
+Kubernetes requires caller-provided TLS PostgreSQL, TLS ClickHouse, an HTTPS Ops
+origin, and existing Secret references. See
+[`docs/context-fabric-local.md`](docs/context-fabric-local.md) for Docker plugin
+setup, Kubernetes prerequisites, credential creation, port-forward testing, and
+cleanup behavior.
 
 ### Run workers
 
@@ -237,42 +253,3 @@ IMAGE_REGISTRY=ghcr.io/myorg/dev-health-ops \
 VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo latest) \
   ./scripts/build-images.sh
 ```
-
-Run the API image:
-
-```bash
-docker run --rm -p 8000:8000 \
-  -e POSTGRES_URI="postgresql+asyncpg://postgres:postgres@postgres:5432/postgres" \
-  -e CLICKHOUSE_URI="clickhouse://ch:ch@clickhouse:8123/default" \
-  dev-hops-api:latest
-```
-
-Run a CLI job through the runner image:
-
-```bash
-docker run --rm -it \
-  --network dev-health_default \
-  -v "$(pwd)":/app \
-  -w /app \
-  -e CLICKHOUSE_URI="clickhouse://ch:ch@clickhouse:8123/default" \
-  dev-hops-runner:latest \
-  metrics daily --backfill 14
-```
-
-## Key docs
-
-- [`docs/getting-started.md`](docs/getting-started.md): setup and demo data
-- [`docs/context-fabric-local.md`](docs/context-fabric-local.md): isolated ACR service and plugin testing
-- [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md): full CLI reference
-- [`docs/architecture/database-architecture.md`](docs/architecture/database-architecture.md): PostgreSQL/ClickHouse split
-- [`docs/architecture/data-pipeline.md`](docs/architecture/data-pipeline.md): provider → processor → sink boundaries
-- [`docs/product/prd.md`](docs/product/prd.md): product intent and guardrails
-- [`docs/user-guide/investment-view.md`](docs/user-guide/investment-view.md): canonical Investment View
-- [`docs/user-guide/reports.md`](docs/user-guide/reports.md): Report Center and scheduled reports
-
-## Guardrails
-
-- WorkUnits are evidence containers, not categories.
-- Investment categorization runs at compute time and persists distributions.
-- Theme rollups are deterministic from canonical subcategories.
-- UX-time LLM usage is explanation-only and must not recompute categories.

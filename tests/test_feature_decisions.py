@@ -106,35 +106,35 @@ def test_existing_explicit_purchase_license_override_enables_acr() -> None:
         engine.dispose()
 
 
-def test_canonical_incident_ingestion_is_false_for_every_tier() -> None:
+def test_canonical_incident_ingestion_is_enabled_for_every_tier() -> None:
     for tier in TIER_ORDER:
         features = get_features_for_tier(tier)
 
-        assert features[_FEATURE_KEY] is False
+        assert features[_FEATURE_KEY] is True
 
-    assert is_explicit_purchase_feature(_FEATURE_KEY) is True
+    assert is_explicit_purchase_feature(_FEATURE_KEY) is False
 
 
-def test_canonical_incident_ingestion_requires_org_override(
+def test_canonical_incident_ingestion_defaults_on_without_org_override(
     feature_session: tuple[Session, uuid.UUID, uuid.UUID],
 ) -> None:
     session, org_id, _ = feature_session
 
     decision = FeatureService(session).check_feature_access(org_id, _FEATURE_KEY)
 
-    assert decision.allowed is False
+    assert decision.allowed is True
 
 
-def test_canonical_incident_ingestion_org_override_is_org_scoped(
+def test_canonical_incident_ingestion_disable_override_is_org_scoped(
     feature_session: tuple[Session, uuid.UUID, uuid.UUID],
 ) -> None:
-    session, enabled_org_id, disabled_org_id = feature_session
+    session, disabled_org_id, enabled_org_id = feature_session
     feature = session.query(FeatureFlag).filter_by(key=_FEATURE_KEY).one()
     session.add(
         OrgFeatureOverride(
-            org_id=enabled_org_id,
+            org_id=disabled_org_id,
             feature_id=feature.id,
-            is_enabled=True,
+            is_enabled=False,
         )
     )
     session.commit()
@@ -171,7 +171,7 @@ def test_canonical_incident_ingestion_false_override_fails_closed(
     assert decision.allowed is False
 
 
-def test_canonical_incident_ingestion_expired_override_fails_closed(
+def test_canonical_incident_ingestion_expired_override_falls_back_to_default(
     feature_session: tuple[Session, uuid.UUID, uuid.UUID],
 ) -> None:
     session, org_id, _ = feature_session
@@ -188,7 +188,7 @@ def test_canonical_incident_ingestion_expired_override_fails_closed(
 
     decision = FeatureService(session).check_feature_access(org_id, _FEATURE_KEY)
 
-    assert decision.allowed is False
+    assert decision.allowed is True
 
 
 def test_canonical_incident_ingestion_global_kill_switch_wins(
@@ -211,7 +211,7 @@ def test_canonical_incident_ingestion_global_kill_switch_wins(
     assert decision.allowed is False
 
 
-def test_canonical_incident_ingestion_license_override_cannot_enable(
+def test_canonical_incident_ingestion_license_override_can_enable(
     feature_session: tuple[Session, uuid.UUID, uuid.UUID],
 ) -> None:
     session, org_id, _ = feature_session
@@ -226,10 +226,10 @@ def test_canonical_incident_ingestion_license_override_cannot_enable(
 
     decision = FeatureService(session).check_feature_access(org_id, _FEATURE_KEY)
 
-    assert decision.allowed is False
+    assert decision.allowed is True
 
 
-def test_canonical_incident_ingestion_override_removal_rolls_back(
+def test_canonical_incident_ingestion_override_removal_restores_default(
     feature_session: tuple[Session, uuid.UUID, uuid.UUID],
 ) -> None:
     session, org_id, _ = feature_session
@@ -246,7 +246,7 @@ def test_canonical_incident_ingestion_override_removal_rolls_back(
 
     decision = FeatureService(session).check_feature_access(org_id, _FEATURE_KEY)
 
-    assert decision.allowed is False
+    assert decision.allowed is True
 
 
 def test_canonical_incident_ingestion_storage_failure_fails_closed(

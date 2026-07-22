@@ -26,7 +26,7 @@ from tests.canonical_incident_orchestration_support import (
     CanonicalState,
     canonical_state_context,
     create_canonical_graph,
-    remove_feature_override,
+    disable_feature_for_org,
 )
 
 
@@ -55,7 +55,7 @@ def test_jira_incidents_use_the_existing_canonical_feature_gate() -> None:
     )
 
 
-def test_planner_creates_canonical_work_when_feature_enabled(
+def test_planner_creates_canonical_work_when_feature_enabled_by_default(
     canonical_state: CanonicalState,
 ) -> None:
     # Given
@@ -235,7 +235,7 @@ def test_scheduler_rechecks_feature_immediately_before_enqueue(
 
     def create_then_disable(*args, **kwargs):
         trigger = real_trigger(*args, **kwargs)
-        remove_feature_override(state, state.enabled_org_id)
+        disable_feature_for_org(state, state.enabled_org_id)
         return trigger
 
     monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)

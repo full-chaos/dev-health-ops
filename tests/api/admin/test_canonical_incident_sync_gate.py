@@ -68,7 +68,7 @@ async def test_sync_target_discovery_is_org_scoped(
 
 
 @pytest.mark.asyncio
-async def test_sync_config_create_succeeds_when_feature_enabled(
+async def test_sync_config_create_succeeds_by_default_without_override(
     canonical_api_state: ApiState,
 ) -> None:
     # Given
@@ -86,21 +86,29 @@ async def test_sync_config_create_succeeds_when_feature_enabled(
 
 
 @pytest.mark.asyncio
-async def test_sync_config_create_fails_for_missing_override(
+async def test_sync_config_create_succeeds_without_override(
     canonical_api_state: ApiState,
 ) -> None:
     # Given
     state = canonical_api_state
+    async with state.session_maker() as session:
+        await session.execute(
+            delete(OrgFeatureOverride).where(
+                OrgFeatureOverride.org_id == state.disabled.org_id,
+                OrgFeatureOverride.feature_id == state.feature_id,
+            )
+        )
+        await session.commit()
 
     # When
     async with api_client(state, state.disabled) as client:
         response = await client.post(
             "/api/v1/admin/sync-configs",
-            json=_operational_payload("missing-override"),
+            json=_operational_payload("default-without-override"),
         )
 
     # Then
-    assert response.status_code == 403
+    assert response.status_code == 201, response.text
 
 
 @pytest.mark.asyncio
@@ -109,16 +117,6 @@ async def test_sync_config_create_fails_for_false_override(
 ) -> None:
     # Given
     state = canonical_api_state
-    async with state.session_maker() as session:
-        session.add(
-            OrgFeatureOverride(
-                org_id=state.disabled.org_id,
-                feature_id=state.feature_id,
-                is_enabled=False,
-            )
-        )
-        await session.commit()
-
     # When
     async with api_client(state, state.disabled) as client:
         response = await client.post(

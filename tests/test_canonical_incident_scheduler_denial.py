@@ -30,7 +30,7 @@ from tests.canonical_incident_orchestration_support import (
     CanonicalState,
     canonical_state_context,
     create_canonical_graph,
-    remove_feature_override,
+    disable_feature_for_org,
 )
 
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
@@ -74,7 +74,7 @@ def _install_plan_then_disable(
 
     def create_then_disable(*args, **kwargs):
         trigger = real_trigger(*args, **kwargs)
-        remove_feature_override(state, state.enabled_org_id, commit=False)
+        disable_feature_for_org(state, state.enabled_org_id, commit=False)
         return trigger
 
     monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)

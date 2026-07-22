@@ -68,17 +68,16 @@ it is never an ACR API bearer credential.
 
 ### Canonical Incident Ingestion
 
-`canonical_incident_ingestion` is registered as an explicit-purchase feature and
-is `false` for Community, Team, and Enterprise defaults. Alembic revision `0042`
-seeds only its globally enabled `FeatureFlag`; it does not seed an organization
-grant. The global row is an availability and kill switch, not customer
-enablement.
+`canonical_incident_ingestion` is a Community-tier feature and is therefore enabled
+by default for Community, Team, and Enterprise organizations. Alembic revision `0048`
+upserts the feature row and globally enables it, repairing installations that missed
+the original revision `0042` seed. The global row remains an availability and kill
+switch.
 
-An active, unexpired `OrgFeatureOverride` is the only positive organization path
-for this feature. `OrgLicense.features_override`, tier, deployment environment,
-and CI cannot positively enable it. A missing row, false or expired override,
-storage failure, or globally disabled flag denies access. Removing the
-organization override is the rollback action.
+An active false `OrgFeatureOverride` disables the feature for one organization. An
+expired override falls back to the tier default, and removing an override restores
+the default-on behavior. A missing row, storage failure, or globally disabled flag
+still denies access.
 
 Backend call sites use the shared typed evaluator exported by
 `dev_health_ops.licensing`: `evaluate_org_feature_sync` or

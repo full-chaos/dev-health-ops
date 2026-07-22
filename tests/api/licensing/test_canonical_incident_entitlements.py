@@ -99,15 +99,15 @@ def _session_patcher(
 
 
 @pytest.mark.asyncio
-async def test_async_entitlements_deny_canonical_license_override(
+async def test_async_entitlements_enable_canonical_by_default(
     entitlement_store,
 ) -> None:
-    maker, org_id, _ = entitlement_store
+    maker, _, org_id = entitlement_store
 
     async with maker() as session:
         entitlements = await get_org_entitlements_from_db(org_id, session)
 
-    assert entitlements["features"][_FEATURE_KEY] is False
+    assert entitlements["features"][_FEATURE_KEY] is True
 
 
 @pytest.mark.asyncio
@@ -115,7 +115,7 @@ async def test_rest_entitlements_add_canonical_feature_without_changing_shape(
     entitlement_store,
     monkeypatch,
 ) -> None:
-    maker, org_id, _ = entitlement_store
+    maker, _, org_id = entitlement_store
     app = FastAPI()
     app.include_router(_router_module.router)
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
@@ -140,11 +140,11 @@ async def test_rest_entitlements_add_canonical_feature_without_changing_shape(
     assert response.status_code == 200
     body = response.json()
     assert {"org_id", "tier", "features", "limits"} <= body.keys()
-    assert body["features"][_FEATURE_KEY] is False
+    assert body["features"][_FEATURE_KEY] is True
 
 
 @pytest.mark.asyncio
-async def test_async_entitlements_enable_only_org_with_active_override(
+async def test_async_entitlements_disable_only_org_with_false_override(
     entitlement_store,
 ) -> None:
     maker, enabled_org_id, disabled_org_id = entitlement_store
@@ -158,7 +158,7 @@ async def test_async_entitlements_enable_only_org_with_active_override(
             OrgFeatureOverride(
                 org_id=enabled_org_id,
                 feature_id=feature.id,
-                is_enabled=True,
+                is_enabled=False,
             )
         )
         await session.commit()
@@ -167,5 +167,5 @@ async def test_async_entitlements_enable_only_org_with_active_override(
         enabled = await get_org_entitlements_from_db(enabled_org_id, session)
         disabled = await get_org_entitlements_from_db(disabled_org_id, session)
 
-    assert enabled["features"][_FEATURE_KEY] is True
-    assert disabled["features"][_FEATURE_KEY] is False
+    assert enabled["features"][_FEATURE_KEY] is False
+    assert disabled["features"][_FEATURE_KEY] is True

@@ -50,8 +50,8 @@ _SCENARIOS = (
     ),
     DecisionScenario(
         name="missing-override",
-        expected_allowed=False,
-        expected_reason=FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED,
+        expected_allowed=True,
+        expected_reason=FeatureDecisionReason.ENABLED_BY_TIER,
     ),
     DecisionScenario(
         name="active-override",
@@ -69,8 +69,8 @@ _SCENARIOS = (
         name="expired-override",
         org_override=True,
         override_expires_at=datetime(2000, 1, 1, tzinfo=UTC),
-        expected_allowed=False,
-        expected_reason=FeatureDecisionReason.ORG_OVERRIDE_EXPIRED,
+        expected_allowed=True,
+        expected_reason=FeatureDecisionReason.ENABLED_BY_TIER,
     ),
     DecisionScenario(
         name="global-kill-switch",
@@ -80,15 +80,15 @@ _SCENARIOS = (
         expected_reason=FeatureDecisionReason.GLOBAL_DISABLED,
     ),
     DecisionScenario(
-        name="license-override-denied",
+        name="license-override-enabled",
         license_override=True,
-        expected_allowed=False,
-        expected_reason=FeatureDecisionReason.ORG_OVERRIDE_REQUIRED,
+        expected_allowed=True,
+        expected_reason=FeatureDecisionReason.ENABLED_BY_LICENSE_OVERRIDE,
     ),
 )
 
 
-def test_override_expiring_at_evaluation_time_is_expired() -> None:
+def test_expired_override_falls_back_to_default_tier_access() -> None:
     boundary = datetime(2030, 1, 1, tzinfo=UTC)
     context = FeatureDecisionContext(
         feature_key=_FEATURE_KEY,
@@ -107,8 +107,8 @@ def test_override_expiring_at_evaluation_time_is_expired() -> None:
 
     decision = decide_feature(context)
 
-    assert decision.allowed is False
-    assert decision.reason is FeatureDecisionReason.ORG_OVERRIDE_EXPIRED
+    assert decision.allowed is True
+    assert decision.reason is FeatureDecisionReason.ENABLED_BY_TIER
 
 
 def test_expired_override_preserves_existing_explicit_purchase_fallback() -> None:

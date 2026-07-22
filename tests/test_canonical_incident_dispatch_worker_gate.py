@@ -22,7 +22,7 @@ from tests.canonical_incident_dispatch_support import (
 from tests.canonical_incident_orchestration_support import (
     CanonicalState,
     canonical_state_context,
-    remove_feature_override,
+    disable_feature_for_org,
 )
 
 
@@ -41,7 +41,7 @@ def test_dispatch_terminalizes_run_when_feature_flips_off(
     # Given
     state = canonical_state
     run, unit = plan_run(state)
-    remove_feature_override(state, state.enabled_org_id)
+    disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
     finalize_calls: list[str] = []
     monkeypatch.setattr(
@@ -82,7 +82,7 @@ def test_repeated_dispatch_denial_is_idempotent_and_never_retries(
     # Given
     state = canonical_state
     run, unit = plan_run(state)
-    remove_feature_override(state, state.enabled_org_id)
+    disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
     finalize_calls: list[str] = []
     monkeypatch.setattr(
@@ -121,7 +121,7 @@ def test_zero_unit_denial_schedules_finalizer_once(
     # Given
     state = canonical_state
     run = plan_zero_unit_run(state)
-    remove_feature_override(state, state.enabled_org_id)
+    disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
     finalize_calls: list[str] = []
     monkeypatch.setattr(
@@ -155,7 +155,7 @@ def test_denial_never_publishes_terminal_finalizer(
     # Given
     state = canonical_state
     run, unit = plan_run(state)
-    remove_feature_override(state, state.enabled_org_id)
+    disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
 
     def reject_enqueue(_run_id: str) -> None:
@@ -203,7 +203,7 @@ def test_dispatch_terminalizes_running_claim_when_feature_flips_off(
     unit.lease_expires_at = now + timedelta(minutes=5)
     unit.available_at = now
     state.session.commit()
-    remove_feature_override(state, state.enabled_org_id)
+    disable_feature_for_org(state, state.enabled_org_id)
     patch_dispatch(monkeypatch, state.session)
     finalize_calls: list[str] = []
     monkeypatch.setattr(

@@ -20,7 +20,7 @@ _VERSIONS_DIR = (
 def _canonical_incident_migration_module() -> ModuleType:
     matching_paths = [
         path
-        for path in _VERSIONS_DIR.glob("*.py")
+        for path in _VERSIONS_DIR.glob("0042_*.py")
         if _FEATURE_KEY in path.read_text(encoding="utf-8")
     ]
     assert len(matching_paths) == 1
@@ -112,9 +112,10 @@ def test_canonical_incident_feature_seed_is_in_single_head_graph() -> None:
 
     assert migration.down_revision == "0041"
     assert migration.revision in revisions
-    assert scripts.get_heads() == ["0047"]
+    assert scripts.get_heads() == ["0048"]
     assert scripts.get_revision("0043").down_revision == "0042"
     assert scripts.get_revision("0044").down_revision == "0043"
     assert scripts.get_revision("0045").down_revision == "0044"
     assert scripts.get_revision("0046").down_revision == "0045"
     assert scripts.get_revision("0047").down_revision == "0046"
+    assert scripts.get_revision("0048").down_revision == "0047"

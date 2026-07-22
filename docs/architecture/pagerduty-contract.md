@@ -209,11 +209,11 @@ subscription identity.
 
 ## Rollout and release posture
 
-`canonical_incident_ingestion` remains default-off. CI, deployment, and
-credential setup do not create a positive organization override or enable a
-customer. Feature-off blocks new canonical webhook enqueue, processing, and
-writes while status, inspection, disconnect, deletion, and secret cleanup
-remain available.
+`canonical_incident_ingestion` is enabled by default for every license tier after
+the canonical cutover. The global feature row remains a kill switch, and an
+organization may carry an explicit false override. Feature-off blocks new canonical
+webhook enqueue, processing, and writes while status, inspection, disconnect,
+deletion, and secret cleanup remain available.
 
 The PostgreSQL binding migration and any shared ordering migration must be
 safe for mixed versions. Rollout uses a dual-schema bridge, inventory of every
@@ -227,5 +227,5 @@ Binding persistence uses one lock order through the persistence boundary:
 binding, source, integration, credential; revoke candidates use deterministic
 UUID order. The worker hydrates credentials through the async-native path,
 revalidates that graph immediately before the ClickHouse write, and retains a
-completed receipt for 604800 seconds (seven days). Migration head is 0044.
+completed receipt for 604800 seconds (seven days). Migration head is 0048.
 There is no production downgrade path to the legacy writer or reader.

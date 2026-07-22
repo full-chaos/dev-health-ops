@@ -68,7 +68,7 @@ def test_running_denial_does_not_cancel_replacement_lease_owner(
             state.session,
             run,
             CanonicalIncidentFeatureDisabledError(
-                FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED
+                FeatureDecisionReason.ORG_OVERRIDE_DISABLED
             ),
         )
     finally:
@@ -101,7 +101,7 @@ def test_running_denial_terminalizes_legacy_null_owner(
         state.session,
         run,
         CanonicalIncidentFeatureDisabledError(
-            FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED
+            FeatureDecisionReason.ORG_OVERRIDE_DISABLED
         ),
     )
 

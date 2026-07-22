@@ -14,12 +14,8 @@ from dev_health_ops.licensing.types import TIER_ORDER, FeatureCategory, LicenseT
 STANDARD_FEATURE_ROW = tuple[str, str, FeatureCategory, LicenseTier, str]
 
 CANONICAL_INCIDENT_INGESTION_FEATURE: Final = "canonical_incident_ingestion"
-EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset(
-    {"agent_context_runtime", CANONICAL_INCIDENT_INGESTION_FEATURE}
-)
-ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset(
-    {CANONICAL_INCIDENT_INGESTION_FEATURE}
-)
+EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset({"agent_context_runtime"})
+ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset()
 
 
 def is_explicit_purchase_feature(feature_key: str) -> bool:

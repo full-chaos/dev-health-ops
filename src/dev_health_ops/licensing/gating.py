@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.licensing.feature_decisions import evaluate_org_features_async
 from dev_health_ops.licensing.registry import (
+    CANONICAL_INCIDENT_INGESTION_FEATURE,
     EXPLICIT_PURCHASE_FEATURES,
     get_features_for_tier,
 )
@@ -384,7 +385,13 @@ async def get_org_entitlements_from_db(
     features = get_features_for_tier(tier)
     limits = DEFAULT_LIMITS[tier]
 
-    decision_keys = sorted(EXPLICIT_PURCHASE_FEATURES | {"customer_push_ingest"})
+    decision_keys = sorted(
+        EXPLICIT_PURCHASE_FEATURES
+        | {
+            CANONICAL_INCIDENT_INGESTION_FEATURE,
+            "customer_push_ingest",
+        }
+    )
     decisions = await evaluate_org_features_async(session, org_id, decision_keys)
     for feature_key, decision in decisions.items():
         features[feature_key] = decision.allowed

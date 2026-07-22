@@ -130,9 +130,9 @@ async def canonical_api_state_context(tmp_path: Path) -> AsyncIterator[ApiState]
         await session.flush()
         session.add(
             OrgFeatureOverride(
-                org_id=enabled.org_id,
+                org_id=disabled.org_id,
                 feature_id=feature.id,
-                is_enabled=True,
+                is_enabled=False,
             )
         )
         await session.commit()

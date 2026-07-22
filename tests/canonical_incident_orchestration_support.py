@@ -73,9 +73,9 @@ def canonical_state_context() -> Iterator[CanonicalState]:
     session.flush()
     session.add(
         OrgFeatureOverride(
-            org_id=enabled_org_id,
+            org_id=disabled_org_id,
             feature_id=feature.id,
-            is_enabled=True,
+            is_enabled=False,
         )
     )
     session.commit()
@@ -159,16 +159,31 @@ def create_canonical_graph(
     )
 
 
-def remove_feature_override(
+def disable_feature_for_org(
     state: CanonicalState,
     org_id: uuid.UUID,
     *,
     commit: bool = True,
 ) -> None:
-    state.session.query(OrgFeatureOverride).filter_by(
-        org_id=org_id,
-        feature_id=state.feature_id,
-    ).delete(synchronize_session=False)
+    override = (
+        state.session.query(OrgFeatureOverride)
+        .filter_by(
+            org_id=org_id,
+            feature_id=state.feature_id,
+        )
+        .one_or_none()
+    )
+    if override is None:
+        state.session.add(
+            OrgFeatureOverride(
+                org_id=org_id,
+                feature_id=state.feature_id,
+                is_enabled=False,
+            )
+        )
+    else:
+        override.is_enabled = False
+        override.expires_at = None
     if commit:
         state.session.commit()
     else:

@@ -9,7 +9,7 @@ from tests.canonical_incident_dispatch_support import patch_dispatch, plan_run
 from tests.canonical_incident_orchestration_support import (
     CanonicalState,
     canonical_state_context,
-    remove_feature_override,
+    disable_feature_for_org,
 )
 
 
@@ -31,7 +31,7 @@ def test_worker_terminalizes_claim_when_feature_flips_after_dispatch(
     run, unit = plan_run(state)
     patch_dispatch(monkeypatch, state.session)
     assert sync_units.dispatch_sync_run(str(run.id))["status"] == "dispatched"
-    remove_feature_override(state, state.enabled_org_id)
+    disable_feature_for_org(state, state.enabled_org_id)
     provider_calls: list[str] = []
     finalize_calls: list[str] = []
     monkeypatch.setattr(
@@ -91,7 +91,7 @@ def test_repeated_worker_denial_is_terminal_and_does_not_finalize_twice(
     run, unit = plan_run(state)
     patch_dispatch(monkeypatch, state.session)
     sync_units.dispatch_sync_run(str(run.id))
-    remove_feature_override(state, state.enabled_org_id)
+    disable_feature_for_org(state, state.enabled_org_id)
     finalize_calls: list[str] = []
     monkeypatch.setattr(
         sync_units, "_start_unit_heartbeat", lambda *_args: (None, None)
@@ -144,7 +144,7 @@ def test_worker_rechecks_feature_after_lease_check_before_provider(
     )
 
     def disable_after_lease_check(_unit_id: str, _lease_owner: str | None) -> bool:
-        remove_feature_override(state, state.enabled_org_id)
+        disable_feature_for_org(state, state.enabled_org_id)
         return True
 
     monkeypatch.setattr(

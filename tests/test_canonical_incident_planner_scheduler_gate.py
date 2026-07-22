@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from dev_health_ops.models import (
+    IntegrationDataset,
     JobRun,
     JobStatus,
     ScheduledJob,
@@ -15,7 +16,11 @@ from dev_health_ops.models import (
     SyncRunMode,
     SyncRunUnit,
 )
+from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.sync import planner
+from dev_health_ops.sync.canonical_incident_gate import (
+    sync_dataset_requires_canonical_incident_feature,
+)
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from tests.canonical_incident_orchestration_support import (
     CanonicalState,
@@ -40,6 +45,13 @@ def _request(
         mode=SyncRunMode.INCREMENTAL.value,
         triggered_by="test",
         before=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_jira_incidents_use_the_existing_canonical_feature_gate() -> None:
+    assert sync_dataset_requires_canonical_incident_feature("jira", "incidents") is True
+    assert (
+        sync_dataset_requires_canonical_incident_feature("jira", "work-items") is False
     )
 
 
@@ -85,6 +97,69 @@ def test_planner_denies_canonical_work_before_persistence(
     assert state.session.query(SyncRun).count() == 0
     assert state.session.query(SyncRunUnit).count() == 0
     assert state.session.query(SyncDispatchOutbox).count() == 0
+
+
+def test_planner_denies_disabled_jira_incidents_in_a_mixed_plan(
+    canonical_state: CanonicalState,
+) -> None:
+    # Given
+    state = canonical_state
+    graph = create_canonical_graph(state, state.disabled_org_id)
+    credential = state.session.get(
+        IntegrationCredential, graph.integration.credential_id
+    )
+    assert credential is not None
+    credential.provider = "jira"
+    graph.integration.provider = "jira"
+    graph.source.provider = "jira"
+    state.session.add(
+        IntegrationDataset(
+            org_id=str(state.disabled_org_id),
+            integration_id=graph.integration.id,
+            dataset_key="work-items",
+            is_enabled=True,
+            options={},
+        )
+    )
+    state.session.commit()
+
+    # When
+    with pytest.raises(RuntimeError, match="feature_disabled"):
+        plan_sync_run(
+            state.session,
+            _request(state, str(graph.integration.id), str(state.disabled_org_id)),
+        )
+
+    # Then
+    assert state.session.query(SyncRun).count() == 0
+    assert state.session.query(SyncRunUnit).count() == 0
+
+
+def test_planner_keeps_jira_work_items_ungated_when_feature_is_off(
+    canonical_state: CanonicalState,
+) -> None:
+    # Given
+    state = canonical_state
+    graph = create_canonical_graph(state, state.disabled_org_id)
+    credential = state.session.get(
+        IntegrationCredential, graph.integration.credential_id
+    )
+    assert credential is not None
+    credential.provider = "jira"
+    graph.integration.provider = "jira"
+    graph.source.provider = "jira"
+    graph.dataset.dataset_key = "work-items"
+    state.session.commit()
+
+    # When
+    plan = plan_sync_run(
+        state.session,
+        _request(state, str(graph.integration.id), str(state.disabled_org_id)),
+    )
+
+    # Then
+    assert plan.total_units == 1
+    assert state.session.query(SyncRun).count() == 1
 
 
 def test_scheduler_skips_disabled_canonical_config_before_marker_or_work(

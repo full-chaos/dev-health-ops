@@ -1066,6 +1066,7 @@ proof-of-pipe that the plumbing actually reaches a `budget_comparison` row:
 | --- | --- | --- | --- |
 | `jira_metadata` | `rest_core` | Project/label metadata | high |
 | `jira_jql` | `search` | Work-item listing via REST `search/jql` pagination | medium |
+| `jira_jsm_incident_admission` | `rest_core` | Bounded native JSM incident admission checks for JQL candidates | low |
 | `jira_issue_enrichment` | `rest_core` | Per-issue changelog / comment / sprint enrichment | medium |
 | `jira_comments` | `rest_core` | Comment pagination (activity-dependent) | low |
 | `jira_worklogs` | `rest_core` | Per-issue worklog expansion (`JIRA_FETCH_WORKLOGS`) | low |

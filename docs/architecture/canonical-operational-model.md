@@ -184,3 +184,50 @@ Historical GitHub/GitLab rows retain status and lifecycle timestamps, but legacy
 fields are null or empty after backfill. Enabled live dual-write supplies that richer
 issue metadata going forward. The backfill's deterministic canonical ids make
 repeated runs idempotent under the centralized current-row selector.
+
+## Jira Service Management incident source contract
+
+Jira Service Management (JSM) incidents are an `OperationalIncident` source, not a
+general-purpose alert source. A JSM issue can remain a Jira `WorkItem` for ordinary work-item
+analytics and, separately, be admitted as an `OperationalIncident` only after the native JSM
+Incident API accepts it. These are two persisted semantics, not two names for one record.
+
+The implementation draft uses this bounded candidate query, with the values substituted for
+each sync window:
+
+```text
+project in (<allowed_service_project_keys>) AND "Ticket category" = Incidents AND updated >= "<window_start>" AND updated < "<window_end>" ORDER BY updated ASC, key ASC
+```
+
+`<allowed_service_project_keys>` is the configured JSM allowlist intersected with the
+service-project keys returned by JSM service desk enumeration. A configured key absent from
+that enumeration fails the sync closed. `<window_start>` is inclusive and `<window_end>` is
+exclusive. The query must never become a
+broad text search, a project-only query, an unbounded category query, or an issue-key-prefix
+heuristic. The candidate query is not admission evidence.
+
+For every candidate, admission is a GET to the fixed Atlassian host and native Incident path:
+
+```text
+GET https://api.atlassian.com/jsm/incidents/cloudId/<cloud_id>/v1/incident/<issue_id>
+```
+
+Only HTTP 200 admits the candidate as an `OperationalIncident`. HTTP 404 is a negative
+admission result. It is not a tombstone and must not delete, suppress, or rewrite a prior
+canonical row. Any other status, transport failure, malformed response, cloud ID mismatch,
+or authentication error fails closed for the sync. The provider must not substitute the Jira
+issue GET, a second corroborating endpoint, or an alert lookup for native admission.
+
+The canonical capability outcome is **BLOCKED** because no tenant or live API proof is
+available. The implementation draft may be **GO** for code and unit contracts, but merge and
+release readiness remain **BLOCKED** until a bounded tenant sync proves both a 200 admission
+and a 404 negative admission, with request and response evidence. This document records the
+draft contract and blocker, not a live-proof result.
+
+JSM incidents are distinct from JSM Ops Alerts and Opsgenie alerts. Alerts are not ingested by
+this slice, are not corroborating evidence, and are never converted into incidents. See the
+[JSM provider contract](../providers/jira-service-management.md) for the complete matrix,
+lifecycle, and live-proof rules.
+
+[jsm-service-desks]: https://developer.atlassian.com/cloud/jira/service-desk/rest/api-group-servicedesk/#api-rest-servicedeskapi-servicedesk-get
+[jira-jql-search]: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/

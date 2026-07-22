@@ -4,8 +4,10 @@
 
 The canonical operational model is the ClickHouse-only contract for provider-neutral
 services, incidents, alerts, on-call data, and their evidence. It is the durable seam
-between provider ingestion and operational metrics. It does not fetch provider APIs,
-normalize provider payloads, or replace legacy producers.
+between provider ingestion and operational metrics. It does not fetch provider APIs or
+normalize provider payloads. All supported ClickHouse incident producers and consumers use
+this contract; the old repository-scoped `incidents` table is retained only as a bounded
+historical-backfill input until retirement parity is proven.
 
 ## Entity contract
 
@@ -127,8 +129,10 @@ hydration. Tombstone, active, source, and domain-time filters run only after win
 selection in both modes, so an older active row cannot reappear behind a tombstone.
 Resolved windows are for MTTR and DORA. Started windows are for incident creation
 analysis. Overlap windows are for lifecycle and active-incident analysis.
-`load_operational_incidents()` remains a resolved-window compatibility alias. These reads
-intentionally coexist with legacy `incidents` and `atlassian_ops_*` readers.
+`load_operational_incidents()` remains a resolved-window compatibility alias. Runtime
+metrics, work-graph display resolution, and completeness audits project repository scope
+only through active `ServiceRepositoryMapping` rows. They never union the legacy
+`incidents` table.
 
 ## Ordering-contract rollout and recovery
 
@@ -156,23 +160,25 @@ full resync for every provider/source represented in the canonical tables before
 cutover. Record that resync with the migration evidence. Rollback uses the same bridge
 binary in contract-2 mode; never lower the insert constraint or restart an original
 contract-1 binary.
-## Producer migration rollout
 
-CHAOS-2963 adds an opt-in, additive producer seam for GitHub and GitLab
-issue-derived incidents and for historical Atlassian Ops rows. Set
-`OPERATIONAL_INCIDENT_DUAL_WRITE=true` to write canonical rows alongside the
-legacy `incidents` write; this flag never suppresses the legacy write.
+## Producer cutover and legacy retirement
 
-`providers.operational_migration` maps GitHub and GitLab records with
-`source_entity_type="issue"`, a repository-derived `OperationalService`, and a
-`ServiceRepositoryMapping`. The incident has no `repo_id`; repository linkage is
-the explicit mapping edge. Atlassian Ops backfill maps its legacy incidents,
+GitLab native incidents are selected with the provider-native
+`issue_type=incident` filter and persist canonical operational batches directly.
+Labels are metadata and never classify ordinary GitLab issues as incidents. GitHub
+does not expose a native incident source, so its former issue-label proxy is not a
+supported dataset; GitHub issues remain work items. PagerDuty, JSM, External Push,
+the repository ingest API, and ClickHouse fixtures also write canonical operational
+batches directly. There is no incident dual-write feature flag or supported
+ClickHouse legacy writer.
+
+Repository-associated sources produce a repository-derived `OperationalService`
+and `ServiceRepositoryMapping`. The incident has no `repo_id`; repository linkage
+is the explicit mapping edge. Atlassian Ops backfill maps its legacy incidents,
 alerts, and schedules with `provider="atlassian"` and their native source entity
 types. Deterministic canonical ids make repeated source snapshots idempotent.
 
-The migration does not change incident-correlation, Sankey, DORA, MTTR, or
-deployment-edge consumers. Those consumers continue reading legacy tables until
-their explicit cutover gate. Historical migration runs through
+Historical migration runs through
 `dev-health-ops backfill operational --org <org-id>` and joins `incidents` to
 `repos` on `repo_id` before mapping GitHub/GitLab issue incidents. The CLI accepts
 explicit provider-instance ids because the legacy incident row does not carry
@@ -181,9 +187,11 @@ their legacy tables and mapped through the same canonical writer.
 
 Historical GitHub/GitLab rows retain status and lifecycle timestamps, but legacy
 `incidents` has no labels, issue URL, number, title, or description; those canonical
-fields are null or empty after backfill. Enabled live dual-write supplies that richer
-issue metadata going forward. The backfill's deterministic canonical ids make
-repeated runs idempotent under the centralized current-row selector.
+fields are null or empty after backfill. The backfill's deterministic canonical ids
+make repeated runs idempotent under the centralized current-row selector. Retirement
+parity fails closed when provider-instance identity cannot be recovered or an expected
+canonical incident or repository mapping is missing. Only after that preflight passes
+may a later migration drop the legacy table.
 
 ## Jira Service Management incident source contract
 

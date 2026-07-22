@@ -90,7 +90,7 @@ class _Sink:
                     "last_synced": START,
                 }
             ]
-        if "FROM incidents" in query:
+        if "operational_incidents" in query:
             return [
                 {
                     "repo_id": REPO_ID,
@@ -255,7 +255,7 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
                     {"repo_id": "not-a-uuid", "deployment_id": "d-bad"},
                     {"repo_id": REPO_ID, "deployment_id": ""},
                 ]
-            if "FROM incidents" in query:
+            if "operational_incidents" in query:
                 rows = rows + [{"repo_id": REPO_ID, "incident_id": None}]
             return rows
 

@@ -127,7 +127,7 @@ def test_operational_incident_columns_match_the_live_schema(sink) -> None:
     assert columns == expected
 
 
-def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None:
+def test_operational_native_write_and_legacy_backfill_are_idempotent(sink) -> None:
     # Given: live and legacy incident sources scoped to an isolated organization.
     from dev_health_ops.backfill.operational_clickhouse import (
         run_canonical_operational_backfill,
@@ -154,7 +154,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
     repo_id = uuid4()
     source_version = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
 
-    async def seed_dual_write() -> None:
+    async def seed_native_and_legacy_rows() -> None:
         async with ClickHouseStore(clickhouse_uri) as store:
             store.org_id = org_id
             ingestion_sink = IngestionSink(store)
@@ -198,7 +198,27 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
                 last_synced=source_version,
             )
             await store.insert_repo(repo)
-            await store.insert_incidents([legacy_incident])
+            await store._insert_rows(
+                "incidents",
+                [
+                    "repo_id",
+                    "incident_id",
+                    "status",
+                    "started_at",
+                    "resolved_at",
+                    "last_synced",
+                ],
+                [
+                    {
+                        "repo_id": legacy_incident.repo_id,
+                        "incident_id": legacy_incident.incident_id,
+                        "status": legacy_incident.status,
+                        "started_at": legacy_incident.started_at,
+                        "resolved_at": legacy_incident.resolved_at,
+                        "last_synced": source_version,
+                    }
+                ],
+            )
             await store.insert_atlassian_ops_incidents([atlassian_incident])
             await store.insert_atlassian_ops_alerts([atlassian_alert])
             await store.insert_atlassian_ops_schedules([atlassian_schedule])
@@ -240,20 +260,26 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
             )
 
     try:
-        # When: dual-write and repeated legacy backfills populate canonical tables.
-        asyncio.run(seed_dual_write())
-        asyncio.run(
+        # When: native canonical writes and repeated legacy backfills coexist.
+        asyncio.run(seed_native_and_legacy_rows())
+        first_result = asyncio.run(
             run_canonical_operational_backfill(
                 clickhouse_uri=clickhouse_uri,
                 org_id=org_id,
             )
         )
-        asyncio.run(
+        second_result = asyncio.run(
             run_canonical_operational_backfill(
                 clickhouse_uri=clickhouse_uri,
                 org_id=org_id,
             )
         )
+        assert first_result.parity_verified is True
+        assert second_result.parity_verified is True
+        assert first_result.expected_incidents == 2
+        assert first_result.verified_incidents == 2
+        assert first_result.expected_service_repository_mappings == 1
+        assert first_result.verified_service_repository_mappings == 1
         for table in (
             "operational_services",
             "operational_incidents",
@@ -266,7 +292,7 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
         # Then: native content wins even when the legacy backfill has the same source time.
         counts = {
             table: sink.client.query(
-                f"SELECT count() FROM {table} FINAL WHERE org_id = {{org_id:String}}",
+                f"SELECT count() FROM {current_operational_rows_sql(table)}",
                 parameters={"org_id": org_id},
             ).result_rows[0][0]
             for table in (
@@ -285,8 +311,10 @@ def test_operational_dual_write_and_legacy_backfill_are_idempotent(sink) -> None
             "operational_service_repository_mappings": 1,
         }
         incident = sink.client.query(
-            "SELECT title FROM operational_incidents FINAL "
-            "WHERE org_id = {org_id:String} AND provider = 'github'",
+            "SELECT title FROM "
+            + current_operational_rows_sql(
+                "operational_incidents", ("provider = 'github'",)
+            ),
             parameters={"org_id": org_id},
         ).result_rows
         assert incident == [("Database unavailable",)]

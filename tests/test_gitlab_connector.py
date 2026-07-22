@@ -52,7 +52,7 @@ def test_gitlab_connector_shell_close_is_noop_for_live_processor_callers() -> No
 def test_gitlab_connector_shell_exposes_rest_client_for_live_processor_callers() -> (
     None
 ):
-    # Live processor paths still use connector.rest_client (incident label
+    # Live processor paths still use connector.rest_client (native incident
     # issues at processors/gitlab.py:1111, CI adapter base_url at :1985). The
     # retired shell must keep it or those paths AttributeError at runtime.
     with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab"):

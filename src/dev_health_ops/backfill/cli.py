@@ -106,7 +106,12 @@ def _cmd_backfill_operational(ns: argparse.Namespace) -> int:
             "Migrated canonical operational rows: "
             f"services={result.services}, incidents={result.incidents}, "
             f"alerts={result.alerts}, schedules={result.schedules}, "
-            f"service_repository_mappings={result.service_repository_mappings}"
+            f"service_repository_mappings={result.service_repository_mappings}; "
+            f"parity_verified={str(result.parity_verified).lower()}, "
+            f"incidents={result.verified_incidents}/{result.expected_incidents}, "
+            "service_repository_mappings="
+            f"{result.verified_service_repository_mappings}/"
+            f"{result.expected_service_repository_mappings}"
         )
         return 0
     except Exception as exc:

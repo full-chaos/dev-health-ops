@@ -36,12 +36,14 @@ Deployments and incident facts are synced via their own jobs:
 
 ```bash
 dev-hops sync deployments --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
-dev-hops sync incidents --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
 dev-hops sync deployments --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
 dev-hops sync incidents --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
 ```
 
-Note: Jira Ops/Service Desk incidents are planned once project-to-repo or deployment mapping is defined.
+GitLab incident sync selects native `issue_type=incident` records. GitHub label-bearing
+issues are work items, not incidents. PagerDuty and JSM incidents are configured through
+their integration datasets and become repository-scoped for metrics only through explicit
+service-to-repository mappings.
 
 ## Derived Tables / Collections
 

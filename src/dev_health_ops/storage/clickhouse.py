@@ -30,7 +30,6 @@ from dev_health_ops.models.git import (
     GitFile,
     GitPullRequest,
     GitPullRequestReview,
-    Incident,
     Repo,
 )
 from dev_health_ops.models.operational import (
@@ -1302,58 +1301,6 @@ class ClickHouseStore:
                 "release_ref",
                 "release_ref_confidence",
                 "org_id",
-                "last_synced",
-            ],
-            rows,
-        )
-
-    async def insert_incidents(
-        self, incidents: Sequence[Incident | dict[str, Any]]
-    ) -> None:
-        if not incidents:
-            return
-        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: list[dict[str, Any]] = []
-        for item in incidents:
-            if isinstance(item, dict):
-                rows.append(
-                    {
-                        "repo_id": self._normalize_uuid(item.get("repo_id")),
-                        "incident_id": str(item.get("incident_id")),
-                        "status": item.get("status"),
-                        "started_at": self._normalize_datetime(item.get("started_at")),
-                        "resolved_at": self._normalize_datetime(
-                            item.get("resolved_at")
-                        ),
-                        "last_synced": self._normalize_datetime(
-                            item.get("last_synced") or synced_at_default
-                        ),
-                    }
-                )
-            else:
-                rows.append(
-                    {
-                        "repo_id": self._normalize_uuid(item.repo_id),
-                        "incident_id": str(item.incident_id),
-                        "status": getattr(item, "status", None),
-                        "started_at": self._normalize_datetime(item.started_at),
-                        "resolved_at": self._normalize_datetime(
-                            getattr(item, "resolved_at", None)
-                        ),
-                        "last_synced": self._normalize_datetime(
-                            getattr(item, "last_synced", None) or synced_at_default
-                        ),
-                    }
-                )
-
-        await self._insert_rows(
-            "incidents",
-            [
-                "repo_id",
-                "incident_id",
-                "status",
-                "started_at",
-                "resolved_at",
                 "last_synced",
             ],
             rows,

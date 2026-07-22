@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -53,7 +54,9 @@ def _mock_store():
     store.insert_git_pull_requests = AsyncMock()
     store.insert_work_items = AsyncMock()
     store.insert_deployments = AsyncMock()
-    store.insert_incidents = AsyncMock()
+    store.insert_operational_services = AsyncMock()
+    store.insert_operational_incidents = AsyncMock()
+    store.insert_operational_service_repository_mappings = AsyncMock()
     store.__aenter__ = AsyncMock(return_value=store)
     store.__aexit__ = AsyncMock(return_value=False)
     return store
@@ -183,6 +186,8 @@ class TestPersistIncidents:
                 {
                     "incident_id": "inc-1",
                     "status": "resolved",
+                    "started_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+                    "resolved_at": datetime(2026, 7, 1, 1, tzinfo=timezone.utc),
                     "_repo_url": "https://github.com/org/repo",
                     "_org_id": "default",
                     "_ingestion_id": "ing-1",
@@ -191,9 +196,14 @@ class TestPersistIncidents:
             count = await persist_items("incidents", items)
 
         assert count == 1
-        store.insert_incidents.assert_awaited_once()
-        call_args = store.insert_incidents.call_args[0][0]
-        assert "repo_id" in call_args[0]
+        store.insert_operational_services.assert_awaited_once()
+        store.insert_operational_service_repository_mappings.assert_awaited_once()
+        store.insert_operational_incidents.assert_awaited_once()
+        incident = store.insert_operational_incidents.await_args.args[0][0]
+        assert incident.provider == "external"
+        assert incident.provider_instance_id == "legacy-repository-ingest"
+        assert incident.external_id == "inc-1"
+        assert incident.normalized_status == "resolved"
 
 
 @pytest.mark.asyncio

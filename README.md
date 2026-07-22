@@ -161,6 +161,23 @@ CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
 OpenAPI docs are available at <http://localhost:8000/docs> when the API is
 running. GraphQL is served by the API for the web app.
 
+### Test Context Fabric locally
+
+Context Fabric/ACR is a separate private service and is not added to the normal
+Ops Compose project. With sibling `dev-health-{ops,acr,web}` checkouts, start the
+isolated TLS fixture from this repository:
+
+```bash
+bash scripts/context-fabric-local.sh
+```
+
+The launcher builds this Ops checkout, creates a temporary organization and
+`agent_context_runtime` entitlement, seeds deterministic evidence, verifies the
+ACR API and host-local MCP sidecar, and keeps the stack available for OpenCode,
+Claude Code, Codex, or Cursor testing. See
+[`docs/context-fabric-local.md`](docs/context-fabric-local.md) for path
+overrides, client setup, security boundaries, and cleanup behavior.
+
 ### Run workers
 
 Background jobs use Celery with Valkey/Redis:
@@ -198,9 +215,9 @@ Notes:
 - `live-e2e` starts a live backend harness, generates deterministic ClickHouse
   fixtures, waits for API readiness, and asserts `/health`, `/api/v1/meta`, and
   `/api/v1/home`.
-- `ci` blocks on `flake8` and coverage-gated unit tests. `black`, `isort`, and
-  `mypy` are advisory by default; set `STRICT_QUALITY_GATES=1` to make them
-  blocking.
+- Before pushing an Ops change, `bash ci/local_validate.sh` is the standing
+  gate: Ruff formatting/lint, mypy, the full non-benchmark/non-ClickHouse unit
+  suite, and an isolated live-ClickHouse query proof when Docker is available.
 - JUnit XML paths are stable under `test-results/junit/` and can be overridden
   with `TEST_RESULTS_DIR` / `JUNIT_XML_*` variables.
 
@@ -245,6 +262,7 @@ docker run --rm -it \
 ## Key docs
 
 - [`docs/getting-started.md`](docs/getting-started.md): setup and demo data
+- [`docs/context-fabric-local.md`](docs/context-fabric-local.md): isolated ACR service and plugin testing
 - [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md): full CLI reference
 - [`docs/architecture/database-architecture.md`](docs/architecture/database-architecture.md): PostgreSQL/ClickHouse split
 - [`docs/architecture/data-pipeline.md`](docs/architecture/data-pipeline.md): provider → processor → sink boundaries
@@ -258,5 +276,3 @@ docker run --rm -it \
 - Investment categorization runs at compute time and persists distributions.
 - Theme rollups are deterministic from canonical subcategories.
 - UX-time LLM usage is explanation-only and must not recompute categories.
-- Analytics persistence goes through ClickHouse sinks, not file exports or debug
-  dumps.

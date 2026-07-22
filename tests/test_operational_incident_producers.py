@@ -19,7 +19,7 @@ _REPO_ID = UUID("00000000-0000-0000-0000-000000000101")
 def test_gitlab_incident_fetch_retains_full_issue_for_canonical_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: a live GitLab issue with metadata absent from legacy incidents.
+    # Given: a live GitLab incident carrying its native issue metadata.
     connector = Mock()
     connector.rest_client.get_issues.return_value = [
         {

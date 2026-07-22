@@ -99,7 +99,7 @@ Without this, teams will collide on payload shape, entity identity, metric names
 ### Implementation Notes
 > **Existing infrastructure to extend (not replace):**
 > - `metrics/schemas.py` already defines `PipelineRunRow`, `DeploymentRow`, `IncidentRow`, `DORAMetricsRecord`
-> - `migrations/clickhouse/000_raw_tables.sql` defines `ci_pipeline_runs`, `deployments`, `incidents`
+> - `migrations/clickhouse/000_raw_tables.sql` defines `ci_pipeline_runs` and `deployments`; incidents use `operational_incidents`
 > - `migrations/clickhouse/023b_dora_metrics.sql` defines `dora_metrics_daily`
 >
 > New TestOps schemas (test_case_result, test_suite_result, coverage_snapshot) must coexist with and reference these existing structures. Report schemas (report_plan, chart_spec, insight_block, provenance_record) are net-new.
@@ -131,7 +131,7 @@ Ingest normalized pipeline and job execution data from target CI/CD systems.
 ### Implementation Notes
 > **Existing infrastructure to extend:**
 > - `connectors/github.py` and `connectors/gitlab.py` already fetch CI pipeline data
-> - `storage/mixins/cicd.py` already upserts pipeline runs, deployments, and incidents
+> - `storage/mixins/cicd.py` already upserts pipeline runs and deployments; supported incident producers use canonical operational batches
 > - ClickHouse table `ci_pipeline_runs` already exists in `000_raw_tables.sql`
 >
 > v1 scope: GitHub Actions, GitLab CI, Jenkins/Buildkite. CircleCI and Azure DevOps deferred to v2.

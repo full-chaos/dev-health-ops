@@ -795,6 +795,7 @@ def test_postgres_targets_do_not_overlap_clickhouse_tables():
     # cannot silently turn this guard into a no-op false pass.
     assert ch_tables, "ClickHouse migration table catalog must not be empty"
     assert "teams" in ch_tables, "`teams` must be in the ClickHouse purge catalog"
+    assert "incidents" not in ch_tables
     overlap = pg_tables & ch_tables
     assert not overlap, (
         "Postgres deletion targets must not reference ClickHouse tables "

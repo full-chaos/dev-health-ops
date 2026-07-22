@@ -420,10 +420,10 @@ def test_mapped_canonical_pagerduty_incident_drives_incident_metrics(
         assert [(metric.metric_name, metric.value) for metric in dora_metrics] == [
             ("time_to_restore_service", pytest.approx(4 * 60 * 60))
         ]
-        legacy_count = sink.query(
-            "SELECT count() FROM incidents WHERE org_id = {org_id:String}",
-            {"org_id": ORG_ID},
+        legacy_table_count = sink.query(
+            "SELECT count() FROM system.tables "
+            "WHERE database = currentDatabase() AND name = 'incidents'",
         )
-        assert legacy_count.result_rows == [(0,)]
+        assert legacy_table_count.result_rows == [(0,)]
     finally:
         sink.close()

@@ -6,8 +6,7 @@ The canonical operational model is the ClickHouse-only contract for provider-neu
 services, incidents, alerts, on-call data, and their evidence. It is the durable seam
 between provider ingestion and operational metrics. It does not fetch provider APIs or
 normalize provider payloads. All supported ClickHouse incident producers and consumers use
-this contract; the old repository-scoped `incidents` table is retained only as a bounded
-historical-backfill input until retirement parity is proven.
+this contract; migration 068 removes the old repository-scoped `incidents` table.
 
 ## Entity contract
 
@@ -178,20 +177,15 @@ is the explicit mapping edge. Atlassian Ops backfill maps its legacy incidents,
 alerts, and schedules with `provider="atlassian"` and their native source entity
 types. Deterministic canonical ids make repeated source snapshots idempotent.
 
-Historical migration runs through
-`dev-health-ops backfill operational --org <org-id>` and joins `incidents` to
-`repos` on `repo_id` before mapping GitHub/GitLab issue incidents. The CLI accepts
-explicit provider-instance ids because the legacy incident row does not carry
-instance provenance. Atlassian Ops incidents, alerts, and schedules are read from
-their legacy tables and mapped through the same canonical writer.
+`dev-health-ops backfill operational --org <org-id>` migrates only Atlassian Ops
+incidents, alerts, and schedules from their provider-specific legacy tables through
+the canonical writer. Deterministic canonical ids and post-write identity checks make
+repeated runs idempotent and fail closed if the canonical write is incomplete.
 
-Historical GitHub/GitLab rows retain status and lifecycle timestamps, but legacy
-`incidents` has no labels, issue URL, number, title, or description; those canonical
-fields are null or empty after backfill. The backfill's deterministic canonical ids
-make repeated runs idempotent under the centralized current-row selector. Retirement
-parity fails closed when provider-instance identity cannot be recovered or an expected
-canonical incident or repository mapping is missing. Only after that preflight passes
-may a later migration drop the legacy table.
+Migration 068 removes the former ClickHouse `incidents` table. Fresh installations
+do not create it, and current runtime code has no reader, writer, or backfill path for
+it. GitHub issues are work items; GitLab native incidents and every other supported
+incident producer write `operational_incidents` directly.
 
 ## Jira Service Management incident source contract
 

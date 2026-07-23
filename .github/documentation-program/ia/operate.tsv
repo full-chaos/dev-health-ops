@@ -12,7 +12,6 @@ op-health	op-install	/operate/install/verify-health/	Verify first health	task-gu
 op-configure	operate	/operate/configure/	Configure the platform	landing	true	public	planned	false	
 op-env	op-configure	/operate/configure/environment-and-secrets/	Environment and secrets	task-guide	true	public	planned	false	
 op-db	op-configure	/operate/configure/databases-and-storage/	Databases and storage	task-guide	true	public	planned	false	
-op-db-pooling	op-configure	/operate/configure/database-connection-pooling/	Database connection pooling	reference	true	public	active	false	
 op-network	op-configure	/operate/configure/network-and-tls/	Network, TLS, proxy, and domains	task-guide	true	public	planned	false	
 op-workers-config	op-configure	/operate/configure/workers-and-schedules/	Workers, schedules, and queues	task-guide	true	public	planned	false	
 op-external	op-configure	/operate/configure/external-services/	Model and external-service configuration	task-guide	true	public	planned	false	
@@ -25,7 +24,7 @@ op-routine	op-maintain	/operate/maintain/routine-maintenance/	Routine maintenanc
 op-decommission	op-maintain	/operate/maintain/decommission/	Decommission or replace an environment	task-guide	true	public	planned	false	
 op-run	operate	/operate/run/	Run the platform	landing	true	public	planned	false	
 op-services	op-run	/operate/run/services/	Service and process responsibilities	concept	true	public	planned	false	
-op-workers	op-run	/operate/run/workers-and-jobs/	Workers, jobs, retries, and schedules	task-guide	true	public	active	false	
+op-workers	op-run	/operate/run/workers-and-jobs/	Workers, jobs, retries, and schedules	task-guide	true	public	planned	false	
 op-ingestion	op-run	/operate/run/ingestion-and-backfills/	Ingestion and backfill operations	task-guide	true	public	planned	false	
 op-controls	op-run	/operate/run/operational-controls/	Safe operational controls	task-guide	true	public	planned	false	
 op-observe	operate	/operate/observe/	Observe the platform	landing	true	public	planned	false	

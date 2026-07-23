@@ -105,7 +105,7 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 22 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
+	if len(descriptors) != 23 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
 		descriptors[1].Kind != jobcontract.KindInvestmentDispatch ||
 		descriptors[2].Kind != jobcontract.KindInvestmentFinalize ||
 		descriptors[3].Kind != jobcontract.KindInvestmentMaterialize ||
@@ -124,14 +124,19 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		descriptors[16].Kind != jobcontract.KindWebhookDelivery ||
 		descriptors[17].Kind != jobcontract.KindReportExecuteOnDemand ||
 		descriptors[18].Kind != jobcontract.KindReportExecuteScheduled ||
-		descriptors[19].Kind != jobcontract.KindHeartbeat ||
-		descriptors[20].Kind != jobcontract.KindRetentionCleanup ||
-		descriptors[21].Kind != jobcontract.KindWorkGraphBuild {
+		descriptors[19].Kind != jobcontract.KindSyncProviderUnit ||
+		descriptors[20].Kind != jobcontract.KindHeartbeat ||
+		descriptors[21].Kind != jobcontract.KindRetentionCleanup ||
+		descriptors[22].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	for _, descriptor := range descriptors {
-		if descriptor.Route != "celery" || descriptor.Executable() {
-			t.Fatalf("checked-in production policy became executable: %#v", descriptor)
+		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
+			if descriptor.Route != "river_canary" || !descriptor.Executable() {
+				t.Fatalf("provider-unit canary policy is not executable: %#v", descriptor)
+			}
+		} else if descriptor.Route != "celery" || descriptor.Executable() {
+			t.Fatalf("checked-in compatibility policy became executable: %#v", descriptor)
 		}
 	}
 

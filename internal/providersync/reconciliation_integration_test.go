@@ -88,7 +88,7 @@ SETTINGS non_replicated_deduplication_window = 100`); err != nil {
 		t.Fatal(err)
 	}
 	firstClaim, err := firstRepository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, Owner: uuid.NewString(), Now: now,
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {
@@ -151,7 +151,7 @@ SETTINGS non_replicated_deduplication_window = 100`); err != nil {
 	}
 	recoveryNow := now.Add(61 * time.Second)
 	recoveredClaim, err := freshRepository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, Owner: uuid.NewString(), Now: recoveryNow,
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: recoveryNow,
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {

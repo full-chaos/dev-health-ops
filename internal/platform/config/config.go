@@ -62,10 +62,11 @@ type Config struct {
 	HealthCheckTimeout time.Duration
 	LogLevel           slog.Level
 
-	DomainDatabaseURI secrets.Value
-	QueueDatabaseURI  secrets.Value
-	ClickHouseURI     secrets.Value
-	ValkeyURI         secrets.Value
+	DomainDatabaseURI     secrets.Value
+	QueueDatabaseURI      secrets.Value
+	ClickHouseURI         secrets.Value
+	ValkeyURI             secrets.Value
+	SettingsEncryptionKey secrets.Value
 
 	QueueDatabaseMode              QueueControlMode
 	RiverDatabaseSchema            string
@@ -83,6 +84,11 @@ type Config struct {
 	OperationalBridgeTimeout       time.Duration
 	OperationalBridgeAllowInsecure bool
 	StreamConfiguredReplicas       int
+
+	WorkerLinearWorkItemsEnabled          bool
+	WorkerJiraWorkItemsEnabled            bool
+	WorkerJiraIncidentsEnabled            bool
+	WorkerLaunchDarklyFeatureFlagsEnabled bool
 }
 
 // Load reads and validates the process environment. CLI profile selection, if
@@ -120,6 +126,32 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	for _, item := range []struct {
+		name   string
+		target *bool
+	}{
+		{
+			name:   "WORKER_LINEAR_WORK_ITEMS_ENABLED",
+			target: &cfg.WorkerLinearWorkItemsEnabled,
+		},
+		{
+			name:   "WORKER_JIRA_WORK_ITEMS_ENABLED",
+			target: &cfg.WorkerJiraWorkItemsEnabled,
+		},
+		{
+			name:   "WORKER_JIRA_INCIDENTS_ENABLED",
+			target: &cfg.WorkerJiraIncidentsEnabled,
+		},
+		{
+			name:   "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
+			target: &cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
+		},
+	} {
+		*item.target, err = boolEnv(lookup, item.name, false)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
 		"DEV_HEALTH_HEALTH_CHECK_TIMEOUT",
@@ -148,6 +180,7 @@ func Load(spec Spec) (Config, error) {
 		{name: "WORKER_DATABASE_URI", target: &cfg.QueueDatabaseURI},
 		{name: "CLICKHOUSE_URI", target: &cfg.ClickHouseURI},
 		{name: "VALKEY_URI", target: &cfg.ValkeyURI},
+		{name: "SETTINGS_ENCRYPTION_KEY", target: &cfg.SettingsEncryptionKey},
 		{name: "WORKER_OPERATIONAL_BRIDGE_TOKEN", target: &cfg.OperationalBridgeToken},
 	}
 	for _, item := range secretTargets {
@@ -316,8 +349,16 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("river_job_cleaner_timeout", c.RiverJobCleanerTimeout),
 		slog.Bool("operational_bridge_allow_insecure", c.OperationalBridgeAllowInsecure),
 		slog.Int("stream_configured_replicas", c.StreamConfiguredReplicas),
+		slog.Bool("worker_linear_work_items_enabled", c.WorkerLinearWorkItemsEnabled),
+		slog.Bool("worker_jira_work_items_enabled", c.WorkerJiraWorkItemsEnabled),
+		slog.Bool("worker_jira_incidents_enabled", c.WorkerJiraIncidentsEnabled),
+		slog.Bool(
+			"worker_launchdarkly_feature_flags_enabled",
+			c.WorkerLaunchDarklyFeatureFlagsEnabled,
+		),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
+		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),
 	}
 	if c.Profile != "" {
 		attrs = append(attrs, slog.String("profile", c.Profile))

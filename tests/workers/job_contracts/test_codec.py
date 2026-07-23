@@ -21,6 +21,7 @@ from dev_health_ops.workers.job_contracts import (
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_SYNC_PROVIDER_UNIT,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
     ContractDecodeError,
@@ -29,6 +30,7 @@ from dev_health_ops.workers.job_contracts import (
     DailyMetricsPartitionPayload,
     HeartbeatPayload,
     OnDemandReportExecutionPayload,
+    ProviderUnitPayload,
     RemainingCapacityPayload,
     RemainingComplexityPayload,
     RemainingDORAPayload,
@@ -112,6 +114,11 @@ from dev_health_ops.workers.job_contracts import (
                 (KIND_REMAINING_TEAM_METRICS, RemainingTeamMetricsPayload),
             ]
         ],
+        (
+            KIND_SYNC_PROVIDER_UNIT,
+            "sync.provider_unit.v1.json",
+            ProviderUnitPayload(unit_id="00000000-0000-4000-8000-000000000022"),
+        ),
     ],
 )
 def test_go_and_python_share_canonical_golden_fixtures(

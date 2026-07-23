@@ -303,6 +303,21 @@ func (args ScheduledReportExecutionArgs) ContractEnvelope() jobcontract.Envelope
 	return args.envelope()
 }
 
+// ProviderUnitArgs is the River-facing ID-only form of sync.provider_unit.v1.
+type ProviderUnitArgs struct {
+	EnvelopeArgs[jobcontract.ProviderUnitPayload]
+}
+
+func (ProviderUnitArgs) Kind() string { return jobcontract.KindSyncProviderUnit }
+
+func (ProviderUnitArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args ProviderUnitArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 func (RetentionCleanupArgs) Kind() string { return jobcontract.KindRetentionCleanup }
 
 func (RetentionCleanupArgs) SupportedContractVersions() []int {

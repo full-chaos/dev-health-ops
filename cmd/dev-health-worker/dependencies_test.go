@@ -51,8 +51,8 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	if len(components) != 0 {
 		t.Fatalf("components = %d, want no pool lifecycle without DSNs", len(components))
 	}
-	if registry.RequiredCount() != 7 {
-		t.Fatalf("required checks = %d, want 7", registry.RequiredCount())
+	if registry.RequiredCount() != 8 {
+		t.Fatalf("required checks = %d, want 8", registry.RequiredCount())
 	}
 	var metrics bytes.Buffer
 	if err := registry.WriteMetrics(&metrics); err != nil {
@@ -74,6 +74,126 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	want := []string{"domain_postgres", "profile_completeness", "queue_postgres", "river_schema"}
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
+	}
+}
+
+func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		config  config.Config
+		runtime bool
+		wantErr bool
+	}{
+		{name: "all off", config: config.Config{}},
+		{
+			name: "launchdarkly complete",
+			config: config.Config{
+				WorkerLaunchDarklyFeatureFlagsEnabled: true,
+			},
+			runtime: true,
+		},
+		{
+			name: "launchdarkly missing runtime",
+			config: config.Config{
+				WorkerLaunchDarklyFeatureFlagsEnabled: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:    "linear incomplete",
+			config:  config.Config{WorkerLinearWorkItemsEnabled: true},
+			wantErr: true,
+		},
+		{
+			name:    "jira work items incomplete",
+			config:  config.Config{WorkerJiraWorkItemsEnabled: true},
+			wantErr: true,
+		},
+		{
+			name:    "jira incidents incomplete",
+			config:  config.Config{WorkerJiraIncidentsEnabled: true},
+			wantErr: true,
+		},
+	} {
+		err := providerRouteSwitchesReady(
+			test.config, &test.runtime,
+		)(context.Background())
+		if (err != nil) != test.wantErr {
+			t.Fatalf("%s error=%v wantErr=%v", test.name, err, test.wantErr)
+		}
+	}
+}
+
+func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
+	t *testing.T,
+) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := &fakeWorkerDatabase{}
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return database, nil
+	}
+	sources.buildOperational = nil
+	sources.buildSyncCoordinator = nil
+	sources.buildProviderSync = func(
+		_ context.Context,
+		_ config.Config,
+		_ workerDatabase,
+		_ *jobruntime.Registry,
+		_ jobruntime.Observer,
+		_ *slog.Logger,
+	) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+		spec, ok := runtimeRegistry.Descriptor("sync.provider_unit")
+		if !ok {
+			t.Fatal("sync.provider_unit descriptor missing")
+		}
+		return nil, []jobruntime.HandlerSpec{spec}, nil
+	}
+	registry := health.NewRegistry(100 * time.Millisecond)
+	_, err = configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Profile: "sync", RiverDatabaseSchema: "river",
+			WorkerLaunchDarklyFeatureFlagsEnabled: true,
+		},
+		registry, sources,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	status := registry.Readiness(context.Background())
+	if !status.Ready {
+		t.Fatalf("registered provider runtime readiness=%#v", status)
+	}
+
+	sources.buildProviderSync = nil
+	missingRegistry := health.NewRegistry(100 * time.Millisecond)
+	_, err = configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Profile: "sync", RiverDatabaseSchema: "river",
+			WorkerLaunchDarklyFeatureFlagsEnabled: true,
+		},
+		missingRegistry, sources,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (health.Gate{Registry: missingRegistry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	missing := missingRegistry.Readiness(context.Background())
+	if !slices.Contains(missing.Failed, "provider_route_switches") ||
+		!slices.Contains(missing.Failed, "profile_completeness") {
+		t.Fatalf("missing provider runtime readiness=%#v", missing)
 	}
 }
 

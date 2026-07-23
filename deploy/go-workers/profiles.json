@@ -258,9 +258,18 @@
       "enabled_by_default": false,
       "min_replicas": 0,
       "max_replicas": 2,
-      "queues": [],
-      "queue_workers": [],
-      "job_kinds": [],
+      "queues": [
+        "sync"
+      ],
+      "queue_workers": [
+        {
+          "queue": "sync",
+          "max_workers": 2
+        }
+      ],
+      "job_kinds": [
+        "sync.provider_unit"
+      ],
       "queue_control_max_connections": 2,
       "domain_max_connections": 4,
       "requires_clickhouse": true,
@@ -268,6 +277,7 @@
       "secret_env": [
         "CLICKHOUSE_URI",
         "POSTGRES_URI",
+        "SETTINGS_ENCRYPTION_KEY",
         "VALKEY_URI",
         "WORKER_DATABASE_URI"
       ]

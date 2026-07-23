@@ -32,6 +32,7 @@ func TestRolloutCommand(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "jobs", "v1")
 	report := filepath.Join(t.TempDir(), "capability.json")
 	heavyReport := filepath.Join(t.TempDir(), "heavy-capability.json")
+	syncReport := filepath.Join(t.TempDir(), "sync-capability.json")
 	var capability bytes.Buffer
 	var capabilityErrors bytes.Buffer
 	if code := run([]string{"capabilities", "--root", root, "--profile", "ops"}, &capability, &capabilityErrors); code != 0 {
@@ -48,9 +49,17 @@ func TestRolloutCommand(t *testing.T) {
 	if err := os.WriteFile(heavyReport, capability.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	capability.Reset()
+	capabilityErrors.Reset()
+	if code := run([]string{"capabilities", "--root", root, "--profile", "sync"}, &capability, &capabilityErrors); code != 0 {
+		t.Fatalf("sync capabilities code = %d, stderr = %s", code, capabilityErrors.String())
+	}
+	if err := os.WriteFile(syncReport, capability.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := run([]string{"rollout", "--root", root, "--report", report, "--report", heavyReport}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"rollout", "--root", root, "--report", report, "--report", heavyReport, "--report", syncReport}, &stdout, &stderr); code != 0 {
 		t.Fatalf("rollout code = %d, stderr = %s", code, stderr.String())
 	}
 }

@@ -83,7 +83,7 @@ ORDER BY (org_id, flag_key, environment, event_ts)`); err != nil {
 		t.Fatal(err)
 	}
 	firstClaim, err := repository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, Owner: uuid.NewString(), Now: now,
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ ORDER BY (org_id, flag_key, environment, event_ts)`); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := freshRepository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, Owner: uuid.NewString(), Now: recoveryNow,
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: recoveryNow,
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {

@@ -28,6 +28,7 @@ KIND_REMAINING_MEMBERSHIP = "metrics.remaining.membership_backfill"
 KIND_REMAINING_RECOMMENDATIONS = "metrics.remaining.recommendations"
 KIND_REMAINING_RELEASE_IMPACT = "metrics.remaining.release_impact"
 KIND_REMAINING_TEAM_METRICS = "metrics.remaining.team_metrics"
+KIND_SYNC_PROVIDER_UNIT = "sync.provider_unit"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 MAX_ENVELOPE_BYTES = 16 * 1024
 
@@ -253,6 +254,17 @@ class RemainingTeamMetricsPayload:
     partition_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderUnitPayload:
+    """ID-only request to execute one authoritative SyncRunUnit."""
+
+    KIND: ClassVar[str] = KIND_SYNC_PROVIDER_UNIT
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "sync_run_unit"
+
+    unit_id: str
+
+
 JobPayload: TypeAlias = (
     BillingNotificationPayload
     | WebhookDeliveryPayload
@@ -276,6 +288,7 @@ JobPayload: TypeAlias = (
     | RemainingRecommendationsPayload
     | RemainingReleaseImpactPayload
     | RemainingTeamMetricsPayload
+    | ProviderUnitPayload
 )
 
 

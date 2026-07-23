@@ -22,6 +22,7 @@ from .models import (
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_SYNC_PROVIDER_UNIT,
     KIND_WEBHOOK_DELIVERY,
     KIND_WORK_GRAPH_BUILD,
     MAX_ENVELOPE_BYTES,
@@ -40,6 +41,7 @@ from .models import (
     InvestmentMaterializePayload,
     JobPayload,
     OnDemandReportExecutionPayload,
+    ProviderUnitPayload,
     RemainingCapacityPayload,
     RemainingComplexityPayload,
     RemainingDORAPayload,
@@ -100,6 +102,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         KIND_INVESTMENT_CHUNK,
         KIND_INVESTMENT_FINALIZE,
         *_REMAINING_PAYLOAD_BY_KIND,
+        KIND_SYNC_PROVIDER_UNIT,
     }:
         raise ContractDecodeError("unknown job kind")
     document = load_json_document(data, max_bytes=MAX_ENVELOPE_BYTES)
@@ -137,6 +140,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         KIND_INVESTMENT_MATERIALIZE,
         KIND_WORK_GRAPH_BUILD,
         *_REMAINING_PAYLOAD_BY_KIND,
+        KIND_SYNC_PROVIDER_UNIT,
     }
     if tenant_kind and organization_id is None:
         raise ContractDecodeError("organization_id is required for a tenant job")
@@ -182,6 +186,10 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         if domain_type != ScheduledReportExecutionPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_scheduled_report_execution(envelope["payload"])
+    elif kind == KIND_SYNC_PROVIDER_UNIT:
+        if domain_type != ProviderUnitPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_provider_unit(envelope["payload"])
     elif kind == KIND_DAILY_METRICS_DISPATCH:
         if domain_type != DailyMetricsDispatchPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
@@ -268,6 +276,7 @@ def build_envelope(
             InvestmentFinalizePayload,
             WebhookDeliveryPayload,
             *_REMAINING_PAYLOAD_TYPES,
+            ProviderUnitPayload,
         ),
     ):
         raise ContractDecodeError("unsupported payload type")
@@ -330,6 +339,8 @@ def encode_envelope(envelope: Envelope) -> bytes:
         kind = KIND_INVESTMENT_FINALIZE
     elif isinstance(envelope.payload, _REMAINING_PAYLOAD_TYPES):
         kind = envelope.payload.KIND
+    elif isinstance(envelope.payload, ProviderUnitPayload):
+        kind = KIND_SYNC_PROVIDER_UNIT
     else:
         raise ContractDecodeError("unsupported payload type")
     decode_envelope(kind, encoded)
@@ -512,6 +523,15 @@ def _decode_remaining_partition(
     return payload_type(partition_id=partition_id)
 
 
+def _decode_provider_unit(value: Any) -> ProviderUnitPayload:
+    payload = _expect_object(
+        value, required={"unit_id"}, optional=set(), label="provider unit payload"
+    )
+    unit_id = _expect_string(payload["unit_id"], "unit_id")
+    _validate_uuid("unit_id", unit_id)
+    return ProviderUnitPayload(unit_id=unit_id)
+
+
 def _payload_document(payload: object) -> dict[str, Any]:
     if isinstance(payload, BillingNotificationPayload):
         return {"notification_id": payload.notification_id}
@@ -547,6 +567,8 @@ def _payload_document(payload: object) -> dict[str, Any]:
         return {"run_id": payload.run_id}
     if isinstance(payload, _REMAINING_PAYLOAD_TYPES):
         return {"partition_id": payload.partition_id}
+    if isinstance(payload, ProviderUnitPayload):
+        return {"unit_id": payload.unit_id}
     raise ContractDecodeError("unsupported payload type")
 
 

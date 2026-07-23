@@ -36,6 +36,7 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
     SyncWatermark,
+    WorkerJobOutbox,
 )
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
@@ -273,11 +274,19 @@ def _patch_worker_enqueues(monkeypatch):
 
     dispatch_calls = []
     finalize_calls = []
-    chord_calls = []
+    unit_publish_calls = []
 
-    class FakeChord:
+    class FakeUnitSignature:
+        def __init__(self, unit_id):
+            self.unit_id = unit_id
+            self.queue = None
+
+        def set(self, *, queue):
+            self.queue = queue
+            return self
+
         def apply_async(self):
-            chord_calls.append("apply_async")
+            unit_publish_calls.append((self.unit_id, self.queue))
 
     monkeypatch.setattr(
         sync_units.dispatch_sync_run,
@@ -289,8 +298,12 @@ def _patch_worker_enqueues(monkeypatch):
         "apply_async",
         lambda args=None, queue=None: finalize_calls.append((args, queue)),
     )
-    monkeypatch.setattr(sync_units, "chord", lambda *args, **kwargs: FakeChord())
-    return dispatch_calls, finalize_calls, chord_calls
+    monkeypatch.setattr(
+        sync_units.run_sync_unit,
+        "s",
+        lambda unit_id: FakeUnitSignature(unit_id),
+    )
+    return dispatch_calls, finalize_calls, unit_publish_calls
 
 
 def test_linear_backfill_retry_surface_contract_matches_work_item_write_fences():
@@ -1589,7 +1602,9 @@ def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypat
     run, unit = _seed_run(db_session)
     _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
 
     def fail_bootstrap(session, unit_id):
         raise ValueError("missing source")
@@ -1608,7 +1623,7 @@ def test_run_sync_unit_bootstrap_failure_enqueues_finalize(db_session, monkeypat
     assert unit.result == {"error_category": "adapter_error"}
     assert dispatch_calls == []
     assert finalize_calls == [((str(run.id),), "sync")]
-    assert chord_calls == []
+    assert unit_publish_calls == []
 
 
 def test_run_sync_unit_bootstrap_failure_survives_session_rollback(
@@ -1620,7 +1635,9 @@ def test_run_sync_unit_bootstrap_failure_survives_session_rollback(
     run, unit = _seed_run(db_session)
     _mark_dispatching(db_session, unit)
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
 
     def fail_bootstrap(session, unit_id):
         db_session.refresh(unit)
@@ -1643,7 +1660,7 @@ def test_run_sync_unit_bootstrap_failure_survives_session_rollback(
     assert unit.result == {"error_category": "adapter_error"}
     assert dispatch_calls == []
     assert finalize_calls == [((str(run.id),), "sync")]
-    assert chord_calls == []
+    assert unit_publish_calls == []
 
 
 def test_bootstrap_failure_cas_loses_to_reconciler(tmp_path, monkeypatch):
@@ -1658,7 +1675,7 @@ def test_bootstrap_failure_cas_loses_to_reconciler(tmp_path, monkeypatch):
             unit_id = unit.id
             seed_session.commit()
         _patch_db_session_factory(monkeypatch, engine)
-        dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(
+        dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
             monkeypatch
         )
 
@@ -1687,7 +1704,7 @@ def test_bootstrap_failure_cas_loses_to_reconciler(tmp_path, monkeypatch):
             assert unit.result == {"error_category": "worker_lost"}
         assert dispatch_calls == []
         assert finalize_calls == []
-        assert chord_calls == []
+        assert unit_publish_calls == []
     finally:
         engine.dispose()
 
@@ -1707,7 +1724,7 @@ def test_slow_bootstrap_loses_lease_before_provider_does_not_execute(
             unit_id = unit.id
             seed_session.commit()
         _patch_db_session_factory(monkeypatch, engine)
-        dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(
+        dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
             monkeypatch
         )
         heartbeat_started = []
@@ -1757,7 +1774,7 @@ def test_slow_bootstrap_loses_lease_before_provider_does_not_execute(
         assert heartbeat_started and heartbeat_started[0][0] == str(unit_id)
         assert dispatch_calls == []
         assert finalize_calls == []
-        assert chord_calls == []
+        assert unit_publish_calls == []
     finally:
         engine.dispose()
 
@@ -1814,7 +1831,9 @@ def test_run_sync_unit_bootstrap_failure_skips_duplicate_live_running_lease(
     unit.result = {"existing": True}
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
 
     def fail_bootstrap(session, unit_id):
         raise ValueError("missing source")
@@ -1838,7 +1857,7 @@ def test_run_sync_unit_bootstrap_failure_skips_duplicate_live_running_lease(
     assert unit.result == {"existing": True}
     assert dispatch_calls == []
     assert finalize_calls == []
-    assert chord_calls == []
+    assert unit_publish_calls == []
 
 
 def test_run_sync_unit_skips_terminal_run_without_overwriting_unit(
@@ -2414,22 +2433,10 @@ def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypat
             queued.append(self)
             return self
 
-    class FakeChord:
-        def __init__(self, header, callback):
-            self.header = header
-            self.callback = callback
-
         def apply_async(self):
             return None
 
     monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeSig(unit_id))
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
-    )
-    monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
-    monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
-    )
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2441,6 +2448,123 @@ def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypat
     ]
     assert planned.status == SyncRunUnitStatus.DISPATCHING.value
     assert recent_dispatching.status == SyncRunUnitStatus.DISPATCHING.value
+
+
+def test_dispatch_sync_run_routes_only_enabled_launchdarkly_unit_to_river(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, launchdarkly = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    celery_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=launchdarkly.integration_id,
+        source_id=launchdarkly.source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_git": True, "sync_commits": True},
+    )
+    run.total_units = 2
+    db_session.add(celery_unit)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    rows = db_session.query(WorkerJobOutbox).all()
+    assert result == {"status": "dispatched", "queued_units": 2}
+    assert len(unit_publish_calls) == 1
+    assert len(rows) == 1
+    assert rows[0].job_kind == "sync.provider_unit"
+    assert rows[0].dedupe_key == f"sync.provider_unit:{launchdarkly.id}"
+    assert rows[0].args["payload"] == {"unit_id": str(launchdarkly.id)}
+    assert rows[0].args["domain"] == {
+        "type": "sync_run_unit",
+        "id": str(launchdarkly.id),
+    }
+    assert set(rows[0].args) == {
+        "contract_version",
+        "organization_id",
+        "correlation_id",
+        "idempotency_key",
+        "domain",
+        "payload",
+    }
+
+
+def test_dispatch_sync_run_launchdarkly_route_off_stays_on_celery(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, _ = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert len(unit_publish_calls) == 1
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+def test_dispatch_sync_run_provider_outbox_claim_rolls_back_and_dedupes(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    real_enqueue = sync_units.enqueue_worker_job
+
+    def die_after_staging(*args, **kwargs):
+        real_enqueue(*args, **kwargs)
+        raise RuntimeError("simulated producer death")
+
+    monkeypatch.setattr(sync_units, "enqueue_worker_job", die_after_staging)
+    with pytest.raises(RuntimeError, match="simulated producer death"):
+        sync_units.dispatch_sync_run(str(run.id))
+    db_session.expire_all()
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+    monkeypatch.setattr(sync_units, "enqueue_worker_job", real_enqueue)
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    unit.updated_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    db_session.commit()
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    assert db_session.query(WorkerJobOutbox).count() == 1
 
 
 def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(
@@ -2517,7 +2641,9 @@ def test_paused_config_with_running_and_planned_units_dispatches_planned(
     db_session.add_all([planned, config])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
     dispatch_result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -2538,7 +2664,7 @@ def test_paused_config_with_running_and_planned_units_dispatches_planned(
     assert running.lease_owner == "worker-live"
     assert dispatch_calls == []
     assert finalize_calls == []
-    assert len(chord_calls) == 1
+    assert len(unit_publish_calls) == 1
 
     running.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     db_session.flush()
@@ -2621,7 +2747,9 @@ def test_paused_config_with_stale_dispatching_reclaims_accepted_work(
     db_session.add_all([running, planned, config])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
 
     dispatch_result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2643,7 +2771,7 @@ def test_paused_config_with_stale_dispatching_reclaims_accepted_work(
     assert run.completed_at is None
     assert dispatch_calls == []
     assert finalize_calls == []
-    assert len(chord_calls) == 1
+    assert len(unit_publish_calls) == 2
 
     running.status = SyncRunUnitStatus.FAILED.value
     running.error = "sync unit lease expired"
@@ -2709,7 +2837,9 @@ def test_total_cap_hard_deny_with_stale_dispatching_does_not_redispatch(
     db_session.add_all([running, planned])
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
     reason = "sync run unit cap exceeded: 3/1"
     monkeypatch.setattr(
         sync_units.DispatchGuard,
@@ -2751,7 +2881,7 @@ def test_total_cap_hard_deny_with_stale_dispatching_does_not_redispatch(
     assert run.completed_at is None
     assert dispatch_calls == []
     assert finalize_calls == [((str(run.id),), "sync")]
-    assert chord_calls == []
+    assert unit_publish_calls == []
 
 
 def test_total_cap_hard_deny_terminalizes_linked_job_run(db_session, monkeypatch):
@@ -3002,7 +3132,9 @@ def test_dispatch_sync_run_enforces_budget_deferral(db_session, monkeypatch):
 
     run, unit = _seed_run(db_session)
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", json.dumps({"github:rest_core": 1}))
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_SECONDS", "120")
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
@@ -3023,7 +3155,7 @@ def test_dispatch_sync_run_enforces_budget_deferral(db_session, monkeypatch):
     assert unit.result["budget_guard"][0]["decision"] == "deferred"
     assert dispatch_calls == []
     assert finalize_calls == []
-    assert chord_calls == []
+    assert unit_publish_calls == []
 
 
 def test_dispatch_sync_run_enforces_launchdarkly_budget_deferral(
@@ -3042,7 +3174,9 @@ def test_dispatch_sync_run_enforces_launchdarkly_budget_deferral(
         processor_flags={"sync_feature_flags": True},
     )
     _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls, chord_calls = _patch_worker_enqueues(monkeypatch)
+    dispatch_calls, finalize_calls, unit_publish_calls = _patch_worker_enqueues(
+        monkeypatch
+    )
     monkeypatch.setenv(
         "SYNC_BUDGET_BUCKET_LIMITS",
         json.dumps(
@@ -3069,7 +3203,7 @@ def test_dispatch_sync_run_enforces_launchdarkly_budget_deferral(
     )
     assert dispatch_calls == []
     assert finalize_calls == []
-    assert chord_calls == []
+    assert unit_publish_calls == []
 
 
 def test_dispatch_sync_run_budget_reservation_blocks_second_unit(
@@ -3225,7 +3359,7 @@ def test_dispatch_sync_run_github_budget_route_family_isolates_contents_blob(
     assert active_files.status == SyncRunUnitStatus.DISPATCHING.value
 
 
-def test_dispatch_sync_run_does_not_terminalize_when_chord_enqueue_fails(
+def test_dispatch_sync_run_does_not_terminalize_when_unit_enqueue_fails(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import sync_units
@@ -3240,22 +3374,10 @@ def test_dispatch_sync_run_does_not_terminalize_when_chord_enqueue_fails(
         def set(self, *, queue):
             return self
 
-    class FailingChord:
-        def __init__(self, header, callback):
-            self.header = header
-            self.callback = callback
-
         def apply_async(self):
             raise RuntimeError("broker down")
 
     monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeSig(unit_id))
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
-    )
-    monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: FailingChord(header, callback)
-    )
 
     with pytest.raises(RuntimeError, match="broker down"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -3291,16 +3413,10 @@ def test_dispatch_sync_run_redispatches_stale_dispatching_units(
             queued.append((self.unit_id, queue))
             return self
 
+        def apply_async(self):
+            return None
+
     monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: FakeSig(unit_id))
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeSig(run_id)
-    )
-    monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
-    monkeypatch.setattr(
-        sync_units,
-        "chord",
-        lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
-    )
 
     result = sync_units.dispatch_sync_run(str(run.id))
     assert result["queued_units"] == 1
@@ -3319,15 +3435,8 @@ def test_dispatch_sync_run_does_not_reclaim_stale_running_units(
     _patch_db_session(monkeypatch, db_session)
 
     monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: None)
-    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: None)
     monkeypatch.setattr(
         sync_units.finalize_sync_run, "apply_async", lambda *a, **k: None
-    )
-    monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
-    monkeypatch.setattr(
-        sync_units,
-        "chord",
-        lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
     )
     monkeypatch.setattr(
         sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
@@ -3357,15 +3466,8 @@ def test_dispatch_sync_run_does_not_reclaim_fresh_running_units(
     _patch_db_session(monkeypatch, db_session)
 
     monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda unit_id: None)
-    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda run_id: None)
     monkeypatch.setattr(
         sync_units.finalize_sync_run, "apply_async", lambda *a, **k: None
-    )
-    monkeypatch.setattr(sync_units, "group", lambda signatures: list(signatures))
-    monkeypatch.setattr(
-        sync_units,
-        "chord",
-        lambda header, callback: type("C", (), {"apply_async": lambda self: None})(),
     )
     monkeypatch.setattr(
         sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None

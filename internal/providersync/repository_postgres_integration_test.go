@@ -43,7 +43,7 @@ func TestPostgresLeaseClaimRenewRecoveryAndTerminalFence(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 	firstOwner := uuid.NewString()
 	first, err := repository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, Owner: firstOwner, Now: now,
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: firstOwner, Now: now,
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {
@@ -54,7 +54,7 @@ func TestPostgresLeaseClaimRenewRecoveryAndTerminalFence(t *testing.T) {
 		t.Fatalf("first claim=%+v", first)
 	}
 	if _, err := repository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, Owner: uuid.NewString(), Now: now.Add(30 * time.Second),
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now.Add(30 * time.Second),
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	}); !errors.Is(err, ErrUnitNotClaimable) {
 		t.Fatalf("live claim steal error=%v", err)
@@ -68,7 +68,7 @@ func TestPostgresLeaseClaimRenewRecoveryAndTerminalFence(t *testing.T) {
 
 	secondOwner := uuid.NewString()
 	second, err := repository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, Owner: secondOwner, Now: now.Add(91 * time.Second),
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: secondOwner, Now: now.Add(91 * time.Second),
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {
@@ -222,6 +222,66 @@ FROM public.sync_run_units WHERE id = $1`, firstUnitID).Scan(&attempts, &recover
 	if err := repository.Renew(ctx, second, now.Add(93*time.Second), now.Add(153*time.Second)); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("terminal run renew error=%v", err)
 	}
+	if _, err := pool.Exec(ctx, "UPDATE public.sync_runs SET status = 'running' WHERE id = $1", firstRunID); err != nil {
+		t.Fatal(err)
+	}
+	finalizeClaimToken := "live-finalize-claim"
+	finalizeClaimExpiresAt := now.Add(5 * time.Minute)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_dispatch_outbox (
+    id, org_id, sync_run_id, kind, status, available_at, attempts,
+    claim_token, claim_expires_at, claim_transport, claim_route_generation,
+    created_at, updated_at
+) VALUES (
+    $1, 'org-acme', $2, 'finalize_sync_run', 'pending', $3, 1,
+    $4, $5, 'celery', 1, $6, $6
+)`,
+		uuid.NewString(), firstRunID, now.Add(10*time.Minute),
+		finalizeClaimToken, finalizeClaimExpiresAt, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	watermark := now.Add(106 * time.Second)
+	completedAt := now.Add(107 * time.Second)
+	if err := repository.Complete(
+		ctx, second, map[string]any{"records": 1}, &watermark,
+		now.Add(91*time.Second), completedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var persistedWatermark time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT unit.status, watermark.last_synced_at
+FROM public.sync_run_units AS unit
+JOIN public.sync_watermarks AS watermark
+  ON watermark.org_id = unit.org_id
+ AND watermark.source_id = 'acme/api'
+ AND watermark.dataset_key = 'commits'
+WHERE unit.id = $1`, firstUnitID).Scan(&status, &persistedWatermark); err != nil {
+		t.Fatal(err)
+	}
+	if status != "success" || !persistedWatermark.Equal(watermark) {
+		t.Fatalf("status=%s watermark=%s", status, persistedWatermark)
+	}
+	var finalizeCount int
+	var persistedClaimToken string
+	var persistedClaimExpiry, availableAt time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT count(*), min(claim_token), min(claim_expires_at), min(available_at)
+FROM public.sync_dispatch_outbox
+WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
+		firstRunID,
+	).Scan(&finalizeCount, &persistedClaimToken, &persistedClaimExpiry, &availableAt); err != nil {
+		t.Fatal(err)
+	}
+	if finalizeCount != 1 || persistedClaimToken != finalizeClaimToken ||
+		!persistedClaimExpiry.Equal(finalizeClaimExpiresAt) || !availableAt.Equal(completedAt) {
+		t.Fatalf(
+			"finalize outbox count=%d token=%q expiry=%s available_at=%s",
+			finalizeCount, persistedClaimToken, persistedClaimExpiry, availableAt,
+		)
+	}
 }
 
 func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -252,8 +312,27 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			attempts integer NOT NULL DEFAULT 0, available_at timestamptz,
 			error text, result json, processor_flags jsonb, lease_owner text,
 			lease_expires_at timestamptz, last_heartbeat_at timestamptz,
+			duration_seconds integer, rate_limit_deferrals integer NOT NULL DEFAULT 0,
+			rate_limit_first_seen_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL
+		)`,
+		`CREATE TABLE public.sync_watermarks (
+			id uuid PRIMARY KEY, org_id text NOT NULL, repo_id text NOT NULL,
+			source_id text NOT NULL, target text NOT NULL, dataset_key text NOT NULL,
+			last_synced_at timestamptz, updated_at timestamptz NOT NULL,
+			UNIQUE (org_id, repo_id, target),
+			UNIQUE (org_id, source_id, dataset_key)
+		)`,
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL,
+			kind text NOT NULL, status text NOT NULL, available_at timestamptz NOT NULL,
+			attempts integer NOT NULL, last_error text, dispatched_at timestamptz,
+			claim_token text, claim_expires_at timestamptz, claim_transport text,
+			claim_route_generation bigint, dispatched_transport text,
+			dispatched_route_generation bigint, transport_job_id text,
+			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+			UNIQUE (sync_run_id, kind)
 		)`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {

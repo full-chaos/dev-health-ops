@@ -114,6 +114,7 @@ func (claim Claim) GenerationKey() string { return "sync-unit:" + claim.ID }
 
 type ClaimRequest struct {
 	UnitID               string
+	OrgID                string
 	Owner                string
 	Now                  time.Time
 	LeaseDuration        time.Duration

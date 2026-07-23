@@ -104,7 +104,10 @@ from dev_health_ops.sync.trigger_routing import (
 )
 from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.job_contracts import ProviderUnitPayload
+from dev_health_ops.workers.job_outbox import enqueue_worker_job
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
+from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
 from dev_health_ops.workers.rate_limit_defer import (
     RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
@@ -747,7 +750,19 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         reference_discovery_succeeded,
     )
 
+    river_queued = 0
     with get_postgres_session_sync() as session:
+        # The provider-unit outbox row and DISPATCHING claim must share one
+        # explicit transaction. A process death therefore commits both or
+        # neither, closing the producer kill window without serializing
+        # credentials, callables, or route configuration into River.
+        if session.in_transaction():
+            # The task owns this fresh session. Test fixtures and ORM attribute
+            # refreshes may have already triggered a read-only AUTOBEGIN; clear
+            # it before establishing the producer's explicit BEGIN boundary.
+            session.rollback()
+        session.begin()
+        provider_unit_routes = ProviderUnitRouteSwitches.from_environment()
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is None:
@@ -924,6 +939,19 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
+            if provider_unit_routes.routes_to_river(
+                str(unit.provider), str(unit.dataset_key)
+            ):
+                enqueue_worker_job(
+                    session,
+                    ProviderUnitPayload(unit_id=str(unit.id)),
+                    correlation_id=f"sync-run:{run.id}",
+                    idempotency_key=f"sync.provider_unit:{unit.id}",
+                    domain_id=str(unit.id),
+                    organization_id=str(unit.org_id),
+                )
+                river_queued += 1
+                continue
             dispatch_route = route(
                 org_id=str(unit.org_id),
                 provider=str(unit.provider),
@@ -936,7 +964,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 )
             )
 
-        if signatures:
+        if signatures or river_queued:
             now = datetime.now(timezone.utc)
             run.status = SyncRunStatus.DISPATCHING.value
             run.started_at = run.started_at or now
@@ -949,7 +977,9 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             "dispatch_sync_run.dispatched",
             extra={
                 "sync_run_id": sync_run_id,
-                "queued_units": len(signatures),
+                "queued_units": len(signatures) + river_queued,
+                "celery_units": len(signatures),
+                "river_units": river_queued,
             },
         )
         try:
@@ -969,7 +999,26 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 extra={"sync_run_id": sync_run_id, "error": str(exc)},
             )
             raise
-        return {"status": "dispatched", "queued_units": len(signatures)}
+        return {
+            "status": "dispatched",
+            "queued_units": len(signatures) + river_queued,
+        }
+
+    if river_queued:
+        if next_deferred_at is not None:
+            _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
+        elif capped_ids:
+            _schedule_redispatch(sync_run_id)
+        logger.info(
+            "dispatch_sync_run.dispatched",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": river_queued,
+                "celery_units": 0,
+                "river_units": river_queued,
+            },
+        )
+        return {"status": "dispatched", "queued_units": river_queued}
 
     # Fix 2: no units were claimable this pass.  Distinguish two cases:
     #   a) Deferred work remains (PLANNED units exist, not all terminal) →

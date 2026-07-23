@@ -158,6 +158,90 @@ func TestPrepareRowAcceptsExecutableMigrationRoutes(t *testing.T) {
 	}
 }
 
+func TestPrepareRowRelaysProviderUnitCanaryAsIDOnlyTenantEnvelope(t *testing.T) {
+	organizationID := "00000000-0000-4000-8000-000000000024"
+	unitID := "00000000-0000-4000-8000-000000000021"
+	envelope := jobcontract.Envelope{
+		ContractVersion: 1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "sync-run:00000000-0000-4000-8000-000000000020",
+		IdempotencyKey:  "sync.provider_unit:" + unitID,
+		Domain: jobcontract.DomainLink{
+			Type: "sync_run_unit",
+			ID:   unitID,
+		},
+		Payload: jobcontract.ProviderUnitPayload{UnitID: unitID},
+	}
+	encoded, err := jobcontract.MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	row := Row{
+		ID:              "00000000-0000-4000-8000-000000000022",
+		DedupeKey:       envelope.IdempotencyKey,
+		JobKind:         jobcontract.KindSyncProviderUnit,
+		ContractVersion: 1,
+		Args:            encoded,
+		PayloadHash:     canonicalHash(encoded),
+		Queue:           "sync",
+		Priority:        2,
+		MaxAttempts:     5,
+		ScheduledAt:     now,
+		Status:          statusClaimed,
+		ClaimToken:      "00000000-0000-4000-8000-000000000023",
+		AttemptCount:    1,
+		NextAttemptAt:   now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	descriptor := jobruntime.Descriptor{
+		Kind:              jobcontract.KindSyncProviderUnit,
+		CurrentVersion:    1,
+		SupportedVersions: []int{1},
+		Queue:             "sync",
+		Priority:          2,
+		MaxAttempts:       5,
+		Route:             "river_canary",
+	}
+	registry := staticRegistry{descriptors: map[string]jobruntime.Descriptor{
+		row.JobKind: descriptor,
+	}}
+
+	preparedDescriptor, args, err := prepareRow(registry, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preparedDescriptor.Route != "river_canary" || args.Kind() != row.JobKind ||
+		args.OrganizationID == nil || *args.OrganizationID != organizationID ||
+		args.Domain.Type != "sync_run_unit" || args.Domain.ID != unitID {
+		t.Fatalf("unexpected provider-unit relay: descriptor=%+v args=%+v", preparedDescriptor, args)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(args.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) != 1 || payload["unit_id"] != unitID {
+		t.Fatalf("provider-unit payload is not ID-only: %#v", payload)
+	}
+	relayed, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"credential", "callable", "config"} {
+		if strings.Contains(strings.ToLower(string(relayed)), forbidden) {
+			t.Fatalf("provider-unit relay leaked forbidden field %q", forbidden)
+		}
+	}
+	canonical, err := jobcontract.MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonicalHash(canonical) != row.PayloadHash {
+		t.Fatalf("provider-unit relay hash drifted: got=%s want=%s", canonicalHash(canonical), row.PayloadHash)
+	}
+}
+
 func TestVerifyInsertResultRejectsDuplicateIdentityMismatch(t *testing.T) {
 	row := testRow(t)
 	metadata, err := json.Marshal(relayMetadata{

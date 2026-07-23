@@ -37,6 +37,7 @@ const (
 	KindInvestmentDispatch       = "investment.dispatch"
 	KindInvestmentChunk          = "investment.chunk"
 	KindInvestmentFinalize       = "investment.finalize"
+	KindSyncProviderUnit         = "sync.provider_unit"
 	RetentionWorkerTerminal      = "worker_job_terminal"
 )
 
@@ -153,6 +154,13 @@ func NewRemainingMetricsPartitionPayload(kind, partitionID string) RemainingMetr
 	return RemainingMetricsPartitionPayload{PartitionID: partitionID, JobKind: kind}
 }
 
+// ProviderUnitPayload carries only the authoritative SyncRunUnit identifier.
+// Provider settings, credentials, routes, and callable names are reloaded in
+// the worker and are never serialized through River.
+type ProviderUnitPayload struct {
+	UnitID string `json:"unit_id"`
+}
+
 type wireEnvelope struct {
 	ContractVersion int             `json:"contract_version"`
 	OrganizationID  *string         `json:"organization_id,omitempty"`
@@ -247,6 +255,13 @@ var definitions = map[string]contractDefinition{
 	KindRemainingRecommendations: remainingDefinition(KindRemainingRecommendations),
 	KindRemainingReleaseImpact:   remainingDefinition(KindRemainingReleaseImpact),
 	KindRemainingTeamMetrics:     remainingDefinition(KindRemainingTeamMetrics),
+	KindSyncProviderUnit: {
+		Kind:              KindSyncProviderUnit,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "sync_run_unit",
+		OrganizationScope: "tenant",
+	},
 }
 
 func remainingDefinition(kind string) contractDefinition {
@@ -417,6 +432,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, err
 		}
 		payload = value
+	case KindSyncProviderUnit:
+		var value ProviderUnitPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	default:
 		return Envelope{}, fmt.Errorf("job kind %q has no decoder", kind)
 	}
@@ -465,6 +489,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindInvestmentFinalize
 	case RemainingMetricsPartitionPayload:
 		kind = envelope.Payload.(RemainingMetricsPartitionPayload).JobKind
+	case ProviderUnitPayload:
+		kind = KindSyncProviderUnit
 	default:
 		return nil, errors.New("unsupported payload type")
 	}
@@ -645,6 +671,13 @@ func remainingKind(kind string) bool {
 	default:
 		return false
 	}
+}
+
+func (payload ProviderUnitPayload) validate() error {
+	if !uuidPattern.MatchString(payload.UnitID) {
+		return errors.New("unit_id must be a lowercase UUID")
+	}
+	return nil
 }
 
 func validateUTCTimestamp(name, value string) error {

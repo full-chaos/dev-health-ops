@@ -299,6 +299,35 @@
       }
     },
     {
+      "kind": "sync.provider_unit",
+      "current_version": 1,
+      "supported_versions": [1],
+      "profile": "sync",
+      "queue": "sync",
+      "handler_owner": "internal/jobs/providerunit",
+      "execution_mode": "command",
+      "priority": 2,
+      "timeout_seconds": 900,
+      "max_attempts": 5,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "authoritative_sync_run_unit",
+      "delivery": "guarded_at_least_once",
+      "idempotency": "sync_run_unit",
+      "concurrency": {
+        "scope": "organization",
+        "limit": 2
+      },
+      "sensitive_fields": [],
+      "domain_link": "sync_run_unit",
+      "organization_scope": "tenant",
+      "schema_versions": {
+        "1": "schemas/sync.provider_unit.v1.schema.json"
+      },
+      "fixtures": {
+        "1": ["examples/sync.provider_unit.v1.json"]
+      }
+    },
+    {
       "kind": "system.heartbeat",
       "current_version": 1,
       "supported_versions": [1],

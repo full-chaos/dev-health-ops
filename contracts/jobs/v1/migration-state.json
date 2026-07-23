@@ -124,6 +124,16 @@
       "evidence": ["artifact_golden", "contract_schema", "cross_language_golden", "metadata_parity"]
     },
     {
+      "kind": "sync.provider_unit",
+      "state": "canary",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["sync"],
+      "route": "river_canary",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery", "kill_window", "provider_parity"]
+    },
+    {
       "kind": "system.heartbeat",
       "state": "go_implemented",
       "producer_version": 1,

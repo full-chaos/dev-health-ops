@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -123,6 +124,7 @@ type workerDependencySources struct {
 	buildOperational     func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
 	buildSyncCoordinator func(config.Config, workerDatabase, *slog.Logger) (lifecycle.Component, error)
 	buildDaily           func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
 	contractRoot         string
 	deploymentProfile    string
 }
@@ -137,6 +139,7 @@ var productionWorkerDependencySources = workerDependencySources{
 	buildOperational:     buildOperationalWorker,
 	buildSyncCoordinator: buildSyncCoordinatorWorker,
 	buildDaily:           buildDailyWorker,
+	buildProviderSync:    buildProviderSyncWorker,
 	contractRoot:         defaultContractRoot,
 	deploymentProfile:    defaultDeploymentProfile,
 }
@@ -256,6 +259,7 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, err
 	}
+	providerRuntimeConstructed := false
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -263,6 +267,7 @@ func configureWorkerDependenciesWithSources(
 		{name: "domain_postgres", check: dependencies.domainReady},
 		{name: "job_registry", check: dependencies.jobRegistryReady},
 		{name: "profile_completeness", check: dependencies.profileReady},
+		{name: "provider_route_switches", check: providerRouteSwitchesReady(cfg, &providerRuntimeConstructed)},
 		{name: "queued_contract_versions", check: dependencies.queuedContractVersionsReady},
 		{name: "queue_control_config", check: dependencies.queueControlConfigReady},
 		{name: "queue_postgres", check: dependencies.queueReady},
@@ -325,6 +330,27 @@ func configureWorkerDependenciesWithSources(
 			components = append(components, component)
 		}
 	}
+	if sources.buildProviderSync != nil {
+		component, handlers, err := sources.buildProviderSync(
+			ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
+			dependencies.metrics, logger,
+		)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+		if len(handlers) > 0 {
+			dependencies.startup.Handlers = handlers
+			for _, handler := range handlers {
+				if handler.Kind == jobcontract.KindSyncProviderUnit {
+					providerRuntimeConstructed = true
+				}
+			}
+		}
+		if component != nil {
+			components = append(components, component)
+		}
+	}
 	return components, nil
 }
 
@@ -354,6 +380,44 @@ func composeHandlerSpecs(
 		result = append(result, handler)
 	}
 	return result, nil
+}
+
+func providerRouteSwitchesReady(
+	cfg config.Config,
+	runtimeConstructed *bool,
+) health.CheckFunc {
+	switches := providersync.CompleteRouteSwitches{
+		LinearWorkItems:          cfg.WorkerLinearWorkItemsEnabled,
+		JiraWorkItems:            cfg.WorkerJiraWorkItemsEnabled,
+		JiraIncidents:            cfg.WorkerJiraIncidentsEnabled,
+		LaunchDarklyFeatureFlags: cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
+	}
+	routes := []struct {
+		provider string
+		dataset  string
+		enabled  bool
+	}{
+		{"linear", "work-items", cfg.WorkerLinearWorkItemsEnabled},
+		{"jira", "work-items", cfg.WorkerJiraWorkItemsEnabled},
+		{"jira", "incidents", cfg.WorkerJiraIncidentsEnabled},
+		{"launchdarkly", "feature-flags", cfg.WorkerLaunchDarklyFeatureFlagsEnabled},
+	}
+	return func(context.Context) error {
+		for _, route := range routes {
+			if !route.enabled {
+				continue
+			}
+			descriptor, ok := switches.Descriptor(route.provider, route.dataset)
+			if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
+				return errWorkerDependencyUnavailable
+			}
+			if route.provider == "launchdarkly" &&
+				(runtimeConstructed == nil || !*runtimeConstructed) {
+				return errWorkerDependencyUnavailable
+			}
+		}
+		return nil
+	}
 }
 
 type workerMetricsSource struct {

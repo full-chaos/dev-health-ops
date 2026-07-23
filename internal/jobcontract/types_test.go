@@ -28,6 +28,7 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 		{KindInvestmentDispatch, "examples/investment.dispatch.v1.json", InvestmentDispatchPayload{RequestID: "00000000-0000-4000-8000-000000000103"}},
 		{KindInvestmentChunk, "examples/investment.chunk.v1.json", InvestmentChunkPayload{ChunkID: "00000000-0000-4000-8000-000000000104"}},
 		{KindInvestmentFinalize, "examples/investment.finalize.v1.json", InvestmentFinalizePayload{RunID: "00000000-0000-4000-8000-000000000105"}},
+		{KindSyncProviderUnit, "examples/sync.provider_unit.v1.json", ProviderUnitPayload{UnitID: "00000000-0000-4000-8000-000000000022"}},
 	}
 	for _, kind := range []string{
 		KindRemainingCapacity,

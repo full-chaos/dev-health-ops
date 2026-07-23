@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -20,7 +21,8 @@ func NewPostgresRepository(pool *pgxpool.Pool) (*PostgresRepository, error) {
 }
 
 func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRequest) (Claim, error) {
-	if repository == nil || repository.Pool == nil || ctx == nil || request.validate() != nil {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		request.validate() != nil || request.OrgID == "" {
 		return Claim{}, ErrInvalidConfiguration
 	}
 	var claim Claim
@@ -33,6 +35,7 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		request.Now.UTC(),
 		request.Now.UTC().Add(request.LeaseDuration),
 		request.AllowExpiredRecovery,
+		request.OrgID,
 	).Scan(
 		&claim.ID,
 		&claim.SyncRunID,
@@ -83,6 +86,118 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		return Claim{}, err
 	}
 	return claim, nil
+}
+
+// Complete atomically terminalizes the authoritative unit, advances its
+// monotonic watermark, and arms the existing finalize outbox. Queue state is
+// never treated as the product-state completion record.
+func (repository *PostgresRepository) Complete(
+	ctx context.Context,
+	claim Claim,
+	result map[string]any,
+	watermark *time.Time,
+	startedAt time.Time,
+	completedAt time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || result == nil || startedAt.IsZero() ||
+		completedAt.Before(startedAt) {
+		return ErrInvalidConfiguration
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, completeUnitSQL,
+		claim.ID, claim.Owner, completedAt.UTC(),
+		int(completedAt.Sub(startedAt).Seconds()), encoded,
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	if watermark != nil {
+		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
+			uuid.New(), claim.OrgID, claim.SourceExternalID, claim.Dataset,
+			watermark.UTC(), completedAt.UTC(),
+		); err != nil {
+			return ErrInvalidConfiguration
+		}
+	}
+	if _, err := tx.Exec(ctx, upsertFinalizeSQL,
+		uuid.New(), claim.OrgID, claim.SyncRunID, completedAt.UTC(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrInvalidConfiguration
+	}
+	return nil
+}
+
+// ReleaseForRetry returns a live claim to dispatching for the same River job's
+// bounded retry. A process death cannot call this method; expired-lease
+// recovery remains the fresh-process path in Claim.
+func (repository *PostgresRepository) ReleaseForRetry(
+	ctx context.Context,
+	claim Claim,
+	now time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(ctx, releaseForRetrySQL,
+		claim.ID, claim.Owner, now.UTC(),
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// Fail terminalizes an exhausted unit and arms run finalization.
+func (repository *PostgresRepository) Fail(
+	ctx context.Context,
+	claim Claim,
+	category string,
+	startedAt time.Time,
+	completedAt time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || category == "" || len(category) > 64 ||
+		startedAt.IsZero() || completedAt.Before(startedAt) {
+		return ErrInvalidConfiguration
+	}
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	result, marshalErr := json.Marshal(map[string]any{"error_category": category})
+	if marshalErr != nil {
+		return ErrInvalidConfiguration
+	}
+	command, err := tx.Exec(ctx, failUnitSQL,
+		claim.ID, claim.Owner, completedAt.UTC(),
+		int(completedAt.Sub(startedAt).Seconds()), category, result,
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	if _, err := tx.Exec(ctx, upsertFinalizeSQL,
+		uuid.New(), claim.OrgID, claim.SyncRunID, completedAt.UTC(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrInvalidConfiguration
+	}
+	return nil
 }
 
 func decodeClaimJSON(raw []byte, target *map[string]bool) error {
@@ -140,6 +255,7 @@ WITH candidate AS (
           AND unit.lease_expires_at <= $3
         )
       )
+      AND unit.org_id = $6
     FOR UPDATE OF unit
 ),
 claimed AS (
@@ -229,5 +345,163 @@ WHERE unit.id = $1::uuid
       AND run.org_id = unit.org_id
       AND run.status NOT IN ('success', 'partial_failed', 'failed')
   )`
+
+const completeUnitSQL = `
+UPDATE public.sync_run_units AS unit
+SET status = 'success',
+    duration_seconds = $4,
+    result = $5::jsonb,
+    error = NULL,
+    rate_limit_deferrals = 0,
+    rate_limit_first_seen_at = NULL,
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    updated_at = $3
+WHERE unit.id = $1::uuid
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3
+  AND EXISTS (
+    SELECT 1 FROM public.sync_runs AS run
+    WHERE run.id = unit.sync_run_id
+      AND run.org_id = unit.org_id
+      AND run.status NOT IN ('success', 'partial_failed', 'failed')
+  )`
+
+const releaseForRetrySQL = `
+UPDATE public.sync_run_units AS unit
+SET status = 'dispatching',
+    available_at = NULL,
+    error = 'provider_unit_retryable',
+    result = jsonb_build_object('error_category', 'provider_unit_retryable'),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    updated_at = $3
+WHERE unit.id = $1::uuid
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+const failUnitSQL = `
+UPDATE public.sync_run_units AS unit
+SET status = 'failed',
+    duration_seconds = $4,
+    error = $5,
+    result = $6::jsonb,
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    updated_at = $3
+WHERE unit.id = $1::uuid
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+const upsertWatermarkSQL = `
+INSERT INTO public.sync_watermarks (
+    id, org_id, repo_id, source_id, target, dataset_key,
+    last_synced_at, updated_at
+) VALUES ($1, $2, $3, $3, $4, $4, $5, $6)
+ON CONFLICT (org_id, source_id, dataset_key) DO UPDATE
+SET last_synced_at = GREATEST(
+        public.sync_watermarks.last_synced_at,
+        EXCLUDED.last_synced_at
+    ),
+    updated_at = EXCLUDED.updated_at`
+
+const upsertFinalizeSQL = `
+INSERT INTO public.sync_dispatch_outbox (
+    id, org_id, sync_run_id, kind, status, available_at, attempts,
+    created_at, updated_at
+) VALUES ($1, $2, $3::uuid, 'finalize_sync_run', 'pending', $4, 0, $4, $4)
+ON CONFLICT (sync_run_id, kind) DO UPDATE
+SET status = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.status
+        ELSE 'pending'
+    END,
+    available_at = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.available_at
+        ELSE LEAST(public.sync_dispatch_outbox.available_at, EXCLUDED.available_at)
+    END,
+    dispatched_at = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.dispatched_at
+        ELSE NULL
+    END,
+    last_error = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.last_error
+        ELSE NULL
+    END,
+    claim_token = CASE
+        WHEN NOT (
+            public.sync_dispatch_outbox.status = 'dispatched'
+            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        )
+         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
+         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
+        THEN public.sync_dispatch_outbox.claim_token
+        ELSE NULL
+    END,
+    claim_expires_at = CASE
+        WHEN NOT (
+            public.sync_dispatch_outbox.status = 'dispatched'
+            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        )
+         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
+         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
+        THEN public.sync_dispatch_outbox.claim_expires_at
+        ELSE NULL
+    END,
+    claim_transport = CASE
+        WHEN NOT (
+            public.sync_dispatch_outbox.status = 'dispatched'
+            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        )
+         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
+         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
+        THEN public.sync_dispatch_outbox.claim_transport
+        ELSE NULL
+    END,
+    claim_route_generation = CASE
+        WHEN NOT (
+            public.sync_dispatch_outbox.status = 'dispatched'
+            AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        )
+         AND public.sync_dispatch_outbox.claim_expires_at IS NOT NULL
+         AND public.sync_dispatch_outbox.claim_expires_at > EXCLUDED.updated_at
+        THEN public.sync_dispatch_outbox.claim_route_generation
+        ELSE NULL
+    END,
+    dispatched_transport = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.dispatched_transport
+        ELSE NULL
+    END,
+    dispatched_route_generation = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.dispatched_route_generation
+        ELSE NULL
+    END,
+    transport_job_id = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.transport_job_id
+        ELSE NULL
+    END,
+    updated_at = EXCLUDED.updated_at`
 
 var _ LeaseRepository = (*PostgresRepository)(nil)

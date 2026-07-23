@@ -457,6 +457,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindInvestmentFinalize:       {"run_id"},
 		KindHeartbeat:                {"scheduled_for"},
 		KindRetentionCleanup:         {"batch_size", "delete_before", "retention_policy"},
+		KindSyncProviderUnit:         {"unit_id"},
 	}[kind]
 	if expectedFields == nil || !equalStringSet(stringSet(schema["required"]), expectedFields) || !equalStringSet(keySet(properties), expectedFields) {
 		return errors.New("schema fields drift from compiled payload type")
@@ -487,6 +488,9 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindWebhookDelivery {
 		return validateUUIDProperty(properties["delivery_id"])
+	}
+	if kind == KindSyncProviderUnit {
+		return validateUUIDProperty(properties["unit_id"])
 	}
 	batch, ok := properties["batch_size"].(map[string]any)
 	if !ok || batch["type"] != "integer" || fmt.Sprint(batch["minimum"]) != "1" || fmt.Sprint(batch["maximum"]) != "1000" {

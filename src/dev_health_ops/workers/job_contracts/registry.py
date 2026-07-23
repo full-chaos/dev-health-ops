@@ -30,6 +30,7 @@ from .models import (
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_SYNC_PROVIDER_UNIT,
     KIND_WEBHOOK_DELIVERY,
     KIND_WORK_GRAPH_BUILD,
 )
@@ -236,6 +237,7 @@ def load_registry(root: Path | None = None) -> Registry:
         KIND_REMAINING_RECOMMENDATIONS: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_RELEASE_IMPACT: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_TEAM_METRICS: (CONTRACT_VERSION_V1,),
+        KIND_SYNC_PROVIDER_UNIT: (CONTRACT_VERSION_V1,),
     }
     if {
         contract.kind: contract.supported_versions for contract in contracts

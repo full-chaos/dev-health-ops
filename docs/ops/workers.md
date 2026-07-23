@@ -117,13 +117,22 @@ not claimable by Python. The Go reconciler checks the persisted four-row set
 against the checked-in contract and closes readiness on a pause, missing row,
 generation error, or route drift.
 
-This is a fail-closed selector foundation, not River activation. All persisted
-and checked-in routes remain Celery, deployment profiles remain
-`coexistence_disabled` with zero replicas, and no Go sync handler or River
-sync-domain claimant exists. Do not change a route to River: it would strand
-the wakeup. The mutation-capable sync-domain scheduler,
-organization/entitlement gates, lease repair, River insertion, and handlers
-remain unfinished CHAOS-3039 work.
+Two dormant transaction kernels now sit behind that foundation. The scheduler
+kernel locks a bounded due window with `FOR UPDATE ... SKIP LOCKED`, invokes an
+injected coordinator through the same PostgreSQL transaction, and advances the
+schedule marker only after that durable handoff succeeds. The sync reconciler
+kernel can claim only unpaused River-routed rows, invoke an injected
+same-transaction River publisher for at-least-once kinds, and preserve a
+separate mark-before seam for `post_sync`. Neither kernel is constructed by
+the scheduler or reconciler command.
+
+This remains a fail-closed selector foundation, not River activation. All
+persisted and checked-in routes remain Celery, deployment profiles remain
+`coexistence_disabled` with zero replicas, and no Go sync handler is compiled.
+Do not change a route to River: it would strand the wakeup. Activation still
+requires command wiring, materialization of missing sync outbox rows,
+expired-lease repair and failure backoff, real River publishers and handlers,
+and the bounded post-sync quiescence/external-handoff path.
 
 For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`
 and run:
@@ -136,13 +145,21 @@ The command holds one exported read-only `REPEATABLE READ` snapshot across the
 Python and Go observations and emits only a safe match/mismatch report. It
 does not claim or publish work. See the
 [v2 parity evidence](../architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md).
+The `sync-parity` target in `docker/Dockerfile` packages the Go binary, Python
+observer, installed Python runtime, and checked-in sync-dispatch contract so
+the same comparison can run as an isolated container. The Go reconciler image
+also packages `contracts/sync-dispatch/v1`; packaging makes its registry
+loadable at startup but does not wire the dormant mutation kernel.
 
 The Go scheduler also remains blocked on the Phase 4
 `sync.plan_scheduled_config` coordinator. `sync.dispatch_run` starts from an
 existing `SyncRun` and cannot replace scheduled planning. Until the new
 coordinator consumes a stable occurrence identity and creates the scheduled
 domain plan transactionally, Celery Beat and `dispatch_scheduled_syncs` remain
-the sole schedule mutation owners.
+the sole schedule mutation owners. The dormant transaction kernel supplies the
+atomic handoff boundary, but the planner, organization/entitlement decisions,
+missing-marker materialization, catch-up policy, and command loop remain
+unimplemented.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target

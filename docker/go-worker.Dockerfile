@@ -54,6 +54,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/scheduler/usr/local/bin \
       /runtime/reconciler/usr/local/bin \
       /runtime/reconciler/app/contracts/jobs \
+      /runtime/reconciler/app/contracts/sync-dispatch \
       /runtime/stream-runner/usr/local/bin \
       /runtime/operator/usr/local/bin \
       /runtime/operator/app/contracts/jobs \
@@ -65,6 +66,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp /out/dev-health-reconciler /runtime/reconciler/usr/local/bin/dev-health-reconciler; \
     cp -R /src/contracts/jobs/v1 /runtime/reconciler/app/contracts/jobs/v1; \
+    cp -R /src/contracts/sync-dispatch/v1 /runtime/reconciler/app/contracts/sync-dispatch/v1; \
     cp /out/dev-health-stream-runner /runtime/stream-runner/usr/local/bin/dev-health-stream-runner; \
     cp /out/dev-health-workerctl /runtime/operator/usr/local/bin/dev-health-workerctl; \
     cp /out/worker-contractcheck /runtime/contractcheck/usr/local/bin/worker-contractcheck; \

@@ -1,6 +1,7 @@
-// Package sync provides a dormant, read-only shadow of the legacy Python
-// sync scheduler. It evaluates candidates only; it never claims, writes, or
-// starts a scheduler loop.
+// Package sync provides a dormant shadow of the legacy Python sync scheduler.
+// Snapshot remains read-only. The separate transaction kernel can persist a
+// coordinator handoff and its schedule marker atomically, but no command starts
+// a scheduler loop.
 package sync
 
 import (

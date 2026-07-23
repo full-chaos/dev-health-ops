@@ -568,14 +568,18 @@ Until that handler and its route are present, Celery Beat plus
 evaluate or failure-test occurrences before then, but it must not advance a
 production marker or claim schedule ownership.
 
-The current Phase 2 implementation stops before this mutation boundary.
-`internal/scheduler/sync` is an unregistered, read-only shadow: it performs one
+The read-only comparison path in `internal/scheduler/sync` still performs one
 bounded schedule/configuration `SELECT` and evaluates a versioned candidate
-snapshot in memory. It has no advisory lock, row lock, occurrence claim,
-update, enqueue, or command wiring. Celery Beat and
-`dispatch_scheduled_syncs` therefore remain the sole production scheduler
-until the steps above and their duplicate-occurrence tests are implemented
-and approved.
+snapshot in memory. Beside it, an unregistered transaction kernel now locks a
+bounded due window with `FOR UPDATE ... SKIP LOCKED`, derives a stable
+config-and-occurrence identity, invokes an injected coordinator through the
+same PostgreSQL transaction, and advances `next_run_at` only after that
+coordinator reports a durable handoff. No scheduler command constructs or
+calls this kernel. It also deliberately excludes missing-marker creation,
+organization and entitlement policy, authoritative `JobRun`/`SyncRun`/unit
+and outbox materialization, catch-up policy, and the
+`sync.plan_scheduled_config` handler. Celery Beat and
+`dispatch_scheduled_syncs` therefore remain the sole production scheduler.
 
 ### 10.2 Simple periodic maintenance
 
@@ -672,7 +676,24 @@ increment. The future River relay must insert the River job and mark the sync
 outbox through one PostgreSQL transaction and therefore needs the corresponding
 semantic-table privileges on that transaction's pool.
 
-For dispatch, finalize, and discovery rows, the reconciler inserts the River job and marks the outbox row dispatched in the same PostgreSQL transaction. The River job uses a deterministic unique insertion key derived from the outbox row and kind. An insert or mark failure rolls the transaction back and leaves the row eligible for reconciliation.
+An unregistered sync-reconciler transaction kernel now implements the narrow
+transport boundary: for River-routed at-least-once rows it locks and claims a
+bounded due window, invokes an injected River publisher through the same
+transaction, and marks the outbox dispatched only after the insert succeeds.
+For the at-most-once `post_sync` kind it marks dispatched first and invokes a
+separate transaction-local seam that cannot perform the eventual external
+effect. Route generation and claim-token predicates fail closed at the
+terminal write. The checked-in contract currently contains no River route, so
+even explicit mutation mode returns without opening a write transaction, and
+the reconciler command does not construct this kernel.
+
+This kernel is not the complete reconciler loop. Activation still needs
+command wiring and operator controls, materialization of missing
+dispatch/finalize/post-sync outbox rows, expired-domain-lease repair, persisted
+failure classification and retry backoff, concrete River publishers and
+handlers, and the bounded post-sync quiescence plus external-handoff mechanism.
+The reconciler image packages `contracts/sync-dispatch/v1` so the registry is
+available at runtime; that packaging does not change route ownership.
 
 - `dispatch_sync_run`: at-least-once queue insertion; unit claims prevent duplicate provider work.
 - `finalize_sync_run`: at-least-once queue insertion; finalization ledger prevents duplicate finalization.

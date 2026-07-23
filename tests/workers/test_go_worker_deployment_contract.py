@@ -11,6 +11,8 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROFILES = _REPO_ROOT / "deploy" / "go-workers" / "profiles.json"
+_APP_DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
+_GO_WORKER_DOCKERFILE = _REPO_ROOT / "docker" / "go-worker.Dockerfile"
 _PRODUCTION_COMPOSE = (
     _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 )
@@ -108,6 +110,37 @@ def test_go_profiles_are_disabled_future_topology() -> None:
             "WORKER_OPERATOR_TOKEN",
         ],
     }
+
+
+def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        "cp -R /src/contracts/jobs/v1 "
+        "/runtime/reconciler/app/contracts/jobs/v1;" in dockerfile
+    )
+    assert (
+        "cp -R /src/contracts/sync-dispatch/v1 "
+        "/runtime/reconciler/app/contracts/sync-dispatch/v1;" in dockerfile
+    )
+
+
+def test_sync_parity_image_packages_fixed_runtime_paths() -> None:
+    dockerfile = _APP_DOCKERFILE.read_text(encoding="utf-8")
+
+    for required in (
+        "FROM runtime AS sync-parity",
+        "COPY --from=go-migrator-builder /out/dev-health-sync-parity "
+        "/usr/local/bin/dev-health-sync-parity",
+        "COPY --from=builder /build/contracts/sync-dispatch/v1 "
+        "/app/contracts/sync-dispatch/v1",
+        "COPY --from=builder /build/scripts/worker/observe_sync_dispatch_parity.py "
+        "/app/scripts/worker/observe_sync_dispatch_parity.py",
+        "ln -s /usr/local/bin/python /app/.venv/bin/python",
+        "ENV PYTHONPATH=/app/src",
+        'ENTRYPOINT ["dev-health-sync-parity"]',
+    ):
+        assert required in dockerfile
 
 
 def test_profile_pgbouncer_budget_matches_production_compose_defaults() -> None:

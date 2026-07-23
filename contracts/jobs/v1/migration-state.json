@@ -3,33 +3,33 @@
   "jobs": [
     {
       "kind": "metrics.daily_dispatch",
-      "state": "go_implemented",
+      "state": "contract_frozen",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "kill_window_matrix", "replay_matrix"]
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory"]
     },
     {
       "kind": "metrics.daily_finalize",
-      "state": "go_implemented",
+      "state": "contract_frozen",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "kill_window_matrix", "replay_matrix"]
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory"]
     },
     {
       "kind": "metrics.daily_partition",
-      "state": "go_implemented",
+      "state": "contract_frozen",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "kill_window_matrix", "replay_matrix"]
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory"]
     },
     {
       "kind": "operational.billing_notification",

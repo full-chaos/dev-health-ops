@@ -25,7 +25,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if err := json.Unmarshal(data, &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || len(registry.Families) < 20 {
+	if registry.SchemaVersion != 1 || len(registry.Families) != 23 {
 		t.Fatalf("invalid family registry: %#v", registry)
 	}
 	seen := map[string]bool{}
@@ -35,9 +35,17 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		}
 		seen[family.Name] = true
 	}
-	for _, core := range []string{"repo_user_commit", "team_wellbeing"} {
+	expected := []string{
+		"repo_user_commit", "team_wellbeing", "file_hotspots", "file_risk_hotspots", "work_item", "work_item_estimate", "work_item_attribution", "work_item_state", "review_edges", "cicd", "testops_pipeline", "testops_test", "testops_coverage", "deploy", "incident", "ai_governance", "ai_impact", "ai_workflow", "work_graph_edges", "compounding_risk", "testops_risk", "benchmarking", "ic_finalize",
+	}
+	for _, core := range expected {
 		if !seen[core] {
-			t.Fatalf("daily core family %s is absent", core)
+			t.Fatalf("daily family %s is absent", core)
+		}
+	}
+	for _, family := range registry.Families {
+		if (family.Name == "repo_user_commit" || family.Name == "team_wellbeing") && family.Port != "next_core" {
+			t.Fatalf("daily core family %s must be next_core, got %s", family.Name, family.Port)
 		}
 	}
 }

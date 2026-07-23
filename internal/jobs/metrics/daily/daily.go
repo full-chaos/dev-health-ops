@@ -4,6 +4,13 @@
 // run/partition identity after this package has reloaded and fenced it from
 // PostgreSQL. It cannot receive a command, metric rows, SQL, credentials, or
 // caller-selected Python module.
+//
+// All three kinds deliberately use the existing heavy/metrics profile. Celery's
+// current all-org fanout is lightweight and uses default, but this dispatcher
+// owns durable run/partition publication and must share the same bounded
+// ClickHouse-facing topology as its partitions/finalizer. It does not create a
+// new profile, and the checked-in route remains Celery until this topology and
+// its compatibility executor are fully audited.
 package daily
 
 import (
@@ -87,7 +94,13 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	run, err := handler.store.LoadRun(ctx, runID)
-	if err != nil || run.ID != runID || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
+	if err != nil {
+		if errors.Is(err, ErrInvalidState) {
+			return jobruntime.Permanent(err)
+		}
+		return jobruntime.Retryable(err)
+	}
+	if run.ID != runID || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	partitions, err := handler.store.DispatchablePartitions(ctx, runID)
@@ -133,7 +146,15 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		return nil
 	}
 	run, err := handler.store.LoadRun(ctx, claim.Partition.RunID)
-	if err != nil || claim.Partition.ID != partitionID || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
+	if err != nil {
+		_ = handler.store.ReleasePartition(ctx, *claim)
+		if errors.Is(err, ErrInvalidState) {
+			return jobruntime.Permanent(err)
+		}
+		return jobruntime.Retryable(err)
+	}
+	if claim.Partition.ID != partitionID || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
+		_ = handler.store.ReleasePartition(ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	if err := handler.compatibility.ComputePartition(ctx, run, claim.Partition); err != nil {
@@ -175,6 +196,7 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return nil
 	}
 	if execution.OrganizationID == nil || claim.Run.ID != runID || claim.Run.OrganizationID != *execution.OrganizationID {
+		_ = handler.store.ReleaseFinalize(ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	if err := handler.compatibility.Finalize(ctx, claim.Run); err != nil {

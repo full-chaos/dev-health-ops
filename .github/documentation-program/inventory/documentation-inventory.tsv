@@ -50,6 +50,7 @@ full-chaos/dev-health-ops	.github/workflows/docs-cloudflare.yml	workflow	support
 full-chaos/dev-health-ops	.github/workflows/docs-guards.yml	workflow	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	.github/workflows/docs-health-report.yml	workflow	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	.github/workflows/docs-inventory-review.yml	workflow	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops	.github/workflows/pr1256-docs-finalize.yml	workflow	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	AGENTS.md	repository-entry-point	external-entry-point						repository-guidance			False	False							Public repository entry point; links into documentation must be inventoried and updated at cutover.
 full-chaos/dev-health-ops	Makefile	configuration	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	README.md	repository-entry-point	external-entry-point						repository-guidance			False	False							Public repository entry point; links into documentation must be inventoried and updated at cutover.
@@ -505,6 +506,7 @@ full-chaos/dev-health-ops	scripts/docs_inventory_review.py	tooling	supporting-ar
 full-chaos/dev-health-ops	scripts/docs_inventory_v2.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/docs_publication.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/gen_taxonomy_docs.py	tooling	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops	scripts/pr1256_finalize_docs.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/prepare_docs_cloudflare.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/user_guide_evidence_contract.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/user_guide_evidence_validation.py	tooling	supporting-artifact						documentation-system			False	False							

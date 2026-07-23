@@ -250,6 +250,7 @@ def reconcile_pending_scheduled_sync_occurrences(
 
     if limit <= 0:
         return {"scanned": 0, "completed": 0, "skipped": 0, "errors": 0}
+    claim_limit = min(limit, DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT)
 
     candidates = (
         session.query(
@@ -268,7 +269,7 @@ def reconcile_pending_scheduled_sync_occurrences(
             ScheduledSyncOccurrence.scheduled_for,
             ScheduledSyncOccurrence.occurrence_id,
         )
-        .limit(limit)
+        .limit(claim_limit)
         .all()
     )
     completed = 0

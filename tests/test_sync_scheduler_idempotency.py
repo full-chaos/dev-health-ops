@@ -370,7 +370,52 @@ class TestDispatchIdempotency:
         assert persisted.job_run_id == first_job_run_id
         assert persisted.sync_run_id == first_sync_run_id
 
-    def test_pending_go_occurrence_is_completed_once_by_python(
+    def test_active_scheduler_completes_pending_go_occurrence_once(
+        self, monkeypatch, db_session
+    ):
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config)
+        db_session.add(job)
+        db_session.flush()
+        scheduled_for = now - HOUR
+        occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(
+                config.id,
+                scheduled_for,
+            ),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=scheduled_for,
+        )
+        db_session.add(occurrence)
+        db_session.commit()
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
+
+        first = _call(task)
+        db_session.refresh(occurrence)
+        first_job_run_id = occurrence.job_run_id
+        first_sync_run_id = occurrence.sync_run_id
+
+        job.next_run_at = now - timedelta(seconds=1)
+        db_session.commit()
+        second = _call(task)
+
+        assert str(config.id) in first["dispatched"]
+        assert str(config.id) in second["dispatched"]
+        assert first_job_run_id is not None
+        assert first_sync_run_id is not None
+        assert occurrence.job_run_id == first_job_run_id
+        assert occurrence.sync_run_id == first_sync_run_id
+        assert db_session.query(ScheduledSyncOccurrence).count() == 1
+        assert db_session.query(JobRun).count() == 1
+        assert db_session.query(SyncRun).count() == 1
+        assert db_session.query(SyncDispatchOutbox).count() == 1
+        dispatch_mock.apply_async.assert_not_called()
+
+    def test_pending_occurrence_consumer_ignores_future_marker_and_replays_once(
         self, monkeypatch, db_session
     ):
         from dev_health_ops.workers.sync_scheduler import (
@@ -468,6 +513,49 @@ class TestDispatchIdempotency:
         assert earlier.sync_run_id is not None
         assert later.job_run_id is None
         assert later.sync_run_id is None
+
+    def test_pending_occurrence_reconciliation_caps_oversized_limit(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.workers import sync_scheduler
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 3 * HOUR)
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        for offset in range(101):
+            scheduled_for = now - timedelta(hours=offset + 1)
+            db_session.add(
+                ScheduledSyncOccurrence(
+                    occurrence_id=scheduled_sync_occurrence_identity(
+                        config.id, scheduled_for
+                    ),
+                    identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+                    org_id=config.org_id,
+                    sync_config_id=config.id,
+                    scheduled_job_id=job.id,
+                    scheduled_for=scheduled_for,
+                )
+            )
+        db_session.commit()
+        monkeypatch.setattr(
+            sync_scheduler,
+            "_complete_pending_scheduled_sync_occurrence",
+            lambda *_args, **_kwargs: False,
+        )
+
+        result = sync_scheduler.reconcile_pending_scheduled_sync_occurrences(
+            db_session,
+            limit=10_000,
+        )
+
+        assert result == {
+            "scanned": sync_scheduler.DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT,
+            "completed": 0,
+            "skipped": sync_scheduler.DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT,
+            "errors": 0,
+        }
 
     def test_pending_occurrence_reconciliation_isolates_failed_rows(
         self, monkeypatch, db_session

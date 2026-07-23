@@ -2,147 +2,46 @@
 
 ## Scope
 
-This review compares the documentation foundation commit `33a09d0544c2382e221802745e96a2a98476cef3` with current `main` after the incident-ingestion and Go-worker foundation work. It inventories changes under `docs/` and related checked-in contracts or deployment examples that materially affect the public `docs-prototype/` candidate.
+This review compares the documentation foundation commit `33a09d0544c2382e221802745e96a2a98476cef3` with current `main` after the incident-ingestion and Go-worker foundation work. It inventories new and materially revised documents under `docs/` and identifies their publication destination in `docs-prototype/`.
 
-The prototype remains organized by the approved public information architecture. New source material is merged into existing admin, operations, reference, integration, and contributor pages unless a genuinely new supported reader destination is required.
+The implementation direction changed during review: the strongest new source documents are migrated directly instead of being compressed into new summary pages. Their Markdown bodies remain aligned with the source documents. Canonical placement, navigation, source-relative links, and inaccessible empty anchors are adapted by the documentation build.
 
-## Change groups
+## Directly migrated documents
 
-### PagerDuty and canonical incident ingestion
-
-Source changes:
-
-- `docs/user-guide/pagerduty-oauth-app-setup.md`
-- `docs/architecture/pagerduty-contract.md`
-- `docs/architecture/canonical-operational-model.md`
-- `docs/architecture/dispatch-outbox.md`
-- `docs/architecture/licensing.md`
-- PagerDuty credential, service-discovery, OAuth, webhook-binding, revocation, and sync implementation
-
-Public documentation impact:
-
-- add a supported PagerDuty administrator setup workflow under the approved incident-response source page;
-- explain organization-scoped OAuth, client-credentials fallback, exact callback path, read scopes, service discovery, repository mapping, preflight, initial backfill, disconnect, and rotation;
-- update provider troubleshooting and credential lifecycle guidance;
-- update environment and feature-availability reference;
-- document the V3 webhook boundary only where it is useful to administrators, integrators, or operators;
-- state that `canonical_incident_ingestion` is enabled by default after cutover but retains a global kill switch and optional organization override.
-
-### Jira Service Management incidents
-
-Source change:
-
-- `docs/providers/jira-service-management.md`
-
-Public documentation impact:
-
-- do not publish a setup workflow or advertise JSM incidents as release-ready;
-- record that the implementation is code/unit-contract ready but live tenant proof, merge readiness, and release readiness remain blocked;
-- preserve the boundary that JSM incidents are not inferred from ordinary Jira issues, alerts, Opsgenie, labels, timestamps, or text similarity.
-
-### Go worker and River coexistence foundation
-
-Source changes:
-
-- `docs/ops/workers.md`
-- `docs/ops/database-connection-pooling.md`
-- `docs/architecture/go-worker-runtime-trd.md`
-- `docs/decisions/chaos-3034-river-compatibility.md`
-- `contracts/jobs/v1/`
-- `contracts/sync-dispatch/v1/`
-- `deploy/go-workers/`
-- Go commands and packages under `cmd/` and `internal/`
-
-Public documentation impact:
-
-- state unambiguously that Celery remains the production owner of all current jobs;
-- describe the dormant Go worker, scheduler, reconciler, stream-runner, operator CLI, job contracts, and deployment profiles without implying production routing;
-- document zero-minimum-replica coexistence and route ownership gates;
-- add the direct-PostgreSQL queue-control DSN, PgBouncer-compatible domain DSN, and one-shot migration DSN/role separation;
-- add Go health endpoints, readiness categories, bounded metrics, and payload-redacted operator controls;
-- update repository map, architecture, storage, configuration, CLI, deployment, and operations pages.
-
-### Deployment and operational examples
-
-Source changes:
-
-- `compose.yml`
-- `deploy/docker-compose/`
-- `deploy/docker-swarm/`
-- `deploy/kubernetes/`
-- `deploy/helm/dev-health/`
-- `docker/go-worker.Dockerfile`
-- `deploy/grafana/dashboards/go-workers.json`
-
-Public documentation impact:
-
-- keep current Python API/Celery deployment examples canonical;
-- describe Go profiles as disabled coexistence examples, not replacement production topology;
-- document migration ordering and dedicated runtime/migration database identities;
-- point readers to checked-in Compose, Swarm, Kubernetes/Kustomize, Helm, and Go profile examples rather than duplicating every manifest.
-
-### CLI, observability, configuration, and repository layout
-
-Source changes:
-
-- `docs/ops/cli-reference.md`
-- `docs/ops/observability-tooling.md`
-- `docs/configuration.md`
-- `docs/architecture/repo-layout.md`
-- `docs/contributing/platform-contract.md`
-
-Public documentation impact:
-
-- add worker operator and contract-check commands while retaining `dev-hops` as the Python CLI;
-- add Go worker liveness, readiness, queue depth, oldest eligible age, execution saturation, and pool-saturation signals;
-- add the new `cmd/`, `internal/`, `contracts/`, and `deploy/go-workers/` ownership boundaries;
-- retain warnings about inline CLI execution where worker-backed paths are the supported operational route.
-
-## Publication decisions
-
-| Source material | Prototype action | Publication boundary |
+| Current source | v2 destination | Reader boundary |
 | --- | --- | --- |
-| PagerDuty OAuth setup | Add and navigate an administrator guide under incident-response sources | Current supported setup |
-| PagerDuty backend/webhook contract | Summarize in admin, integration, operations, and reference pages | Exact backend details remain contributor/reference material |
-| JSM provider contract | Add an availability warning only | Withheld as a setup workflow until live proof exists |
-| Go worker TRD, PRD, plans, and evidence | Extract current runtime facts into operations and contributor docs | Planning history and benchmark evidence remain internal/source material |
-| Worker and database-pooling guides | Substantially update canonical operations pages | Current runtime plus explicit coexistence state |
-| Deployment manifests | Link and explain supported examples | Manifests remain source of exact topology |
-| CLI and repository-layout updates | Update reference and contributor pages | Current commands and ownership boundaries |
+| `docs/user-guide/pagerduty-oauth-app-setup.md` | `/admin/data-sources/incident-response/` | Supported administrator setup and troubleshooting |
+| `docs/providers/jira-service-management.md` | `/admin/data-sources/jira-atlassian/` | Provider contract and explicit blocked release status |
+| `docs/architecture/pagerduty-contract.md` | `/integrate/webhooks/pagerduty/` | PagerDuty REST/Webhooks V3 backend and integration contract |
+| `docs/ops/workers.md` | `/operate/run/workers-and-jobs/` | Active Celery operations and additive Go foundation |
+| `docs/ops/database-connection-pooling.md` | `/operate/configure/database-connection-pooling/` | PgBouncer, direct River queue control, and migration-role boundaries |
+| `docs/architecture/go-worker-runtime-trd.md` | `/contribute/architecture/go-worker-runtime/` | Full technical requirements and runtime design |
+| `docs/decisions/chaos-3034-river-compatibility.md` | `/contribute/architecture/river-compatibility/` | Accepted River compatibility and enqueue-boundary decision |
+| `docs/product/go-worker-migration-prd.md` | `/contribute/architecture/go-worker-migration-prd/` | Product requirements for the migration |
+| `docs/plans/go-worker-migration-implementation-plan.md` | `/contribute/architecture/go-worker-migration-plan/` | Full phased implementation plan |
 
-## Updated prototype destinations
+The mapping is versioned in `.github/documentation-program/content/migrated-source-pages.json`. `scripts/mkdocs_migrated_source_links.py` resolves links relative to each original source document and renders them as stable repository links where the supporting source has not yet been migrated.
 
-The source review is applied to:
+## Related prototype updates
 
-- `/admin/data-sources/`
-- `/admin/data-sources/incident-response/`
-- `/admin/data-sources/credential-lifecycle/`
-- `/admin/sync-and-coverage/status-and-freshness/`
-- `/admin/troubleshooting/provider-connections/`
-- `/integrate/webhooks/configure/`
-- `/integrate/webhooks/verify-signatures/`
-- `/integrate/webhooks/retries-and-replay/`
-- `/operate/configure/environment-and-secrets/`
-- `/operate/configure/databases-and-storage/`
-- `/operate/configure/workers-and-schedules/`
-- `/operate/run/workers-and-jobs/`
-- `/operate/observe/health-checks/`
-- `/operate/observe/metrics-and-traces/`
-- `/operate/plan/capacity-and-sizing/`
-- `/operate/runbooks/provider-authentication-failure/`
-- `/operate/runbooks/worker-or-queue-failure/`
-- `/operate/install/production/`
-- `/reference/configuration/environment/`
-- `/reference/configuration/feature-flags/`
-- `/reference/cli/`
-- `/contribute/start/repository-map/`
-- `/contribute/architecture/platform/`
-- `/contribute/architecture/data-and-storage/`
-- `/contribute/architecture/contracts/`
-- `/contribute/development/commands/`
+The direct documents are supported by targeted updates to existing landing, reference, troubleshooting, deployment, and contributor pages, including:
 
-## Explicitly withheld
+- provider connection and credential lifecycle guidance;
+- synchronization status and freshness;
+- webhook authentication, replay, and rotation;
+- environment and feature-availability reference;
+- worker health, metrics, capacity, and recovery guidance;
+- deployment examples and migration ordering;
+- repository ownership and development commands.
 
-- A public JSM incident setup page, because live tenant proof and release readiness are still blocked.
-- A statement that Go or River owns production jobs, because all current routes remain Celery-owned and the checked-in Go profiles remain disabled.
-- Internal migration plans, benchmark captures, implementation evidence, and issue-specific rollout history as public user guidance.
+## Important status boundaries retained from the source documents
+
+- PagerDuty canonical incident ingestion is the supported current incident-response path.
+- JSM incident ingestion remains blocked for release until live tenant proof is recorded; the direct provider contract states that limitation rather than presenting a false setup workflow.
+- Celery remains the production owner of current jobs and schedules.
+- Go/River profiles remain coexistence foundations with zero minimum replicas and Celery routes unless a later migration gate changes ownership.
+- Direct PostgreSQL queue control, pooled domain access, and one-shot migration access remain separate database responsibilities.
+
+## Material that remains source-only
+
+The migration does not publish raw benchmark captures, generated compatibility JSON, local resource snapshots, or other evidence artifacts as standalone navigation destinations. The migrated TRD, ADR, PRD, implementation plan, worker guide, and database guide link to that evidence in the repository when it is relevant.

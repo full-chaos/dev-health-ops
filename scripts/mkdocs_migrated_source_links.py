@@ -127,9 +127,7 @@ def _rewrite_markdown(markdown: str, source_path: str) -> str:
                 source_path,
                 image=match.group("prefix").startswith("!["),
             )
-            return (
-                f"{match.group('prefix')}{rewritten}{title}{match.group('suffix')}"
-            )
+            return f"{match.group('prefix')}{rewritten}{title}{match.group('suffix')}"
 
         output.append(INLINE_LINK_RE.sub(replace_inline, line))
 

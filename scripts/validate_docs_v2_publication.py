@@ -170,9 +170,7 @@ def main() -> int:
     migrated_sources = _load_json_map(MIGRATED_SOURCE_MAP_PATH)
     migrated_urls = {_canonical_url(path) for path in migrated_sources}
 
-    duplicate_paths = [
-        path for path, count in Counter(nav_paths).items() if count > 1
-    ]
+    duplicate_paths = [path for path, count in Counter(nav_paths).items() if count > 1]
     if duplicate_paths:
         errors.append(f"duplicate navigation paths: {duplicate_paths}")
 

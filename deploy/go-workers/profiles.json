@@ -56,15 +56,23 @@
       "min_replicas": 0,
       "max_replicas": 1,
       "queues": [
+        "metrics",
         "reports"
       ],
       "queue_workers": [
+        {
+          "queue": "metrics",
+          "max_workers": 2
+        },
         {
           "queue": "reports",
           "max_workers": 2
         }
       ],
       "job_kinds": [
+        "metrics.daily_dispatch",
+        "metrics.daily_finalize",
+        "metrics.daily_partition",
         "report.execute_on_demand",
         "report.execute_scheduled"
       ],

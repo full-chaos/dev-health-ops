@@ -32,9 +32,9 @@ Connect a GitLab namespace or instance, verify project visibility, and select th
 
 <div class="fc-topic-card" markdown>
 
-### [PagerDuty](pagerduty.md)
+### [Incident-response sources](incident-response.md)
 
-Register the read-only OAuth app, authorize it once for the Dev Health organization, discover services, map them to product scope, and verify incident synchronization.
+Register PagerDuty OAuth, authorize the organization, discover services, map operational scope, and verify canonical incident synchronization.
 
 </div>
 

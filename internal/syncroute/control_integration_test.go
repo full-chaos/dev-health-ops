@@ -21,12 +21,14 @@ func (registry integrationRegistry) Lookup(kind string) (syncdispatchcontract.De
 }
 
 type integrationQuiescer struct {
-	err   error
-	calls int
+	err     error
+	calls   int
+	request QuiescenceRequest
 }
 
-func (quiescer *integrationQuiescer) Quiesce(context.Context, QuiescenceRequest) error {
+func (quiescer *integrationQuiescer) Quiesce(_ context.Context, request QuiescenceRequest) error {
 	quiescer.calls++
+	quiescer.request = request
 	return quiescer.err
 }
 
@@ -68,7 +70,8 @@ func TestRouteControlPostgresConcurrencyDrainAndRollback(t *testing.T) {
 	}
 	capabilities, err := NewCapabilities([]Capability{
 		{Kind: syncdispatchcontract.KindDispatchSyncRun, Transport: syncdispatchcontract.RouteRiver},
-		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver, Quiescer: quiescer},
+		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver},
+		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteCelery, Quiescer: quiescer},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,8 +217,13 @@ WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 		t.Fatalf("post_sync quiescence error=%v", err)
 	}
 	state, err = controller.Inspect(ctx, syncdispatchcontract.KindPostSync)
-	if err != nil || !state.Paused || state.Generation != 4 || quiescer.calls != 1 {
-		t.Fatalf("post_sync rollback state=%+v calls=%d err=%v", state, quiescer.calls, err)
+	if err != nil || !state.Paused || state.Generation != 4 || quiescer.calls != 1 ||
+		quiescer.request.Transport != syncdispatchcontract.RouteCelery ||
+		quiescer.request.Generation != 3 {
+		t.Fatalf(
+			"post_sync rollback state=%+v calls=%d request=%+v err=%v",
+			state, quiescer.calls, quiescer.request, err,
+		)
 	}
 }
 

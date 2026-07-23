@@ -1005,7 +1005,7 @@ The shipped capability registry is empty and every checked-in route remains
 Celery. These commands can therefore pause, drain, and resume the same Celery
 route for operational proof, including `post_sync`, but cannot activate River.
 A transport-changing `post_sync` resume remains blocked until a concrete
-external quiescer is registered.
+external quiescer is registered for the old transport.
 
 ---
 

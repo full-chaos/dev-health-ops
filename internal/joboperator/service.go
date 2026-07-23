@@ -605,6 +605,7 @@ func (service *Service) mutate(ctx context.Context, mutation Mutation, operation
 			errors.Is(err, syncroute.ErrLiveClaims) ||
 			errors.Is(err, syncroute.ErrCapabilityMissing) ||
 			errors.Is(err, syncroute.ErrQuiescenceMissing) ||
+			errors.Is(err, syncroute.ErrDrift) ||
 			errors.Is(err, syncroute.ErrInvalidConfiguration) {
 			return mapRouteError(err)
 		}
@@ -753,6 +754,8 @@ func mapRouteError(err error) error {
 	case errors.Is(err, syncroute.ErrRouteStateConflict), errors.Is(err, syncroute.ErrLiveClaims):
 		return serviceError(CodeConflict, err)
 	case errors.Is(err, syncroute.ErrCapabilityMissing), errors.Is(err, syncroute.ErrQuiescenceMissing):
+		return serviceError(CodePrecondition, err)
+	case errors.Is(err, syncroute.ErrDrift):
 		return serviceError(CodePrecondition, err)
 	case errors.Is(err, syncroute.ErrInvalidConfiguration):
 		return serviceError(CodeInvalid, err)

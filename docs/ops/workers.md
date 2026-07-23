@@ -122,11 +122,11 @@ barrier and re-read state and live claims, covering both Celery's
 route-plus-outbox transaction and Go's outbox-only terminal commit. Resume
 requires the target to equal the checked-in route. River requires an exact
 compiled capability, and a transport-changing `post_sync` resume additionally
-requires an external quiescer for its old generation. The shipped command
-registers no capabilities, so today it can pause, inspect/drain, and resume the
-same Celery route, including `post_sync`, but cannot activate River. A future
-cutover quiescer must prove it honors context cancellation; its configured
-timeout is cooperative.
+requires an external quiescer registered under the old transport capability and
+invoked for its old generation. The shipped command registers no capabilities,
+so today it can pause, inspect/drain, and resume the same Celery route,
+including `post_sync`, but cannot activate River. A future cutover quiescer must
+prove it honors context cancellation; its configured timeout is cooperative.
 
 Two dormant transaction kernels now sit behind that foundation. The scheduler
 kernel locks a bounded due window with `FOR UPDATE ... SKIP LOCKED`, invokes an

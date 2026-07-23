@@ -244,6 +244,20 @@ func TestRouteResumeFailsClosedWithoutCapabilityAndAuditsFailure(t *testing.T) {
 	}
 }
 
+func TestRouteDriftIsAnOperatorPreconditionFailure(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.routes.err = syncroute.ErrDrift
+	_, err := fixture.service.PauseRoute(
+		context.Background(), testPrincipal(), "dispatch_sync_run", "cutover", "corr-route-drift",
+	)
+	assertCode(t, err, CodePrecondition)
+	if fixture.auditor.status != AuditFailed ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,route_pause,audit_failed" {
+		t.Fatalf("route drift status=%s order=%v", fixture.auditor.status, fixture.order)
+	}
+}
+
 func TestAmbiguousRouteCommitIsAuditedAsOutcomeUnknown(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)

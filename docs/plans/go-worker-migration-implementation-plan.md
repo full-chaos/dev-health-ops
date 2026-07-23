@@ -343,10 +343,11 @@ and resume one fixed route at a time with durable audit intent and monotonic
 generation changes. Route mutation follows Python's route-row-first lock order,
 then holds a table barrier across the post-terminal/pre-commit window and
 rechecks route state and live claims. A transport-changing `post_sync` resume
-additionally requires a registered external quiescer. The shipped command
-registers no River or `post_sync` cutover capability, every checked-in route
-remains Celery, and the Go reconciler closes readiness while a route is paused
-or divergent, so these controls do not activate River.
+additionally requires an external quiescer registered for the old transport
+generation. The shipped command registers no River or `post_sync` cutover
+capability, every checked-in route remains Celery, and the Go reconciler closes
+readiness while a route is paused or divergent, so these controls do not
+activate River.
 
 The dormant `internal/scheduler/sync` package retains its read-only
 schedule-evaluation foundation. It reads at most 101 active configuration/job
@@ -421,10 +422,10 @@ claim-commit/publish workflow that uses the failure recorder and concrete River
 publishers and handlers. The capability-aware route/operator control plane now
 serializes the documented post-terminal, pre-commit window, but the shipped
 capability registry is empty: River resume is rejected and `post_sync` cannot
-change transports without a concrete external quiescer. A same-transport Celery
-resume remains available for recovery. The cutover quiescer must prove it
-honors context cancellation before activation because the current timeout is
-cooperative.
+change transports without a concrete external quiescer registered for the old
+transport. A same-transport Celery resume remains available for recovery. The
+cutover quiescer must prove it honors context cancellation before activation
+because the current timeout is cooperative.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,

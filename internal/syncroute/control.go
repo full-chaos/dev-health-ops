@@ -51,8 +51,9 @@ type Quiescer interface {
 }
 
 // Capability is registered only by composition code that has a concrete
-// publisher/handler. Post-sync additionally requires a Quiescer because its
-// mark-before-publish window outlives the database claim.
+// publisher/handler. A post-sync capability's Quiescer stops publishers owned
+// by Capability.Transport because its mark-before-publish window outlives the
+// database claim.
 type Capability struct {
 	Kind      string
 	Transport string
@@ -291,23 +292,18 @@ func resumeCapability(
 	currentTransport string,
 	targetTransport string,
 ) (Capability, bool, error) {
-	var capability Capability
 	if targetTransport == syncdispatchcontract.RouteRiver {
-		var ok bool
-		capability, ok = capabilities.Lookup(kind, targetTransport)
+		capability, ok := capabilities.Lookup(kind, targetTransport)
 		if !ok || capability.Kind != kind || capability.Transport != targetTransport {
 			return Capability{}, false, ErrCapabilityMissing
 		}
 	}
 	if kind != syncdispatchcontract.KindPostSync || currentTransport == targetTransport {
-		return capability, false, nil
+		return Capability{}, false, nil
 	}
-	if targetTransport != syncdispatchcontract.RouteRiver {
-		var ok bool
-		capability, ok = capabilities.Lookup(kind, targetTransport)
-		if !ok || capability.Kind != kind || capability.Transport != targetTransport {
-			return Capability{}, false, ErrQuiescenceMissing
-		}
+	capability, ok := capabilities.Lookup(kind, currentTransport)
+	if !ok || capability.Kind != kind || capability.Transport != currentTransport {
+		return Capability{}, false, ErrQuiescenceMissing
 	}
 	if capability.Quiescer == nil {
 		return Capability{}, false, ErrQuiescenceMissing

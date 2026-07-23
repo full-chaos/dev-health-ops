@@ -698,12 +698,13 @@ A reviewed cutover must pause with a generation increment, wait for live claims
 to drain or expire, deploy the matching checked-in handler/contract and
 capability, then resume the new transport with another generation increment.
 The command currently composes an empty capability registry, so River resume is
-rejected. A transport-changing `post_sync` resume also requires a registered
-external quiescer for the old generation; a same-transport Celery resume remains
-available for recovery. Because the quiescer timeout is cooperative, a concrete
-implementation must prove it honors context cancellation before activation.
-All checked-in routes remain Celery, so the available control is same-transport
-pause/drain/resume until that separately reviewed deployment exists.
+rejected. A transport-changing `post_sync` resume also requires an external
+quiescer registered to the old transport capability and invoked for its old
+generation; a same-transport Celery resume remains available for recovery.
+Because the quiescer timeout is cooperative, a concrete implementation must
+prove it honors context cancellation before activation. All checked-in routes
+remain Celery, so the available control is same-transport pause/drain/resume
+until that separately reviewed deployment exists.
 
 The future River relay must insert the River job and mark the sync outbox
 through one PostgreSQL transaction and therefore needs the corresponding

@@ -93,18 +93,25 @@ func TestResumeCapabilityAllowsSameTransportPostSyncAndGuardsCutover(t *testing.
 	); !errors.Is(err, ErrQuiescenceMissing) {
 		t.Fatalf("Celery-to-River post_sync error=%v", err)
 	}
-	riverWithBarrier, err := NewCapabilities([]Capability{{
-		Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver,
-		Quiescer: quiescerFunc(func(context.Context, QuiescenceRequest) error { return nil }),
-	}})
+	riverWithOldBarrier, err := NewCapabilities([]Capability{
+		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver},
+		{
+			Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteCelery,
+			Quiescer: quiescerFunc(func(context.Context, QuiescenceRequest) error { return nil }),
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, required, err := resumeCapability(
-		riverWithBarrier, syncdispatchcontract.KindPostSync,
+	capability, required, err := resumeCapability(
+		riverWithOldBarrier, syncdispatchcontract.KindPostSync,
 		syncdispatchcontract.RouteCelery, syncdispatchcontract.RouteRiver,
-	); err != nil || !required {
-		t.Fatalf("registered cutover capability = required:%t err:%v", required, err)
+	)
+	if err != nil || !required || capability.Transport != syncdispatchcontract.RouteCelery {
+		t.Fatalf(
+			"registered cutover capability = transport:%s required:%t err:%v",
+			capability.Transport, required, err,
+		)
 	}
 }
 

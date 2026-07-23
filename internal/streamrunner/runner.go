@@ -150,15 +150,17 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) error {
 			}
 		}
 	}
-	for _, stream := range streams {
-		stats, err := r.transport.Stats(ctx, stream, r.config.ConsumerGroup)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("inspect stream %q: %w", stream, err))
-			continue
+	if maintain {
+		for _, stream := range streams {
+			stats, err := r.transport.Stats(ctx, stream, r.config.ConsumerGroup)
+			if err != nil {
+				failures = append(failures, fmt.Errorf("inspect stream %q: %w", stream, err))
+				continue
+			}
+			r.mu.Lock()
+			r.lastStats[stream] = stats
+			r.mu.Unlock()
 		}
-		r.mu.Lock()
-		r.lastStats[stream] = stats
-		r.mu.Unlock()
 	}
 	if err := errors.Join(failures...); err != nil {
 		r.ready.Store(false)

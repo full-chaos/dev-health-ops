@@ -25,6 +25,7 @@ type fakeTransport struct {
 	readNotify  chan struct{}
 	readDelay   time.Duration
 	ackErr      error
+	statCalls   int
 	stats       StreamStats
 	closed      bool
 }
@@ -99,6 +100,9 @@ func (f *fakeTransport) Quarantine(_ context.Context, message Message, reason st
 	return nil
 }
 func (f *fakeTransport) Stats(context.Context, string, string) (StreamStats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statCalls++
 	return f.stats, nil
 }
 func (f *fakeTransport) Close() { f.mu.Lock(); defer f.mu.Unlock(); f.closed = true }
@@ -243,6 +247,11 @@ func TestRunnerReadsContinuouslyBetweenReclaimCadences(t *testing.T) {
 			t.Fatal("successful reads waited for reclaim cadence")
 		}
 	}
+	transport.mu.Lock()
+	if transport.statCalls != 1 {
+		t.Fatalf("continuous reads performed full stats sweeps: calls=%d", transport.statCalls)
+	}
+	transport.mu.Unlock()
 	cancel()
 	if err := runner.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)

@@ -407,7 +407,15 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
 
 
 def test_byo_llm_status_reason_codes_match_documented_contract():
-    doc = Path(__file__).parents[3] / "docs" / "llm" / "byo-llm-credentials.md"
+    # The BYO-LLM reason-code contract is an internal/source contract, not a public
+    # reference page; it is preserved under .github/docs-legacy/llm/byo-llm-credentials.md.
+    doc = (
+        Path(__file__).parents[3]
+        / ".github"
+        / "docs-legacy"
+        / "llm"
+        / "byo-llm-credentials.md"
+    )
     text = doc.read_text(encoding="utf-8")
     for reason_code in (
         "not_configured",

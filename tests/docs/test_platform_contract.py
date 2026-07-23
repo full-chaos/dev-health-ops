@@ -1,10 +1,23 @@
+"""Platform-contract and workspace-AGENTS golden guards (non-public repo contracts).
+
+The platform contract and the generated ``workspace-AGENTS.golden.md`` are machine/repository
+contracts, not public product documentation. They were moved out of the public ``docs/`` tree and
+are preserved under ``.github/docs-legacy/contributing/``. ``scripts/render_workspace_agents.py``
+renders the contract into a workspace ``AGENTS.md``; these tests keep that renderer byte-identical
+to the committed golden and protect the documentation-delivery decisions in the contract.
+"""
+
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-CONTRACT_PATH = ROOT / "docs" / "contributing" / "platform-contract.md"
-GOLDEN_PATH = ROOT / "docs" / "contributing" / "workspace-AGENTS.golden.md"
+CONTRACT_PATH = (
+    ROOT / ".github" / "docs-legacy" / "contributing" / "platform-contract.md"
+)
+GOLDEN_PATH = (
+    ROOT / ".github" / "docs-legacy" / "contributing" / "workspace-AGENTS.golden.md"
+)
 RENDERER_PATH = ROOT / "scripts" / "render_workspace_agents.py"
 
 

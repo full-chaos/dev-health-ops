@@ -38,8 +38,6 @@ class _Signature:
         self.queued.append(f"{queue}:{self.value}")
         return self
 
-
-class _Chord:
     def apply_async(self) -> None:
         return None
 
@@ -124,9 +122,6 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
             "si",
             lambda run_id: _Signature(run_id, queued),
         )
-        monkeypatch.setattr(sync_units, "group", list)
-        monkeypatch.setattr(sync_units, "chord", lambda *_args: _Chord())
-
         # When
         dispatch_result = sync_units.dispatch_sync_run(plan.sync_run_id)
 

@@ -53,7 +53,7 @@ from typing import Any, TypedDict
 from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, SessionTransactionOrigin
 
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models import (
@@ -756,12 +756,19 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         # explicit transaction. A process death therefore commits both or
         # neither, closing the producer kill window without serializing
         # credentials, callables, or route configuration into River.
-        if session.in_transaction():
-            # The task owns this fresh session. Test fixtures and ORM attribute
-            # refreshes may have already triggered a read-only AUTOBEGIN; clear
-            # it before establishing the producer's explicit BEGIN boundary.
-            session.rollback()
-        session.begin()
+        transaction = session.get_transaction()
+        if (
+            transaction is not None
+            and transaction.origin is SessionTransactionOrigin.AUTOBEGIN
+        ):
+            # A task-owned fresh session begins implicitly when it first reads
+            # its run. Persist that read/fixture transaction rather than
+            # rolling it back: rollback can erase a just-planned run before
+            # dispatch sees it. The explicit producer transaction below then
+            # fences the unit claim and outbox row together.
+            session.commit()
+        if not session.in_transaction():
+            session.begin()
         provider_unit_routes = ProviderUnitRouteSwitches.from_environment()
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()

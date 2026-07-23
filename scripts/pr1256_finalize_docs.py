@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from pathlib import Path
 
@@ -703,7 +702,10 @@ def _update_supporting_scripts() -> None:
                 "Validate the canonical documentation tree and emit its publication inventory.",
             ),
             ("public-candidate", "public-canonical"),
-            ("# Documentation v2 publication summary", "# Canonical documentation publication summary"),
+            (
+                "# Documentation v2 publication summary",
+                "# Canonical documentation publication summary",
+            ),
             ("Public candidate pages", "Canonical public pages"),
             ("candidate pages", "canonical pages"),
             (
@@ -727,7 +729,9 @@ def _update_supporting_scripts() -> None:
 
     inventory = ROOT / "scripts" / "docs_inventory_v2.py"
     text = inventory.read_text(encoding="utf-8")
-    text = text.replace('"docs/publication.yml"', '".github/docs-legacy/publication.yml"')
+    text = text.replace(
+        '"docs/publication.yml"', '".github/docs-legacy/publication.yml"'
+    )
     text = text.replace(
         '"docs/freshness-inventory.yml"',
         '".github/docs-legacy/freshness-inventory.yml"',
@@ -813,7 +817,7 @@ def _update_review_inventory_scanner() -> None:
         start = text.find('    prototype_root = repo_root / "docs-prototype"')
     if start != -1:
         end = text.index("\n    program_root =", start)
-        block = '''    legacy_root = repo_root / ".github" / "docs-legacy"
+        block = """    legacy_root = repo_root / ".github" / "docs-legacy"
     if legacy_root.exists():
         for path in sorted(legacy_root.rglob("*")):
             if not path.is_file():
@@ -842,15 +846,17 @@ def _update_review_inventory_scanner() -> None:
                 content_type=content_type,
                 notes="Preserved pre-cutover documentation source; not in the public build.",
             )
-'''
+"""
         text = text[:start] + block + text[end:]
 
     config_start = text.find('    prototype_config = repo_root / "mkdocs.yml"')
     if config_start == -1:
-        config_start = text.find('    prototype_config = repo_root / "mkdocs.prototype.yml"')
+        config_start = text.find(
+            '    prototype_config = repo_root / "mkdocs.prototype.yml"'
+        )
     if config_start != -1:
         config_end = text.index("\n    for pattern in", config_start)
-        block = '''    legacy_config = repo_root / ".github" / "docs-legacy" / "mkdocs.yml"
+        block = """    legacy_config = repo_root / ".github" / "docs-legacy" / "mkdocs.yml"
     if legacy_config.is_file():
         _add_file(
             rows_by_path,
@@ -862,7 +868,7 @@ def _update_review_inventory_scanner() -> None:
             product_area="documentation-legacy",
             notes="Archived pre-cutover build configuration.",
         )
-'''
+"""
         text = text[:config_start] + block + text[config_end:]
 
     path.write_text(text, encoding="utf-8")
@@ -871,7 +877,7 @@ def _update_review_inventory_scanner() -> None:
 def _write_publication_tests() -> None:
     _write(
         ROOT / "tests" / "docs" / "test_publication_manifest.py",
-        '''from __future__ import annotations
+        """from __future__ import annotations
 
 import subprocess
 import sys
@@ -965,7 +971,7 @@ def test_strict_build_omits_archived_legacy_pages(tmp_path: Path) -> None:
     assert not (site_dir / "roadmap" / "index.html").exists()
     assert not (site_dir / "project" / "index.html").exists()
     assert not (site_dir / "plans" / "dead-code-cleanup-plan" / "index.html").exists()
-''',
+""",
     )
 
 
@@ -1012,7 +1018,9 @@ def _update_health_workflow() -> None:
     if not path.is_file():
         return
     text = path.read_text(encoding="utf-8")
-    text = text.replace("Build the canonical candidate", "Build the canonical documentation")
+    text = text.replace(
+        "Build the canonical candidate", "Build the canonical documentation"
+    )
     text = text.replace(
         "--allowlist docs/external-link-allowlist.yml",
         "--allowlist .github/docs-legacy/external-link-allowlist.yml",
@@ -1041,7 +1049,11 @@ def main() -> int:
     _update_health_workflow()
 
     for temporary in (
-        ROOT / ".github" / "documentation-program" / "content" / "pr-1256-migration-trigger.txt",
+        ROOT
+        / ".github"
+        / "documentation-program"
+        / "content"
+        / "pr-1256-migration-trigger.txt",
         ROOT / ".github" / "workflows" / "finish-canonical-docs.yml",
         ROOT / ".github" / "workflows" / "canonical-docs-sync.yml",
         ROOT / ".github" / "workflows" / "promote-docs-canonical.yml",

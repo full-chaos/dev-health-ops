@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -110,15 +113,74 @@ func (writer teamAutoimportPostSyncWriter) PublishTx(
 	})
 }
 
-type unavailableWorkGraphPostSyncWriter struct{}
+var postSyncFanoutNamespace = uuid.MustParse("0713fbcf-ec5c-49dc-b7dc-18ae3de17536")
 
-func (unavailableWorkGraphPostSyncWriter) StartRequestTx(
-	context.Context,
-	pgx.Tx,
-	string,
-	syncdispatchruntime.PostSyncPlan,
+type workGraphPostSyncWriter struct{ writer *workgraph.RequestWriter }
+
+func (writer workGraphPostSyncWriter) StartRequestTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind string,
+	plan syncdispatchruntime.PostSyncPlan,
 ) error {
-	return syncdispatchruntime.ErrPostSyncUnavailable
+	var requestKind workgraph.Kind
+	var consumer string
+	switch kind {
+	case jobcontract.KindWorkGraphBuild:
+		requestKind, consumer = workgraph.KindBuild, "workgraph"
+	case jobcontract.KindInvestmentDispatch:
+		requestKind, consumer = workgraph.KindDispatch, "investment"
+	default:
+		return syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	scope, err := postSyncWorkGraphScope(requestKind, plan)
+	if err != nil {
+		return err
+	}
+	generation := "post-sync:" + plan.SyncRunID
+	return writer.writer.WriteTx(ctx, tx, workgraph.Request{
+		ID:                   postSyncRequestID(plan.SyncRunID, consumer),
+		OrganizationID:       plan.OrganizationID,
+		Kind:                 requestKind,
+		Scope:                scope,
+		LLMConcurrency:       1,
+		SpendLimitMicrounits: 0,
+		CorrelationID:        generation,
+		IdempotencyKey:       generation + ":" + kind,
+	})
+}
+
+func postSyncRequestID(syncRunID, consumer string) string {
+	return uuid.NewSHA1(
+		postSyncFanoutNamespace,
+		[]byte(syncRunID+":"+consumer),
+	).String()
+}
+
+func postSyncWorkGraphScope(
+	kind workgraph.Kind,
+	plan syncdispatchruntime.PostSyncPlan,
+) ([]byte, error) {
+	scope := map[string]any{}
+	switch kind {
+	case workgraph.KindBuild:
+		if plan.From != nil {
+			scope["from_date"] = plan.From.UTC().Format(time.RFC3339)
+		}
+		if plan.To != nil {
+			scope["to_date"] = plan.To.UTC().Format(time.RFC3339)
+		}
+	case workgraph.KindDispatch:
+		if plan.From != nil {
+			scope["from_date"] = plan.From.UTC().Format("2006-01-02")
+		}
+		if plan.To != nil {
+			scope["to_date"] = plan.To.UTC().Format("2006-01-02")
+		}
+	default:
+		return nil, syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	return json.Marshal(scope)
 }
 
 // The client type includes the driver's transaction type, but lifecycle only
@@ -169,15 +231,16 @@ func buildSyncCoordinatorWorker(
 	remainingStore, remainingStoreErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain)
 	remainingPublisher, remainingPublisherErr := remaining.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 	producer, producerErr := joboutbox.NewProducer(postgresDatabase.pools.Domain, registry)
+	workGraphWriter, workGraphWriterErr := workgraph.NewRequestWriter(registry)
 	if dailyStoreErr != nil || dailyPublisherErr != nil || remainingStoreErr != nil ||
-		remainingPublisherErr != nil || producerErr != nil {
+		remainingPublisherErr != nil || producerErr != nil || workGraphWriterErr != nil {
 		return nil, errWorkerDependencyUnavailable
 	}
 	postSync, err := syncdispatchruntime.NewNativePostSyncService(
 		postgresDatabase.pools.Domain,
 		dailyPostSyncWriter{store: dailyStore, publisher: dailyPublisher},
 		remainingPostSyncWriter{store: remainingStore, publisher: remainingPublisher},
-		unavailableWorkGraphPostSyncWriter{},
+		workGraphPostSyncWriter{writer: workGraphWriter},
 		teamAutoimportPostSyncWriter{producer: producer},
 	)
 	if err != nil {

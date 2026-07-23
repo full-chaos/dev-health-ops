@@ -770,6 +770,23 @@ from the run ID plus one-based scope ordinal, and creates/verifies both domain
 rows and their deferred or executable outbox handoffs before returning the
 canonical `Run`.
 
+The `post_sync` River consumer now validates the exact dispatched outbox ID,
+tenant, SyncRun, route generation, and live unpaused River route before it
+does any work. It then reloads only successful `sync_run_units` and the
+canonical parent sync configuration. Daily metrics, complexity, DORA,
+work-graph build, investment dispatch, and team autoimport are staged in one
+caller-owned PostgreSQL transaction through package-owned writers. A failure
+in any writer rolls back every domain request and handoff; River retries the
+same guarded delivery. Replays use deterministic generation/request IDs and
+outbox dedupe keys, and reject a reused identity whose immutable scope changed.
+
+Child contracts remain `go_implemented` with `route=celery` and
+`rollback_route=celery` until their individual parity/canary gates are
+approved. Native post-sync therefore records those handoffs as deferred
+`worker_job_outbox` rows; it does not bypass route policy or promote a child
+consumer. The legacy Celery chain remains the production path while
+`post_sync` itself is also Celery-routed.
+
 #### Work
 
 - Port complexity, DORA, release impact, capacity, recommendations, extra metrics, membership backfill, and team metrics.
@@ -811,6 +828,11 @@ canonical `Run`.
 ### CHAOS-3051 — Complete post-sync idempotency and enable durable Go fanout
 
 **Blocked by:** CHAOS-2596.
+
+Implementation status: the guarded native consumer and atomic, deterministic
+fanout are implemented. Production activation remains a route-only decision
+after the downstream child contracts complete their independent promotion
+evidence.
 
 #### Work
 

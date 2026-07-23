@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -73,11 +74,19 @@ func validRequest(request Request) bool {
 
 func sameRequest(existing, expected Request, scope []byte) bool {
 	return existing.ID == expected.ID && existing.OrganizationID == expected.OrganizationID &&
-		existing.Kind == expected.Kind && string(scope) == string(expected.Scope) &&
+		existing.Kind == expected.Kind && sameJSON(scope, expected.Scope) &&
 		existing.ModelRef == expected.ModelRef && existing.PromptRef == expected.PromptRef &&
 		existing.LLMConcurrency == expected.LLMConcurrency &&
 		existing.SpendLimitMicrounits == expected.SpendLimitMicrounits &&
 		existing.CorrelationID == expected.CorrelationID && existing.IdempotencyKey == expected.IdempotencyKey
+}
+
+func sameJSON(left, right []byte) bool {
+	var compactLeft, compactRight bytes.Buffer
+	if json.Compact(&compactLeft, left) != nil || json.Compact(&compactRight, right) != nil {
+		return false
+	}
+	return bytes.Equal(compactLeft.Bytes(), compactRight.Bytes())
 }
 
 func envelopeFor(request Request) jobcontract.Envelope {

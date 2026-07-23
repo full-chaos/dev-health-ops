@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
 
@@ -27,6 +28,32 @@ func TestPostSyncRemainingScopeMatchesBoundedFamilyContract(t *testing.T) {
 	if json.Unmarshal(dora, &decoded) != nil || decoded["backfill_days"] != float64(90) ||
 		decoded["sink"] != "auto" || decoded["interval"] != "daily" {
 		t.Fatalf("dora=%s", dora)
+	}
+}
+
+func TestPostSyncWorkGraphScopesPreserveLegacyWindowShapes(t *testing.T) {
+	t.Parallel()
+	from := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 1, 14, 23, 0, 0, 0, time.UTC)
+	plan := syncdispatchruntime.PostSyncPlan{From: &from, To: &to}
+	build, err := postSyncWorkGraphScope(workgraph.KindBuild, plan)
+	if err != nil || string(build) != `{"from_date":"2026-01-01T03:00:00Z","to_date":"2026-01-14T23:00:00Z"}` {
+		t.Fatalf("build=%s err=%v", build, err)
+	}
+	investment, err := postSyncWorkGraphScope(workgraph.KindDispatch, plan)
+	if err != nil || string(investment) != `{"from_date":"2026-01-01","to_date":"2026-01-14"}` {
+		t.Fatalf("investment=%s err=%v", investment, err)
+	}
+}
+
+func TestPostSyncRequestIDsMatchCrossLanguagePlanner(t *testing.T) {
+	t.Parallel()
+	const runID = "00000000-0000-4000-8000-000000000004"
+	if got, want := postSyncRequestID(runID, "workgraph"), "02be9bc9-c26b-5735-8ace-04e72d4c80a8"; got != want {
+		t.Fatalf("workgraph id=%s want=%s", got, want)
+	}
+	if got, want := postSyncRequestID(runID, "investment"), "c53e7bf8-705f-583e-828e-f2540336645a"; got != want {
+		t.Fatalf("investment id=%s want=%s", got, want)
 	}
 }
 

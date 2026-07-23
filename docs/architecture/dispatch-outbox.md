@@ -214,6 +214,23 @@ Duplicate deliveries are safe because supported readers select the newest
 `computed_at` generation per logical key (CHAOS-2596); no destructive rewrite
 of historical rows is required.
 
+For River delivery, the consumer rechecks the exact outbox ID, SyncRun,
+organization, dispatched transport, dispatched generation, and current
+unpaused route in PostgreSQL. A stale delivery commits no child state. A
+current delivery reconstructs the fanout from successful SyncRun units and
+stages all supported child domain rows plus `worker_job_outbox` handoffs in one
+transaction. Daily and remaining-metric runs, work-graph and investment
+requests, and team autoimport each use deterministic identities. If any child
+writer or handoff fails, the transaction rolls back and the River delivery is
+retryable; no partial generation can escape.
+
+Child routes are evaluated independently. While a reviewed child remains
+`go_implemented` and Celery-routed, its generic outbox row is persisted as
+deferred and the relay cannot insert it into River. Promotion changes only the
+checked-in route policy; it does not change the post-sync payload or
+idempotency identity. Rolling back a child route to Celery likewise stops new
+River insertion without rewriting its domain generation.
+
 ---
 
 ## Reconciler Relay Details

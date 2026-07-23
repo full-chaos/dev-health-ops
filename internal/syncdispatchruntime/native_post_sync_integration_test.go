@@ -177,24 +177,32 @@ func seedPostSync(
 	orgID, runID, outboxID, integrationID, repositoryID string,
 ) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_transport_routes
-    (kind,transport,generation,paused,rollback_transport)
-VALUES ('post_sync','river',1,false,'celery');
-INSERT INTO sync_dispatch_outbox
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO sync_dispatch_transport_routes
+		    (kind,transport,generation,paused,rollback_transport)
+		  VALUES ('post_sync','river',1,false,'celery')`, nil},
+		{`INSERT INTO sync_dispatch_outbox
     (id,sync_run_id,org_id,kind,status,dispatched_transport,dispatched_route_generation)
-VALUES ($1,$2,$3,'post_sync','dispatched','river',1);
-INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($2,$3,$4);
-INSERT INTO sync_run_units
+		  VALUES ($1,$2,$3,'post_sync','dispatched','river',1)`, []any{outboxID, runID, orgID}},
+		{`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
+			[]any{runID, orgID, integrationID}},
+		{`INSERT INTO sync_run_units
     (id,sync_run_id,provider,dataset_key,source_id,since_at,before_at,status)
-VALUES ('00000000-0000-4000-8000-000000000006',$2,'github','commits',$5,
-        '2026-07-23T00:00:00Z','2026-07-23T00:00:00Z','success');
-INSERT INTO sync_configurations
+VALUES ('00000000-0000-4000-8000-000000000006',$1,'github','commits',$2,
+        '2026-07-23T00:00:00Z','2026-07-23T00:00:00Z','success')`,
+			[]any{runID, repositoryID}},
+		{`INSERT INTO sync_configurations
     (id,org_id,integration_id,parent_id,sync_options,created_at)
-VALUES ('00000000-0000-4000-8000-000000000007',$3,$4,NULL,
+VALUES ('00000000-0000-4000-8000-000000000007',$1,$2,NULL,
         '{"auto_import_teams":true}'::jsonb,'2026-07-23T00:00:00Z')`,
-		outboxID, runID, orgID, integrationID, repositoryID)
-	if err != nil {
-		t.Fatal(err)
+			[]any{orgID, integrationID}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

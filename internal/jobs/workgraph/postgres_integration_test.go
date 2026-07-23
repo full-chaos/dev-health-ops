@@ -101,10 +101,6 @@ func TestRequestWriterUsesCanonicalDeferredOutboxPolicyInsideCallerTransaction(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	request := Request{
 		ID:                   testRequestID,
 		OrganizationID:       testOrgID,
@@ -115,11 +111,18 @@ func TestRequestWriterUsesCanonicalDeferredOutboxPolicyInsideCallerTransaction(t
 		CorrelationID:        "post-sync:1",
 		IdempotencyKey:       "workgraph:post-sync:1",
 	}
-	if err := writer.WriteTx(ctx, tx, request); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
+	for attempt := 0; attempt < 2; attempt++ {
+		tx, beginErr := pool.Begin(ctx)
+		if beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		if err := writer.WriteTx(ctx, tx, request); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("duplicate attempt %d: %v", attempt, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var kind, queue, dedupe string
 	if err := pool.QueryRow(ctx, `SELECT job_kind, queue, dedupe_key FROM worker_job_outbox`).Scan(&kind, &queue, &dedupe); err != nil {
@@ -128,6 +131,27 @@ func TestRequestWriterUsesCanonicalDeferredOutboxPolicyInsideCallerTransaction(t
 	if kind != string(KindBuild) || queue != "workgraph" || dedupe != request.IdempotencyKey {
 		t.Fatalf("outbox policy drift: kind=%s queue=%s dedupe=%s", kind, queue, dedupe)
 	}
+	var requests, handoffs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM work_graph_execution_requests`).Scan(&requests); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox`).Scan(&handoffs); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || handoffs != 1 {
+		t.Fatalf("requests=%d handoffs=%d", requests, handoffs)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Scope = []byte(`{"from_date":"2026-07-02"}`)
+	if err := writer.WriteTx(ctx, tx, request); !errors.Is(err, ErrInvalidState) {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("mutated duplicate err=%v", err)
+	}
+	_ = tx.Rollback(ctx)
 }
 
 func createExecutionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {

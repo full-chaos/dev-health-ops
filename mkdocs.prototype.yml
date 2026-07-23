@@ -100,6 +100,7 @@ nav:
           - admin/data-sources/index.md
           - GitHub: admin/data-sources/github.md
           - GitLab: admin/data-sources/gitlab.md
+          - PagerDuty: admin/data-sources/pagerduty.md
           - Credential lifecycle: admin/data-sources/credential-lifecycle.md
       - Sync and coverage:
           - admin/sync-and-coverage/index.md

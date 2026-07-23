@@ -23,6 +23,10 @@ var (
 	// ErrScheduleMarkerLost identifies a locked marker that disappeared before
 	// the atomic handoff could advance it.
 	ErrScheduleMarkerLost = errors.New("scheduler schedule marker was lost")
+	// ErrSchedulerFallbackRequired prevents Go scheduler activation while a
+	// locked window contains cron behavior that remains owned by Celery. The
+	// transaction rolls back without handoffs or marker advancement.
+	ErrSchedulerFallbackRequired = errors.New("scheduler window requires Celery cron fallback")
 )
 
 // Occurrence is the deterministic handoff envelope for one due schedule. It
@@ -37,6 +41,18 @@ type Occurrence struct {
 	ScheduledFor    time.Time
 	ObservedAt      time.Time
 	NextRunAt       time.Time
+}
+
+// HandoffResult is the bounded outcome of one locked scheduler window. The
+// fallback counts are intentionally process-level only: unsupported or invalid
+// cron text leaves the marker untouched so the current Celery owner can retain
+// its established croniter behavior.
+type HandoffResult struct {
+	Candidates      int
+	TimingEligible  int
+	UnsupportedCron int
+	InvalidCron     int
+	HandedOff       []Occurrence
 }
 
 // HandoffTransaction is the same PostgreSQL transaction that protects the
@@ -113,24 +129,37 @@ func (repository *Repository) HandoffDue(
 	limit int,
 	coordinator Coordinator,
 ) ([]Occurrence, error) {
+	result, err := repository.HandoffDueResult(ctx, observedAt, limit, coordinator)
+	return result.HandedOff, err
+}
+
+// HandoffDueResult locks and re-evaluates one bounded candidate window. It is
+// the lifecycle-facing form of HandoffDue and exposes only aggregate fallback
+// counts, never organization or configuration identifiers.
+func (repository *Repository) HandoffDueResult(
+	ctx context.Context,
+	observedAt time.Time,
+	limit int,
+	coordinator Coordinator,
+) (HandoffResult, error) {
 	if ctx == nil || observedAt.IsZero() || limit < minimumSnapshotLimit ||
 		limit > maximumSnapshotLimit || coordinator == nil ||
 		repository == nil || repository.begin == nil {
-		return nil, ErrInvalidTransactionRequest
+		return HandoffResult{}, ErrInvalidTransactionRequest
 	}
 	if err := repository.ownership.Validate(); err != nil {
-		return nil, err
+		return HandoffResult{}, err
 	}
 	if !repository.ownership.allowsMutation() {
-		return nil, ErrSchedulerMutationDisabled
+		return HandoffResult{}, ErrSchedulerMutationDisabled
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return HandoffResult{}, err
 	}
 
 	transaction, err := repository.begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("begin scheduler transaction: %w", err)
+		return HandoffResult{}, fmt.Errorf("begin scheduler transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
@@ -141,20 +170,44 @@ func (repository *Repository) HandoffDue(
 		limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("lock scheduler candidates: %w", err)
+		return HandoffResult{}, fmt.Errorf("lock scheduler candidates: %w", err)
 	}
 	candidates, err := readLockedCandidates(ctx, rows, limit)
 	rows.Close()
 	if err != nil {
-		return nil, err
+		return HandoffResult{}, err
 	}
 
-	handedOff := make([]Occurrence, 0, len(candidates))
-	for _, locked := range candidates {
+	result := HandoffResult{Candidates: len(candidates), HandedOff: make([]Occurrence, 0, len(candidates))}
+	evaluations := make([]Evaluation, len(candidates))
+	for index, locked := range candidates {
 		evaluation, err := evaluateContext(ctx, locked.candidate, observedAt)
 		if err != nil {
-			return nil, err
+			return HandoffResult{}, err
 		}
+		evaluations[index] = evaluation
+		switch evaluation.Decision {
+		case DecisionUnsupportedCron:
+			result.UnsupportedCron++
+		case DecisionInvalidCron:
+			result.InvalidCron++
+		}
+		if !evaluation.TimingEligible || evaluation.NextOccurrence == nil ||
+			locked.candidate.Job == nil {
+			continue
+		}
+		result.TimingEligible++
+	}
+	// Cron fallback is an ownership boundary, not a successful empty window.
+	// Refuse the entire locked window before any coordinator or marker write so
+	// an incompatible oldest row cannot silently starve later schedules while
+	// this process advertises healthy Go ownership.
+	if result.UnsupportedCron > 0 || result.InvalidCron > 0 {
+		return result, ErrSchedulerFallbackRequired
+	}
+
+	for index, locked := range candidates {
+		evaluation := evaluations[index]
 		if !evaluation.TimingEligible || evaluation.NextOccurrence == nil ||
 			locked.candidate.Job == nil {
 			continue
@@ -166,7 +219,7 @@ func (repository *Repository) HandoffDue(
 			locked.candidate.Job.Timezone,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("compute next schedule marker for config %s: %w", locked.candidate.ConfigID, err)
+			return HandoffResult{}, fmt.Errorf("compute next schedule marker for config %s: %w", locked.candidate.ConfigID, err)
 		}
 		occurrence := newOccurrence(
 			locked.candidate.ConfigID,
@@ -177,10 +230,10 @@ func (repository *Repository) HandoffDue(
 			nextRunAt,
 		)
 		if err := coordinator.Handoff(ctx, transaction, occurrence); err != nil {
-			return nil, fmt.Errorf("handoff scheduler occurrence %s: %w", occurrence.ID, err)
+			return HandoffResult{}, fmt.Errorf("handoff scheduler occurrence %s: %w", occurrence.ID, err)
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return HandoffResult{}, err
 		}
 		command, err := transaction.Exec(
 			ctx,
@@ -190,18 +243,18 @@ func (repository *Repository) HandoffDue(
 			occurrence.JobID,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("advance scheduler marker for config %s: %w", occurrence.ConfigID, err)
+			return HandoffResult{}, fmt.Errorf("advance scheduler marker for config %s: %w", occurrence.ConfigID, err)
 		}
 		if command.RowsAffected() != 1 {
-			return nil, ErrScheduleMarkerLost
+			return HandoffResult{}, ErrScheduleMarkerLost
 		}
-		handedOff = append(handedOff, occurrence)
+		result.HandedOff = append(result.HandedOff, occurrence)
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit scheduler transaction: %w", err)
+		return HandoffResult{}, fmt.Errorf("commit scheduler transaction: %w", err)
 	}
-	return handedOff, nil
+	return result, nil
 }
 
 func readLockedCandidates(

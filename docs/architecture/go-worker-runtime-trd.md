@@ -583,9 +583,11 @@ embeds an opaque Celery/`coexistence_disabled` ownership policy, and its
 transaction kernel rejects mutation before opening a transaction. Constructing
 Go mutation authority requires a reviewed package-private source change. Until
 an activation review enables the consumer and supplies the remaining scheduler
-loop, unsupported-cron fallback, and coordinator policy parity, Celery Beat
-plus `dispatch_scheduled_syncs` remains the only mutation owner; a Go scheduler
-must not advance a production marker or claim schedule ownership.
+lifecycle composition, unsupported-cron policy parity, and coordinator policy
+parity, Celery Beat plus `dispatch_scheduled_syncs` remains the only mutation
+owner; a Go scheduler must not advance a production marker or claim schedule
+ownership. The dormant loop rolls back the entire locked window and keeps
+readiness closed when any candidate needs unsupported/invalid-cron fallback.
 
 The read-only comparison path in `internal/scheduler/sync` still performs one
 bounded schedule/configuration `SELECT` and evaluates a versioned candidate
@@ -697,14 +699,13 @@ kernel's outbox-only terminal transaction without the lock-upgrade deadlock.
 A reviewed cutover must pause with a generation increment, wait for live claims
 to drain or expire, deploy the matching checked-in handler/contract and
 capability, then resume the new transport with another generation increment.
-The command currently composes an empty capability registry, so River resume is
-rejected. A transport-changing `post_sync` resume also requires an external
-quiescer registered to the old transport capability and invoked for its old
-generation; a same-transport Celery resume remains available for recovery.
-Because the quiescer timeout is cooperative, a concrete implementation must
-prove it honors context cancellation before activation. All checked-in routes
-remain Celery, so the available control is same-transport pause/drain/resume
-until that separately reviewed deployment exists.
+The current runtime only ships a publisher-owned, in-process
+`GenerationTracker` local generation-drain API for the `post_sync`
+pre-publish window; `EnterLocalHandoff` and `WaitForLocalHandoffs` can close a
+generation and honor cancellation, but they are intentionally not a route or
+worker controller. River resume is still rejected. All checked-in routes remain
+Celery, so the available control is same-transport pause/drain/resume until
+that separately reviewed deployment exists.
 
 The future River relay must insert the River job and mark the sync outbox
 through one PostgreSQL transaction and therefore needs the corresponding
@@ -717,14 +718,13 @@ operator's outbox-table barrier now also waits through the post-terminal,
 pre-commit window before it changes the route generation.
 
 An unregistered sync-reconciler transaction kernel now implements the narrow
-transport boundary: for River-routed at-least-once rows it locks and claims a
-bounded due outbox window, invokes an injected River publisher through the same
-transaction, and marks the outbox dispatched only after the insert succeeds.
-For the at-most-once `post_sync` kind it marks dispatched first and invokes a
-separate transaction-local seam that cannot perform the eventual external
-effect. Route generation and claim-token predicates fail closed at the
-terminal write. The checked-in contract currently contains no River route, so
-even explicit mutation mode returns without opening a write transaction.
+transport boundary: it first commits a bounded set of River claims, then each
+at-least-once claim is delivered and terminally marked in its own fresh
+transaction. For the at-most-once `post_sync` kind the terminal mark is
+committed before the external handoff is invoked. Route generation and
+claim-token predicates fail closed at the terminal write. The checked-in
+contract currently contains no River route, so even explicit mutation mode
+returns without opening a write transaction.
 
 The reconciler command now reaches this package only through a shadow adapter
 whose kernel retains no transaction-begin function. The existing observer
@@ -742,23 +742,23 @@ execution owner.
 This kernel is not the complete reconciler loop. A command-unwired
 expired-domain-lease repair step now preserves the eligible Linear-backfill
 retry matrix and serializes provider/org/cost-class mutations. A separate
-persisted failure recorder can release an already committed River claim with
-bounded Python-parity backoff. The current kernel still claims, invokes the
-publisher, and marks in one transaction, however, so a publish failure rolls
-that transaction back; activation must split and commit the claim before it
-can use the recorder. The queue-control trust boundary is proven with the real
-River `InsertTx` API and exact outbox/route privileges. The operator route
-controller supplies the post-terminal, pre-commit serialization barrier and an
-exact capability registry, but the shipped registry is intentionally empty.
-Activation still needs an explicit materializer/transport loop, concrete River
-publishers and handlers registered as capabilities, and the bounded post-sync
-external quiescer and handoff mechanism.
+persisted failure recorder can rearm an already committed River claim with
+bounded Python-parity backoff. The queue-control trust boundary is proven with
+the real River `InsertTx` API and exact outbox/route privileges. The typed
+runtime package is intentionally all-or-nothing: its claim envelope validates
+the contract version, UUID shape, and generation, its publisher only inserts
+through the caller's transaction, and its generation tracker is a publisher-
+owned local generation-drain API for `post_sync`. Activation still needs an
+explicit materializer/transport loop and concrete River publishers and
+handlers registered as capabilities, authoritative domain-reference lookup,
+and a separately proven cross-process `post_sync` quiescer/controller plus
+external-handoff binding.
 The reconciler image packages `contracts/sync-dispatch/v1` so the registry is
 available at runtime; that packaging does not change route ownership.
 
-- `dispatch_sync_run`: at-least-once queue insertion; unit claims prevent duplicate provider work.
-- `finalize_sync_run`: at-least-once queue insertion; finalization ledger prevents duplicate finalization.
-- `post_sync`: mark-before-insert/at-most-once until CHAOS-2596 closes.
+- `dispatch_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; unit claims prevent duplicate provider work.
+- `finalize_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; finalization ledger prevents duplicate finalization.
+- `post_sync`: mark-before-external-handoff/at-most-once, with the terminal mark committed before the external handoff begins, until CHAOS-2596 closes.
 - eligible Linear backfill expired leases: continue `RUNNING -> RETRYING` with current eligibility matrix.
 
 No second generic sync workflow is introduced in River.

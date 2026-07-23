@@ -24,9 +24,13 @@ var (
 	// ErrPublisherRequired means mutation reached an at-least-once claim without
 	// an injected same-transaction River publisher.
 	ErrPublisherRequired = errors.New("sync dispatch transport publisher required")
-	// ErrPostSyncMarkerRequired means mutation reached the special at-most-once
-	// post_sync kind without its explicit mark-before seam.
-	ErrPostSyncMarkerRequired = errors.New("sync dispatch post-sync mark-before seam required")
+	// ErrPostSyncHandoffRequired means mutation can claim the special at-most-once
+	// post_sync kind without an explicit post-commit external handoff.
+	ErrPostSyncHandoffRequired = errors.New("sync dispatch post-sync handoff required")
+	// ErrPostSyncHandoffFailed reports one or more post-commit handoff failures
+	// without exposing an adapter's potentially sensitive error text. The
+	// associated terminal marks are already durable and must never be rearmed.
+	ErrPostSyncHandoffFailed = errors.New("sync dispatch post-sync handoff failed")
 )
 
 // KernelMode selects a strictly bounded reconciler behavior. Shadow is the
@@ -40,7 +44,7 @@ const (
 )
 
 // TransportClaim is the minimum non-sensitive state a transport publisher
-// needs. It is valid only inside the pgx transaction passed to the publisher.
+// needs. The claim token and route generation are persisted before delivery.
 type TransportClaim struct {
 	ID              string
 	Kind            string
@@ -50,25 +54,29 @@ type TransportClaim struct {
 	Attempts        int64
 }
 
-// AtLeastOncePublisher inserts one River job using the supplied transaction.
-// The returned identifier is optional audit metadata. Returning an error rolls
-// back both the River insert and the claim, making the attempt retry-safe.
+// AtLeastOncePublisher inserts one River job using the supplied fresh
+// transaction. The returned identifier is optional audit metadata. Returning
+// an error rolls back the River insert; the already committed claim is then
+// released through the bounded persisted failure recorder.
 type AtLeastOncePublisher func(context.Context, pgx.Tx, TransportClaim) (string, error)
 
-// PostSyncMarkBefore is deliberately separate from AtLeastOncePublisher.
-// The kernel persists the terminal dispatched mark first, then invokes this
-// transaction-local seam before commit. It must not perform an external effect;
-// post_sync's external at-most-once work belongs to a later, explicit phase.
-type PostSyncMarkBefore func(context.Context, pgx.Tx, TransportClaim) error
+// PostSyncHandoff is deliberately separate from AtLeastOncePublisher. The
+// kernel commits the terminal dispatched mark before invoking this callback,
+// so it cannot accidentally perform an external effect in the mark
+// transaction. A callback failure is surfaced but never re-arms post_sync.
+type PostSyncHandoff func(context.Context, TransportClaim) error
 
 // KernelResult is bounded to one requested claim window. Shadow includes the
 // existing read-only observation; mutation reports only aggregate counts.
 type KernelResult struct {
-	Mode         KernelMode
-	Observation  Observation
-	Claimed      int
-	Dispatched   int
-	PostSyncMark int
+	Mode                  KernelMode
+	Observation           Observation
+	Claimed               int
+	Dispatched            int
+	PostSyncMark          int
+	PostSyncHandoffFailed int
+	Retried               int
+	LeaseLost             int
 }
 
 type beginFunc func(context.Context) (pgx.Tx, error)
@@ -80,6 +88,7 @@ type Kernel struct {
 	mode        KernelMode
 	observer    Stepper
 	begin       beginFunc
+	failures    *PublishFailureRecorder
 	descriptors map[string]syncdispatchcontract.Descriptor
 	riverKinds  []string
 }
@@ -125,6 +134,15 @@ func newKernel(
 		begin:       begin,
 		descriptors: make(map[string]syncdispatchcontract.Descriptor, len(descriptors)),
 	}
+	if mode == KernelModeMutation {
+		failures, failureErr := newPublishFailureRecorder(func(ctx context.Context) (failureTransaction, error) {
+			return begin(ctx)
+		})
+		if failureErr != nil {
+			return nil, ErrInvalidConfiguration
+		}
+		kernel.failures = failures
+	}
 	for _, descriptor := range descriptors {
 		kernel.descriptors[descriptor.Kind] = descriptor
 		if descriptor.Route == syncdispatchcontract.RouteRiver {
@@ -136,16 +154,17 @@ func newKernel(
 }
 
 // Step runs exactly one bounded unit of work. Shadow delegates to the existing
-// read-only observer and never begins a transaction. Mutation claims only rows
-// whose persisted route is River and unpaused. The outbox is locked before any
-// publisher is called; route generation is rechecked by the terminal write.
+// read-only observer and never begins a transaction. Mutation first commits one
+// bounded set of River claims. Each at-least-once claim is then delivered and
+// terminally marked in its own fresh transaction. post_sync is terminally
+// marked and committed before its external handoff is invoked.
 func (kernel *Kernel) Step(
 	ctx context.Context,
 	now time.Time,
 	limit int,
 	leaseDuration time.Duration,
 	publish AtLeastOncePublisher,
-	postSyncMark PostSyncMarkBefore,
+	postSyncHandoff PostSyncHandoff,
 ) (KernelResult, error) {
 	if kernel == nil || kernel.observer == nil || ctx == nil || now.IsZero() ||
 		limit < minimumStepLimit || limit > maximumStepLimit ||
@@ -160,7 +179,7 @@ func (kernel *Kernel) Step(
 		observation, err := kernel.observer.Step(ctx, now, limit)
 		return KernelResult{Mode: KernelModeShadow, Observation: observation}, err
 	}
-	if kernel.mode != KernelModeMutation || kernel.begin == nil {
+	if kernel.mode != KernelModeMutation || kernel.begin == nil || kernel.failures == nil {
 		return KernelResult{}, ErrInvalidConfiguration
 	}
 	// The checked-in contract is currently Celery-only. Avoid even opening a
@@ -169,56 +188,202 @@ func (kernel *Kernel) Step(
 	if len(kernel.riverKinds) == 0 {
 		return KernelResult{Mode: KernelModeMutation}, nil
 	}
-
-	tx, err := kernel.begin(ctx)
-	if err != nil || tx == nil {
-		return KernelResult{}, ErrUnavailable
+	for _, kind := range kernel.riverKinds {
+		descriptor := kernel.descriptors[kind]
+		switch descriptor.Delivery {
+		case syncdispatchcontract.DeliveryAtLeastOnce:
+			if publish == nil {
+				return KernelResult{}, ErrPublisherRequired
+			}
+		case syncdispatchcontract.DeliveryAtMostOnceMarkBefore:
+			if postSyncHandoff == nil {
+				return KernelResult{}, ErrPostSyncHandoffRequired
+			}
+		default:
+			return KernelResult{}, ErrInvalidConfiguration
+		}
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
-	claims, err := claimRiverRoutes(ctx, tx, now, limit, leaseDuration, kernel.riverKinds)
+	claims, err := kernel.commitClaims(ctx, now, limit, leaseDuration)
 	if err != nil {
 		return KernelResult{}, err
 	}
 	result := KernelResult{Mode: KernelModeMutation, Claimed: len(claims)}
+	handoffFailed := false
 	for _, claim := range claims {
 		descriptor, known := kernel.descriptors[claim.Kind]
 		if !known || descriptor.Route != syncdispatchcontract.RouteRiver {
-			return KernelResult{}, ErrLeaseLost
+			return result, kernelStepError(handoffFailed, ErrLeaseLost)
 		}
 		if descriptor.Delivery == syncdispatchcontract.DeliveryAtMostOnceMarkBefore {
-			if err := markRiverDispatched(ctx, tx, claim, now, ""); err != nil {
-				return KernelResult{}, err
-			}
-			if postSyncMark == nil {
-				return KernelResult{}, ErrPostSyncMarkerRequired
-			}
-			if err := postSyncMark(ctx, tx, claim); err != nil {
-				return KernelResult{}, err
+			if err := kernel.commitPostSyncMark(ctx, claim, now); err != nil {
+				// Only the unadorned exact-CAS miss is safely skippable. A joined
+				// persistence error (for example, an ambiguous commit plus a CAS
+				// probe miss) remains fatal.
+				if err == ErrLeaseLost {
+					result.LeaseLost++
+					continue
+				}
+				return result, kernelStepError(handoffFailed, err)
 			}
 			result.Dispatched++
 			result.PostSyncMark++
+			if err := postSyncHandoff(ctx, claim); err != nil {
+				handoffFailed = true
+				result.PostSyncHandoffFailed++
+			}
 			continue
 		}
 		if descriptor.Delivery != syncdispatchcontract.DeliveryAtLeastOnce {
-			return KernelResult{}, ErrInvalidConfiguration
+			return result, kernelStepError(handoffFailed, ErrInvalidConfiguration)
 		}
-		if publish == nil {
-			return KernelResult{}, ErrPublisherRequired
+		outcome, err := kernel.deliverAtLeastOnce(ctx, claim, now, publish)
+		switch outcome {
+		case deliverySucceeded:
+			result.Dispatched++
+		case deliveryRetried:
+			result.Retried++
+		case deliveryLeaseLost:
+			result.LeaseLost++
 		}
-		transportJobID, err := publish(ctx, tx, claim)
+		// See the post_sync branch above: do not mask a compound error that
+		// merely contains ErrLeaseLost alongside an unavailable dependency.
+		if err == ErrLeaseLost {
+			continue
+		}
 		if err != nil {
-			return KernelResult{}, err
+			return result, kernelStepError(handoffFailed, err)
 		}
-		if err := markRiverDispatched(ctx, tx, claim, now, transportJobID); err != nil {
-			return KernelResult{}, err
-		}
-		result.Dispatched++
+	}
+	return result, kernelStepError(handoffFailed, nil)
+}
+
+func kernelStepError(handoffFailed bool, laterErr error) error {
+	if !handoffFailed {
+		return laterErr
+	}
+	if laterErr == nil {
+		return ErrPostSyncHandoffFailed
+	}
+	return errors.Join(ErrPostSyncHandoffFailed, laterErr)
+}
+
+type deliveryOutcome uint8
+
+const (
+	deliveryNoResult deliveryOutcome = iota
+	deliverySucceeded
+	deliveryRetried
+	deliveryLeaseLost
+)
+
+func (kernel *Kernel) commitClaims(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+	leaseDuration time.Duration,
+) ([]TransportClaim, error) {
+	tx, err := kernel.begin(ctx)
+	if err != nil || tx == nil {
+		return nil, ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	claims, err := claimRiverRoutes(ctx, tx, now, limit, leaseDuration, kernel.riverKinds)
+	if err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return KernelResult{}, ErrUnavailable
+		return nil, ErrUnavailable
 	}
-	return result, nil
+	return claims, nil
+}
+
+func (kernel *Kernel) deliverAtLeastOnce(
+	ctx context.Context,
+	claim TransportClaim,
+	now time.Time,
+	publish AtLeastOncePublisher,
+) (deliveryOutcome, error) {
+	tx, err := kernel.begin(ctx)
+	if err != nil || tx == nil {
+		return deliveryNoResult, ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockRiverClaim(ctx, tx, claim, now); err != nil {
+		if err == ErrLeaseLost {
+			return deliveryLeaseLost, err
+		}
+		return deliveryNoResult, err
+	}
+	transportJobID, publishErr := publish(ctx, tx, claim)
+	if publishErr != nil {
+		_ = tx.Rollback(ctx)
+		recordErr := kernel.failures.Record(ctx, claim, now, publishErr)
+		switch {
+		case recordErr == nil:
+			return deliveryRetried, nil
+		case recordErr == ErrLeaseLost:
+			return deliveryLeaseLost, nil
+		default:
+			return deliveryNoResult, recordErr
+		}
+	}
+	if err := markRiverDispatched(ctx, tx, claim, now, transportJobID); err != nil {
+		if err == ErrLeaseLost {
+			return deliveryLeaseLost, err
+		}
+		return deliveryNoResult, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		// Commit failure is outcome-unknown. The exact-CAS recorder may prove
+		// that the terminal transaction did not commit by successfully rearming
+		// the claim, but Step still fails closed because it cannot prove whether
+		// a River job became durable.
+		_ = tx.Rollback(ctx)
+		recordErr := kernel.failures.Record(ctx, claim, now, ErrUnavailable)
+		if recordErr != nil {
+			return deliveryNoResult, errors.Join(ErrUnavailable, recordErr)
+		}
+		return deliveryNoResult, ErrUnavailable
+	}
+	return deliverySucceeded, nil
+}
+
+func lockRiverClaim(
+	ctx context.Context,
+	tx pgx.Tx,
+	claim TransportClaim,
+	now time.Time,
+) error {
+	command, err := tx.Exec(ctx, lockRiverClaimSQL,
+		claim.ID, claim.ClaimToken, claim.RouteGeneration, now)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+func (kernel *Kernel) commitPostSyncMark(
+	ctx context.Context,
+	claim TransportClaim,
+	now time.Time,
+) error {
+	tx, err := kernel.begin(ctx)
+	if err != nil || tx == nil {
+		return ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := markRiverDispatched(ctx, tx, claim, now, ""); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func claimRiverRoutes(
@@ -330,6 +495,28 @@ FROM candidates
 WHERE outbox.id = candidates.id
 RETURNING outbox.id::text, outbox.kind, outbox.claim_token::text,
 	outbox.claim_route_generation, outbox.available_at, outbox.attempts
+`
+
+// lockRiverClaimSQL reacquires the committed claim before River InsertTx. The
+// queue role cannot lock the route relation, so it locks only the outbox row
+// and verifies the live route snapshot. The terminal update repeats this CAS;
+// the operator's outbox-table barrier serializes route mutation across the
+// remaining insert-and-mark transaction window.
+const lockRiverClaimSQL = `
+SELECT outbox.id
+FROM public.sync_dispatch_outbox AS outbox
+JOIN public.sync_dispatch_transport_routes AS route
+	ON route.kind = outbox.kind
+WHERE outbox.id = $1
+	AND outbox.claim_token = $2
+	AND outbox.status = 'pending'
+	AND outbox.claim_expires_at > $4
+	AND outbox.claim_transport = 'river'
+	AND outbox.claim_route_generation = $3
+	AND route.transport = 'river'
+	AND route.paused = FALSE
+	AND route.generation = outbox.claim_route_generation
+FOR UPDATE OF outbox
 `
 
 // markRiverDispatchedSQL rechecks the live route generation and pause state in

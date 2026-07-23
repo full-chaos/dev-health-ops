@@ -283,14 +283,16 @@ circular.
 ## 6. Phase 2 — first bounded jobs and orchestration infrastructure
 
 Current boundary: the route-safe generic `worker_job_outbox` slice is in
-place. Python now gates enqueue on a valid executable migration state/route
-pair, the Go relay leaves known Celery rows untouched while still terminalizing
-unknown rows, and the reconciler command composes the bounded loop with
-readiness and metrics. Startup is fail-closed until that loop succeeds once,
-and later persistence failures close readiness. Checked-in deployment profiles
-remain `coexistence_disabled` with zero replicas; both registered kinds still
-route to Celery, no producer calls the bridge, and no Go handler is compiled.
-The mutation-capable scheduler and sync-domain transport work in CHAOS-3039
+place, the scheduler track is complete in code, and the remaining active work
+is the typed `syncdispatchruntime` wiring. Python now
+gates enqueue on a valid executable migration state/route pair, the Go relay
+leaves known Celery rows untouched while still terminalizing unknown rows, and
+the reconciler command composes the bounded loop with readiness and metrics.
+Startup is fail-closed until that loop succeeds once, and later persistence
+failures close readiness. Checked-in deployment profiles remain
+`coexistence_disabled` with zero replicas; both registered kinds still route to
+Celery, no producer calls the bridge, and no Go handler is compiled. The
+mutation-capable scheduler and sync-domain transport work in CHAOS-3039
 therefore remains unported and no tandem parity is claimed.
 
 The first sync-domain transport dependency is now frozen independently of
@@ -335,19 +337,19 @@ container execution.
 
 The first mutation-safety prerequisite is also implemented without activating
 River. Migration `0049` seeds a four-row database route fence with Celery
-ownership and generation 1. Python claims bind the active route generation.
-Dispatch, finalize, and discovery publish transactions lock both outbox and
-route, and mark/failure writes fail closed after any route change. The
+ownership and generation 1. Python claims bind the active route generation and
+retain their route-plus-outbox locking through publish and mark. Separately,
+the dormant Go kernel commits a bounded River claim set first, then performs
+fresh per-claim River inserts and terminal marks in atomic transactions.
+Go mark/failure writes fail closed after any route change. The
 authenticated `dev-health-workerctl routes` surface can inspect, pause, drain,
 and resume one fixed route at a time with durable audit intent and monotonic
 generation changes. Route mutation follows Python's route-row-first lock order,
 then holds a table barrier across the post-terminal/pre-commit window and
-rechecks route state and live claims. A transport-changing `post_sync` resume
-additionally requires an external quiescer registered for the old transport
-generation. The shipped command registers no River or `post_sync` cutover
-capability, every checked-in route remains Celery, and the Go reconciler closes
-readiness while a route is paused or divergent, so these controls do not
-activate River.
+rechecks route state and live claims. The shipped command
+registers no River cutover capability, every checked-in route remains Celery,
+and the Go reconciler closes readiness while a route is paused or divergent,
+so these controls do not activate River.
 
 The dormant `internal/scheduler/sync` package retains its read-only
 schedule-evaluation foundation. It reads at most 101 active configuration/job
@@ -360,9 +362,12 @@ ordinary list/range/step/name forms and the explicitly tested timezone and DST
 behavior. A valid Croniter form outside that grammar is reported as
 unsupported and can never become timing-eligible; this includes random `R`,
 unported mixed special-day forms, and optional seconds/year fields. Results
-and their digest are labeled `schedule_and_marker_only`; they are not full
-dispatch eligibility because organization existence, entitlement, occurrence
-claiming, and the dispatch transaction are still Celery-owned work below.
+and their digest are labeled `schedule_and_marker_only`; unsupported or
+invalid cron is a fail-closed activation boundary that rolls the locked window
+back with `ErrSchedulerFallbackRequired`, performs no coordinator or marker
+writes, and never opens readiness. Celery remains the sole owner until policy
+parity is complete, so the scheduler can keep older candidates from starving
+while the checked-in Go path stays non-authoritative.
 
 A separate dormant transaction kernel now locks an existing-marker due window,
 calls an injected coordinator through the same PostgreSQL transaction, and
@@ -401,8 +406,10 @@ constructor embeds an opaque Celery/`coexistence_disabled` ownership policy,
 and `HandoffDue` rejects mutation before opening a transaction. Only
 package-private test and future activation composition can construct Go
 mutation authority. Scheduler activation needs a reviewed source change,
-command loop, unsupported-cron fallback, remaining coordinator policy parity,
-and an explicit review that enables the consumer before Go may own a marker.
+lifecycle factory composition, unsupported-cron policy parity, remaining
+coordinator policy parity, and an explicit review that enables the consumer
+before Go may own a marker. The dormant loop currently rolls back a whole
+locked window and keeps readiness closed if any cron requires Celery fallback.
 
 The Go reconciler command now constructs only an explicit no-begin shadow
 adapter around the transport kernel. A separate command-unwired materializer
@@ -412,20 +419,21 @@ publishes work; existing pending rows and at-most-once post-sync rows retain
 their current semantics. A second command-unwired repair step preserves the
 current eligible Linear-backfill expired-lease transition, including bounded
 retry exhaustion and provider/org/cost-class serialization. A persisted
-publish-failure recorder can release an already committed River claim with the
-same bounded backoff as Python, but the dormant kernel still claims, publishes,
-and marks in one transaction, so a publisher failure currently rolls the claim
-back instead of invoking that recorder. The least-privilege queue-control role
-has also been exercised through the real River `InsertTx` API in the same
+publish-failure recorder can rearm an already committed River claim with the
+same bounded backoff as Python. The least-privilege queue-control role has
+also been exercised through the real River `InsertTx` API in the same
 transaction as the outbox terminal mark. Reconciler activation still needs the
-claim-commit/publish workflow that uses the failure recorder and concrete River
-publishers and handlers. The capability-aware route/operator control plane now
-serializes the documented post-terminal, pre-commit window, but the shipped
-capability registry is empty: River resume is rejected and `post_sync` cannot
-change transports without a concrete external quiescer registered for the old
-transport. A same-transport Celery resume remains available for recovery. The
-cutover quiescer must prove it honors context cancellation before activation
-because the current timeout is cooperative.
+command composition that resolves authoritative domain references and binds
+the committed-claim kernel to concrete River publishers and handlers. The
+typed `syncdispatchruntime` package is
+intentionally all-or-nothing: its claim projection drops the claim token, its
+River args validate the exact contract/version/UUID/generation tuple, its
+publisher only calls `InsertTx` through the caller's transaction, and its
+`GenerationTracker` exposes a publisher-owned local generation-drain API for
+`post_sync`. The shipped command registers no River cutover capability, every
+checked-in route remains Celery, and a transport-changing `post_sync` resume
+still requires a separately proven cross-process quiescer/controller and
+external-handoff binding.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,
@@ -461,13 +469,18 @@ occurrences without retrying poison rows forever. The reconciler command is
 wired only to the shadow adapter, while the Go outbox materializer and
 expired-lease repair remain command-unwired. Persisted transport-failure
 backoff and the least-privilege River transaction boundary are implemented as
-dormant primitives, but the kernel has not yet split claim commit from publish
-or registered concrete publishers and handlers. The scheduler has an opaque
-default-Celery ownership fence, and audited route pause/drain/resume controls
-are implemented with an empty activation-capability registry. Every route
-remains Celery-only; the scheduler command loop and coordinator parity,
-concrete River delivery capabilities, and the `post_sync` external quiescer
-and handoff gaps above remain open.
+dormant primitives, but the kernel now claims first and then performs fresh
+per-claim insert/mark transactions, with `post_sync` committed before its
+external handoff. The scheduler has an opaque default-Celery
+ownership fence, the remaining Python policy-parity blockers are organization
+existence, entitlement, occurrence claiming, catch-up, and unsupported-cron
+policy; an unsupported or invalid cron currently rolls back the whole Go
+window and keeps readiness closed. The typed `syncdispatchruntime` generation
+tracker is only a publisher-owned local drain API today. Audited route pause/drain/resume
+controls are implemented with an empty activation-capability registry. Every
+route remains Celery-only; scheduler lifecycle factory/coordinator parity,
+concrete River delivery capabilities, and the cross-process `post_sync`
+quiescer/controller plus external-handoff binding remain open.
 
 #### Acceptance
 

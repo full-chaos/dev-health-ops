@@ -120,9 +120,13 @@ rollback route and refuses to succeed until outbox, semantic-run, and River
 work are quiescent. Both mutations are authenticated, serialized,
 generation-fenced, and durably audited. The six operational/report/system rows
 and the seeded `sync.provider_unit` route start at Celery; only the latter has
-a checked-in canary transition with Celery rollback. That policy does not
-authorize production ownership without the separately required canary evidence
-and enabled sync deployment.
+a checked-in canary transition with Celery rollback. That transition remains
+default-off until its bounded evidence protocol records Celery generation `G`,
+River generation `G+1`, and restored Celery generation `G+2`; see
+[`v3 canary release proof`](../architecture/evidence/go-worker-migration/v3-canary-release-proof/README.md).
+Neither that local protocol nor the checked-in policy authorizes River
+ownership or production release acceptance without the enabled sync deployment
+and separately required canary evidence.
 
 `dev-health-workerctl` is the Phase 1 payload-redacted operator surface. It is
 shipped as a dedicated non-root image target and serialized to one invocation

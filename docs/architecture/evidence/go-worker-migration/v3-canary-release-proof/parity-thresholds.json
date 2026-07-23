@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "evidence_version": "v3-canary-release-proof",
+  "baseline": {
+    "path": "docs/architecture/evidence/go-worker-migration/v0-celery-baseline/capture.json",
+    "sha256": "04f85ea281739f75cef142daeb4882a1aca4b2406bf764312991c91e72a5ccab"
+  },
+  "thresholds": {
+    "lag_seconds_delta_max": 5,
+    "error_count_delta_max": 0,
+    "celery_error_count_max": 0,
+    "go_error_count_max": 0,
+    "cpu_cores_multiplier_max": 1.25,
+    "memory_bytes_multiplier_max": 1.25
+  },
+  "review": {
+    "reviewed_by": [],
+    "reviewed_at": null,
+    "approved": false
+  }
+}

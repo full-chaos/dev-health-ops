@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
 )
 
 // HeartbeatDispatcher performs the bounded compatibility side effect while
@@ -37,7 +38,10 @@ func (handler *HeartbeatHandler) Work(
 		return jobruntime.Permanent(errors.New("heartbeat schedule occurrence is invalid"))
 	}
 	if err := handler.dispatcher.DispatchHeartbeat(ctx, scheduledFor); err != nil {
-		return jobruntime.Permanent(err)
+		if errors.Is(err, operational.ErrDispatchPermanent) {
+			return jobruntime.Permanent(err)
+		}
+		return jobruntime.Retryable(err)
 	}
 	return nil
 }

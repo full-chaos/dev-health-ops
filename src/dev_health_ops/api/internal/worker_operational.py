@@ -5,7 +5,7 @@ from __future__ import annotations
 import hmac
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException
@@ -95,7 +95,7 @@ async def process_heartbeat_reference(
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict:
     _authorize(authorization)
-    if reference.scheduled_for.tzinfo is None:
+    if reference.scheduled_for.utcoffset() != timedelta(0):
         raise HTTPException(status_code=422, detail="Heartbeat occurrence must be UTC")
     result = await run_in_threadpool(phone_home_heartbeat.run)
     return _bridge_result(result, success=frozenset({"ok"}))

@@ -125,3 +125,17 @@ def test_internal_bridge_rejects_timezone_free_heartbeat(monkeypatch) -> None:
         json={"scheduled_for": "2026-07-21T12:00:00"},
     )
     assert response.status_code == 422
+
+
+def test_internal_bridge_rejects_non_utc_heartbeat_offset(monkeypatch) -> None:
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    with patch(
+        "dev_health_ops.api.internal.worker_operational.phone_home_heartbeat.run"
+    ) as run:
+        response = TestClient(app).post(
+            "/api/internal/worker-operational/heartbeat",
+            headers={"Authorization": "Bearer test-token"},
+            json={"scheduled_for": "2026-07-21T12:00:00+05:00"},
+        )
+    assert response.status_code == 422
+    run.assert_not_called()

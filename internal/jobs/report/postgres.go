@@ -7,20 +7,26 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PostgresRunStore struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
+	pool              *pgxpool.Pool
+	now               func() time.Time
+	notificationLease time.Duration
 }
+
+const defaultNotificationLease = 5 * time.Minute
 
 func NewPostgresRunStore(pool *pgxpool.Pool) (*PostgresRunStore, error) {
 	if pool == nil {
 		return nil, ErrDependencyUnavailable
 	}
-	return &PostgresRunStore{pool: pool, now: time.Now}, nil
+	return &PostgresRunStore{
+		pool: pool, now: time.Now, notificationLease: defaultNotificationLease,
+	}, nil
 }
 
 func (store *PostgresRunStore) Claim(ctx context.Context, runID, reportID string) (bool, error) {
@@ -151,40 +157,49 @@ WHERE id = $1::uuid`, reportID, now); err != nil {
 	return nil
 }
 
-func (store *PostgresRunStore) ClaimNotification(ctx context.Context, runID string) (string, bool, error) {
-	if !store.available() || runID == "" {
-		return "", false, ErrDependencyUnavailable
+func (store *PostgresRunStore) ClaimNotification(ctx context.Context, runID string) (*NotificationClaim, error) {
+	if !store.available() || runID == "" || store.notificationLease < time.Second || store.notificationLease > time.Hour {
+		return nil, ErrDependencyUnavailable
 	}
-	var key string
+	now := store.now().UTC()
+	token := uuid.New()
+	var claim NotificationClaim
 	err := store.pool.QueryRow(ctx, `
 UPDATE public.report_runs
-SET notification_status = 'delivering'
+SET notification_status = 'delivering', notification_claim_token = $2,
+    notification_lease_expires_at = $3
 WHERE id = $1::uuid AND status = 'success'
-  AND notification_status = 'pending' AND notification_key IS NOT NULL
-RETURNING notification_key`, runID).Scan(&key)
+  AND notification_key IS NOT NULL
+  AND (notification_status = 'pending' OR (
+      notification_status = 'delivering'
+      AND notification_lease_expires_at IS NOT NULL
+      AND notification_lease_expires_at <= $4
+  ))
+RETURNING notification_key, notification_claim_token::text`,
+		runID, token, now.Add(store.notificationLease), now).Scan(&claim.Key, &claim.Token)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("claim report notification: %w", ErrDependencyUnavailable)
+		return nil, fmt.Errorf("claim report notification: %w", ErrDependencyUnavailable)
 	}
-	return key, true, nil
+	return &claim, nil
 }
 
-func (store *PostgresRunStore) CompleteNotification(ctx context.Context, runID string) error {
-	return store.transitionNotification(ctx, runID, "delivering", "delivered", true)
+func (store *PostgresRunStore) CompleteNotification(ctx context.Context, runID string, claim NotificationClaim) error {
+	return store.transitionNotification(ctx, runID, claim, "delivered", true)
 }
 
-func (store *PostgresRunStore) ReleaseNotification(ctx context.Context, runID string) error {
-	return store.transitionNotification(ctx, runID, "delivering", "pending", false)
+func (store *PostgresRunStore) ReleaseNotification(ctx context.Context, runID string, claim NotificationClaim) error {
+	return store.transitionNotification(ctx, runID, claim, "pending", false)
 }
 
 func (store *PostgresRunStore) transitionNotification(
 	ctx context.Context,
-	runID, from, to string,
+	runID string, claim NotificationClaim, to string,
 	sent bool,
 ) error {
-	if !store.available() || runID == "" {
+	if !store.available() || runID == "" || claim.Token == "" {
 		return ErrDependencyUnavailable
 	}
 	var command pgconnCommandTag
@@ -192,15 +207,19 @@ func (store *PostgresRunStore) transitionNotification(
 	if sent {
 		command, err = store.pool.Exec(ctx, `
 UPDATE public.report_runs
-SET notification_status = $3, notification_sent_at = $4
-WHERE id = $1::uuid AND notification_status = $2`,
-			runID, from, to, store.now().UTC())
+SET notification_status = $3, notification_sent_at = $4,
+    notification_claim_token = NULL, notification_lease_expires_at = NULL
+WHERE id = $1::uuid AND notification_status = 'delivering'
+  AND notification_claim_token = $2::uuid`,
+			runID, claim.Token, to, store.now().UTC())
 	} else {
 		command, err = store.pool.Exec(ctx, `
 UPDATE public.report_runs
-SET notification_status = $3
-WHERE id = $1::uuid AND notification_status = $2`,
-			runID, from, to)
+SET notification_status = $3, notification_claim_token = NULL,
+    notification_lease_expires_at = NULL
+WHERE id = $1::uuid AND notification_status = 'delivering'
+  AND notification_claim_token = $2::uuid`,
+			runID, claim.Token, to)
 	}
 	if err != nil || command.RowsAffected() != 1 {
 		return fmt.Errorf("transition report notification: %w", ErrDependencyUnavailable)

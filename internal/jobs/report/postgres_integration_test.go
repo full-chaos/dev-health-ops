@@ -91,16 +91,33 @@ VALUES ($1, $2, 'pending', 0, 'pending')`, runID, reportID); err != nil {
 	if _, err := store.Complete(ctx, runID, conflict); !errors.Is(err, ErrArtifactConflict) {
 		t.Fatalf("conflicting retry error = %v", err)
 	}
-	key, notify, err := store.ClaimNotification(ctx, runID)
-	if err != nil || !notify || key != "report.ready:"+runID {
-		t.Fatalf("notification claim = %q, %v, %v", key, notify, err)
+	firstNotificationClaim, err := store.ClaimNotification(ctx, runID)
+	if err != nil || firstNotificationClaim == nil || firstNotificationClaim.Key != "report.ready:"+runID {
+		t.Fatalf("notification claim = %#v, %v", firstNotificationClaim, err)
 	}
-	if err := store.CompleteNotification(ctx, runID); err != nil {
+	if duplicate, err := store.ClaimNotification(ctx, runID); err != nil || duplicate != nil {
+		t.Fatalf("unexpired notification lease = %#v, %v", duplicate, err)
+	}
+
+	// A process can die after the durable pending -> delivering transition.
+	// Only an expired lease is reclaimable; the old token is fenced from
+	// completing or releasing the newer delivery attempt.
+	now = now.Add(store.notificationLease + time.Second)
+	reclaimedNotification, err := store.ClaimNotification(ctx, runID)
+	if err != nil || reclaimedNotification == nil || reclaimedNotification.Token == firstNotificationClaim.Token {
+		t.Fatalf("reclaimed notification = %#v, %v", reclaimedNotification, err)
+	}
+	if err := store.CompleteNotification(ctx, runID, *firstNotificationClaim); err == nil {
+		t.Fatal("stale notification claimant completed a reclaimed delivery")
+	}
+	if err := store.ReleaseNotification(ctx, runID, *firstNotificationClaim); err == nil {
+		t.Fatal("stale notification claimant released a reclaimed delivery")
+	}
+	if err := store.CompleteNotification(ctx, runID, *reclaimedNotification); err != nil {
 		t.Fatal(err)
 	}
-	_, notify, err = store.ClaimNotification(ctx, runID)
-	if err != nil || notify {
-		t.Fatalf("notification duplicate = %v, %v", notify, err)
+	if duplicate, err := store.ClaimNotification(ctx, runID); err != nil || duplicate != nil {
+		t.Fatalf("delivered notification was reclaimed = %#v, %v", duplicate, err)
 	}
 
 	const canceledRunID = "00000000-0000-4000-8000-000000000003"
@@ -160,7 +177,9 @@ CREATE TABLE report_runs (
 	artifact_fingerprint text NULL,
 	notification_key text NULL UNIQUE,
 	notification_status text NOT NULL,
-	notification_sent_at timestamptz NULL
+	notification_sent_at timestamptz NULL,
+	notification_claim_token uuid NULL,
+	notification_lease_expires_at timestamptz NULL
 )`)
 	if err != nil {
 		t.Fatal(err)

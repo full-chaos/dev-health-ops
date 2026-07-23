@@ -220,14 +220,17 @@ func (store *fakeRunStore) Complete(context.Context, string, Artifact) (bool, er
 	return store.complete, nil
 }
 func (store *fakeRunStore) Fail(context.Context, string, string) error { return nil }
-func (store *fakeRunStore) ClaimNotification(context.Context, string) (string, bool, error) {
-	return "report.ready:1", store.notificationClaim, nil
+func (store *fakeRunStore) ClaimNotification(context.Context, string) (*NotificationClaim, error) {
+	if !store.notificationClaim {
+		return nil, nil
+	}
+	return &NotificationClaim{Key: "report.ready:1", Token: "00000000-0000-4000-8000-000000000099"}, nil
 }
-func (store *fakeRunStore) CompleteNotification(context.Context, string) error {
+func (store *fakeRunStore) CompleteNotification(context.Context, string, NotificationClaim) error {
 	store.notificationsCompleted++
 	return nil
 }
-func (store *fakeRunStore) ReleaseNotification(context.Context, string) error {
+func (store *fakeRunStore) ReleaseNotification(context.Context, string, NotificationClaim) error {
 	store.notificationsReleased++
 	return nil
 }

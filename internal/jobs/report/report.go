@@ -114,6 +114,15 @@ type NotificationAdapter interface {
 	Notify(context.Context, string, string) error
 }
 
+// NotificationClaim fences the notification state transition. A retried
+// worker may reclaim an expired delivery lease, but a worker that crashed and
+// later resumes must not complete or release the newer claimant's delivery.
+// The notification key remains the downstream idempotency identity.
+type NotificationClaim struct {
+	Key   string
+	Token string
+}
+
 type RunStore interface {
 	// Claim atomically transitions pending/failed -> running. Failed is allowed
 	// so a bounded River retry can reuse the authoritative ReportRun; explicit
@@ -125,11 +134,12 @@ type RunStore interface {
 	// fingerprint on a retry. It returns false for canceled/already-completed.
 	Complete(ctx context.Context, runID string, artifact Artifact) (bool, error)
 	Fail(ctx context.Context, runID, code string) error
-	// ClaimNotification reserves the side effect by its durable key. A false
-	// claim means a prior successful notification must not be repeated.
-	ClaimNotification(ctx context.Context, runID string) (key string, claimed bool, err error)
-	CompleteNotification(ctx context.Context, runID string) error
-	ReleaseNotification(ctx context.Context, runID string) error
+	// ClaimNotification reserves the side effect by its durable key with a
+	// bounded lease. A nil claim means delivery already completed or another
+	// worker still owns the unexpired lease.
+	ClaimNotification(ctx context.Context, runID string) (*NotificationClaim, error)
+	CompleteNotification(ctx context.Context, runID string, claim NotificationClaim) error
+	ReleaseNotification(ctx context.Context, runID string, claim NotificationClaim) error
 }
 
 type Dependencies struct {
@@ -208,20 +218,20 @@ func execute(ctx context.Context, envelope jobcontract.Envelope, reportID string
 }
 
 func notify(ctx context.Context, dependencies Dependencies, runID, reportID string) error {
-	key, notify, err := dependencies.Runs.ClaimNotification(ctx, runID)
+	claim, err := dependencies.Runs.ClaimNotification(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("claim report notification: %w", err)
 	}
-	if !notify {
+	if claim == nil {
 		return nil
 	}
-	if err := dependencies.Notifications.Notify(ctx, reportID, key); err != nil {
-		if releaseErr := dependencies.Runs.ReleaseNotification(ctx, runID); releaseErr != nil {
+	if err := dependencies.Notifications.Notify(ctx, reportID, claim.Key); err != nil {
+		if releaseErr := dependencies.Runs.ReleaseNotification(ctx, runID, *claim); releaseErr != nil {
 			return fmt.Errorf("notify report: %w; release notification: %v", err, releaseErr)
 		}
 		return fmt.Errorf("notify report: %w", err)
 	}
-	if err := dependencies.Runs.CompleteNotification(ctx, runID); err != nil {
+	if err := dependencies.Runs.CompleteNotification(ctx, runID, *claim); err != nil {
 		return fmt.Errorf("complete report notification: %w", err)
 	}
 	return nil

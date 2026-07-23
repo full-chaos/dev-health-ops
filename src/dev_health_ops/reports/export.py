@@ -44,6 +44,8 @@ def persist_report_run(
     run.artifact_fingerprint = fingerprint
     run.notification_key = f"report.ready:{run.id}"
     run.notification_status = "pending"
+    run.notification_claim_token = None
+    run.notification_lease_expires_at = None
 
     report = session.execute(
         select(SavedReport).where(SavedReport.id == report_id)

@@ -246,6 +246,16 @@ class ReportRun(Base):
     notification_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    notification_claim_token: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        nullable=True,
+        comment="Fencing token for the current report-ready delivery lease",
+    )
+    notification_lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Bounded delivery lease; expiry permits crash recovery",
+    )
 
     triggered_by: Mapped[str] = mapped_column(
         Text,
@@ -264,6 +274,11 @@ class ReportRun(Base):
         Index("ix_report_runs_report_created", "report_id", "created_at"),
         Index("ix_report_runs_status", "status"),
         Index("ix_report_runs_notification_key", "notification_key"),
+        Index(
+            "ix_report_runs_notification_reclaim",
+            "notification_status",
+            "notification_lease_expires_at",
+        ),
     )
 
     def __init__(

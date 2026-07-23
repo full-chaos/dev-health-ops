@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -27,6 +27,7 @@ from dev_health_ops.reports.export import persist_report_run, start_report_run
 from dev_health_ops.reports.notifications import (
     claim_report_notification,
     complete_report_notification,
+    release_report_notification,
 )
 
 
@@ -140,7 +141,7 @@ def test_retry_preserves_artifact_and_notification_identity(engine):
             )
             claimed = claim_report_notification(session, trigger.run_id)
             assert claimed is not None
-            assert complete_report_notification(session, trigger.run_id)
+            assert complete_report_notification(session, trigger.run_id, claimed[2])
 
     with Session(engine) as session:
         with session.begin():
@@ -149,6 +150,38 @@ def test_retry_preserves_artifact_and_notification_identity(engine):
             )
             assert claim_report_notification(session, trigger.run_id) is None
             assert len(session.scalars(select(WorkerJobOutbox)).all()) == 1
+
+
+def test_notification_claim_recovers_after_crash_and_fences_stale_worker(engine):
+    with Session(engine) as session:
+        with session.begin():
+            report, _ = _seed(session)
+            trigger = create_on_demand_report_execution(session, report.id, "org-a")
+            assert start_report_run(session, trigger.run_id)
+            # SQLite returns timezone-naive values from this fixture; duration
+            # accounting is unrelated to notification lease recovery.
+            run = session.get(ReportRun, trigger.run_id)
+            assert run is not None
+            run.started_at = None
+            assert persist_report_run(
+                session, trigger.run_id, trigger.report_id, "# canonical", []
+            )
+            first = claim_report_notification(session, trigger.run_id)
+            assert first is not None
+            assert claim_report_notification(session, trigger.run_id) is None
+
+            # Simulate a worker death after pending -> delivering. The next
+            # attempt may reclaim only after the durable lease expires.
+            run = session.get(ReportRun, trigger.run_id)
+            assert run is not None
+            run.notification_lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            reclaimed = claim_report_notification(session, trigger.run_id)
+            assert reclaimed is not None
+            assert reclaimed[2] != first[2]
+            assert not complete_report_notification(session, trigger.run_id, first[2])
+            assert not release_report_notification(session, trigger.run_id, first[2])
+            assert complete_report_notification(session, trigger.run_id, reclaimed[2])
+            assert claim_report_notification(session, trigger.run_id) is None
 
 
 def test_canceled_run_cannot_be_rendered_or_retried(engine):

@@ -32,6 +32,16 @@ func NewProducer(pool *pgxpool.Pool, registry PolicyRegistry) (*Producer, error)
 	return &Producer{pool: pool, registry: registry, now: time.Now}, nil
 }
 
+// NewTransactionProducer constructs the package-owned transaction-only seam.
+// It cannot publish standalone because it deliberately owns no connection
+// pool; callers must supply the transaction that also owns their domain state.
+func NewTransactionProducer(registry PolicyRegistry) (*Producer, error) {
+	if registry == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	return &Producer{registry: registry, now: time.Now}, nil
+}
+
 func (producer *Producer) Publish(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -60,7 +70,7 @@ func (producer *Producer) publish(
 	envelope jobcontract.Envelope,
 	deferred bool,
 ) error {
-	if producer == nil || producer.pool == nil || producer.registry == nil || producer.now == nil || tx == nil {
+	if producer == nil || producer.registry == nil || producer.now == nil || tx == nil {
 		return ErrInvalidConfiguration
 	}
 	descriptor, ok := producer.registry.Descriptor(kind)

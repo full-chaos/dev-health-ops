@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -93,6 +94,47 @@ FROM public.sync_run_units WHERE id = $1`, firstUnitID).Scan(&attempts, &recover
 		t.Fatalf("attempts=%d recovery_count=%d retry_reason=%q", attempts, recoveryCount, retryReason)
 	}
 
+	generationBlocks, err := providerfoundation.BuildGenerationBlocks(
+		second.GenerationKey(),
+		"provider_records",
+		[]providerfoundation.NormalizedEnvelope{{
+			SchemaVersion: "v1", Provider: "github", OrgID: "org-acme",
+			IntegrationID: firstIntegrationID, EntityType: "repository",
+			SourceID: "github:repo:acme/api", DedupeKey: "github:repository:github:repo:acme/api",
+			ObservedAt: now, Provenance: providerfoundation.Provenance{Source: "github_rest", Confidence: "1.0"},
+			Attributes: map[string]string{"name": "acme/api"},
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired, err := NewGenerationJournalState(generationBlocks, now.Add(92*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := repository.Prepare(ctx, second, desired, now.Add(92*time.Second))
+	if err != nil || prepared.Blocks[0].Status != GenerationBlockPending {
+		t.Fatalf("prepared=%+v error=%v", prepared, err)
+	}
+	if err := repository.BeginBlock(ctx, second, 0, generationBlocks[0].ContentDigest(), now.Add(93*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.BeginBlock(ctx, second, 0, generationBlocks[0].ContentDigest(), now.Add(94*time.Second)); !errors.Is(err, ErrGenerationBlockAmbiguous) {
+		t.Fatalf("ambiguous block replay error=%v", err)
+	}
+	if err := repository.CommitBlock(ctx, second, 0, generationBlocks[0].ContentDigest(), now.Add(95*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := repository.Prepare(ctx, second, desired, now.Add(96*time.Second))
+	if err != nil || resumed.Blocks[0].Status != GenerationBlockCommitted {
+		t.Fatalf("resumed=%+v error=%v", resumed, err)
+	}
+	conflict := desired
+	conflict.Generation = "sync-unit:different"
+	if _, err := repository.Prepare(ctx, second, conflict, now.Add(97*time.Second)); !errors.Is(err, ErrGenerationJournalConflict) {
+		t.Fatalf("manifest conflict error=%v", err)
+	}
+
 	if _, err := pool.Exec(ctx, "UPDATE public.sync_runs SET status = 'failed' WHERE id = $1", firstRunID); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +172,7 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			dataset_key text NOT NULL, cost_class text NOT NULL, mode text NOT NULL,
 			since_at timestamptz, before_at timestamptz, status text NOT NULL,
 			attempts integer NOT NULL DEFAULT 0, available_at timestamptz,
-			error text, processor_flags jsonb, lease_owner text,
+			error text, result json, processor_flags jsonb, lease_owner text,
 			lease_expires_at timestamptz, last_heartbeat_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL

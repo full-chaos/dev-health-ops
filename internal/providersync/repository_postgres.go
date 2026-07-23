@@ -24,7 +24,7 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		return Claim{}, ErrInvalidConfiguration
 	}
 	var claim Claim
-	var processorFlags, datasetOptions, sourceMetadata, integrationConfig []byte
+	var processorFlags, datasetOptions, unitResult, sourceMetadata, integrationConfig []byte
 	err := repository.Pool.QueryRow(
 		ctx,
 		claimUnitSQL,
@@ -46,6 +46,7 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		&claim.SinceAt,
 		&claim.BeforeAt,
 		&processorFlags,
+		&unitResult,
 		&claim.Attempt,
 		&claim.LeaseExpiresAt,
 		&claim.Recovered,
@@ -70,6 +71,7 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 	}
 	for raw, target := range map[string]*map[string]any{
 		string(datasetOptions):    &claim.DatasetOptions,
+		string(unitResult):        &claim.Result,
 		string(sourceMetadata):    &claim.SourceMetadata,
 		string(integrationConfig): &claim.IntegrationConfig,
 	} {
@@ -170,6 +172,7 @@ SELECT
     claimed.since_at,
     claimed.before_at,
     COALESCE(claimed.processor_flags::text, '{}'),
+    COALESCE(claimed.result::text, '{}'),
     claimed.attempts,
     claimed.lease_expires_at,
     claimed.recovered,

@@ -619,6 +619,11 @@ quiescer/controller plus external-handoff binding remain open.
 - Implement lease heartbeats and cancellation.
 - Shadow provider reads and compare normalized/sink-ready batches.
 - Canary by organization, dataset, and cost class.
+- Treat ClickHouse insert-token deduplication as a finite engine window, not
+  an exactly-once ledger. Persist each deterministic block transition
+  (`pending` → `writing` → `committed`) under the leased sync unit. A recovered
+  `writing` block is ambiguous and must pass durable readback reconciliation;
+  it is never automatically replayed based only on the ClickHouse window.
 
 #### Acceptance
 
@@ -626,6 +631,8 @@ quiescer/controller plus external-handoff binding remain open.
 - Provider call counts and rate-limit behavior do not regress beyond approved tolerance.
 - Kill tests prove claim/lease recovery.
 - No duplicate ClickHouse generation or provider side effect occurs.
+- Recovery outside the ClickHouse deduplication window refuses ambiguous block
+  replay and records a reconciliation-required outcome.
 - GitHub and GitLab queues can be independently rolled back.
 
 ### CHAOS-3046 — Migrate Linear, Jira, and LaunchDarkly sync unit execution

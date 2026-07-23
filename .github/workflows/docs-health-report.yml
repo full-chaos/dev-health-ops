@@ -21,8 +21,8 @@ jobs:
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
-      - name: Build the canonical candidate
-        run: mkdocs build --strict --config-file mkdocs.prototype.yml
+      - name: Build the canonical documentation
+        run: python -m mkdocs build --strict --config-file mkdocs.yml
 
       - name: Check external links without blocking pull requests
         id: external
@@ -31,8 +31,8 @@ jobs:
           mkdir -p .build
           set -o pipefail
           python scripts/check_external_links.py \
-            --built-site .build/docs-prototype \
-            --allowlist docs/external-link-allowlist.yml \
+            --built-site .build/docs \
+            --allowlist .github/docs-legacy/external-link-allowlist.yml \
             --site-url https://docs.fullchaos.dev \
             2>&1 | tee .build/docs-external-links.log
 

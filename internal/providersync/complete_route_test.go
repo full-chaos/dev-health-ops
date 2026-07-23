@@ -3,6 +3,10 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +75,89 @@ func TestCompleteRouteExecutorRejectsAliasActivation(t *testing.T) {
 	}).Descriptor("linear", "work-item-comments")
 	if !ok || descriptor.RouteReady || descriptor.RouteEnabled {
 		t.Fatalf("alias descriptor=%+v ok=%v", descriptor, ok)
+	}
+}
+
+func TestCompleteRouteExecutorBudgetsDisabledShadowAndWritesNoEffects(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	descriptor, ok := (CompleteRouteSwitches{}).Descriptor(
+		"launchdarkly", "feature-flags",
+	)
+	if !ok || !descriptor.RouteReady || descriptor.RouteEnabled {
+		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
+	}
+	budget := &trackingCompleteRouteBudget{}
+	gate := &trackingCompleteRouteGate{}
+	doer := &trackingCompleteRouteDoer{}
+	handler := &requestingCompleteRouteHandler{
+		batch: completeRouteFixture(t, claim),
+	}
+	executor := completeRouteExecutor(now, handler, nil, nil)
+	executor.Budget = budget
+	executor.Gate = func(
+		Claim,
+		*providerfoundation.HTTPClient,
+	) providerfoundation.BackoffGate {
+		return gate
+	}
+	executor.Doer = doer
+	result, err := executor.Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.ShadowOnly || result.Effects != (EffectCommitResult{}) ||
+		doer.requests != 1 || budget.acquires != 1 || budget.releases != 1 ||
+		gate.waits != 1 {
+		t.Fatalf(
+			"result=%+v requests=%d acquires=%d releases=%d waits=%d",
+			result, doer.requests, budget.acquires, budget.releases, gate.waits,
+		)
+	}
+}
+
+func TestCompleteRouteExecutorRejectsMissingOutboundDependencies(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	descriptor, _ := (CompleteRouteSwitches{}).Descriptor(
+		"launchdarkly", "feature-flags",
+	)
+	for _, test := range []struct {
+		name   string
+		mutate func(*CompleteRouteExecutor)
+	}{
+		{
+			name: "credentials",
+			mutate: func(executor *CompleteRouteExecutor) {
+				executor.Credentials = providerfoundation.CredentialResolver{}
+			},
+		},
+		{
+			name: "budget",
+			mutate: func(executor *CompleteRouteExecutor) {
+				executor.Budget = nil
+			},
+		},
+		{
+			name: "gate",
+			mutate: func(executor *CompleteRouteExecutor) {
+				executor.Gate = nil
+			},
+		},
+	} {
+		executor := completeRouteExecutor(
+			now,
+			&staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)},
+			nil,
+			nil,
+		)
+		test.mutate(&executor)
+		_, err := executor.Execute(context.Background(), session, descriptor)
+		if !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("%s error=%v", test.name, err)
+		}
 	}
 }
 
@@ -168,6 +255,25 @@ type staticCompleteRouteHandler struct {
 	normalizedAt time.Time
 }
 
+type requestingCompleteRouteHandler struct {
+	batch CompleteRouteBatch
+}
+
+func (handler *requestingCompleteRouteHandler) Collect(
+	ctx context.Context,
+	_ Claim,
+	_ providerfoundation.Credential,
+	client *providerfoundation.HTTPClient,
+	_ time.Time,
+) (CompleteRouteBatch, error) {
+	response, err := client.Do(ctx, http.MethodGet, "/probe", nil)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	_ = response.Body.Close()
+	return handler.batch, nil
+}
+
 func (handler *staticCompleteRouteHandler) Collect(
 	_ context.Context,
 	_ Claim,
@@ -208,5 +314,59 @@ func (completeRouteCredentialDecryptor) Decrypt(secrets.Value) ([]byte, error) {
 	return []byte(`{"api_key":"fixture-token","project_key":"payments"}`), nil
 }
 
+type trackingCompleteRouteBudget struct {
+	acquires int
+	releases int
+}
+
+func (budget *trackingCompleteRouteBudget) Acquire(
+	_ context.Context,
+	key providerfoundation.BudgetKey,
+) (providerfoundation.Reservation, error) {
+	if key.Validate() != nil {
+		return nil, providerfoundation.ErrBudgetUnavailable
+	}
+	budget.acquires++
+	return completeRouteTrackingReservation{budget: budget}, nil
+}
+
+type completeRouteTrackingReservation struct {
+	budget *trackingCompleteRouteBudget
+}
+
+func (reservation completeRouteTrackingReservation) Release(context.Context) error {
+	reservation.budget.releases++
+	return nil
+}
+
+type trackingCompleteRouteGate struct {
+	waits int
+}
+
+func (gate *trackingCompleteRouteGate) Wait(context.Context) (time.Duration, error) {
+	gate.waits++
+	return 0, nil
+}
+
+func (*trackingCompleteRouteGate) Penalize(context.Context, time.Duration) error {
+	return nil
+}
+
+type trackingCompleteRouteDoer struct {
+	requests int
+}
+
+func (doer *trackingCompleteRouteDoer) Do(
+	*http.Request,
+) (*http.Response, error) {
+	doer.requests++
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`{}`)),
+	}, nil
+}
+
 var _ CompleteRouteHandler = (*staticCompleteRouteHandler)(nil)
+var _ CompleteRouteHandler = (*requestingCompleteRouteHandler)(nil)
 var _ CompleteRouteComparator = matchingCompleteRouteComparator{}

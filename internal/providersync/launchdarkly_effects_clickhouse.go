@@ -20,7 +20,7 @@ func (sink LaunchDarklyClickHouseEffects) WriteEffect(
 	claim Claim,
 	effect EffectBatch,
 ) error {
-	if ctx == nil || sink.Conn == nil || sink.Lease == nil ||
+	if ctx == nil || sink.Lease == nil ||
 		claim.Validate() != nil || claim.Provider != "launchdarkly" {
 		return ErrInvalidConfiguration
 	}
@@ -33,11 +33,23 @@ func (sink LaunchDarklyClickHouseEffects) WriteEffect(
 		if err != nil {
 			return err
 		}
+		if err := validateLaunchDarklyFlagScope(claim, rows); err != nil {
+			return err
+		}
+		if sink.Conn == nil {
+			return ErrInvalidConfiguration
+		}
 		return sink.writeFlags(ctx, rows)
 	case "feature_flag_event":
 		rows, err := decodeEffectRows[launchDarklyEventRow](effect)
 		if err != nil {
 			return err
+		}
+		if err := validateLaunchDarklyEventScope(claim, rows); err != nil {
+			return err
+		}
+		if sink.Conn == nil {
+			return ErrInvalidConfiguration
 		}
 		return sink.writeEvents(ctx, rows)
 	case "feature_flag_link":
@@ -45,11 +57,23 @@ func (sink LaunchDarklyClickHouseEffects) WriteEffect(
 		if err != nil {
 			return err
 		}
+		if err := validateLaunchDarklyLinkScope(claim, rows); err != nil {
+			return err
+		}
+		if sink.Conn == nil {
+			return ErrInvalidConfiguration
+		}
 		return sink.writeLinks(ctx, rows)
 	case "work_graph_edges":
 		rows, err := decodeEffectRows[launchDarklyEdgeRow](effect)
 		if err != nil {
 			return err
+		}
+		if err := validateLaunchDarklyEdgeScope(claim, rows); err != nil {
+			return err
+		}
+		if sink.Conn == nil {
+			return ErrInvalidConfiguration
 		}
 		return sink.writeEdges(ctx, rows)
 	default:
@@ -62,7 +86,7 @@ func (sink LaunchDarklyClickHouseEffects) InspectEffect(
 	claim Claim,
 	effect EffectBatch,
 ) (EffectInspection, error) {
-	if ctx == nil || sink.Conn == nil || sink.Lease == nil ||
+	if ctx == nil || sink.Lease == nil ||
 		claim.Validate() != nil || effect.Destination != "feature_flag_event" {
 		return EffectConflict, ErrInvalidConfiguration
 	}
@@ -72,6 +96,12 @@ func (sink LaunchDarklyClickHouseEffects) InspectEffect(
 	expected, err := decodeEffectRows[launchDarklyEventRow](effect)
 	if err != nil {
 		return EffectConflict, err
+	}
+	if err := validateLaunchDarklyEventScope(claim, expected); err != nil {
+		return EffectConflict, err
+	}
+	if sink.Conn == nil {
+		return EffectConflict, ErrInvalidConfiguration
 	}
 	exact, absent := 0, 0
 	for _, event := range expected {
@@ -96,6 +126,54 @@ func (sink LaunchDarklyClickHouseEffects) InspectEffect(
 	default:
 		return EffectConflict, nil
 	}
+}
+
+func validateLaunchDarklyFlagScope(
+	claim Claim,
+	rows []launchDarklyFlagRow,
+) error {
+	for _, row := range rows {
+		if row.OrgID != claim.OrgID || row.Provider != claim.Provider {
+			return providerfoundation.ErrInvalidScope
+		}
+	}
+	return nil
+}
+
+func validateLaunchDarklyEventScope(
+	claim Claim,
+	rows []launchDarklyEventRow,
+) error {
+	for _, row := range rows {
+		if row.OrgID != claim.OrgID {
+			return providerfoundation.ErrInvalidScope
+		}
+	}
+	return nil
+}
+
+func validateLaunchDarklyLinkScope(
+	claim Claim,
+	rows []launchDarklyLinkRow,
+) error {
+	for _, row := range rows {
+		if row.OrgID != claim.OrgID || row.Provider != claim.Provider {
+			return providerfoundation.ErrInvalidScope
+		}
+	}
+	return nil
+}
+
+func validateLaunchDarklyEdgeScope(
+	claim Claim,
+	rows []launchDarklyEdgeRow,
+) error {
+	for _, row := range rows {
+		if row.OrgID != claim.OrgID || row.Provider != claim.Provider {
+			return providerfoundation.ErrInvalidScope
+		}
+	}
+	return nil
 }
 
 func (sink LaunchDarklyClickHouseEffects) writeFlags(

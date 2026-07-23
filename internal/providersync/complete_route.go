@@ -98,13 +98,16 @@ func (executor CompleteRouteExecutor) Execute(
 		descriptor.RequestedDataset != session.Claim.Dataset ||
 		descriptor.RouteDataset != session.Claim.Dataset ||
 		!descriptor.RouteReady || executor.Doer == nil ||
+		executor.Credentials.Repository == nil ||
+		executor.Credentials.Decryptor == nil ||
+		executor.Budget == nil || executor.Gate == nil ||
 		executor.Handler == nil || executor.Comparator == nil ||
-		executor.HeartbeatInterval <= 0 {
+		executor.HeartbeatInterval <= 0 || executor.BudgetTTL <= 0 ||
+		executor.BudgetLimits[session.Claim.CostClass] < 1 {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	if descriptor.RouteEnabled &&
-		(executor.Budget == nil || executor.Gate == nil ||
-			executor.Committer.Ledger == nil || executor.Committer.Sink == nil) {
+		(executor.Committer.Ledger == nil || executor.Committer.Sink == nil) {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	var result CompleteRouteExecutionResult
@@ -126,23 +129,18 @@ func (executor CompleteRouteExecutor) Execute(
 		if err != nil {
 			return err
 		}
-		if descriptor.RouteEnabled {
-			limit := executor.BudgetLimits[session.Claim.CostClass]
-			if limit < 1 || executor.BudgetTTL <= 0 {
-				return ErrInvalidConfiguration
-			}
-			client.Budget = executor.Budget
-			client.BudgetKey = providerfoundation.BudgetKey{
-				Provider:  session.Claim.Provider,
-				OrgID:     session.Claim.OrgID,
-				Host:      client.BaseURL.Hostname(),
-				CostClass: string(session.Claim.CostClass),
-				Limit:     limit, TTL: executor.BudgetTTL,
-			}
-			client.Gate = executor.Gate(session.Claim, client)
-			if client.Gate == nil {
-				return ErrInvalidConfiguration
-			}
+		client.Budget = executor.Budget
+		client.BudgetKey = providerfoundation.BudgetKey{
+			Provider:  session.Claim.Provider,
+			OrgID:     session.Claim.OrgID,
+			Host:      client.BaseURL.Hostname(),
+			CostClass: string(session.Claim.CostClass),
+			Limit:     executor.BudgetLimits[session.Claim.CostClass],
+			TTL:       executor.BudgetTTL,
+		}
+		client.Gate = executor.Gate(session.Claim, client)
+		if client.Gate == nil {
+			return ErrInvalidConfiguration
 		}
 		client.Metrics = executor.Metrics
 		normalizedAt := executor.now()

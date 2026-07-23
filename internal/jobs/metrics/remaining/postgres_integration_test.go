@@ -4,11 +4,14 @@ package remaining
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -27,40 +30,44 @@ func TestPostgresStoreResumesPartitionsAndFencesCancellationAndExpiry(t *testing
 	defer pool.Close()
 	createRemainingTables(t, ctx, pool)
 
-	const (
-		runID    = "00000000-0000-4000-8000-000000000101"
-		firstID  = "00000000-0000-4000-8000-000000000102"
-		secondID = "00000000-0000-4000-8000-000000000103"
-		orgID    = "00000000-0000-4000-8000-000000000109"
-	)
+	const orgID = "00000000-0000-4000-8000-000000000109"
 	now := time.Date(2026, 7, 23, 20, 0, 0, 0, time.UTC)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO remaining_metric_runs
-    (id,org_id,family,generation,scope_key,generation_seed,status,created_at,updated_at)
-VALUES ($1,$2,'capacity','capacity-v1','all-teams',42,'pending',$3,$3)`, runID, orgID, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO remaining_metric_runs
-    (id,org_id,family,generation,scope_key,generation_seed,status,created_at,updated_at)
-VALUES ('00000000-0000-4000-8000-000000000110',$1,'capacity','capacity-v1','all-teams',99,'pending',$2,$2)`,
-		orgID, now); err == nil {
-		t.Fatal("duplicate authoritative family generation was accepted")
-	}
-	for ordinal, partitionID := range []string{firstID, secondID} {
-		if _, err := pool.Exec(ctx, `
-INSERT INTO remaining_metric_partitions
-    (id,run_id,ordinal,scope,status,attempt_count,created_at,updated_at)
-VALUES ($1,$2,$3,'{}'::jsonb,'pending',0,$4,$4)`, partitionID, runID, ordinal, now); err != nil {
-			t.Fatal(err)
-		}
-	}
 	store, err := NewPostgresStore(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return now }
-	run, err := store.LoadRun(ctx, runID)
+	run, err := store.StartRun(ctx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "capacity",
+		Generation:     "capacity-v1",
+		ScopeKey:       "all-teams",
+		GenerationSeed: int64Pointer(42),
+		Scopes:         []json.RawMessage{json.RawMessage(`{"team":"one"}`), json.RawMessage(`{"team":"two"}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := run.ID
+	firstID := deterministicPartitionID(runID, 0)
+	secondID := deterministicPartitionID(runID, 1)
+
+	var before time.Time
+	if err := pool.QueryRow(ctx, "SELECT updated_at FROM remaining_metric_runs WHERE id=$1::uuid", runID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if unknown, err := store.ClaimPartition(ctx, uuid.NewString()); err != nil || unknown != nil {
+		t.Fatalf("unknown claim=%#v err=%v", unknown, err)
+	}
+	var afterNoClaim time.Time
+	if err := pool.QueryRow(ctx, "SELECT updated_at FROM remaining_metric_runs WHERE id=$1::uuid", runID).Scan(&afterNoClaim); err != nil {
+		t.Fatal(err)
+	}
+	if !afterNoClaim.Equal(before) {
+		t.Fatalf("unclaimable partition moved run timestamp: before=%s after=%s", before, afterNoClaim)
+	}
+	run, err = store.LoadRun(ctx, runID)
 	if err != nil || run.Family != "capacity" || run.Seed == nil || *run.Seed != 42 {
 		t.Fatalf("run=%#v err=%v", run, err)
 	}
@@ -124,6 +131,152 @@ VALUES ($1,$2,$3,'{}'::jsonb,'pending',0,$4,$4)`, partitionID, runID, ordinal, n
 	run, err = store.LoadRun(ctx, runID)
 	if err != nil || run.Status != "succeeded" {
 		t.Fatalf("final run=%#v err=%v", run, err)
+	}
+}
+
+func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return time.Date(2026, 7, 23, 20, 0, 0, 0, time.UTC) }
+	request := StartRunRequest{
+		OrganizationID: "00000000-0000-4000-8000-000000000119",
+		Family:         "capacity",
+		Generation:     "capacity-v1",
+		ScopeKey:       "all-teams",
+		GenerationSeed: int64Pointer(42),
+		Scopes:         []json.RawMessage{json.RawMessage(`{"team":"one"}`), json.RawMessage(`{"team":"two"}`)},
+	}
+
+	start := make(chan struct{})
+	results := make(chan struct {
+		run Run
+		err error
+	}, 2)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			run, err := store.StartRun(ctx, request)
+			results <- struct {
+				run Run
+				err error
+			}{run, err}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	var runs []Run
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent StartRun: %v", result.err)
+		}
+		runs = append(runs, result.run)
+	}
+	if len(runs) != 2 || runs[0].ID != runs[1].ID || runs[0].ID != deterministicRunID(request) {
+		t.Fatalf("concurrent runs=%#v", runs)
+	}
+	partitions, err := store.PendingPartitions(ctx, runs[0].ID)
+	if err != nil || len(partitions) != 2 {
+		t.Fatalf("partitions=%#v err=%v", partitions, err)
+	}
+	for ordinal, partition := range partitions {
+		canonical, err := canonicalJSON(partition.Scope)
+		if err != nil {
+			t.Fatalf("partition %d scope = %q: %v", ordinal, partition.Scope, err)
+		}
+		if partition.ID != deterministicPartitionID(runs[0].ID, ordinal) || partition.Ordinal != ordinal ||
+			string(canonical) != string(request.Scopes[ordinal]) {
+			t.Fatalf("partition %d = %#v", ordinal, partition)
+		}
+	}
+
+	mismatchedSeed := request
+	mismatchedSeed.GenerationSeed = int64Pointer(43)
+	if _, err := store.StartRun(ctx, mismatchedSeed); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("mismatched seed replay error = %v", err)
+	}
+	mismatchedScopes := request
+	mismatchedScopes.Scopes = []json.RawMessage{json.RawMessage(`{"team":"one"}`)}
+	if _, err := store.StartRun(ctx, mismatchedScopes); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("mismatched scope replay error = %v", err)
+	}
+	if _, err := store.StartRun(ctx, StartRunRequest{
+		OrganizationID: request.OrganizationID, Family: "dora", Generation: "dora-v1", ScopeKey: "bad-seed",
+		GenerationSeed: int64Pointer(1), Scopes: []json.RawMessage{json.RawMessage(`{}`)},
+	}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("non-capacity seed error = %v", err)
+	}
+	if _, err := store.StartRun(ctx, StartRunRequest{
+		OrganizationID: request.OrganizationID, Family: "capacity", Generation: "capacity-v2", ScopeKey: "missing-seed",
+		Scopes: []json.RawMessage{json.RawMessage(`{}`)},
+	}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("capacity missing seed error = %v", err)
+	}
+	if _, err := store.StartRun(ctx, StartRunRequest{
+		OrganizationID: request.OrganizationID, Family: "not-in-inventory", Generation: "v1", ScopeKey: "bad-family",
+		Scopes: []json.RawMessage{json.RawMessage(`{}`)},
+	}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("unknown inventory family error = %v", err)
+	}
+
+	invalid := request
+	invalid.ScopeKey = "invalid-json"
+	invalid.Scopes = []json.RawMessage{json.RawMessage(`not-json`)}
+	if _, err := store.StartRun(ctx, invalid); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("invalid scope error = %v", err)
+	}
+	assertRunAndPartitionCounts(t, ctx, pool, deterministicRunID(invalid), 0, 0)
+
+	if _, err := pool.Exec(ctx, `
+CREATE FUNCTION reject_remaining_partition() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.ordinal = 1 THEN RAISE EXCEPTION 'forced partition failure'; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER reject_remaining_partition BEFORE INSERT ON remaining_metric_partitions
+FOR EACH ROW EXECUTE FUNCTION reject_remaining_partition()`); err != nil {
+		t.Fatal(err)
+	}
+	partial := request
+	partial.ScopeKey = "forced-rollback"
+	if _, err := store.StartRun(ctx, partial); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("partial insert error = %v", err)
+	}
+	assertRunAndPartitionCounts(t, ctx, pool, deterministicRunID(partial), 0, 0)
+}
+
+func int64Pointer(value int64) *int64 { return &value }
+
+func assertRunAndPartitionCounts(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID string, wantRuns, wantPartitions int) {
+	t.Helper()
+	var runs, partitions int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM remaining_metric_runs WHERE id=$1::uuid", runID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM remaining_metric_partitions WHERE run_id=$1::uuid", runID).Scan(&partitions); err != nil {
+		t.Fatal(err)
+	}
+	if runs != wantRuns || partitions != wantPartitions {
+		t.Fatalf("persisted counts = runs:%d partitions:%d, want runs:%d partitions:%d", runs, partitions, wantRuns, wantPartitions)
 	}
 }
 

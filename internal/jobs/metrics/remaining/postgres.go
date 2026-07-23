@@ -1,9 +1,16 @@
 package remaining
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,11 +25,30 @@ var (
 
 const defaultLease = 10 * time.Minute
 
+const (
+	maxGenerationLength = 128
+	maxScopeKeyLength   = 512
+	maxScopesPerRun     = 1024
+)
+
+// StartRunRequest is the immutable, persisted input for a remaining-metrics
+// generation. Scopes are ordered deliberately: their ordinal is the durable
+// work identity, not an implementation detail of a dispatcher.
+type StartRunRequest struct {
+	OrganizationID string
+	Family         string
+	Generation     string
+	ScopeKey       string
+	GenerationSeed *int64
+	Scopes         []json.RawMessage
+}
+
 type Run struct {
 	ID             string
 	OrganizationID string
 	Family         string
 	Generation     string
+	ScopeKey       string
 	Status         string
 	Seed           *int64
 }
@@ -31,6 +57,7 @@ type Partition struct {
 	ID      string
 	RunID   string
 	Ordinal int
+	Scope   json.RawMessage
 }
 
 type Claim struct {
@@ -52,15 +79,93 @@ func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now}, nil
 }
 
+// StartRun atomically persists a deterministic generation and every partition
+// it owns. Retried queue deliveries are only accepted when their immutable
+// seed, count, and ordered scopes exactly match the original request.
+func (store *PostgresStore) StartRun(ctx context.Context, request StartRunRequest) (Run, error) {
+	if !store.valid() {
+		return Run{}, ErrUnavailable
+	}
+	request.Scopes = cloneScopes(request.Scopes)
+	if err := validateStartRunRequest(request); err != nil {
+		return Run{}, ErrInvalidState
+	}
+	request.OrganizationID = uuid.MustParse(request.OrganizationID).String()
+	for ordinal := range request.Scopes {
+		canonical, err := canonicalJSON(request.Scopes[ordinal])
+		if err != nil {
+			return Run{}, ErrInvalidState
+		}
+		request.Scopes[ordinal] = canonical
+	}
+
+	runID := deterministicRunID(request)
+	now := store.now().UTC()
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return Run{}, ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	command, err := tx.Exec(ctx, `
+INSERT INTO public.remaining_metric_runs
+    (id, org_id, family, generation, scope_key, generation_seed, status, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'pending', $7, $7)
+ON CONFLICT DO NOTHING`,
+		runID, request.OrganizationID, request.Family, request.Generation, request.ScopeKey, request.GenerationSeed, now)
+	if err != nil {
+		return Run{}, ErrUnavailable
+	}
+	if command.RowsAffected() == 0 {
+		run, err := loadStartedRun(ctx, tx, runID)
+		if err != nil {
+			return Run{}, err
+		}
+		if !sameRunSeed(run, request) || !sameRunIdentity(run, request) {
+			return Run{}, ErrInvalidState
+		}
+		if err := verifyStartedPartitions(ctx, tx, runID, request.Scopes); err != nil {
+			return Run{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return Run{}, ErrUnavailable
+		}
+		return run, nil
+	}
+
+	for ordinal, scope := range request.Scopes {
+		_, err := tx.Exec(ctx, `
+INSERT INTO public.remaining_metric_partitions
+    (id, run_id, ordinal, scope, status, attempt_count, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
+			deterministicPartitionID(runID, ordinal), runID, ordinal, scope, now)
+		if err != nil {
+			return Run{}, ErrUnavailable
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Run{}, ErrUnavailable
+	}
+	return Run{
+		ID:             runID,
+		OrganizationID: request.OrganizationID,
+		Family:         request.Family,
+		Generation:     request.Generation,
+		ScopeKey:       request.ScopeKey,
+		Status:         "pending",
+		Seed:           request.GenerationSeed,
+	}, nil
+}
+
 func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, error) {
 	if !store.valid() || !validUUID(runID) {
 		return Run{}, ErrUnavailable
 	}
 	var run Run
 	err := store.pool.QueryRow(ctx, `
-SELECT id::text, org_id::text, family, generation, status, generation_seed
+SELECT id::text, org_id::text, family, generation, scope_key, status, generation_seed
 FROM public.remaining_metric_runs WHERE id = $1::uuid`, runID).Scan(
-		&run.ID, &run.OrganizationID, &run.Family, &run.Generation, &run.Status, &run.Seed,
+		&run.ID, &run.OrganizationID, &run.Family, &run.Generation, &run.ScopeKey, &run.Status, &run.Seed,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrInvalidState
@@ -78,7 +183,7 @@ func (store *PostgresStore) PendingPartitions(ctx context.Context, runID string)
 		return nil, ErrUnavailable
 	}
 	rows, err := store.pool.Query(ctx, `
-SELECT partition.id::text, partition.run_id::text, partition.ordinal
+SELECT partition.id::text, partition.run_id::text, partition.ordinal, partition.scope
 FROM public.remaining_metric_partitions AS partition
 JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE partition.run_id = $1::uuid AND partition.status IN ('pending', 'failed')
@@ -91,7 +196,7 @@ ORDER BY partition.ordinal`, runID)
 	var result []Partition
 	for rows.Next() {
 		var partition Partition
-		if err := rows.Scan(&partition.ID, &partition.RunID, &partition.Ordinal); err != nil {
+		if err := rows.Scan(&partition.ID, &partition.RunID, &partition.Ordinal, &partition.Scope); err != nil {
 			return nil, ErrUnavailable
 		}
 		result = append(result, partition)
@@ -109,23 +214,25 @@ func (store *PostgresStore) ClaimPartition(ctx context.Context, partitionID stri
 	now, token := store.now().UTC(), uuid.New()
 	var claim Claim
 	err := store.pool.QueryRow(ctx, `
-WITH active_run AS (
-    UPDATE public.remaining_metric_runs
-    SET status = 'running', updated_at = $1
-    WHERE id = (
-        SELECT run_id FROM public.remaining_metric_partitions WHERE id = $4::uuid
-    ) AND status IN ('pending', 'running')
-    RETURNING id
-)
-UPDATE public.remaining_metric_partitions
+WITH claimed AS (
+UPDATE public.remaining_metric_partitions AS partition
 SET status = 'running', claim_token = $2, lease_expires_at = $3,
     attempt_count = attempt_count + 1, updated_at = $1
-WHERE id = $4::uuid AND (
+WHERE partition.id = $4::uuid AND (
     status IN ('pending', 'failed') OR
     (status = 'running' AND lease_expires_at <= $1)
   )
-  AND run_id IN (SELECT id FROM active_run)
-RETURNING id::text, run_id::text, ordinal, claim_token::text`,
+  AND EXISTS (
+      SELECT 1 FROM public.remaining_metric_runs AS run
+      WHERE run.id = partition.run_id AND run.status IN ('pending', 'running')
+  )
+RETURNING partition.id::text, partition.run_id::text, partition.ordinal, partition.claim_token::text
+), activated_run AS (
+    UPDATE public.remaining_metric_runs AS run
+    SET status = 'running', updated_at = $1
+    WHERE run.id = (SELECT run_id::uuid FROM claimed) AND run.status = 'pending'
+)
+SELECT id, run_id, ordinal, claim_token FROM claimed`,
 		now, token, now.Add(store.lease), partitionID,
 	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Partition.Ordinal, &claim.Token)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -261,6 +368,129 @@ func (store *PostgresStore) validClaim(claim Claim) bool {
 
 func (store *PostgresStore) valid() bool {
 	return store != nil && store.pool != nil && store.now != nil && store.lease >= time.Second && store.lease <= time.Hour
+}
+
+func validateStartRunRequest(request StartRunRequest) error {
+	if !validUUID(request.OrganizationID) ||
+		utf8.RuneCountInString(request.Generation) < 1 || utf8.RuneCountInString(request.Generation) > maxGenerationLength ||
+		utf8.RuneCountInString(request.ScopeKey) < 1 || utf8.RuneCountInString(request.ScopeKey) > maxScopeKeyLength ||
+		len(request.Scopes) < 1 || len(request.Scopes) > maxScopesPerRun {
+		return ErrInvalidState
+	}
+	inventory, err := Load()
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, family := range inventory.Families {
+		if request.Family == family.Name {
+			found = true
+			break
+		}
+	}
+	if !found || (request.Family == "capacity") != (request.GenerationSeed != nil) {
+		return ErrInvalidState
+	}
+	return nil
+}
+
+func deterministicRunID(request StartRunRequest) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
+		"remaining-metrics-run", request.OrganizationID, request.Family, request.Generation, request.ScopeKey,
+	}, "/"))).String()
+}
+
+func deterministicPartitionID(runID string, ordinal int) string {
+	runUUID := uuid.MustParse(runID)
+	return uuid.NewSHA1(runUUID, []byte("remaining-metrics-partition/"+strconv.Itoa(ordinal))).String()
+}
+
+func canonicalJSON(raw json.RawMessage) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return nil, ErrInvalidState
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, ErrInvalidState
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, ErrInvalidState
+	}
+	return canonical, nil
+}
+
+func cloneScopes(scopes []json.RawMessage) []json.RawMessage {
+	cloned := make([]json.RawMessage, len(scopes))
+	for index, scope := range scopes {
+		cloned[index] = append(json.RawMessage(nil), scope...)
+	}
+	return cloned
+}
+
+func loadStartedRun(ctx context.Context, tx pgx.Tx, runID string) (Run, error) {
+	var run Run
+	err := tx.QueryRow(ctx, `
+SELECT id::text, org_id::text, family, generation, scope_key, status, generation_seed
+FROM public.remaining_metric_runs WHERE id = $1::uuid`, runID).Scan(
+		&run.ID, &run.OrganizationID, &run.Family, &run.Generation, &run.ScopeKey, &run.Status, &run.Seed,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, ErrInvalidState
+	}
+	if err != nil {
+		return Run{}, ErrUnavailable
+	}
+	return run, nil
+}
+
+func sameRunIdentity(run Run, request StartRunRequest) bool {
+	return run.OrganizationID == request.OrganizationID && run.Family == request.Family &&
+		run.Generation == request.Generation && run.ScopeKey == request.ScopeKey
+}
+
+func sameRunSeed(run Run, request StartRunRequest) bool {
+	if run.Seed == nil || request.GenerationSeed == nil {
+		return run.Seed == nil && request.GenerationSeed == nil
+	}
+	return *run.Seed == *request.GenerationSeed
+}
+
+func verifyStartedPartitions(ctx context.Context, tx pgx.Tx, runID string, scopes []json.RawMessage) error {
+	rows, err := tx.Query(ctx, `
+SELECT id::text, ordinal, scope
+FROM public.remaining_metric_partitions
+WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer rows.Close()
+	ordinal := 0
+	for rows.Next() {
+		var id string
+		var persisted json.RawMessage
+		if err := rows.Scan(&id, &ordinal, &persisted); err != nil {
+			return ErrUnavailable
+		}
+		canonical, err := canonicalJSON(persisted)
+		if err != nil {
+			return ErrInvalidState
+		}
+		if ordinal >= len(scopes) || id != deterministicPartitionID(runID, ordinal) || !bytes.Equal(canonical, scopes[ordinal]) {
+			return ErrInvalidState
+		}
+		ordinal++
+	}
+	if err := rows.Err(); err != nil {
+		return ErrUnavailable
+	}
+	if ordinal != len(scopes) {
+		return fmt.Errorf("%w: partition count mismatch", ErrInvalidState)
+	}
+	return nil
 }
 
 func validUUID(value string) bool {

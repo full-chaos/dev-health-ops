@@ -28,6 +28,68 @@ type idleQuiescer struct{}
 
 func (idleQuiescer) Quiesce(context.Context, string) error { return nil }
 
+func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE public.worker_job_routes (
+			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
+			generation bigint NOT NULL, updated_at timestamptz NOT NULL
+		);
+		CREATE TABLE public.worker_job_outbox (
+			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
+		);
+		CREATE TABLE public.worker_job_runs (
+			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
+		);
+		INSERT INTO public.worker_job_routes
+			(job_kind, transport, paused, generation, updated_at)
+		VALUES ('sync.provider_unit', 'celery', FALSE, 1, statement_timestamp())`); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewControllerWithCeleryQuiescer(
+		pool,
+		integrationRegistry{jobruntime.Descriptor{
+			Kind: "sync.provider_unit", Route: "river_canary", RollbackRoute: "celery",
+		}},
+		idleQuiescer{},
+		idleQuiescer{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := controller.ApplyCheckedIn(ctx, "sync.provider_unit")
+	if err != nil {
+		t.Fatalf("ApplyCheckedIn(): %v", err)
+	}
+	if state.Transport != "river_canary" || state.Generation != 2 {
+		t.Fatalf("canary state = %+v", state)
+	}
+	state, err = controller.Rollback(ctx, "sync.provider_unit")
+	if err != nil {
+		t.Fatalf("Rollback(): %v", err)
+	}
+	if state.Transport != "celery" || state.Generation != 3 {
+		t.Fatalf("rollback state = %+v", state)
+	}
+}
+
 func TestRollbackWaitsForProducerRouteLockThenRejectsStagedOutbox(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -172,6 +234,14 @@ func TestRollbackWaitsForProducerRouteLockThenRejectsStagedOutbox(t *testing.T) 
 	}
 	if state.Transport != "river_canary" || state.Generation != 3 {
 		t.Fatalf("route not activated after quiescence: %+v", state)
+	}
+
+	state, err = activationController.Rollback(ctx, "job.test")
+	if err != nil {
+		t.Fatalf("Rollback() after canary: %v", err)
+	}
+	if state.Transport != "celery" || state.Generation != 4 {
+		t.Fatalf("route not restored after rollback: %+v", state)
 	}
 }
 

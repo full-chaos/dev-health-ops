@@ -32,10 +32,14 @@ setting, not a Python database alias. Long-running processes never apply River
 migrations; `MIGRATION_DATABASE_URI` is injected only into the one-shot
 migration job.
 
-All Go profiles have zero minimum replicas and the current registry routes
-remain `celery`. Their readiness stays closed until a profile has complete
-compiled handler coverage and its database/schema checks pass. The canonical
-disabled topology and its connection budget live in
+All Go profiles have zero minimum replicas. `sync.provider_unit` is the sole
+checked-in `river_canary` policy and retains a Celery rollback route, but its
+durable route starts at `celery` until an authenticated operator applies that
+policy; every other current route is also `celery`. The disabled topology still
+prevents a Go worker deployment from starting by default, and a route policy
+alone is not canary approval. Readiness stays closed until a profile has
+complete compiled handler coverage and its database/schema checks pass. The
+canonical disabled topology and its connection budget live in
 `deploy/go-workers/profiles.json`.
 
 The Go worker exposes `/healthz` for process liveness, `/readyz` for required
@@ -114,8 +118,11 @@ cannot cut ownership away while old Celery work may still execute. `rollback`
 returns to the checked-in
 rollback route and refuses to succeed until outbox, semantic-run, and River
 work are quiescent. Both mutations are authenticated, serialized,
-generation-fenced, and durably audited. Today all six route rows and policies
-remain Celery, so `apply` is a no-op and no River ownership is authorized.
+generation-fenced, and durably audited. The six operational/report/system rows
+and the seeded `sync.provider_unit` route start at Celery; only the latter has
+a checked-in canary transition with Celery rollback. That policy does not
+authorize production ownership without the separately required canary evidence
+and enabled sync deployment.
 
 `dev-health-workerctl` is the Phase 1 payload-redacted operator surface. It is
 shipped as a dedicated non-root image target and serialized to one invocation

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the MkDocs site and prepare the static asset tree used by Wrangler."""
+"""Build the canonical MkDocs site and prepare the static tree used by Wrangler."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SITE_DIR = ROOT / ".build" / "docs-prototype"
+SITE_DIR = ROOT / ".build" / "docs"
 ASSET_DIR = ROOT / ".build" / "docs-cloudflare"
 REDIRECTS = ROOT / ".github" / "documentation-program" / "phase-9" / "redirects.tsv"
 SEARCH_ACCEPTANCE = (
@@ -68,7 +68,7 @@ def build(*, mode: str, full_check: bool) -> None:
             "build",
             "--strict",
             "--config-file",
-            "mkdocs.prototype.yml",
+            "mkdocs.yml",
         ]
     )
 
@@ -98,7 +98,7 @@ def build(*, mode: str, full_check: bool) -> None:
                 "--site-dir",
                 str(SITE_DIR.relative_to(ROOT)),
                 "--css",
-                "docs-prototype/stylesheets/extra.css",
+                "docs/stylesheets/extra.css",
             ]
         )
         _run([sys.executable, "scripts/check_docs_candidate_facts.py"])

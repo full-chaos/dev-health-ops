@@ -127,7 +127,8 @@ func TestExternalHandlerPersistsPartialOutcomeAndSchedulesAfterCommit(t *testing
 		},
 	}
 	scope := ExternalRecomputeScope{
-		OrgID: pointer.OrgID, IngestionID: pointer.IngestionID,
+		OrgID: pointer.OrgID, SourceSystem: pointer.SourceSystem,
+		SourceInstance: pointer.SourceInstance, IngestionID: pointer.IngestionID,
 		RepoIDs: []string{"repo-id"}, RecordKinds: []string{"repository.v1"},
 	}
 	sink := &externalSinkFake{scope: scope}

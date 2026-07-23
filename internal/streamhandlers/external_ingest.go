@@ -177,6 +177,24 @@ func (h *ExternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		if err != nil {
 			return err
 		}
+		if scope.OrgID == "" {
+			scope.OrgID = pointer.OrgID
+		}
+		if scope.SourceSystem == "" {
+			scope.SourceSystem = pointer.SourceSystem
+		}
+		if scope.SourceInstance == "" {
+			scope.SourceInstance = pointer.SourceInstance
+		}
+		if scope.IngestionID == uuid.Nil {
+			scope.IngestionID = pointer.IngestionID
+		}
+		if scope.WindowStart == nil {
+			scope.WindowStart = batch.WindowStartedAt
+		}
+		if scope.WindowEnd == nil {
+			scope.WindowEnd = batch.WindowEndedAt
+		}
 	}
 	completion := externalCompletion{
 		Accepted: len(accepted), Rejected: len(rejections),

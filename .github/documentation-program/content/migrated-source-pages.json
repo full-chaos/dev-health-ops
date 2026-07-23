@@ -1,0 +1,9 @@
+{
+  "admin/data-sources/incident-response.md": "docs/user-guide/pagerduty-oauth-app-setup.md",
+  "admin/data-sources/jira-atlassian.md": "docs/providers/jira-service-management.md",
+  "contribute/architecture/contracts.md": "docs/decisions/chaos-3034-river-compatibility.md",
+  "contribute/architecture/platform.md": "docs/architecture/go-worker-runtime-trd.md",
+  "integrate/webhooks/configure.md": "docs/architecture/pagerduty-contract.md",
+  "operate/configure/databases-and-storage.md": "docs/ops/database-connection-pooling.md",
+  "operate/run/workers-and-jobs.md": "docs/ops/workers.md"
+}

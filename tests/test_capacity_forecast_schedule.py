@@ -203,7 +203,7 @@ async def test_run_capacity_forecast_persists_rows_with_requested_org_id() -> No
         patch(
             "dev_health_ops.metrics.job_capacity.forecast_capacity",
             return_value=forecast,
-        ),
+        ) as mock_forecast,
     ):
         results = await job_capacity.run_capacity_forecast(
             db_url="clickhouse://fake",
@@ -213,11 +213,13 @@ async def test_run_capacity_forecast_persists_rows_with_requested_org_id() -> No
             target_items=7,
             simulations=10,
             persist=True,
+            seed=1234,
         )
 
     assert results == [forecast]
     assert [row.org_id for row in sink.written] == ["org-1"]
     assert sink.closed is True
+    assert mock_forecast.call_args.kwargs["seed"] == 1234
 
 
 @pytest.mark.asyncio

@@ -201,25 +201,11 @@ class MembershipBackfillScope(_StrictScope):
 class _DailyFamilyScope(_StrictScope):
     day: str
     backfill_days: int = Field(ge=1, le=30)
-    repo_id: str | None = None
-    repo_name: str | None = None
-    sink: Literal["auto", "clickhouse"]
-    provider: Literal["auto", "all", "jira", "github", "gitlab", "none"]
 
     @field_validator("day")
     @classmethod
     def validate_day(cls, value: str) -> str:
         return _date_text(value)
-
-    @field_validator("repo_id")
-    @classmethod
-    def validate_repo_id(cls, value: str | None) -> str | None:
-        return None if value is None else _uuid_text(value)
-
-    @field_validator("repo_name")
-    @classmethod
-    def validate_repo_name(cls, value: str | None) -> str | None:
-        return None if value is None else _bounded_text(value, maximum=256)
 
 
 class ExtraMetricsScope(_DailyFamilyScope):

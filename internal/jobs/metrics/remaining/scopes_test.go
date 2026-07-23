@@ -14,8 +14,8 @@ func TestFamilyScopesCanonicalizeProductionDerivedInputs(t *testing.T) {
 		"release_impact":      `{"version":1,"day":"2026-07-23","backfill_days":1,"recomputation_window_days":7}`,
 		"recommendations":     `{"version":1,"window":14}`,
 		"membership_backfill": `{"version":1,"repo_ids":[]}`,
-		"extra_metrics":       `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"auto","provider":"all"}`,
-		"team_metrics":        `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"clickhouse","provider":"jira"}`,
+		"extra_metrics":       `{"version":1,"day":"2026-07-23","backfill_days":1}`,
+		"team_metrics":        `{"version":1,"day":"2026-07-23","backfill_days":1}`,
 	}
 	for family, raw := range tests {
 		t.Run(family, func(t *testing.T) {
@@ -38,9 +38,9 @@ func TestFamilyScopesRejectUnknownFieldsAndBounds(t *testing.T) {
 		{"membership_backfill", `{"version":1,"command":"bad"}`},
 		{"membership_backfill", `{"version":1,"repo_ids":["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]}`},
 		{"membership_backfill", `{"version":1,"repo_ids":["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]}`},
-		{"extra_metrics", `{"version":1,"day":"bad","backfill_days":1,"sink":"auto","provider":"all"}`},
+		{"extra_metrics", `{"version":1,"day":"bad","backfill_days":1}`},
 		{"extra_metrics", `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"postgres","provider":"all"}`},
-		{"team_metrics", `{"version":1,"day":"2026-07-23","backfill_days":0,"sink":"auto","provider":"all"}`},
+		{"team_metrics", `{"version":1,"day":"2026-07-23","backfill_days":0}`},
 		{"team_metrics", `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"auto","provider":"linear"}`},
 	} {
 		if _, err := validateFamilyScope(test.family, json.RawMessage(test.raw)); err == nil {

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
-import os
 import uuid
 from datetime import datetime, timedelta
 from typing import Annotated
@@ -12,6 +10,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
+from dev_health_ops.api.internal.worker_auth import authorize_worker_bridge
 from dev_health_ops.workers.system_ops import (
     phone_home_heartbeat,
     send_billing_notification,
@@ -53,14 +52,7 @@ def _bridge_result(result: object, *, success: frozenset[str]) -> dict[str, str]
 
 
 def _authorize(authorization: Annotated[str | None, Header()] = None) -> None:
-    expected = os.environ.get("WORKER_OPERATIONAL_BRIDGE_TOKEN", "")
-    supplied = authorization or ""
-    if (
-        not expected
-        or not supplied.startswith("Bearer ")
-        or not hmac.compare_digest(supplied[7:], expected)
-    ):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    authorize_worker_bridge(authorization)
 
 
 @router.post("/webhook", dependencies=[])

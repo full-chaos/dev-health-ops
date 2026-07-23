@@ -20,7 +20,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestWorkerSpecConfiguresDependencies(t *testing.T) {
@@ -250,7 +252,7 @@ func TestHeavyHandlersAdvertiseDormantCompiledCapability(t *testing.T) {
 
 func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	runtimeRegistry, contractRoot := executableHeavyRegistry(t)
+	runtimeRegistry, contractRoot := executableHeavyRegistry(t, true)
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.contractRoot = contractRoot
@@ -327,7 +329,7 @@ func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			runtimeRegistry, contractRoot := executableHeavyRegistry(t)
+			runtimeRegistry, contractRoot := executableHeavyRegistry(t, true)
 			database := &fakeWorkerDatabase{}
 			sources := productionWorkerDependencySources
 			sources.contractRoot = contractRoot
@@ -356,6 +358,58 @@ func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
 				t.Fatalf("configure error=%v database_closed=%t", err, database.closed.Load())
 			}
 		})
+	}
+}
+
+func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, contractRoot := executableHeavyRegistry(t, false)
+	ctx := context.Background()
+	domainPool, err := pgxpool.New(ctx, "postgresql://domain@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	queuePool, err := pgxpool.New(ctx, "postgresql://queue@127.0.0.1:1/devhealth")
+	if err != nil {
+		domainPool.Close()
+		t.Fatal(err)
+	}
+	database := &postgresWorkerDatabase{
+		pools: &postgres.RuntimePools{Domain: domainPool, QueueControl: queuePool},
+	}
+	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return database, nil
+	}
+	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+		return runtimeRegistry, nil
+	}
+	sources.compiledHandlers = func(string) []jobruntime.HandlerSpec {
+		return runtimeRegistry.Profile("heavy")
+	}
+	components, err := configureWorkerDependenciesWithSources(
+		ctx,
+		config.Config{
+			Profile:                  "heavy",
+			RiverDatabaseSchema:      "river",
+			OperationalBridgeURL:     "http://localhost",
+			OperationalBridgeToken:   secrets.NewValue("test-bridge-token"),
+			OperationalBridgeTimeout: time.Second,
+		},
+		health.NewRegistry(time.Second),
+		sources,
+		slog.Default(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 2 || components[0].Name() != "postgres-runtime-pools" ||
+		components[1].Name() != "river-daily-metrics-worker" {
+		t.Fatalf("production components = %#v", components)
+	}
+	if err := components[0].Shutdown(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -532,7 +586,10 @@ func fakeHandlerBuilder(
 	}
 }
 
-func executableHeavyRegistry(t *testing.T) (*jobruntime.Registry, string) {
+func executableHeavyRegistry(
+	t *testing.T,
+	promoteReports bool,
+) (*jobruntime.Registry, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "v1")
 	if err := os.CopyFS(root, os.DirFS(defaultContractRoot)); err != nil {
@@ -553,7 +610,7 @@ func executableHeavyRegistry(t *testing.T) (*jobruntime.Registry, string) {
 	for _, job := range document.Jobs {
 		kind, _ := job["kind"].(string)
 		if strings.HasPrefix(kind, "metrics.daily_") ||
-			strings.HasPrefix(kind, "report.execute_") {
+			(promoteReports && strings.HasPrefix(kind, "report.execute_")) {
 			job["state"] = "go_default"
 			job["route"] = "river"
 		}

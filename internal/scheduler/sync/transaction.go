@@ -118,6 +118,12 @@ func (repository *Repository) HandoffDue(
 		repository == nil || repository.begin == nil {
 		return nil, ErrInvalidTransactionRequest
 	}
+	if err := repository.ownership.Validate(); err != nil {
+		return nil, err
+	}
+	if !repository.ownership.allowsMutation() {
+		return nil, ErrSchedulerMutationDisabled
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

@@ -8,9 +8,13 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
 func TestSchedulerSpecConfiguresFailClosedDependencies(t *testing.T) {
+	if schedulerOwnership != schedulersync.DefaultOwnershipPolicy() {
+		t.Fatalf("scheduler ownership = %#v", schedulerOwnership)
+	}
 	if schedulerSpec.Service != "dev-health-scheduler" {
 		t.Fatalf("service = %q", schedulerSpec.Service)
 	}

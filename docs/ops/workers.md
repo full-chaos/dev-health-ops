@@ -79,7 +79,7 @@ an activation claim:
 | Family | Current side-effect guard | Go migration disposition |
 | --- | --- | --- |
 | Generic provider webhooks | Durable `webhook_deliveries` row keyed by provider delivery identity; Celery receives only its UUID, while the 24-hour cache remains a compatibility marker | Go can consume the same payload reference once provider reconciliation is ported and shadow parity is recorded. |
-| PagerDuty webhooks | Valkey receipt plus stream entry; delete only after success or terminal dead-letter | Celery remains the stream owner until Go proves the read/delete/retry crash windows. |
+| PagerDuty webhooks | Valkey receipt plus stream entry; delete only after success or terminal dead-letter | Dormant Go stream handler uses a leased, token-fenced `worker_job_runs` receipt and `streamrunner` ACK-after-completion semantics; Celery remains owner until locked-graph parity and a shadow/canary prove read/delete/retry behavior. |
 | Billing email | Durable `billing_notifications` intent keyed by Stripe event where available, otherwise canonical notification attributes; Celery receives only its UUID | Go can own delivery after mail-provider idempotency-header parity and sandbox evidence. |
 | Phone-home heartbeat | explicit `max_attempts=1` and best-effort endpoint post | Non-retryable; frozen `system.heartbeat` policy remains Celery-routed. |
 | Worker-outbox terminal retention | durable `maintenance_run_checkpoint` claim and bounded SQL delete | Go handler implemented but uncompiled and Celery-routed. |

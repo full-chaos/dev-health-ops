@@ -216,7 +216,8 @@ check_integration() {
 		cd "${ROOT}"
 		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=10m \
 			./internal/testsupport/containers ./internal/storage/postgres ./internal/storage/river \
-			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute
+			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute \
+			./internal/scheduler/sync
 	)
 }
 

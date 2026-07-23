@@ -206,8 +206,9 @@ func (controller *Controller) Drain(ctx context.Context, kind string) (RouteStat
 
 // Resume holds the outbox table lock while rechecking claims and changing the
 // generation. This prevents an old-generation terminal update from committing
-// after the route becomes active. River requires an exact capability; post_sync
-// additionally requires and executes a deadline-bounded external barrier.
+// after the route becomes active. River requires an exact capability; a
+// transport-changing post_sync resume additionally requires and executes a
+// deadline-bounded external barrier.
 func (controller *Controller) Resume(
 	ctx context.Context,
 	kind string,

@@ -82,8 +82,8 @@ func newFence(registry *syncdispatchcontract.Registry, query queryFunc) (*Fence,
 }
 
 // Check compares each active persisted route to the checked-in contract. A
-// pause is coherent only with its timestamp, but is still drift for readiness:
-// this phase has no audited partial-route pause control surface.
+// pause is coherent only with its timestamp, but is still drift for reconciler
+// readiness while an audited operator transition is in progress.
 func (fence *Fence) Check(ctx context.Context) error {
 	if fence == nil || fence.query == nil || !validRegistry(fence.registry) {
 		return ErrInvalidConfiguration

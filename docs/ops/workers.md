@@ -66,9 +66,9 @@ dev-hops service-credentials create \
 
 The plaintext token is printed once and is then supplied as
 `WORKER_OPERATOR_TOKEN` or its `_FILE` form. Read commands include `status`,
-`jobs list`, `jobs inspect`,
-`queues`, `streams status`, and `contracts`. During Phase 1, `streams status`
-reports the validated disabled deployment profiles and their Celery ownership;
+`jobs list`, `jobs inspect`, `queues`, `routes status`, `streams status`, and
+`contracts`. During Phase 1, `streams status` reports the validated disabled
+deployment profiles and their Celery ownership;
 live backlog and pending-entry state remains on the stream-runner metrics
 surface once a stream profile is composed. Mutations require both `--reason` and
 `--correlation-id`, verify an exact state transition, and persist a bounded
@@ -78,9 +78,10 @@ the resource before any retry. A confirmed mutation whose audit finalization
 is delayed returns `audit_pending` while retaining its durable `started`
 intent. Cancel/retry remain intentionally
 fail-closed for the two foundation kinds because their frozen domain links do
-not yet have authoritative semantic rows; queue pause/resume and profile drain
-are available to an authorized operator. Encoded arguments, driver errors,
-DSNs, and tokens are absent from command output and audit records.
+not yet have authoritative semantic rows; queue pause/resume, profile drain,
+and sync-route pause/drain/resume are available to an authorized operator.
+Encoded arguments, driver errors, DSNs, and tokens are absent from command
+output and audit records.
 
 The generic `worker_job_outbox` bridge is now route-safe foundation rather than
 a dormant placeholder. Python's producer helper refuses to enqueue unless the
@@ -110,17 +111,30 @@ at generation 1. Each Python claim binds the route and generation. For
 dispatch, finalize, and discovery, the publish transaction locks both the
 outbox row and route row through publish and mark; success/failure writes must
 still match that active generation. `post_sync` preserves its existing
-mark-before-publish commit, so its route lock ends at that commit. A future
-route switch therefore needs a separate bounded post-sync quiescence proof in
-addition to draining live claims. Unknown, paused, and River-routed kinds are
-not claimable by Python. The Go reconciler checks the persisted four-row set
-against the checked-in contract and closes readiness on a pause, missing row,
-generation error, or route drift.
+mark-before-publish commit, so its route lock ends at that commit. Unknown,
+paused, and River-routed kinds are not claimable by Python. The Go reconciler
+checks the persisted four-row set against the checked-in contract and closes
+readiness on a pause, missing row, generation error, or route drift.
+
+`dev-health-workerctl routes pause|drain|resume` provides the audited transition
+surface. Pause and resume lock the route row first, then hold an outbox-table
+barrier and re-read state and live claims, covering both Celery's
+route-plus-outbox transaction and Go's outbox-only terminal commit. Resume
+requires the target to equal the checked-in route. River requires an exact
+compiled capability, and a transport-changing `post_sync` resume additionally
+requires an external quiescer for its old generation. The shipped command
+registers no capabilities, so today it can pause, inspect/drain, and resume the
+same Celery route, including `post_sync`, but cannot activate River. A future
+cutover quiescer must prove it honors context cancellation; its configured
+timeout is cooperative.
 
 Two dormant transaction kernels now sit behind that foundation. The scheduler
 kernel locks a bounded due window with `FOR UPDATE ... SKIP LOCKED`, invokes an
 injected coordinator through the same PostgreSQL transaction, and advances the
-schedule marker only after that durable handoff succeeds. The sync reconciler
+schedule marker only after that durable handoff succeeds. Its public repository
+constructor embeds an opaque Celery/`coexistence_disabled` ownership policy, so
+`HandoffDue` rejects mutation before beginning a transaction; Go mutation
+authority requires a reviewed package-private source change. The sync reconciler
 kernel can claim only unpaused River-routed rows, invoke an injected
 same-transaction River publisher for at-least-once kinds, and preserve a
 separate mark-before seam for `post_sync`. Neither kernel is constructed by
@@ -130,9 +144,9 @@ This remains a fail-closed selector foundation, not River activation. All
 persisted and checked-in routes remain Celery, deployment profiles remain
 `coexistence_disabled` with zero replicas, and no Go sync handler is compiled.
 Do not change a route to River: it would strand the wakeup. Activation still
-requires command wiring, materialization of missing sync outbox rows,
-expired-lease repair and failure backoff, real River publishers and handlers,
-and the bounded post-sync quiescence/external-handoff path.
+requires a scheduler command loop and remaining policy parity; reconciler loop
+wiring; split claim-commit/publish flow; concrete River publishers, handlers,
+and capabilities; and the bounded post-sync quiescence/external-handoff path.
 
 For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`
 and run:
@@ -159,9 +173,12 @@ domain plan transactionally, Celery Beat and `dispatch_scheduled_syncs` remain
 the sole schedule mutation owners by default. An operator may separately set
 `SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED=true` to let the bounded Celery
 consumer materialize pre-existing Go-authored identities; it does not own
-timing or activate the Go command loop. The dormant transaction kernel still
-needs the planner, organization/entitlement decisions, missing-marker
-materialization, catch-up policy, and command loop.
+timing or activate the Go command loop. The default-off consumer now provides
+the authoritative Python planner path for a valid pending identity, while the
+dormant transaction kernel still needs organization/entitlement and
+missing-marker parity, catch-up and unsupported-cron policy, and a command
+loop. Its ownership fence prevents the current command from mutating production
+markers.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target

@@ -969,6 +969,44 @@ dev-hops workers start-scheduler
 For queue cleanup, stale reserved jobs, and failed-result cleanup, see
 [Workers & Celery](workers.md#queue-cleanup-and-stale-jobs).
 
+### `dev-health-workerctl routes`
+
+Inspect or control one fixed sync-dispatch transport route through the
+authenticated, payload-redacted Go operator binary:
+
+```bash
+dev-health-workerctl routes status dispatch_sync_run
+
+dev-health-workerctl routes pause \
+  --reason maintenance \
+  --correlation-id change-123 \
+  dispatch_sync_run
+
+dev-health-workerctl routes drain \
+  --reason maintenance \
+  --correlation-id change-123 \
+  dispatch_sync_run
+
+dev-health-workerctl routes resume \
+  --transport celery \
+  --reason maintenance \
+  --correlation-id change-123 \
+  dispatch_sync_run
+```
+
+The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
+`reference_discovery`. Supply the one-time service credential through
+`WORKER_OPERATOR_TOKEN` or `WORKER_OPERATOR_TOKEN_FILE`; status requires
+`workers:read`, while pause/drain/resume require `workers:operate`. Mutations
+are serialized per semantic database, persist audit intent before changing
+state, and may return `outcome_unknown`; inspect the route before retrying.
+
+The shipped capability registry is empty and every checked-in route remains
+Celery. These commands can therefore pause, drain, and resume the same Celery
+route for operational proof, including `post_sync`, but cannot activate River.
+A transport-changing `post_sync` resume remains blocked until a concrete
+external quiescer is registered.
+
 ---
 
 ## Maintenance

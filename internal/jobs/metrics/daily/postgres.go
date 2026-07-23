@@ -130,6 +130,7 @@ func (store *PostgresStore) RenewPartition(ctx context.Context, claim PartitionC
 UPDATE public.daily_metrics_partitions
 SET lease_expires_at = $1, updated_at = $2
 WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid
+  AND lease_expires_at > $2
   AND EXISTS (
       SELECT 1 FROM public.daily_metrics_runs AS run
       WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
@@ -161,6 +162,7 @@ SET status = $1, claim_token = NULL, lease_expires_at = NULL,
     completed_at = CASE WHEN $1 = 'succeeded' THEN $2 ELSE completed_at END,
     updated_at = $2
 WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid
+  AND lease_expires_at > $2
   AND EXISTS (
       SELECT 1 FROM public.daily_metrics_runs AS run
       WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
@@ -214,7 +216,8 @@ func (store *PostgresStore) RenewFinalize(ctx context.Context, claim FinalizeCla
 UPDATE public.daily_metrics_runs
 SET finalization_lease_expires_at = $1, updated_at = $2
 WHERE id = $3::uuid AND finalization_status = 'running'
-  AND finalization_claim_token = $4::uuid AND status = 'running'`,
+  AND finalization_claim_token = $4::uuid AND status = 'running'
+  AND finalization_lease_expires_at > $2`,
 		now.Add(store.lease), now, claim.Run.ID, claim.Token)
 	if err != nil {
 		return ErrUnavailable
@@ -245,7 +248,8 @@ SET finalization_status = $1, finalization_claim_token = NULL,
     status = CASE WHEN $1 = 'succeeded' THEN 'succeeded' ELSE status END,
     updated_at = $2
 WHERE id = $3::uuid AND finalization_status = 'running'
-  AND finalization_claim_token = $4::uuid AND status = 'running'`, status, store.now().UTC(), claim.Run.ID, claim.Token)
+  AND finalization_claim_token = $4::uuid AND status = 'running'
+  AND finalization_lease_expires_at > $2`, status, store.now().UTC(), claim.Run.ID, claim.Token)
 	if err != nil {
 		return ErrUnavailable
 	}

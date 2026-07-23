@@ -52,7 +52,9 @@ type FinalizeClaim struct {
 }
 
 // Store is the authoritative execution-state boundary. Implementations must
-// use bounded leases and fence all completion transitions with their token.
+// use bounded leases and fence renew, release, and completion transitions with
+// both the current token and a live lease. An expired claimant has lost all
+// mutation authority even when no replacement has claimed yet.
 type Store interface {
 	LoadRun(context.Context, string) (Run, error)
 	ClaimDispatch(context.Context, string) (*Run, error)

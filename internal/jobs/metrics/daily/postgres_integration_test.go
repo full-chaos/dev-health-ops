@@ -4,6 +4,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -85,7 +86,13 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'running' WHERE id = $1::uuid", runID); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(store.lease + time.Second)
+	now = now.Add(store.lease/2 + time.Second)
+	if err := store.RenewPartition(ctx, *first); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("expired unreclaimed partition renewed: %v", err)
+	}
+	if err := store.CompletePartition(ctx, *first); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("expired unreclaimed partition completed: %v", err)
+	}
 	reclaimed, err := store.ClaimPartition(ctx, partitionID)
 	if err != nil || reclaimed == nil || reclaimed.Token == first.Token {
 		t.Fatalf("reclaim = %#v, %v", reclaimed, err)
@@ -121,7 +128,13 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	if duplicate, err := store.ClaimFinalize(ctx, runID); err != nil || duplicate != nil {
 		t.Fatalf("healthy renewed finalizer was reclaimed = %#v, %v", duplicate, err)
 	}
-	now = now.Add(store.lease + time.Second)
+	now = now.Add(store.lease/2 + time.Second)
+	if err := store.RenewFinalize(ctx, *firstFinalize); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("expired unreclaimed finalizer renewed: %v", err)
+	}
+	if err := store.CompleteFinalize(ctx, *firstFinalize); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("expired unreclaimed finalizer completed: %v", err)
+	}
 	reclaimedFinalize, err := store.ClaimFinalize(ctx, runID)
 	if err != nil || reclaimedFinalize == nil || reclaimedFinalize.Token == firstFinalize.Token {
 		t.Fatalf("reclaimed finalize = %#v, %v", reclaimedFinalize, err)

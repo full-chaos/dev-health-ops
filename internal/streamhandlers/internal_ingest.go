@@ -40,6 +40,9 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil || envelope.OrgID == "" || len(envelope.Items) == 0 || len(envelope.Items) > 1000 {
 		return &streamrunner.PermanentError{Reason: "invalid_ingest_payload"}
 	}
+	if envelope.OrgID != parts[1] {
+		return &streamrunner.PermanentError{Reason: "ingest_org_stream_mismatch"}
+	}
 	if entity != "work-items" && entity != "incidents" && envelope.RepoURL == "" {
 		return &streamrunner.PermanentError{Reason: "missing_ingest_repo"}
 	}
@@ -53,7 +56,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		}
 		for _, item := range envelope.Items {
 			author, ok := itemTime(item, "author_when")
-			if !ok || stringValue(item, "hash") == "" {
+			if !ok || stringValue(item, "hash") == "" || stringValue(item, "message") == "" || stringValue(item, "author_name") == "" || stringValue(item, "author_email") == "" {
 				return &streamrunner.PermanentError{Reason: "invalid_commit"}
 			}
 			committer, _ := itemTime(item, "committer_when")
@@ -72,7 +75,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		}
 		for _, item := range envelope.Items {
 			created, ok := itemTime(item, "created_at")
-			if !ok || number(item, "number", 0) < 1 {
+			if !ok || number(item, "number", 0) < 1 || stringValue(item, "title") == "" || stringValue(item, "state") == "" || stringValue(item, "author_name") == "" {
 				return &streamrunner.PermanentError{Reason: "invalid_pull_request"}
 			}
 			merged, _ := itemTime(item, "merged_at")
@@ -88,7 +91,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 			return fmt.Errorf("prepare deployments: %w", err)
 		}
 		for _, item := range envelope.Items {
-			if stringValue(item, "deployment_id") == "" {
+			if stringValue(item, "deployment_id") == "" || stringValue(item, "status") == "" || stringValue(item, "environment") == "" {
 				return &streamrunner.PermanentError{Reason: "invalid_deployment"}
 			}
 			started, _ := itemTime(item, "started_at")
@@ -106,7 +109,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		}
 		for _, item := range envelope.Items {
 			created, ok := itemTime(item, "created_at")
-			if !ok || stringValue(item, "work_item_id") == "" || stringValue(item, "provider") == "" || stringValue(item, "title") == "" {
+			if !ok || stringValue(item, "work_item_id") == "" || stringValue(item, "provider") == "" || stringValue(item, "title") == "" || !validWorkItem(item) {
 				return &streamrunner.PermanentError{Reason: "invalid_work_item"}
 			}
 			updated, _ := itemTime(item, "updated_at")
@@ -184,4 +187,11 @@ func nullableTime(value time.Time) any {
 		return nil
 	}
 	return value
+}
+
+func validWorkItem(item map[string]any) bool {
+	_, provider := map[string]struct{}{"jira": {}, "github": {}, "gitlab": {}, "linear": {}}[stringValue(item, "provider")]
+	_, kind := map[string]struct{}{"story": {}, "task": {}, "bug": {}, "epic": {}, "issue": {}, "incident": {}, "chore": {}, "unknown": {}}[stringValue(item, "type")]
+	_, status := map[string]struct{}{"backlog": {}, "todo": {}, "in_progress": {}, "in_review": {}, "blocked": {}, "done": {}, "canceled": {}, "unknown": {}}[stringValue(item, "status")]
+	return provider && kind && status
 }

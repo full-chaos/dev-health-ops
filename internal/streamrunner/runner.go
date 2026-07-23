@@ -15,6 +15,7 @@ import (
 )
 
 var errNotReady = errors.New("stream runner has not completed a successful stream window")
+var errTransientWrite = errors.New("transient stream durable-write failure")
 
 // Runner owns a long-lived XREADGROUP loop. It has one in-flight message per
 // configured stream lane, so shutdown can either finish that message or leave
@@ -215,7 +216,7 @@ func (r *Runner) process(ctx context.Context, message Message) error {
 		r.mu.Lock()
 		r.retries++
 		r.mu.Unlock()
-		return nil
+		return fmt.Errorf("%w: %w", errTransientWrite, err)
 	}
 	if err := r.transport.Ack(ctx, message.Stream, r.config.ConsumerGroup, message.ID); err != nil {
 		// The durable write committed but the ACK did not. Redelivery is safe only

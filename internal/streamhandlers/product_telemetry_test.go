@@ -83,7 +83,7 @@ func TestInternalIngestCommitsUsesReplacingKeySinkBeforeAcknowledgement(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = handler.Handle(context.Background(), streamrunner.Message{Stream: "ingest:org-1:commits", Fields: map[string]string{"payload": `{"org_id":"org-1","repo_url":"https://example.test/acme/repo","items":[{"hash":"abc","author_when":"2026-07-23T12:00:00Z"}]}`}})
+	err = handler.Handle(context.Background(), streamrunner.Message{Stream: "ingest:org-1:commits", Fields: map[string]string{"payload": `{"org_id":"org-1","repo_url":"https://example.test/acme/repo","items":[{"hash":"abc","message":"message","author_name":"Ada","author_email":"ada@example.test","author_when":"2026-07-23T12:00:00Z"}]}`}})
 	if err != nil {
 		t.Fatal(err)
 	}

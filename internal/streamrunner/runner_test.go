@@ -99,8 +99,8 @@ func TestRunnerLeavesTransientFailurePendingForReclaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.window(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := runner.window(context.Background()); !errors.Is(err, errTransientWrite) {
+		t.Fatalf("transient window error = %v", err)
 	}
 	if len(transport.acked) != 0 || len(transport.quarantined) != 0 {
 		t.Fatalf("transient failure was terminal: acked=%v quarantine=%v", transport.acked, transport.quarantined)

@@ -117,11 +117,6 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
             "s",
             lambda unit_id: _Signature(unit_id, queued),
         )
-        monkeypatch.setattr(
-            sync_units.finalize_sync_run,
-            "si",
-            lambda run_id: _Signature(run_id, queued),
-        )
         # When
         dispatch_result = sync_units.dispatch_sync_run(plan.sync_run_id)
 

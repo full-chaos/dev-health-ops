@@ -35,6 +35,16 @@ type Run struct {
 	Status         string
 }
 
+// StartRunRequest is the immutable post-sync input for one daily generation.
+// Repository IDs are server-owned durable references and are partitioned in
+// deterministic order by PostgresStore.
+type StartRunRequest struct {
+	OrganizationID string
+	TargetDay      time.Time
+	Generation     string
+	RepositoryIDs  []string
+}
+
 type Partition struct {
 	ID    string
 	RunID string
@@ -75,6 +85,10 @@ type Store interface {
 type Publisher interface {
 	PublishPartition(context.Context, Run, Partition) error
 	PublishFinalizeTx(context.Context, pgx.Tx, Run) error
+}
+
+type RunPublisher interface {
+	PublishDispatchTx(context.Context, pgx.Tx, Run) error
 }
 
 // CompatibilityExecutor is the only temporary Python seam. Both identities

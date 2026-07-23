@@ -265,7 +265,9 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		targetDay = *to
 	}
 	if from != nil && to != nil {
-		backfillDays = int(to.Sub(*from).Hours()/24) + 1
+		fromDay := utcDay(*from)
+		toDay := utcDay(*to)
+		backfillDays = int(toDay.Sub(fromDay)/(24*time.Hour)) + 1
 		if backfillDays < 1 {
 			backfillDays = 1
 		}
@@ -284,6 +286,11 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		WorkGraph: git || hasWorkItems, Investment: git || hasWorkItems,
 		TeamAutoimport: autoImport,
 	}, nil
+}
+
+func utcDay(value time.Time) time.Time {
+	value = value.UTC()
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 func sameUTCDate(left, right time.Time) bool {

@@ -2,15 +2,124 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
+
+type dailyPostSyncWriter struct {
+	store     *daily.PostgresStore
+	publisher *daily.PostgresPublisher
+}
+
+func (writer dailyPostSyncWriter) StartRunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan syncdispatchruntime.PostSyncPlan,
+) error {
+	_, err := writer.store.StartRunTx(ctx, tx, daily.StartRunRequest{
+		OrganizationID: plan.OrganizationID,
+		TargetDay:      plan.TargetDay,
+		Generation:     "post-sync:" + plan.SyncRunID,
+		RepositoryIDs:  plan.RepositoryIDs,
+	}, writer.publisher)
+	return err
+}
+
+type remainingPostSyncWriter struct {
+	store     *remaining.PostgresStore
+	publisher *remaining.PostgresPublisher
+}
+
+func (writer remainingPostSyncWriter) StartRunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	family string,
+	plan syncdispatchruntime.PostSyncPlan,
+) error {
+	scope, err := postSyncRemainingScope(family, plan)
+	if err != nil {
+		return err
+	}
+	_, err = writer.store.StartRunTx(ctx, tx, remaining.StartRunRequest{
+		OrganizationID: plan.OrganizationID,
+		Family:         family,
+		Generation:     "post-sync:" + plan.SyncRunID,
+		ScopeKey:       string(scope),
+		Scopes:         []json.RawMessage{scope},
+	}, writer.publisher)
+	return err
+}
+
+func postSyncRemainingScope(
+	family string,
+	plan syncdispatchruntime.PostSyncPlan,
+) (json.RawMessage, error) {
+	day := plan.TargetDay.UTC().Format("2006-01-02")
+	switch family {
+	case "complexity":
+		return json.Marshal(struct {
+			Version      int    `json:"version"`
+			Day          string `json:"day"`
+			BackfillDays int    `json:"backfill_days"`
+		}{Version: remaining.ScopeVersion, Day: day, BackfillDays: 1})
+	case "dora":
+		backfillDays := min(90, max(1, plan.BackfillDays))
+		return json.Marshal(struct {
+			Version      int    `json:"version"`
+			Day          string `json:"day"`
+			BackfillDays int    `json:"backfill_days"`
+			Sink         string `json:"sink"`
+			Interval     string `json:"interval"`
+		}{
+			Version: remaining.ScopeVersion, Day: day, BackfillDays: backfillDays,
+			Sink: "auto", Interval: "daily",
+		})
+	default:
+		return nil, syncdispatchruntime.ErrPostSyncUnavailable
+	}
+}
+
+type teamAutoimportPostSyncWriter struct{ producer *joboutbox.Producer }
+
+func (writer teamAutoimportPostSyncWriter) PublishTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan syncdispatchruntime.PostSyncPlan,
+) error {
+	organizationID := plan.OrganizationID
+	return writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamAutoimport, jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "post-sync:" + plan.SyncRunID,
+		IdempotencyKey:  "post-sync:" + plan.SyncRunID + ":" + jobcontract.KindTeamAutoimport,
+		Domain:          jobcontract.DomainLink{Type: "sync_run", ID: plan.SyncRunID},
+		Payload:         jobcontract.TeamAutoimportPayload{SyncRunID: plan.SyncRunID},
+	})
+}
+
+type unavailableWorkGraphPostSyncWriter struct{}
+
+func (unavailableWorkGraphPostSyncWriter) StartRequestTx(
+	context.Context,
+	pgx.Tx,
+	string,
+	syncdispatchruntime.PostSyncPlan,
+) error {
+	return syncdispatchruntime.ErrPostSyncUnavailable
+}
 
 // The client type includes the driver's transaction type, but lifecycle only
 // needs Start and Stop. Keep the component concrete below to avoid exposing a
@@ -51,11 +160,30 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		return nil, errWorkerDependencyUnavailable
 	}
+	registry, err := jobruntime.Load(defaultContractRoot)
+	if err != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	dailyStore, dailyStoreErr := daily.NewPostgresStore(postgresDatabase.pools.Domain)
+	dailyPublisher, dailyPublisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
+	remainingStore, remainingStoreErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain)
+	remainingPublisher, remainingPublisherErr := remaining.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
+	producer, producerErr := joboutbox.NewProducer(postgresDatabase.pools.Domain, registry)
+	if dailyStoreErr != nil || dailyPublisherErr != nil || remainingStoreErr != nil ||
+		remainingPublisherErr != nil || producerErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	postSync, err := syncdispatchruntime.NewNativePostSyncService(
+		postgresDatabase.pools.Domain,
+		dailyPostSyncWriter{store: dailyStore, publisher: dailyPublisher},
+		remainingPostSyncWriter{store: remainingStore, publisher: remainingPublisher},
+		unavailableWorkGraphPostSyncWriter{},
+		teamAutoimportPostSyncWriter{producer: producer},
+	)
+	if err != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
 	workers := river.NewWorkers()
-	// Native post-sync registration is intentionally fail-closed until the
-	// package-owned daily, remaining, and work-graph transaction writers are
-	// bound below as one service.
-	var postSync *syncdispatchruntime.NativePostSyncService
 	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync); err != nil {
 		return nil, errWorkerDependencyUnavailable
 	}

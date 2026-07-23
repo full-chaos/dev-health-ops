@@ -16,6 +16,101 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestPostgresStoreStartRunTxReplaysWholeGenerationAtomically(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := StartRunRequest{
+		OrganizationID: "00000000-0000-4000-8000-000000000009",
+		TargetDay:      time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC),
+		Generation:     "post-sync:00000000-0000-4000-8000-000000000001",
+		RepositoryIDs:  []string{"00000000-0000-4000-8000-000000000002"},
+	}
+	var first Run
+	for attempt := 0; attempt < 2; attempt++ {
+		tx, beginErr := pool.Begin(ctx)
+		if beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		run, startErr := store.StartRunTx(ctx, tx, request, publisher)
+		if startErr != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(startErr)
+		}
+		if attempt == 0 {
+			first = run
+		} else if run.ID != first.ID {
+			t.Fatalf("duplicate run id=%s want=%s", run.ID, first.ID)
+		}
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			t.Fatal(commitErr)
+		}
+	}
+	var runs, partitions, handoffs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partitions`).Scan(&partitions); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_dispatch'`).Scan(&handoffs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 || partitions != 1 || handoffs != 1 {
+		t.Fatalf("runs=%d partitions=%d handoffs=%d", runs, partitions, handoffs)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.RepositoryIDs = []string{"00000000-0000-4000-8000-000000000003"}
+	if _, err := store.StartRunTx(ctx, tx, request, publisher); !errors.Is(err, ErrInvalidState) {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("mutated duplicate err=%v", err)
+	}
+	_ = tx.Rollback(ctx)
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Generation = "post-sync:00000000-0000-4000-8000-000000000005"
+	if _, err := store.StartRunTx(ctx, tx, request, failingRunPublisher{}); !errors.Is(err, ErrUnavailable) {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("injected handoff failure err=%v", err)
+	}
+	_ = tx.Rollback(ctx)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Fatalf("failed transaction leaked run, count=%d", runs)
+	}
+}
+
 func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -246,6 +341,12 @@ func (registry dailyTestRegistry) Descriptor(kind string) (jobruntime.Descriptor
 type failingFinalizePublisher struct {
 	delegate Publisher
 	cancel   context.CancelFunc
+}
+
+type failingRunPublisher struct{}
+
+func (failingRunPublisher) PublishDispatchTx(context.Context, pgx.Tx, Run) error {
+	return ErrUnavailable
 }
 
 func (publisher failingFinalizePublisher) PublishPartition(

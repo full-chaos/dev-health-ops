@@ -2,7 +2,10 @@ package daily
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +14,10 @@ import (
 )
 
 const defaultLease = 10 * time.Minute
+
+const dailyRepositoryPartitionSize = 100
+
+var dailyRunNamespace = uuid.MustParse("db1556db-28a7-58f6-982d-fc6f54dc7240")
 
 // PostgresStore is the durable fence around the temporary compatibility
 // compute adapter. Queue retries may repeat a request, but only a claimant
@@ -26,6 +33,165 @@ func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 		return nil, ErrUnavailable
 	}
 	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now}, nil
+}
+
+// StartRunTx atomically creates or verifies a deterministic daily run, its
+// ordered repository partitions, and the deferred/executable dispatch
+// handoff. It never commits the caller's transaction.
+func (store *PostgresStore) StartRunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	request StartRunRequest,
+	publisher RunPublisher,
+) (Run, error) {
+	if !store.valid() || tx == nil || publisher == nil {
+		return Run{}, ErrUnavailable
+	}
+	request, partitions, err := normalizeStartRunRequest(request)
+	if err != nil {
+		return Run{}, err
+	}
+	run := Run{
+		ID: uuid.NewSHA1(
+			dailyRunNamespace,
+			[]byte(request.OrganizationID+"|"+request.TargetDay.Format("2006-01-02")+"|"+request.Generation),
+		).String(),
+		OrganizationID: request.OrganizationID,
+		Generation:     request.Generation,
+		Status:         "pending",
+	}
+	now := store.now().UTC()
+	command, err := tx.Exec(ctx, `
+INSERT INTO public.daily_metrics_runs
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5)
+ON CONFLICT DO NOTHING`,
+		run.ID, run.OrganizationID, request.TargetDay.Format("2006-01-02"), run.Generation, now)
+	if err != nil {
+		return Run{}, ErrUnavailable
+	}
+	if command.RowsAffected() == 0 {
+		if err := verifyStartedRun(ctx, tx, run, request.TargetDay, partitions); err != nil {
+			return Run{}, err
+		}
+	} else {
+		for ordinal, repositoryIDs := range partitions {
+			partitionID := dailyPartitionID(run.ID, ordinal)
+			raw, marshalErr := json.Marshal(repositoryIDs)
+			if marshalErr != nil {
+				return Run{}, ErrInvalidState
+			}
+			if _, err := tx.Exec(ctx, `
+INSERT INTO public.daily_metrics_partitions
+    (id, run_id, ordinal, repo_ids, status, attempt_count, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
+				partitionID, run.ID, ordinal, raw, now); err != nil {
+				return Run{}, ErrUnavailable
+			}
+		}
+	}
+	if err := publisher.PublishDispatchTx(ctx, tx, run); err != nil {
+		return Run{}, err
+	}
+	return run, nil
+}
+
+func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]string, error) {
+	if !validUUID(request.OrganizationID) || request.Generation == "" ||
+		len(request.Generation) > 64 || len(request.RepositoryIDs) > 1000 {
+		return StartRunRequest{}, nil, ErrInvalidState
+	}
+	request.OrganizationID = uuid.MustParse(request.OrganizationID).String()
+	request.TargetDay = request.TargetDay.UTC()
+	if request.TargetDay.IsZero() {
+		return StartRunRequest{}, nil, ErrInvalidState
+	}
+	seen := make(map[string]struct{}, len(request.RepositoryIDs))
+	repositories := make([]string, 0, len(request.RepositoryIDs))
+	for _, repositoryID := range request.RepositoryIDs {
+		if !validUUID(repositoryID) {
+			return StartRunRequest{}, nil, ErrInvalidState
+		}
+		canonical := uuid.MustParse(repositoryID).String()
+		if _, duplicate := seen[canonical]; duplicate {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		repositories = append(repositories, canonical)
+	}
+	sort.Strings(repositories)
+	request.RepositoryIDs = repositories
+	partitions := make([][]string, 0, max(1, (len(repositories)+dailyRepositoryPartitionSize-1)/dailyRepositoryPartitionSize))
+	for len(repositories) > 0 {
+		size := min(dailyRepositoryPartitionSize, len(repositories))
+		partitions = append(partitions, append([]string(nil), repositories[:size]...))
+		repositories = repositories[size:]
+	}
+	if len(partitions) == 0 {
+		partitions = append(partitions, []string{})
+	}
+	return request, partitions, nil
+}
+
+func verifyStartedRun(
+	ctx context.Context,
+	tx pgx.Tx,
+	run Run,
+	targetDay time.Time,
+	partitions [][]string,
+) error {
+	var organizationID, generation, day string
+	if err := tx.QueryRow(ctx, `
+SELECT org_id::text, generation, target_day::text
+FROM public.daily_metrics_runs WHERE id = $1::uuid`, run.ID).
+		Scan(&organizationID, &generation, &day); err != nil {
+		return ErrUnavailable
+	}
+	if organizationID != run.OrganizationID || generation != run.Generation ||
+		day != targetDay.Format("2006-01-02") {
+		return ErrInvalidState
+	}
+	rows, err := tx.Query(ctx, `
+SELECT ordinal, repo_ids::text
+FROM public.daily_metrics_partitions
+WHERE run_id = $1::uuid ORDER BY ordinal`, run.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer rows.Close()
+	index := 0
+	for rows.Next() {
+		var ordinal int
+		var raw string
+		if err := rows.Scan(&ordinal, &raw); err != nil {
+			return ErrUnavailable
+		}
+		if index >= len(partitions) || ordinal != index {
+			return ErrInvalidState
+		}
+		var existing []string
+		if json.Unmarshal([]byte(raw), &existing) != nil ||
+			len(existing) != len(partitions[index]) {
+			return ErrInvalidState
+		}
+		for repositoryIndex := range existing {
+			if existing[repositoryIndex] != partitions[index][repositoryIndex] {
+				return ErrInvalidState
+			}
+		}
+		index++
+	}
+	if rows.Err() != nil {
+		return ErrUnavailable
+	}
+	if index != len(partitions) {
+		return ErrInvalidState
+	}
+	return nil
+}
+
+func dailyPartitionID(runID string, ordinal int) string {
+	return uuid.NewSHA1(uuid.MustParse(runID), []byte("partition:"+strconv.Itoa(ordinal))).String()
 }
 
 func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, error) {

@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -11,6 +12,7 @@ import (
 
 type PostgresPublisher struct {
 	producer *joboutbox.Producer
+	registry joboutbox.PolicyRegistry
 }
 
 func NewPostgresPublisher(
@@ -21,7 +23,43 @@ func NewPostgresPublisher(
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	return &PostgresPublisher{producer: producer}, nil
+	return &PostgresPublisher{producer: producer, registry: registry}, nil
+}
+
+func (publisher *PostgresPublisher) PublishDispatchTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	run Run,
+) error {
+	if publisher == nil || publisher.producer == nil || publisher.registry == nil || tx == nil {
+		return ErrUnavailable
+	}
+	descriptor, ok := publisher.registry.Descriptor(jobcontract.KindDailyMetricsDispatch)
+	if !ok {
+		return ErrUnavailable
+	}
+	organizationID := run.OrganizationID
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "daily:" + run.ID,
+		IdempotencyKey:  "metrics.daily_dispatch:" + run.ID,
+		Domain:          jobcontract.DomainLink{Type: "daily_metrics_run", ID: run.ID},
+		Payload:         jobcontract.DailyMetricsDispatchPayload{RunID: run.ID},
+	}
+	var err error
+	if descriptor.Executable() {
+		err = publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope)
+	} else {
+		err = publisher.producer.PublishDeferred(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope)
+	}
+	if err != nil {
+		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
+			return ErrInvalidState
+		}
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (publisher *PostgresPublisher) PublishPartition(
@@ -81,3 +119,4 @@ func (publisher *PostgresPublisher) PublishFinalizeTx(
 }
 
 var _ Publisher = (*PostgresPublisher)(nil)
+var _ RunPublisher = (*PostgresPublisher)(nil)

@@ -194,7 +194,7 @@ dev-hops fixtures generate \
 
 Use a disposable local store or explicitly approved fixture database.
 
-## Build and preview the v2 documentation
+## Build and preview the documentation
 
 Install dependencies:
 
@@ -226,7 +226,7 @@ Production documentation deployment is intentionally separate:
 make docs:deploy
 ```
 
-The legacy `make docs:build` target still builds the non-prototype documentation tree. Use the v2 targets for the candidate until cutover retires the legacy tree.
+`make docs:build` uses the canonical `mkdocs.yml` configuration. The Cloudflare targets add redirects, headers, preview-version upload, deployment, and rollback behavior around that same canonical build.
 
 ## Inspect CLI commands before changing state
 

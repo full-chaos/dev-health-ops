@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+from sqlalchemy import func, or_, true, update
+
+from dev_health_ops.providers.utils import env_flag
 from dev_health_ops.sync.canonical_incident_gate import (
     CANONICAL_INCIDENT_FEATURE_KEY,
     CanonicalIncidentFeatureDisabledError,
@@ -26,7 +29,11 @@ from dev_health_ops.workers.task_utils import (
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from dev_health_ops.models.settings import ScheduledJob, SyncConfiguration
+    from dev_health_ops.models.settings import (
+        ScheduledJob,
+        ScheduledSyncOccurrence,
+        SyncConfiguration,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +43,15 @@ logger = logging.getLogger(__name__)
 STALE_RUNNING_TTL_SECONDS = 2 * 60 * 60  # 2 hours
 
 DEFAULT_SYNC_CRON = "0 * * * *"
+
+# This is intentionally only a bounded, callable reconciliation slice.  The
+# active scheduler paths do not invoke it while the Go scheduler remains
+# shadow-only; an operator-owned consumer can opt in after that hand-off is
+# reviewed.
+DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT = 100
+_PENDING_OCCURRENCE_RECONCILE_SCAN_MULTIPLIER = 2
+_PENDING_OCCURRENCE_RECONCILE_MAX_ATTEMPTS = 5
+_PENDING_OCCURRENCE_RECONCILE_BACKOFF_CAP_SECONDS = 15 * 60
 
 
 def _ensure_utc(value: datetime | None) -> datetime | None:
@@ -145,6 +161,448 @@ def _ensure_due_job_marker(
         session.add(job)
         session.flush()
     return job
+
+
+def _complete_pending_scheduled_sync_occurrence(
+    session: Session,
+    *,
+    config: SyncConfiguration,
+    job: ScheduledJob,
+    occurrence: ScheduledSyncOccurrence,
+) -> str:
+    """Plan one pre-locked Go-authored occurrence.
+
+    The caller locks configuration, scheduled job, then occurrence. That lets
+    a replica skip a contended occurrence prefix before applying its limit.
+    """
+    from dev_health_ops.models.settings import (
+        SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED,
+    )
+    from dev_health_ops.sync.execution_trigger import (
+        create_scheduled_sync_execution_trigger,
+    )
+
+    if not _scheduled_occurrence_identity_is_valid(occurrence, config, job):
+        return "identity_conflict"
+    if occurrence.job_run_id is not None or occurrence.sync_run_id is not None:
+        return "already_completed"
+
+    create_scheduled_sync_execution_trigger(
+        session,
+        config,
+        job,
+        str(config.org_id),
+        scheduled_for=occurrence.scheduled_for,
+        triggered_by="schedule",
+        mode="incremental",
+    )
+    occurrence.reconcile_attempt_count = 0
+    occurrence.reconcile_next_attempt_at = None
+    occurrence.reconcile_error_code = None
+    occurrence.reconcile_error_at = None
+    occurrence.reconcile_status = SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED
+    session.flush()
+    return "completed"
+
+
+def _scheduled_occurrence_identity_is_valid(
+    occurrence: ScheduledSyncOccurrence,
+    config: SyncConfiguration,
+    job: ScheduledJob,
+) -> bool:
+    """Verify the immutable Go/Python occurrence identity before planning."""
+    from dev_health_ops.sync.execution_trigger import (
+        SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+        scheduled_sync_occurrence_identity,
+    )
+
+    try:
+        scheduled_for = _ensure_utc(occurrence.scheduled_for)
+        if scheduled_for is None:
+            return False
+        expected_id = scheduled_sync_occurrence_identity(config.id, scheduled_for)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return (
+        occurrence.identity_version == SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION
+        and occurrence.occurrence_id == expected_id
+        and occurrence.org_id == config.org_id == job.org_id
+        and occurrence.sync_config_id == config.id == job.sync_config_id
+        and occurrence.scheduled_job_id == job.id
+        and str(job.job_type) == "sync"
+    )
+
+
+def _pending_occurrence_backoff_seconds(attempt_count: int) -> int:
+    """Return a bounded exponential retry delay for a failed occurrence."""
+    return min(
+        _PENDING_OCCURRENCE_RECONCILE_BACKOFF_CAP_SECONDS,
+        60 * (2 ** min(max(attempt_count - 1, 0), 4)),
+    )
+
+
+def _defer_pending_scheduled_sync_occurrence(
+    session: Session,
+    *,
+    occurrence_id: str,
+    expected_attempt_count: int,
+    error_code: str,
+    now: datetime,
+) -> bool:
+    """CAS a pending occurrence into retry (or terminal quarantine) state."""
+    from dev_health_ops.models.settings import (
+        SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+        SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED,
+        SCHEDULED_OCCURRENCE_RECONCILE_RETRY,
+        ScheduledSyncOccurrence,
+    )
+
+    attempt_count = expected_attempt_count + 1
+    exhausted = attempt_count >= _PENDING_OCCURRENCE_RECONCILE_MAX_ATTEMPTS
+    result = session.execute(
+        update(ScheduledSyncOccurrence)
+        .where(
+            ScheduledSyncOccurrence.occurrence_id == occurrence_id,
+            ScheduledSyncOccurrence.reconcile_status.in_(
+                (
+                    SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+                    SCHEDULED_OCCURRENCE_RECONCILE_RETRY,
+                )
+            ),
+            ScheduledSyncOccurrence.reconcile_attempt_count == expected_attempt_count,
+            ScheduledSyncOccurrence.job_run_id.is_(None),
+            ScheduledSyncOccurrence.sync_run_id.is_(None),
+        )
+        .values(
+            reconcile_attempt_count=attempt_count,
+            reconcile_next_attempt_at=(
+                None
+                if exhausted
+                else now
+                + timedelta(seconds=_pending_occurrence_backoff_seconds(attempt_count))
+            ),
+            reconcile_error_code="retry_exhausted" if exhausted else error_code,
+            reconcile_error_at=now,
+            reconcile_status=(
+                SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED
+                if exhausted
+                else SCHEDULED_OCCURRENCE_RECONCILE_RETRY
+            ),
+        )
+    )
+    return bool(getattr(result, "rowcount", 0))
+
+
+def _quarantine_pending_scheduled_sync_occurrence(
+    session: Session,
+    *,
+    occurrence_id: str,
+    expected_attempt_count: int,
+    now: datetime,
+) -> bool:
+    """CAS an identity-conflicting occurrence into permanent quarantine."""
+    from dev_health_ops.models.settings import (
+        SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+        SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED,
+        SCHEDULED_OCCURRENCE_RECONCILE_RETRY,
+        ScheduledSyncOccurrence,
+    )
+
+    result = session.execute(
+        update(ScheduledSyncOccurrence)
+        .where(
+            ScheduledSyncOccurrence.occurrence_id == occurrence_id,
+            ScheduledSyncOccurrence.reconcile_status.in_(
+                (
+                    SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+                    SCHEDULED_OCCURRENCE_RECONCILE_RETRY,
+                )
+            ),
+            ScheduledSyncOccurrence.reconcile_attempt_count == expected_attempt_count,
+            ScheduledSyncOccurrence.job_run_id.is_(None),
+            ScheduledSyncOccurrence.sync_run_id.is_(None),
+        )
+        .values(
+            reconcile_next_attempt_at=None,
+            reconcile_error_code="identity_conflict",
+            reconcile_error_at=now,
+            reconcile_status=SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED,
+        )
+    )
+    return bool(getattr(result, "rowcount", 0))
+
+
+def reconcile_pending_scheduled_sync_occurrences(
+    session: Session,
+    *,
+    limit: int = DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT,
+) -> dict[str, int]:
+    """Complete a deterministic, bounded batch of unplanned Go occurrences.
+
+    The helper is only invoked by the separately gated Celery consumer; it is
+    not called by :func:`dispatch_scheduled_syncs` or exposed to the Go
+    scheduler. It materializes existing stable occurrence identities without
+    reconsidering ``next_run_at``.
+    """
+    from dev_health_ops.models.settings import (
+        SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+        SCHEDULED_OCCURRENCE_RECONCILE_RETRY,
+        ScheduledJob,
+        ScheduledSyncOccurrence,
+        SyncConfiguration,
+    )
+    from dev_health_ops.sync.execution_trigger import (
+        ScheduledSyncOccurrenceIneligibleError,
+    )
+
+    if limit <= 0:
+        return _empty_pending_occurrence_reconcile_counts()
+    claim_limit = min(limit, DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT)
+    now = datetime.now(timezone.utc)
+    due_occurrences = session.query(ScheduledSyncOccurrence.occurrence_id).filter(
+        ScheduledSyncOccurrence.sync_config_id == SyncConfiguration.id,
+        ScheduledSyncOccurrence.scheduled_job_id == ScheduledJob.id,
+        ScheduledSyncOccurrence.job_run_id.is_(None),
+        ScheduledSyncOccurrence.sync_run_id.is_(None),
+        ScheduledSyncOccurrence.reconcile_status.in_(
+            (
+                SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+                SCHEDULED_OCCURRENCE_RECONCILE_RETRY,
+            )
+        ),
+        or_(
+            ScheduledSyncOccurrence.reconcile_next_attempt_at.is_(None),
+            ScheduledSyncOccurrence.reconcile_next_attempt_at <= now,
+        ),
+    )
+    due_occurrence_exists = due_occurrences.exists()
+    earliest_due_occurrence = due_occurrences.with_entities(
+        func.min(ScheduledSyncOccurrence.scheduled_for)
+    ).scalar_subquery()
+    pairs = (
+        session.query(SyncConfiguration, ScheduledJob)
+        # The correlated due predicate pairs these rows through the occurrence
+        # IDs. Do not assume config/job coherence here: a mismatched persisted
+        # pair must be locked and quarantined, not silently left pending.
+        .join(
+            ScheduledJob,
+            true(),
+        )
+        .filter(due_occurrence_exists)
+        .order_by(
+            earliest_due_occurrence,
+            SyncConfiguration.org_id,
+            SyncConfiguration.id,
+            ScheduledJob.id,
+        )
+        # Claim config/job pairs before limiting. The occurrence query below
+        # keeps the global lock order config -> job -> occurrence.
+        .with_for_update(of=(SyncConfiguration, ScheduledJob), skip_locked=True)
+        .limit(claim_limit)
+        .all()
+    )
+    completed = 0
+    retried = 0
+    quarantined = 0
+    already_completed = 0
+    errors = 0
+    scanned = 0
+    scan_limit = claim_limit * _PENDING_OCCURRENCE_RECONCILE_SCAN_MULTIPLIER
+
+    for config, job in pairs:
+        while completed < claim_limit and scanned < scan_limit:
+            remaining = min(claim_limit - completed, scan_limit - scanned)
+            candidates = (
+                session.query(ScheduledSyncOccurrence)
+                .filter(
+                    ScheduledSyncOccurrence.sync_config_id == config.id,
+                    ScheduledSyncOccurrence.scheduled_job_id == job.id,
+                    ScheduledSyncOccurrence.job_run_id.is_(None),
+                    ScheduledSyncOccurrence.sync_run_id.is_(None),
+                    ScheduledSyncOccurrence.reconcile_status.in_(
+                        (
+                            SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+                            SCHEDULED_OCCURRENCE_RECONCILE_RETRY,
+                        )
+                    ),
+                    or_(
+                        ScheduledSyncOccurrence.reconcile_next_attempt_at.is_(None),
+                        ScheduledSyncOccurrence.reconcile_next_attempt_at <= now,
+                    ),
+                )
+                .order_by(
+                    ScheduledSyncOccurrence.scheduled_for,
+                    ScheduledSyncOccurrence.occurrence_id,
+                )
+                # Apply SKIP LOCKED before LIMIT so a locked prefix cannot
+                # starve a later occurrence in this claimed pair.
+                .with_for_update(of=ScheduledSyncOccurrence, skip_locked=True)
+                .limit(remaining)
+                .all()
+            )
+            if not candidates:
+                break
+
+            for occurrence in candidates:
+                occurrence_id = str(occurrence.occurrence_id)
+                attempt_count = int(occurrence.reconcile_attempt_count)
+                scanned += 1
+                try:
+                    # One bad occurrence must not roll back a prior completion
+                    # or prevent later rows in the bounded scan from advancing.
+                    with session.begin_nested():
+                        outcome = _complete_pending_scheduled_sync_occurrence(
+                            session,
+                            config=config,
+                            job=job,
+                            occurrence=occurrence,
+                        )
+                        if outcome == "identity_conflict":
+                            if _quarantine_pending_scheduled_sync_occurrence(
+                                session,
+                                occurrence_id=occurrence_id,
+                                expected_attempt_count=attempt_count,
+                                now=now,
+                            ):
+                                logger.error(
+                                    "pending_scheduled_sync_occurrence_quarantined",
+                                    extra={
+                                        "occurrence_id": occurrence_id,
+                                        "org_id": str(config.org_id),
+                                        "error_code": "identity_conflict",
+                                    },
+                                )
+                                quarantined += 1
+                            else:
+                                already_completed += 1
+                        elif outcome == "completed":
+                            completed += 1
+                        else:
+                            if _defer_pending_scheduled_sync_occurrence(
+                                session,
+                                occurrence_id=occurrence_id,
+                                expected_attempt_count=attempt_count,
+                                error_code="ineligible",
+                                now=now,
+                            ):
+                                if (
+                                    attempt_count + 1
+                                    >= _PENDING_OCCURRENCE_RECONCILE_MAX_ATTEMPTS
+                                ):
+                                    quarantined += 1
+                                else:
+                                    retried += 1
+                            else:
+                                already_completed += 1
+                except ScheduledSyncOccurrenceIneligibleError:
+                    with session.begin_nested():
+                        deferred = _defer_pending_scheduled_sync_occurrence(
+                            session,
+                            occurrence_id=occurrence_id,
+                            expected_attempt_count=attempt_count,
+                            error_code="ineligible",
+                            now=now,
+                        )
+                    if deferred:
+                        if (
+                            attempt_count + 1
+                            >= _PENDING_OCCURRENCE_RECONCILE_MAX_ATTEMPTS
+                        ):
+                            quarantined += 1
+                        else:
+                            retried += 1
+                    else:
+                        already_completed += 1
+                except Exception:
+                    logger.exception(
+                        "pending_scheduled_sync_occurrence_reconciliation_failed",
+                        extra={
+                            "occurrence_id": occurrence_id,
+                            "org_id": str(config.org_id),
+                        },
+                    )
+                    with session.begin_nested():
+                        deferred = _defer_pending_scheduled_sync_occurrence(
+                            session,
+                            occurrence_id=occurrence_id,
+                            expected_attempt_count=attempt_count,
+                            error_code="planner_error",
+                            now=now,
+                        )
+                    if deferred:
+                        if (
+                            attempt_count + 1
+                            >= _PENDING_OCCURRENCE_RECONCILE_MAX_ATTEMPTS
+                        ):
+                            quarantined += 1
+                        else:
+                            retried += 1
+                    else:
+                        already_completed += 1
+                    errors += 1
+
+                if completed >= claim_limit or scanned >= scan_limit:
+                    break
+
+    return {
+        "scanned": scanned,
+        "completed": completed,
+        "retried": retried,
+        "quarantined": quarantined,
+        "already_completed": already_completed,
+        "errors": errors,
+    }
+
+
+def _empty_pending_occurrence_reconcile_counts() -> dict[str, int]:
+    return {
+        "scanned": 0,
+        "completed": 0,
+        "retried": 0,
+        "quarantined": 0,
+        "already_completed": 0,
+        "errors": 0,
+    }
+
+
+def _scheduled_occurrence_consumer_enabled() -> bool:
+    """Read the rollout flag at task-call time, defaulting to disabled."""
+    return env_flag("SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED", default=False)
+
+
+@celery_app.task(
+    queue="scheduler",
+    name="dev_health_ops.workers.tasks.consume_pending_scheduled_sync_occurrences",
+)
+def consume_pending_scheduled_sync_occurrences() -> dict[str, int]:
+    """Materialize one bounded batch of Go-authored scheduled occurrences.
+
+    This remains a default-off rollout seam. The same flag also controls the
+    Beat registration, but the task checks it again so a queued message cannot
+    open PostgreSQL after the consumer has been switched off.
+    """
+    if not _scheduled_occurrence_consumer_enabled():
+        logger.info("sync_scheduler.pending_occurrence_consumer_disabled")
+        return _empty_pending_occurrence_reconcile_counts()
+
+    from dev_health_ops.db import get_postgres_session_sync
+
+    try:
+        with get_postgres_session_sync() as session:
+            counts = reconcile_pending_scheduled_sync_occurrences(session)
+            # The helper uses nested transactions to isolate a malformed
+            # occurrence. Commit its successful slice as one outer task
+            # transaction before acknowledging the bounded result.
+            session.commit()
+    except Exception:
+        # get_postgres_session_sync rolls back the outer transaction before
+        # control reaches here. Do not swallow this: Celery must record the
+        # failure so the next Beat tick can retry the idempotent occurrences.
+        logger.exception("sync_scheduler.pending_occurrence_consumer_failed")
+        raise
+
+    logger.info("sync_scheduler.pending_occurrence_consumer_completed", extra=counts)
+    return counts
 
 
 def _maybe_dispatch_config(

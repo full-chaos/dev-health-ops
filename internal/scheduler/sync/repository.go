@@ -13,8 +13,9 @@ import (
 // exposes a separate dormant transaction kernel. Snapshot never locks or
 // writes.
 type Repository struct {
-	pool  *pgxpool.Pool
-	begin beginSchedulerTransaction
+	pool      *pgxpool.Pool
+	begin     beginSchedulerTransaction
+	ownership OwnershipPolicy
 }
 
 type candidateRows interface {
@@ -24,11 +25,22 @@ type candidateRows interface {
 }
 
 func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
+	return newRepositoryWithOwnership(pool, DefaultOwnershipPolicy())
+}
+
+// newRepositoryWithOwnership constructs the scheduler repository with an
+// explicit, validated owner/mode policy. Keeping this package-private makes a
+// future mutation activation require an audited source change in this package.
+func newRepositoryWithOwnership(pool *pgxpool.Pool, ownership OwnershipPolicy) (*Repository, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("scheduler shadow repository requires a pool")
 	}
+	if err := ownership.Validate(); err != nil {
+		return nil, err
+	}
 	return &Repository{
-		pool: pool,
+		pool:      pool,
+		ownership: ownership,
 		begin: func(ctx context.Context) (schedulerTransaction, error) {
 			tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 			if err != nil {

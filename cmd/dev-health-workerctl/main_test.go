@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
 
 type commandAuthorizer struct{ err error }
@@ -54,8 +56,42 @@ func (commandDomainGuard) Check(context.Context, joboperator.Action, joboperator
 
 type commandAuditor struct{}
 
+type commandAuditHandle struct{}
+
+func (commandAuditHandle) Complete(context.Context, joboperator.AuditStatus) error { return nil }
+
 func (commandAuditor) Begin(context.Context, joboperator.AuditEvent) (joboperator.AuditHandle, error) {
-	return nil, errors.New("unused")
+	return commandAuditHandle{}, nil
+}
+
+type commandRouteController struct {
+	state syncroute.RouteState
+	err   error
+}
+
+func (controller commandRouteController) Inspect(context.Context, string) (syncroute.RouteState, error) {
+	return controller.state, controller.err
+}
+func (controller commandRouteController) Pause(context.Context, string) (syncroute.RouteState, error) {
+	if controller.state.Kind == "" && controller.err == nil {
+		return syncroute.RouteState{
+			Kind: "post_sync", Transport: "celery", Generation: 2, Paused: true,
+			RollbackTransport: "celery",
+		}, nil
+	}
+	return controller.state, controller.err
+}
+func (controller commandRouteController) Drain(context.Context, string) (syncroute.RouteState, error) {
+	return controller.state, controller.err
+}
+func (controller commandRouteController) Resume(context.Context, string, string, time.Duration) (syncroute.RouteState, error) {
+	if controller.state.Kind == "" && controller.err == nil {
+		return syncroute.RouteState{
+			Kind: "post_sync", Transport: "celery", Generation: 3,
+			RollbackTransport: "celery",
+		}, nil
+	}
+	return controller.state, controller.err
 }
 
 func TestDispatchStatusRequiresReadAuthorizationAndEmitsBoundedJSON(t *testing.T) {
@@ -89,6 +125,30 @@ func TestDispatchMutationRequiresReasonAndCorrelationBeforeService(t *testing.T)
 	}
 }
 
+func TestDispatchRoutesCanPauseAndResumePostSyncOnCelery(t *testing.T) {
+	runtime := commandRuntime(t, commandAuthorizer{})
+	var stdout, stderr bytes.Buffer
+	if code := dispatch(context.Background(), runtime, []string{
+		"routes", "pause", "--reason", "maintenance", "--correlation-id", "route-cli-1", "post_sync",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("routes pause code=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != "{\"kind\":\"post_sync\",\"transport\":\"celery\",\"generation\":2,\"paused\":true,\"rollback_transport\":\"celery\",\"live_claims\":0}\n" {
+		t.Fatalf("routes pause output=%q", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := dispatch(context.Background(), runtime, []string{
+		"routes", "resume", "--reason", "maintenance", "--correlation-id", "route-cli-2",
+		"--transport", "celery", "post_sync",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("routes resume code=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != "{\"kind\":\"post_sync\",\"transport\":\"celery\",\"generation\":3,\"paused\":false,\"rollback_transport\":\"celery\",\"live_claims\":0}\n" {
+		t.Fatalf("routes resume output=%q", stdout.String())
+	}
+}
+
 func TestDispatchStreamsStatusIsAuthorizedBoundedCoexistenceState(t *testing.T) {
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.streamDeploymentState = "coexistence_disabled"
@@ -115,6 +175,7 @@ func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRu
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: commandBackend{}, Authorizer: authorizer,
 		DomainGuard: commandDomainGuard{}, Auditor: commandAuditor{},
+		RouteController: commandRouteController{},
 	})
 	if err != nil {
 		t.Fatal(err)

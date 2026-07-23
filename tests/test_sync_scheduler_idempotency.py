@@ -370,7 +370,7 @@ class TestDispatchIdempotency:
         assert persisted.job_run_id == first_job_run_id
         assert persisted.sync_run_id == first_sync_run_id
 
-    def test_pending_go_occurrence_is_completed_once_by_python(
+    def test_active_scheduler_completes_pending_go_occurrence_once(
         self, monkeypatch, db_session
     ):
         now = datetime.now(timezone.utc)
@@ -414,6 +414,488 @@ class TestDispatchIdempotency:
         assert db_session.query(SyncRun).count() == 1
         assert db_session.query(SyncDispatchOutbox).count() == 1
         dispatch_mock.apply_async.assert_not_called()
+
+    def test_pending_occurrence_consumer_ignores_future_marker_and_replays_once(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        # The Go scheduler already advanced this marker.  The dormant Python
+        # consumer must complete the durable occurrence without reconsidering
+        # the next-run gate.
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        scheduled_for = now - HOUR
+        occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(
+                config.id,
+                scheduled_for,
+            ),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=scheduled_for,
+        )
+        db_session.add(occurrence)
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+
+        first = reconcile_pending_scheduled_sync_occurrences(db_session)
+        db_session.refresh(occurrence)
+        first_job_run_id = occurrence.job_run_id
+        first_sync_run_id = occurrence.sync_run_id
+
+        second = reconcile_pending_scheduled_sync_occurrences(db_session)
+
+        assert first == {
+            "scanned": 1,
+            "completed": 1,
+            "retried": 0,
+            "quarantined": 0,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        assert second == {
+            "scanned": 0,
+            "completed": 0,
+            "retried": 0,
+            "quarantined": 0,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        assert job.next_run_at is not None
+        assert _aware(job.next_run_at) > now
+        assert first_job_run_id is not None
+        assert first_sync_run_id is not None
+        assert occurrence.job_run_id == first_job_run_id
+        assert occurrence.sync_run_id == first_sync_run_id
+        assert db_session.query(ScheduledSyncOccurrence).count() == 1
+        assert db_session.query(JobRun).count() == 1
+        assert db_session.query(SyncRun).count() == 1
+        assert db_session.query(SyncDispatchOutbox).count() == 1
+
+    def test_pending_occurrence_reconciliation_is_deterministic_and_bounded(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 3 * HOUR)
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        later = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(config.id, now - HOUR),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=now - HOUR,
+        )
+        earlier = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(config.id, now - 2 * HOUR),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=now - 2 * HOUR,
+        )
+        db_session.add_all([later, earlier])
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+
+        result = reconcile_pending_scheduled_sync_occurrences(db_session, limit=1)
+
+        db_session.refresh(earlier)
+        db_session.refresh(later)
+        assert result == {
+            "scanned": 1,
+            "completed": 1,
+            "retried": 0,
+            "quarantined": 0,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        assert earlier.job_run_id is not None
+        assert earlier.sync_run_id is not None
+        assert later.job_run_id is None
+        assert later.sync_run_id is None
+
+    def test_pending_occurrence_reconciliation_caps_oversized_limit(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.workers import sync_scheduler
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 3 * HOUR)
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        for offset in range(101):
+            scheduled_for = now - timedelta(hours=offset + 1)
+            db_session.add(
+                ScheduledSyncOccurrence(
+                    occurrence_id=scheduled_sync_occurrence_identity(
+                        config.id, scheduled_for
+                    ),
+                    identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+                    org_id=config.org_id,
+                    sync_config_id=config.id,
+                    scheduled_job_id=job.id,
+                    scheduled_for=scheduled_for,
+                )
+            )
+        db_session.commit()
+        monkeypatch.setattr(
+            sync_scheduler,
+            "_complete_pending_scheduled_sync_occurrence",
+            lambda *_args, **_kwargs: False,
+        )
+
+        result = sync_scheduler.reconcile_pending_scheduled_sync_occurrences(
+            db_session,
+            limit=10_000,
+        )
+
+        assert result == {
+            "scanned": sync_scheduler.DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT + 1,
+            "completed": 0,
+            "retried": sync_scheduler.DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT + 1,
+            "quarantined": 0,
+            "already_completed": 0,
+            "errors": 0,
+        }
+
+    def test_pending_occurrence_reconciliation_isolates_failed_rows(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.sync import execution_trigger
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        failing_config = _make_config(
+            db_session, name="failing", last_sync_at=now - 2 * HOUR
+        )
+        succeeding_config = _make_config(
+            db_session, name="succeeding", last_sync_at=now - 2 * HOUR
+        )
+        failing_job = _make_job(failing_config, next_run_at=now + HOUR)
+        succeeding_job = _make_job(succeeding_config, next_run_at=now + HOUR)
+        db_session.add_all([failing_job, succeeding_job])
+        db_session.flush()
+        failing_occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(
+                failing_config.id, now - HOUR
+            ),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=failing_config.org_id,
+            sync_config_id=failing_config.id,
+            scheduled_job_id=failing_job.id,
+            scheduled_for=now - HOUR,
+        )
+        succeeding_occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(
+                succeeding_config.id, now - HOUR
+            ),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=succeeding_config.org_id,
+            sync_config_id=succeeding_config.id,
+            scheduled_job_id=succeeding_job.id,
+            scheduled_for=now - HOUR,
+        )
+        db_session.add_all([failing_occurrence, succeeding_occurrence])
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+        real_create_trigger = execution_trigger.create_sync_execution_trigger
+
+        def fail_one_occurrence(session, config, org_id, **kwargs):
+            if config.id == failing_config.id:
+                raise RuntimeError("injected planner failure")
+            return real_create_trigger(session, config, org_id, **kwargs)
+
+        monkeypatch.setattr(
+            execution_trigger, "create_sync_execution_trigger", fail_one_occurrence
+        )
+
+        result = reconcile_pending_scheduled_sync_occurrences(db_session)
+
+        db_session.refresh(failing_occurrence)
+        db_session.refresh(succeeding_occurrence)
+        assert result == {
+            "scanned": 2,
+            "completed": 1,
+            "retried": 1,
+            "quarantined": 0,
+            "already_completed": 0,
+            "errors": 1,
+        }
+        assert failing_occurrence.job_run_id is None
+        assert failing_occurrence.sync_run_id is None
+        assert succeeding_occurrence.job_run_id is not None
+        assert succeeding_occurrence.sync_run_id is not None
+
+    def test_pending_occurrence_retry_exhaustion_is_terminal(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.sync import execution_trigger
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(config.id, now - HOUR),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=now - HOUR,
+            reconcile_attempt_count=4,
+            reconcile_error_code="planner_error",
+            reconcile_error_at=now - HOUR,
+            reconcile_status="retry",
+        )
+        db_session.add(occurrence)
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+
+        def fail_plan(*_args, **_kwargs):
+            raise RuntimeError("injected planner failure")
+
+        monkeypatch.setattr(
+            execution_trigger, "create_sync_execution_trigger", fail_plan
+        )
+
+        result = reconcile_pending_scheduled_sync_occurrences(db_session, limit=1)
+
+        db_session.refresh(occurrence)
+        assert result == {
+            "scanned": 1,
+            "completed": 0,
+            "retried": 0,
+            "quarantined": 1,
+            "already_completed": 0,
+            "errors": 1,
+        }
+        assert occurrence.reconcile_attempt_count == 5
+        assert occurrence.reconcile_status == "quarantined"
+        assert occurrence.reconcile_error_code == "retry_exhausted"
+        assert occurrence.reconcile_next_attempt_at is None
+        assert occurrence.job_run_id is None
+        assert occurrence.sync_run_id is None
+
+    def test_pending_occurrence_identity_conflict_is_quarantined_without_planning(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.models.settings import (
+            SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED,
+        )
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        occurrence = ScheduledSyncOccurrence(
+            occurrence_id="sha256:identity-conflict",
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=now - HOUR,
+        )
+        db_session.add(occurrence)
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+
+        result = reconcile_pending_scheduled_sync_occurrences(db_session, limit=1)
+
+        db_session.refresh(occurrence)
+        assert result == {
+            "scanned": 1,
+            "completed": 0,
+            "retried": 0,
+            "quarantined": 1,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        assert occurrence.reconcile_status == SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED
+        assert occurrence.reconcile_error_code == "identity_conflict"
+        assert occurrence.job_run_id is None
+        assert occurrence.sync_run_id is None
+        assert db_session.query(JobRun).count() == 0
+        assert db_session.query(SyncRun).count() == 0
+        assert db_session.query(SyncDispatchOutbox).count() == 0
+
+    def test_pending_occurrence_org_mismatch_is_quarantined(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(config.id, now - HOUR),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=f"{config.org_id}-mismatch",
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=now - HOUR,
+        )
+        db_session.add(occurrence)
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+
+        result = reconcile_pending_scheduled_sync_occurrences(db_session, limit=1)
+
+        db_session.refresh(occurrence)
+        assert result == {
+            "scanned": 1,
+            "completed": 0,
+            "retried": 0,
+            "quarantined": 1,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        assert occurrence.reconcile_status == "quarantined"
+        assert occurrence.reconcile_error_code == "identity_conflict"
+        assert occurrence.job_run_id is None
+        assert occurrence.sync_run_id is None
+
+    def test_quarantined_prefix_does_not_block_later_due_occurrence(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 3 * HOUR)
+        job = _make_job(config, next_run_at=now + HOUR)
+        db_session.add(job)
+        db_session.flush()
+        poisoned = ScheduledSyncOccurrence(
+            occurrence_id="sha256:poisoned-prefix",
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=now - 2 * HOUR,
+        )
+        eligible = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(config.id, now - HOUR),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=now - HOUR,
+        )
+        db_session.add_all([poisoned, eligible])
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+
+        result = reconcile_pending_scheduled_sync_occurrences(db_session, limit=1)
+
+        db_session.refresh(poisoned)
+        db_session.refresh(eligible)
+        assert result == {
+            "scanned": 2,
+            "completed": 1,
+            "retried": 0,
+            "quarantined": 1,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        assert poisoned.reconcile_status == "quarantined"
+        assert eligible.job_run_id is not None
+        assert eligible.sync_run_id is not None
+
+    def test_mismatched_config_job_pair_is_quarantined(self, monkeypatch, db_session):
+        from dev_health_ops.workers.sync_scheduler import (
+            reconcile_pending_scheduled_sync_occurrences,
+        )
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, name="config-a", last_sync_at=now - 2 * HOUR)
+        other_config = _make_config(
+            db_session, name="config-b", last_sync_at=now - 2 * HOUR
+        )
+        job = _make_job(config, next_run_at=now + HOUR)
+        other_job = _make_job(other_config, next_run_at=now + HOUR)
+        db_session.add_all([job, other_job])
+        db_session.flush()
+        occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(config.id, now - HOUR),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=other_job.id,
+            scheduled_for=now - HOUR,
+        )
+        db_session.add(occurrence)
+        db_session.commit()
+        monkeypatch.setattr(
+            "dev_health_ops.workers.org_guard.organization_exists_sync",
+            lambda *_: True,
+        )
+
+        result = reconcile_pending_scheduled_sync_occurrences(db_session, limit=1)
+
+        db_session.refresh(occurrence)
+        assert result == {
+            "scanned": 1,
+            "completed": 0,
+            "retried": 0,
+            "quarantined": 1,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        assert occurrence.reconcile_status == "quarantined"
+        assert occurrence.job_run_id is None
+        assert occurrence.sync_run_id is None
 
     def test_planner_failure_rolls_back_occurrence_plan_and_marker(
         self, monkeypatch, db_session

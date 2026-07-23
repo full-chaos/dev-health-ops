@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type kernelStepper struct {
@@ -114,6 +115,24 @@ func kernelClaim(kind string, at time.Time, id string) TransportClaim {
 	}
 }
 
+func TestNewKernelSeparatesDomainObservationFromQueueMutationPool(t *testing.T) {
+	domainPool := &pgxpool.Pool{}
+	queuePool := &pgxpool.Pool{}
+	registry := riverRegistry(t, syncdispatchcontract.KindDispatchSyncRun)
+
+	shadow, err := NewKernel(domainPool, nil, registry, KernelModeShadow)
+	if err != nil || shadow.begin != nil {
+		t.Fatalf("NewKernel(shadow) = %#v, %v", shadow, err)
+	}
+	if _, err := NewKernel(domainPool, nil, registry, KernelModeMutation); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("NewKernel(mutation without queue pool) error = %v", err)
+	}
+	mutation, err := NewKernel(domainPool, queuePool, registry, KernelModeMutation)
+	if err != nil || mutation.begin == nil {
+		t.Fatalf("NewKernel(mutation) = %#v, %v", mutation, err)
+	}
+}
+
 func TestKernelShadowIsReadOnlyAndNeverBeginsTransaction(t *testing.T) {
 	stepper := &kernelStepper{}
 	kernel, err := newKernel(testRegistry(t, ""), KernelModeShadow, stepper, nil)
@@ -182,12 +201,17 @@ func TestKernelMutationClaimsOnlyBoundedPersistedRiverRoutesInDeterministicOrder
 	for _, required := range []string{
 		"ROUTE.TRANSPORT = 'RIVER'", "ROUTE.PAUSED = FALSE",
 		"OUTBOX.KIND = ANY($4::TEXT[])", "ORDER BY OUTBOX.AVAILABLE_AT, OUTBOX.ID",
-		"FOR UPDATE OF OUTBOX, ROUTE SKIP LOCKED", "LIMIT $2",
+		"FOR UPDATE OF OUTBOX SKIP LOCKED", "LIMIT $2",
 		"SET CLAIM_TOKEN = GEN_RANDOM_UUID()::TEXT",
 	} {
 		if !strings.Contains(upper, required) {
 			t.Fatalf("claim SQL missing %q:\n%s", required, tx.querySQL)
 		}
+	}
+	if strings.Contains(upper, "FOR UPDATE OF ROUTE") ||
+		strings.Contains(upper, "FOR SHARE OF ROUTE") ||
+		strings.Contains(upper, "FOR KEY SHARE OF ROUTE") {
+		t.Fatalf("claim SQL requires forbidden route mutation privilege:\n%s", tx.querySQL)
 	}
 	if len(tx.queryArgs) != 4 || !reflect.DeepEqual(tx.queryArgs[3], []string{
 		syncdispatchcontract.KindDispatchSyncRun, syncdispatchcontract.KindFinalizeSyncRun,

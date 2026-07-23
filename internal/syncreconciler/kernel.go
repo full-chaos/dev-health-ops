@@ -84,21 +84,28 @@ type Kernel struct {
 	riverKinds  []string
 }
 
-// NewKernel constructs an unactivated kernel backed by the semantic database.
-// No transaction or route mutation occurs during construction.
+// NewKernel constructs an unactivated kernel across the two runtime database
+// trust boundaries. Observation stays on the domain pool; mutation begins only
+// on the least-privilege queue-control pool. No transaction or route mutation
+// occurs during construction.
 func NewKernel(
-	pool *pgxpool.Pool,
+	domainPool *pgxpool.Pool,
+	queueControlPool *pgxpool.Pool,
 	registry Registry,
 	mode KernelMode,
 ) (*Kernel, error) {
-	if pool == nil {
+	if domainPool == nil || (mode == KernelModeMutation && queueControlPool == nil) {
 		return nil, ErrInvalidConfiguration
 	}
-	observer, err := NewObserver(pool, registry)
+	observer, err := NewObserver(domainPool, registry)
 	if err != nil {
 		return nil, err
 	}
-	return newKernel(registry, mode, observer, pool.Begin)
+	var begin beginFunc
+	if queueControlPool != nil {
+		begin = queueControlPool.Begin
+	}
+	return newKernel(registry, mode, observer, begin)
 }
 
 func newKernel(
@@ -130,8 +137,8 @@ func newKernel(
 
 // Step runs exactly one bounded unit of work. Shadow delegates to the existing
 // read-only observer and never begins a transaction. Mutation claims only rows
-// whose persisted route is River and unpaused; both the outbox and route are
-// locked in deterministic order before any publisher is called.
+// whose persisted route is River and unpaused. The outbox is locked before any
+// publisher is called; route generation is rechecked by the terminal write.
 func (kernel *Kernel) Step(
 	ctx context.Context,
 	now time.Time,
@@ -287,9 +294,15 @@ func markRiverDispatched(
 }
 
 // claimRiverRoutesSQL is intentionally not reachable from current command
-// wiring. It takes both route and outbox row locks so a route change cannot
-// race a persisted River claim. The explicit returned AvailableAt is sorted
-// again in Go because UPDATE ... RETURNING does not promise result ordering.
+// wiring. The queue role has UPDATE on the outbox but only SELECT on routes.
+// PostgreSQL row-locking clauses require mutation authority on every locked
+// relation, so only each claimed outbox row is locked here. A route change
+// committed before markRiverDispatched is safe: the live generation recheck
+// after River InsertTx rolls the entire transaction back on mismatch. Route
+// mutation activation still requires an external serialization/quiescence
+// barrier for the post-terminal, pre-commit window. The explicit returned
+// AvailableAt is sorted again in Go because UPDATE ... RETURNING does not
+// promise result ordering.
 const claimRiverRoutesSQL = `
 WITH candidates AS (
 	SELECT outbox.id, route.generation
@@ -303,7 +316,7 @@ WITH candidates AS (
 		AND route.transport = 'river'
 		AND route.paused = FALSE
 	ORDER BY outbox.available_at, outbox.id
-	FOR UPDATE OF outbox, route SKIP LOCKED
+	FOR UPDATE OF outbox SKIP LOCKED
 	LIMIT $2
 )
 UPDATE public.sync_dispatch_outbox AS outbox
@@ -320,9 +333,9 @@ RETURNING outbox.id::text, outbox.kind, outbox.claim_token::text,
 `
 
 // markRiverDispatchedSQL rechecks the live route generation and pause state in
-// the terminal write. The transaction already holds both locks, but preserving
-// this predicate makes an accidental future call without the claim lock fail
-// closed rather than dispatching across a route ownership change.
+// the terminal write while the transaction holds the outbox lock. It catches a
+// route change committed before this statement; route mutation activation must
+// separately serialize the remaining post-terminal, pre-commit window.
 const markRiverDispatchedSQL = `
 UPDATE public.sync_dispatch_outbox AS outbox
 SET status = 'dispatched',

@@ -67,6 +67,15 @@ type fakeSchedulerTransaction struct {
 	queryStatement string
 }
 
+func mutationRepository(transaction schedulerTransaction) *Repository {
+	return &Repository{
+		ownership: OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation},
+		begin: func(context.Context) (schedulerTransaction, error) {
+			return transaction, nil
+		},
+	}
+}
+
 func (transaction *fakeSchedulerTransaction) queryCandidates(
 	_ context.Context,
 	statement string,
@@ -134,11 +143,7 @@ func TestHandoffDuePersistsHandoffBeforeAdvancingMarker(t *testing.T) {
 		}},
 		execTag: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	repository := &Repository{
-		begin: func(context.Context) (schedulerTransaction, error) {
-			return transaction, nil
-		},
-	}
+	repository := mutationRepository(transaction)
 	var received Occurrence
 	coordinator := CoordinatorFunc(func(
 		_ context.Context,
@@ -193,11 +198,7 @@ func TestHandoffDueRollsBackWithoutMarkerWhenCoordinatorFails(t *testing.T) {
 		}},
 		execTag: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	repository := &Repository{
-		begin: func(context.Context) (schedulerTransaction, error) {
-			return transaction, nil
-		},
-	}
+	repository := mutationRepository(transaction)
 	handoffErr := errors.New("durable handoff unavailable")
 
 	_, err := repository.HandoffDue(
@@ -233,11 +234,7 @@ func TestHandoffDueRejectsLostMarkerAndRollsBackHandoff(t *testing.T) {
 		}},
 		execTag: pgconn.NewCommandTag("UPDATE 0"),
 	}
-	repository := &Repository{
-		begin: func(context.Context) (schedulerTransaction, error) {
-			return transaction, nil
-		},
-	}
+	repository := mutationRepository(transaction)
 
 	_, err := repository.HandoffDue(
 		context.Background(),
@@ -332,6 +329,7 @@ func TestHandoffStatementIsBoundedAndMultiReplicaSafe(t *testing.T) {
 func TestHandoffDueValidatesRequestBeforeOpeningTransaction(t *testing.T) {
 	calls := 0
 	repository := &Repository{
+		ownership: OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation},
 		begin: func(context.Context) (schedulerTransaction, error) {
 			calls++
 			return nil, errors.New("unexpected begin")
@@ -358,6 +356,29 @@ func TestHandoffDueValidatesRequestBeforeOpeningTransaction(t *testing.T) {
 				t.Fatalf("HandoffDue() err = %v", err)
 			}
 		})
+	}
+	if calls != 0 {
+		t.Fatalf("transactions opened = %d", calls)
+	}
+}
+
+func TestDefaultOwnershipPreventsHandoffBeforeOpeningTransaction(t *testing.T) {
+	calls := 0
+	repository := &Repository{
+		ownership: DefaultOwnershipPolicy(),
+		begin: func(context.Context) (schedulerTransaction, error) {
+			calls++
+			return nil, errors.New("unexpected begin")
+		},
+	}
+	_, err := repository.HandoffDue(
+		context.Background(),
+		time.Now(),
+		1,
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+	)
+	if !errors.Is(err, ErrSchedulerMutationDisabled) {
+		t.Fatalf("HandoffDue() err = %v", err)
 	}
 	if calls != 0 {
 		t.Fatalf("transactions opened = %d", calls)

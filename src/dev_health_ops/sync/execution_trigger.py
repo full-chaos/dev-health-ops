@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.settings import (
+    SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED,
     JobRun,
     JobRunStatus,
     JobStatus,
@@ -122,6 +123,12 @@ def create_scheduled_sync_execution_trigger(
             occurrence, locked_config, job, org_id, scheduled_for
         )
         if occurrence.job_run_id is not None and occurrence.sync_run_id is not None:
+            occurrence.reconcile_attempt_count = 0
+            occurrence.reconcile_next_attempt_at = None
+            occurrence.reconcile_error_code = None
+            occurrence.reconcile_error_at = None
+            occurrence.reconcile_status = SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED
+            session.flush()
             return _existing_scheduled_trigger_result(session, occurrence)
 
     trigger = create_sync_execution_trigger(
@@ -137,6 +144,11 @@ def create_scheduled_sync_execution_trigger(
         )
     occurrence.job_run_id = uuid.UUID(trigger.job_run_id)
     occurrence.sync_run_id = uuid.UUID(trigger.sync_run_id)
+    occurrence.reconcile_attempt_count = 0
+    occurrence.reconcile_next_attempt_at = None
+    occurrence.reconcile_error_code = None
+    occurrence.reconcile_error_at = None
+    occurrence.reconcile_status = SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED
     session.flush()
     return trigger
 

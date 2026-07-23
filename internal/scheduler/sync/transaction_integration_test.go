@@ -36,15 +36,37 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	firstRepository, err := NewRepository(pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondRepository, err := NewRepository(pool)
+	defaultRepository, err := NewRepository(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 	observedAt := at("2026-01-01T12:00:00Z")
+	if _, err := defaultRepository.HandoffDue(ctx, observedAt, 1, NewOccurrenceCoordinator()); !errors.Is(err, ErrSchedulerMutationDisabled) {
+		t.Fatalf("default ownership HandoffDue() error = %v", err)
+	}
+	var defaultOccurrences int
+	var defaultNextRunAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM public.scheduled_sync_occurrences),
+			next_run_at
+		FROM public.scheduled_jobs
+		WHERE id = '00000000-0000-4000-8000-000000003039'
+	`).Scan(&defaultOccurrences, &defaultNextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if defaultOccurrences != 0 || defaultNextRunAt != nil {
+		t.Fatalf("default ownership mutated occurrences=%d nextRunAt=%v", defaultOccurrences, defaultNextRunAt)
+	}
+	ownership := OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation}
+	firstRepository, err := newRepositoryWithOwnership(pool, ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRepository, err := newRepositoryWithOwnership(pool, ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
 	firstEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	firstResult := make(chan error, 1)

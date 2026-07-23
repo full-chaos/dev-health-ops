@@ -16,13 +16,28 @@ const externalDLQMarkerTTL = 7 * 24 * time.Hour
 // ValkeyTransport is the production Redis Streams adapter. It deliberately
 // uses the long-lived client supplied by storage/valkey rather than creating a
 // client per poll, and all blocking reads inherit their lifecycle context.
-type ValkeyTransport struct{ client valkeygo.Client }
+type ValkeyTransport struct {
+	client     valkeygo.Client
+	ownsClient bool
+}
 
 func NewValkeyTransport(client valkeygo.Client) (*ValkeyTransport, error) {
+	return newValkeyTransport(client, true)
+}
+
+// NewSharedValkeyTransport creates a transport whose client is owned by a
+// process-level lifecycle component. The ingest profile runs independent
+// internal-ingest and product-telemetry loops over one bounded client; neither
+// loop may close that shared client while its sibling is still draining.
+func NewSharedValkeyTransport(client valkeygo.Client) (*ValkeyTransport, error) {
+	return newValkeyTransport(client, false)
+}
+
+func newValkeyTransport(client valkeygo.Client, ownsClient bool) (*ValkeyTransport, error) {
 	if client == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &ValkeyTransport{client: client}, nil
+	return &ValkeyTransport{client: client, ownsClient: ownsClient}, nil
 }
 
 func (t *ValkeyTransport) EnsureGroup(ctx context.Context, stream, group string) error {
@@ -257,7 +272,7 @@ func (t *ValkeyTransport) Stats(ctx context.Context, stream, group string) (Stre
 }
 
 func (t *ValkeyTransport) Close() {
-	if t != nil && t.client != nil {
+	if t != nil && t.client != nil && t.ownsClient {
 		t.client.Close()
 	}
 }

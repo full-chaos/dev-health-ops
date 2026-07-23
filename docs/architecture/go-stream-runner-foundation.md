@@ -48,8 +48,31 @@ evidence; none is represented by this implementation.
 
 ## Recompute flush
 
-External recompute coalescing remains on the existing bounded control-job path
-until its River job and persisted outcome writer have parity evidence. Its
-critical crash-window invariant is unchanged: the pending scope is consumed
-atomically with `GETDEL`, and an older flush must not delete a scope written by
-a newer debounce owner. The stream runner does not delete the debounce guard.
+The external profile owns a Go debounce controller, but downstream metric
+execution deliberately remains on the existing Python/Celery planner during
+coexistence. Accepted batch scopes are atomically coalesced in Valkey at
+`(org, source system, source instance)` grain. The first scope owns a
+45-second due ticket; later scopes union repository, team, record-kind,
+ingestion, and time-window bounds without extending that window.
+
+A due scope moves atomically from pending to a leased inflight blob. Process
+death after that drain does not lose the scope: the next controller reclaims
+the inflight blob after its lease. Every ticket has a generation, so completing
+an older inflight generation cannot delete a newer pending generation.
+
+The compatibility dispatcher then writes one deterministic
+`external_ingest_recompute_jobs` bridge identity and the identical allowlisted
+scope onto every coalesced batch row in one PostgreSQL transaction. Replaying
+the inflight claim cannot create a duplicate bridge or batch status row. A
+dormant Python bridge poller accepts only
+`external_ingest.recompute.compat.v1` /
+`dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge`, then
+invokes the current `plan_recompute` and `dispatch_and_persist_scope` behavior.
+That preserves the existing 25-repository and 14-day caps, current Celery task
+allowlist, and customer-facing persisted outcomes without introducing metric
+River contracts owned by later migration phases.
+
+Both stream profiles and the bridge remain disabled in
+`deploy/go-workers/profiles.json`. The implementation is rollback-capable
+foundation and crash-window evidence, not authorization to remove the current
+Celery consumers or health task.

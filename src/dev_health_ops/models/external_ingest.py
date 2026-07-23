@@ -221,6 +221,11 @@ class ExternalIngestRecomputeJob(Base):
     there is no single ``external_ingest_batches`` row to own a job row --
     the affected batches' own ``recompute_status``/``recompute_scope``
     columns are updated separately, keyed by org/source/time range.
+
+    The dormant Go external-ingest runner also uses a deterministic row in
+    this ledger as a fixed compatibility-bridge identity. That row is claimed
+    by the allowlisted Python bridge task before the existing planner emits
+    the ordinary per-job observability rows described above.
     """
 
     __tablename__ = "external_ingest_recompute_jobs"

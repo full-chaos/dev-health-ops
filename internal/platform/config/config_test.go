@@ -132,6 +132,9 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	if cfg.OperationalBridgeAllowInsecure {
 		t.Fatal("insecure operational bridge must default off")
 	}
+	if cfg.StreamConfiguredReplicas != 1 {
+		t.Fatalf("stream replicas = %d, want 1", cfg.StreamConfiguredReplicas)
+	}
 }
 
 func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
@@ -150,6 +153,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"RIVER_DISCARDED_JOB_RETENTION":            "336h",
 		"RIVER_JOB_CLEANER_TIMEOUT":                "45s",
 		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE": "true",
+		"DEV_HEALTH_STREAM_REPLICAS":               "3",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +176,9 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 	if !cfg.OperationalBridgeAllowInsecure {
 		t.Fatal("expected explicit insecure operational bridge opt-in")
 	}
+	if cfg.StreamConfiguredReplicas != 3 {
+		t.Fatalf("stream replicas = %d, want 3", cfg.StreamConfiguredReplicas)
+	}
 
 	for key, value := range map[string]string{
 		"WORKER_DATABASE_MODE":                     "arbitrary",
@@ -184,6 +191,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"RIVER_QUEUE_DATABASE_ROLE":                "Queue-Bad",
 		"PGBOUNCER_TRANSACTION_MODE":               "sometimes",
 		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE": "sometimes",
+		"DEV_HEALTH_STREAM_REPLICAS":               "9",
 	} {
 		if _, err := Load(workerSpec(map[string]string{key: value})); err == nil {
 			t.Fatalf("expected %s=%q to fail", key, value)

@@ -236,7 +236,7 @@ func (r *PostgresExternalBatchRepository) Complete(ctx context.Context, batch ex
 	if err != nil {
 		return fmt.Errorf("marshal external record counts: %w", err)
 	}
-	scopeJSON, err := json.Marshal(completion.Scope)
+	scopeJSON, err := json.Marshal(externalStoredRecomputeScope(completion.Scope))
 	if err != nil {
 		return fmt.Errorf("marshal external recompute scope: %w", err)
 	}
@@ -375,4 +375,29 @@ func nullableExternalText(value string) any {
 		return nil
 	}
 	return value
+}
+
+type externalStoredScope struct {
+	RepoIDs         []string `json:"repoIds"`
+	TeamIDs         []string `json:"teamIds"`
+	RecordKinds     []string `json:"recordKinds"`
+	WindowStartedAt *string  `json:"windowStartedAt"`
+	WindowEndedAt   *string  `json:"windowEndedAt"`
+}
+
+func externalStoredRecomputeScope(scope ExternalRecomputeScope) externalStoredScope {
+	stored := externalStoredScope{
+		RepoIDs:     sortedExternalStrings(scope.RepoIDs),
+		TeamIDs:     sortedExternalStrings(scope.TeamIDs),
+		RecordKinds: sortedExternalStrings(scope.RecordKinds),
+	}
+	if scope.WindowStart != nil {
+		value := scope.WindowStart.UTC().Format(time.RFC3339Nano)
+		stored.WindowStartedAt = &value
+	}
+	if scope.WindowEnd != nil {
+		value := scope.WindowEnd.UTC().Format(time.RFC3339Nano)
+		stored.WindowEndedAt = &value
+	}
+	return stored
 }

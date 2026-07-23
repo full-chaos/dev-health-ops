@@ -28,6 +28,7 @@ const (
 	defaultRiverDatabaseSchema = "river"
 	defaultDomainDatabaseRole  = "devhealth_domain"
 	defaultQueueDatabaseRole   = "devhealth_queue"
+	defaultStreamReplicas      = 1
 )
 
 // QueueControlMode describes the endpoint semantics promised by the operator.
@@ -81,6 +82,7 @@ type Config struct {
 	OperationalBridgeToken         secrets.Value
 	OperationalBridgeTimeout       time.Duration
 	OperationalBridgeAllowInsecure bool
+	StreamConfiguredReplicas       int
 }
 
 // Load reads and validates the process environment. CLI profile selection, if
@@ -276,6 +278,16 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.StreamConfiguredReplicas, err = boundedIntEnv(
+		lookup,
+		"DEV_HEALTH_STREAM_REPLICAS",
+		defaultStreamReplicas,
+		1,
+		8,
+	)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
 }
@@ -303,6 +315,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("river_discarded_job_retention", c.DiscardedJobRetention),
 		slog.Duration("river_job_cleaner_timeout", c.RiverJobCleanerTimeout),
 		slog.Bool("operational_bridge_allow_insecure", c.OperationalBridgeAllowInsecure),
+		slog.Int("stream_configured_replicas", c.StreamConfiguredReplicas),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 	}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the generated taxonomy key block in investment docs."""
+"""Render the generated taxonomy key block in the archived source document."""
 
 from __future__ import annotations
 
@@ -8,7 +8,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY_PATH = ROOT / "src" / "dev_health_ops" / "investment_taxonomy.py"
-DOC_PATH = ROOT / "docs" / "product" / "investment-taxonomy.md"
+DOC_PATH = (
+    ROOT
+    / ".github"
+    / "docs-legacy"
+    / "product"
+    / "investment-taxonomy.md"
+)
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"

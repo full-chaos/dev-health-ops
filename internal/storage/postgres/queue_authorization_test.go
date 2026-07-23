@@ -57,6 +57,7 @@ func TestQueueAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *tes
 		"PG_HAS_ROLE",
 		"'MEMBER'",
 		"HAS_DATABASE_PRIVILEGE",
+		"HAS_ANY_COLUMN_PRIVILEGE",
 		"WORKER_JOB_OUTBOX",
 		"SYNC_DISPATCH_OUTBOX",
 		"SYNC_DISPATCH_TRANSPORT_ROUTES",

@@ -86,6 +86,9 @@ SELECT
 			AND has_table_privilege(current_user, class.oid, 'UPDATE')
 			AND has_table_privilege(current_user, class.oid, 'DELETE')
 			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, REFERENCES'
+			)
 			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
 			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
@@ -105,6 +108,9 @@ SELECT
 			AND has_table_privilege(current_user, class.oid, 'SELECT')
 			AND has_table_privilege(current_user, class.oid, 'UPDATE')
 			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, REFERENCES'
+			)
 			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
 			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
@@ -125,6 +131,9 @@ SELECT
 			AND has_table_privilege(current_user, class.oid, 'SELECT')
 			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
 			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_any_column_privilege(
+				current_user, class.oid, 'INSERT, UPDATE, REFERENCES'
+			)
 			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
 			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
@@ -142,6 +151,9 @@ SELECT
 			OR has_table_privilege(current_user, oid, 'INSERT')
 			OR has_table_privilege(current_user, oid, 'UPDATE')
 			OR has_table_privilege(current_user, oid, 'DELETE')
+			OR has_any_column_privilege(
+				current_user, oid, 'SELECT, INSERT, UPDATE, REFERENCES'
+			)
 			OR has_table_privilege(current_user, oid, 'TRUNCATE')
 			OR has_table_privilege(current_user, oid, 'REFERENCES')
 			OR has_table_privilege(current_user, oid, 'TRIGGER')
@@ -175,6 +187,7 @@ SELECT
 			OR NOT has_table_privilege(current_user, oid, 'DELETE')
 			OR has_table_privilege(current_user, oid, 'TRUNCATE')
 			OR has_table_privilege(current_user, oid, 'REFERENCES')
+			OR has_any_column_privilege(current_user, oid, 'REFERENCES')
 			OR has_table_privilege(current_user, oid, 'TRIGGER')
 			OR CASE
 				WHEN current_setting('server_version_num')::integer >= 170000

@@ -258,6 +258,14 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			id uuid PRIMARY KEY,
 			state text NOT NULL
 		)`,
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY,
+			state text NOT NULL
+		)`,
+		`CREATE TABLE public.sync_dispatch_transport_routes (
+			kind text PRIMARY KEY,
+			generation bigint NOT NULL
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(ctx, statement); err != nil {

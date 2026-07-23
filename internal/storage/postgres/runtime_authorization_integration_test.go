@@ -103,6 +103,27 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	if _, err := admin.Exec(ctx, "REVOKE UPDATE ON TABLE public.sync_dispatch_transport_routes FROM "+runtimeAuthorizationQueueRole); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := admin.Exec(
+		ctx,
+		"GRANT UPDATE (generation) ON TABLE public.sync_dispatch_transport_routes TO "+runtimeAuthorizationQueueRole,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Exec(
+		ctx,
+		"UPDATE public.sync_dispatch_transport_routes SET generation = generation + 1",
+	); err != nil {
+		t.Fatalf("column-level route UPDATE grant was not effective: %v", err)
+	}
+	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("queue column-level route UPDATE authorization error = %v, want ErrUnavailable", err)
+	}
+	if _, err := admin.Exec(
+		ctx,
+		"REVOKE UPDATE (generation) ON TABLE public.sync_dispatch_transport_routes FROM "+runtimeAuthorizationQueueRole,
+	); err != nil {
+		t.Fatal(err)
+	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
 		t.Fatalf("queue authorization did not recover after revoking sync-dispatch excess grants: %v", err)
 	}

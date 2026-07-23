@@ -14,6 +14,7 @@ int-auth	int-api	/integrate/api/authentication/	Authenticate API clients	task-gu
 int-automation	int-api	/integrate/api/automation/	Automate supported workflows	task-guide	true	public	planned	false	
 int-webhooks	integrate	/integrate/webhooks/	Use webhooks	landing	true	public	planned	false	
 int-wh-config	int-webhooks	/integrate/webhooks/configure/	Configure a webhook	task-guide	true	public	planned	false	
+int-wh-pagerduty	int-webhooks	/integrate/webhooks/pagerduty/	PagerDuty provider and webhook contract	architecture	true	public	active	false	
 int-wh-verify	int-webhooks	/integrate/webhooks/verify-signatures/	Verify webhook signatures	task-guide	true	public	planned	false	
 int-wh-retry	int-webhooks	/integrate/webhooks/retries-and-replay/	Handle retries and replay	task-guide	true	public	planned	false	
 int-build	integrate	/integrate/build-an-integration/	Build a supported integration	landing	true	public	planned	false	

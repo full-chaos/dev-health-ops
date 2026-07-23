@@ -66,6 +66,7 @@ from .licensing import (
     OrgFeatureOverride,
     OrgLicense,
 )
+from .operational_deliveries import BillingNotification, WebhookDelivery
 from .org_invite import OrgInvite
 from .pagerduty_webhook_binding import PagerDutyWebhookBinding
 from .rate_limit_observations import ProviderRateLimitObservation
@@ -141,6 +142,7 @@ __all__ = [
     "FeatureFlag",
     "Base",
     "BillingAuditLog",
+    "BillingNotification",
     "GitBlame",
     "GitBlameMixin",
     "GitCommit",
@@ -227,4 +229,5 @@ __all__ = [
     "WorkItemStatusTransition",
     "WorkerJobOutbox",
     "WorkerJobRun",
+    "WebhookDelivery",
 ]

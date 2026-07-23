@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
 import logging
 import os
 import uuid
@@ -12,6 +14,8 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from stripe.params.billing_portal._session_create_params import (
     SessionCreateParams as PortalSessionCreateParams,
@@ -30,6 +34,7 @@ from dev_health_ops.licensing import (
     sign_license,
 )
 from dev_health_ops.models.billing_audit import BillingAuditLog
+from dev_health_ops.models.operational_deliveries import BillingNotification
 from dev_health_ops.workers.system_tasks import send_billing_notification
 
 from ._helpers import assign_attr, require_str, require_uuid
@@ -60,14 +65,52 @@ class SignatureVerificationError(Exception):
 
 
 class _BillingNotificationTask(Protocol):
-    def delay(self, email_type: str, org_id: str, **kwargs: object) -> object: ...
+    def delay(self, *, durable_notification_id: str) -> object: ...
 
 
-def _enqueue_billing_notification(
-    email_type: str, org_id: str, **kwargs: object
+async def _enqueue_billing_notification(
+    email_type: str,
+    org_id: str,
+    *,
+    provider_event_id: str | None = None,
+    **kwargs: object,
 ) -> object:
+    """Persist a stable email intent before publishing its UUID reference.
+
+    Stripe event IDs are used when available. Other lifecycle notifications
+    derive a bounded key from their canonical attributes, so a replay reaches
+    the same intent rather than creating a second provider delivery.
+    """
+    org_uuid = uuid.UUID(org_id)
+    attributes = dict(kwargs)
+    canonical = json.dumps(
+        attributes, sort_keys=True, separators=(",", ":"), default=str
+    )
+    suffix = provider_event_id or hashlib.sha256(canonical.encode()).hexdigest()
+    idempotency_key = f"billing:{email_type}:{org_uuid}:{suffix}"
+    async with get_postgres_session() as session:
+        notification = BillingNotification(
+            org_id=org_uuid,
+            notification_type=email_type,
+            idempotency_key=idempotency_key,
+            attributes=attributes,
+        )
+        session.add(notification)
+        try:
+            await session.commit()
+            notification_id: uuid.UUID = notification.id
+        except IntegrityError:
+            await session.rollback()
+            existing_notification_id = await session.scalar(
+                select(BillingNotification.id).where(
+                    BillingNotification.idempotency_key == idempotency_key
+                )
+            )
+            if existing_notification_id is None:
+                raise
+            notification_id = existing_notification_id
     return cast(_BillingNotificationTask, send_billing_notification).delay(
-        email_type, org_id, **kwargs
+        durable_notification_id=str(notification_id)
     )
 
 
@@ -403,7 +446,9 @@ async def _handle_invoice_webhook(
             )
             return
         try:
-            _enqueue_billing_notification(email_type, org_str, **kwargs)
+            await _enqueue_billing_notification(
+                email_type, org_str, provider_event_id=event_id, **kwargs
+            )
         except Exception:
             logger.debug(
                 "Failed to enqueue %s email for org_id=%s", email_type, org_str
@@ -507,7 +552,7 @@ async def _handle_subscription_updated(subscription: object) -> None:
     # Send subscription changed email if tier actually changed.
     if persisted and old_tier is not None and old_tier != str(tier.value):
         try:
-            _enqueue_billing_notification(
+            await _enqueue_billing_notification(
                 "subscription_changed",
                 org_id,
                 old_tier=old_tier,
@@ -553,7 +598,7 @@ async def _handle_subscription_deleted(subscription: object) -> None:
         await _revoke_license(org_id)
 
         try:
-            _enqueue_billing_notification(
+            await _enqueue_billing_notification(
                 "subscription_cancelled",
                 org_id,
                 tier=current_tier,
@@ -604,7 +649,7 @@ async def _handle_trial_will_end(subscription: object) -> None:
     trial_end_iso = trial_end_dt.date().isoformat()
 
     try:
-        _enqueue_billing_notification(
+        await _enqueue_billing_notification(
             "trial_expiring",
             org_id,
             days_remaining=days_remaining,

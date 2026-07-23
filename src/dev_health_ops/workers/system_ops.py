@@ -4,7 +4,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -77,8 +77,8 @@ def health_check(self) -> dict:
 @celery_app.task(bind=True, max_retries=3, queue="webhooks")
 def send_billing_notification(
     self,
-    email_type: str,
-    org_id: str,
+    email_type: str | None = None,
+    org_id: str | None = None,
     amount_cents: int = 0,
     currency: str = "usd",
     invoice_url: str = "",
@@ -88,6 +88,7 @@ def send_billing_notification(
     tier: str = "",
     days_remaining: int = 0,
     trial_end_date: str = "",
+    durable_notification_id: str | None = None,
 ) -> dict:
     """Send billing email notification via worker queue.
 
@@ -116,6 +117,24 @@ def send_billing_notification(
         dict with send status
     """
     from dev_health_ops.api.services import billing_emails
+
+    if durable_notification_id:
+        durable = _load_billing_notification(durable_notification_id)
+        if durable is None:
+            return {"status": "dropped", "reason": "missing_durable_notification"}
+        email_type, org_id, attributes = durable
+        amount_cents = int(cast(Any, attributes.get("amount_cents", 0)))
+        currency = str(attributes.get("currency", "usd"))
+        invoice_url = str(attributes.get("invoice_url", ""))
+        attempt_count = int(cast(Any, attributes.get("attempt_count", 1)))
+        old_tier = str(attributes.get("old_tier", ""))
+        new_tier = str(attributes.get("new_tier", ""))
+        tier = str(attributes.get("tier", ""))
+        days_remaining = int(cast(Any, attributes.get("days_remaining", 0)))
+        trial_end_date = str(attributes.get("trial_end_date", ""))
+
+    if not email_type or not org_id:
+        return {"status": "dropped", "reason": "missing_notification_identity"}
 
     dispatch = {
         "invoice_receipt": lambda oid: billing_emails.send_invoice_receipt(
@@ -172,6 +191,39 @@ def send_billing_notification(
             exc,
         )
         raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
+
+
+def _load_billing_notification(
+    durable_notification_id: str,
+) -> tuple[str, str, dict[str, object]] | None:
+    try:
+        notification_uuid = uuid.UUID(durable_notification_id)
+    except ValueError:
+        return None
+    try:
+        from sqlalchemy import select
+
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.operational_deliveries import BillingNotification
+
+        with get_postgres_session_sync() as session:
+            notification = session.scalar(
+                select(BillingNotification).where(
+                    BillingNotification.id == notification_uuid
+                )
+            )
+            if notification is None:
+                return None
+            return (
+                notification.notification_type,
+                str(notification.org_id),
+                dict(notification.attributes),
+            )
+    except Exception:
+        logger.exception(
+            "Unable to load durable billing notification id=%s", durable_notification_id
+        )
+        raise
 
 
 @celery_app.task(

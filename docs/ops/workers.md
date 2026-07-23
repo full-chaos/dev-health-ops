@@ -68,18 +68,19 @@ same maintenance-run claim through the common idempotency middleware. The
 `system.heartbeat` policy remains explicitly non-retryable. Neither handler is
 compiled into a production River process yet, and both registry routes remain
 Celery; this foundation creates no producer, route, schedule, or deployment
-change. Generic and PagerDuty webhook, billing-email, and provider adapters
-remain Celery-owned until they each have a persisted payload reference plus a
-stable external-effect key and their own shadow/canary evidence.
+change. Generic webhook and billing email now have persisted reference rows,
+but remain Celery-owned until their Go provider adapters and shadow/canary
+evidence exist. PagerDuty remains Celery-owned until Go proves the
+read/delete/retry crash windows.
 
 The current operational inventory is intentionally a coexistence boundary, not
 an activation claim:
 
 | Family | Current side-effect guard | Go migration disposition |
 | --- | --- | --- |
-| Generic provider webhooks | 24-hour cache delivery marker; payload remains Celery task input | Needs a persisted delivery/reference row before a Go contract can avoid carrying raw payloads. |
+| Generic provider webhooks | Durable `webhook_deliveries` row keyed by provider delivery identity; Celery receives only its UUID, while the 24-hour cache remains a compatibility marker | Go can consume the same payload reference once provider reconciliation is ported and shadow parity is recorded. |
 | PagerDuty webhooks | Valkey receipt plus stream entry; delete only after success or terminal dead-letter | Celery remains the stream owner until Go proves the read/delete/retry crash windows. |
-| Billing email | bounded Celery retry, but no provider-visible delivery key | Needs a canonical notification row and mail-provider idempotency key. |
+| Billing email | Durable `billing_notifications` intent keyed by Stripe event where available, otherwise canonical notification attributes; Celery receives only its UUID | Go can own delivery after mail-provider idempotency-header parity and sandbox evidence. |
 | Phone-home heartbeat | explicit `max_attempts=1` and best-effort endpoint post | Non-retryable; frozen `system.heartbeat` policy remains Celery-routed. |
 | Worker-outbox terminal retention | durable `maintenance_run_checkpoint` claim and bounded SQL delete | Go handler implemented but uncompiled and Celery-routed. |
 | Team autoimport | terminal sync-run post-sync work | Remains coupled to the sync cutover and is out of this independent operational route. |

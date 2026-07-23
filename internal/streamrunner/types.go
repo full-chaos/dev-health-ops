@@ -14,6 +14,7 @@ var (
 	ErrInvalidConfig         = errors.New("invalid stream runner configuration")
 	ErrAlreadyStarted        = errors.New("stream runner already started")
 	ErrQuarantineUnavailable = errors.New("stream quarantine unavailable")
+	ErrDiscoveryLimit        = errors.New("stream discovery limit exceeded")
 )
 
 // Message is the bounded transport representation. Raw payloads are never
@@ -44,13 +45,20 @@ type StreamStats struct {
 // checkpoint that prevents a runner from fetching after drain begins.
 type Transport interface {
 	EnsureGroup(context.Context, string, string) error
-	ReadNew(context.Context, string, string, string, int, time.Duration) ([]Message, error)
+	ReadNew(context.Context, []string, string, string, int, time.Duration) ([]Message, error)
 	Pending(context.Context, string, string, int, time.Duration) ([]Pending, error)
 	Claim(context.Context, string, string, string, []string, time.Duration) ([]Message, error)
 	Ack(context.Context, string, string, string) error
 	Quarantine(context.Context, Message, string) error
 	Stats(context.Context, string, string) (StreamStats, error)
 	Close()
+}
+
+// Discoverer is optional because deterministic unit transports can expose a
+// fixed set of streams. The production Valkey transport implements it for
+// bounded wildcard discovery of per-org stream keys.
+type Discoverer interface {
+	Discover(context.Context, []string, int) ([]string, error)
 }
 
 // Handler must return nil only after its authoritative sink transaction or
@@ -78,9 +86,11 @@ func IsPermanent(err error) bool {
 type Config struct {
 	Name               string
 	Streams            []string
+	Patterns           []string
 	ConsumerGroup      string
 	ConsumerName       string
 	BatchSize          int
+	DiscoveryLimit     int
 	Block              time.Duration
 	ReclaimEvery       time.Duration
 	ReclaimIdle        time.Duration
@@ -91,10 +101,13 @@ type Config struct {
 }
 
 func (c Config) validate() error {
-	if c.Name == "" || len(c.Streams) == 0 || c.ConsumerGroup == "" || c.ConsumerName == "" ||
+	if c.Name == "" || (len(c.Streams) == 0 && len(c.Patterns) == 0) || c.ConsumerGroup == "" || c.ConsumerName == "" ||
 		c.BatchSize < 1 || c.BatchSize > 1_000 || c.Block < 10*time.Millisecond || c.Block > time.Minute ||
 		c.ReclaimEvery < 10*time.Millisecond || c.ReclaimIdle < c.Block || c.MaxDeliveries < 1 ||
 		c.MaxDeliveries > 100 || c.ShutdownDrain < c.Block || c.ShutdownDrain > 5*time.Minute {
+		return ErrInvalidConfig
+	}
+	if len(c.Patterns) > 0 && (c.DiscoveryLimit < 1 || c.DiscoveryLimit > 100_000) {
 		return ErrInvalidConfig
 	}
 	if c.Singleton && c.ConfiguredReplicas != 1 {

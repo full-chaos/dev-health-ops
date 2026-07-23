@@ -3,6 +3,7 @@ package streamrunner
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,13 +31,68 @@ func (t *ValkeyTransport) EnsureGroup(ctx context.Context, stream, group string)
 	return nil
 }
 
-func (t *ValkeyTransport) ReadNew(ctx context.Context, stream, group, consumer string, count int, block time.Duration) ([]Message, error) {
-	result := t.client.Do(ctx, t.client.B().Xreadgroup().Group(group, consumer).Count(int64(count)).Block(block.Milliseconds()).Streams().Key(stream).Id(">").Build())
+func (t *ValkeyTransport) ReadNew(ctx context.Context, streams []string, group, consumer string, count int, block time.Duration) ([]Message, error) {
+	if len(streams) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, len(streams))
+	for index := range ids {
+		ids[index] = ">"
+	}
+	command := t.client.B().Xreadgroup().Group(group, consumer).Count(int64(count)).Block(block.Milliseconds()).Streams().Key(streams...).Id(ids...).Build()
+	result := t.client.Do(ctx, command)
 	read, err := result.AsXRead()
+	if valkeygo.IsValkeyNil(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	return messagesFromRead(read), nil
+}
+
+// Discover performs bounded SCAN TYPE stream traversal for every configured
+// pattern. A hard limit is a fail-closed safety boundary: silently returning a
+// truncated lane set could indefinitely starve an organization's stream.
+func (t *ValkeyTransport) Discover(ctx context.Context, patterns []string, limit int) ([]string, error) {
+	if limit < 1 {
+		return nil, ErrInvalidConfig
+	}
+	found := make(map[string]struct{}, min(limit, 1_000))
+	nodes := t.client.Nodes()
+	for _, pattern := range sortedUnique(append([]string(nil), patterns...)) {
+		for _, node := range nodes {
+			var cursor uint64
+			for {
+				entry, err := node.Do(
+					ctx,
+					node.B().Scan().Cursor(cursor).Match(pattern).Count(int64(min(limit, 1_000))).Type("stream").Build(),
+				).AsScanEntry()
+				if err != nil {
+					return nil, err
+				}
+				for _, stream := range entry.Elements {
+					found[stream] = struct{}{}
+					if len(found) > limit {
+						return nil, ErrDiscoveryLimit
+					}
+				}
+				cursor = entry.Cursor
+				if cursor == 0 {
+					break
+				}
+				if len(found) == limit {
+					return nil, ErrDiscoveryLimit
+				}
+			}
+		}
+	}
+	streams := make([]string, 0, len(found))
+	for stream := range found {
+		streams = append(streams, stream)
+	}
+	slices.Sort(streams)
+	return streams, nil
 }
 
 func (t *ValkeyTransport) Pending(ctx context.Context, stream, group string, count int, idle time.Duration) ([]Pending, error) {

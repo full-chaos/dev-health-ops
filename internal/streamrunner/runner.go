@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,8 @@ type Runner struct {
 	lastSuccess time.Time
 	up          bool
 	lastStats   map[string]StreamStats
+	streams     []string
+	readCursor  int
 }
 
 func New(transport Transport, handler Handler, config Config, registry *health.Registry) (*Runner, error) {
@@ -81,16 +84,7 @@ func (r *Runner) Start(parent context.Context) error {
 	done := r.done
 	r.mu.Unlock()
 
-	for _, stream := range r.config.Streams {
-		if err := r.transport.EnsureGroup(ctx, stream, r.config.ConsumerGroup); err != nil {
-			cancel()
-			close(done)
-			return fmt.Errorf("ensure stream group: %w", err)
-		}
-	}
-	// A successful group setup is not enough: readiness opens only after an
-	// actual bounded read/reclaim window can observe the transport.
-	if err := r.window(ctx); err != nil {
+	if err := r.refreshStreams(ctx); err != nil {
 		cancel()
 		close(done)
 		return err
@@ -101,55 +95,140 @@ func (r *Runner) Start(parent context.Context) error {
 
 func (r *Runner) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
-	ticker := time.NewTicker(r.config.ReclaimEvery)
-	defer ticker.Stop()
+	nextMaintenance := time.Time{}
 	for {
-		if err := r.window(ctx); err != nil {
+		maintain := nextMaintenance.IsZero() || !time.Now().Before(nextMaintenance)
+		if maintain {
+			nextMaintenance = time.Now().Add(r.config.ReclaimEvery)
+		}
+		if err := r.cycle(ctx, maintain); err != nil {
 			r.recordFailure()
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(minDuration(r.config.ReclaimEvery, time.Second)):
 			}
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
 		}
 	}
 }
 
 func (r *Runner) window(ctx context.Context) error {
+	return r.cycle(ctx, true)
+}
+
+func (r *Runner) cycle(ctx context.Context, maintain bool) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	for _, stream := range r.config.Streams {
-		if err := r.reclaim(ctx, stream); err != nil {
+	if maintain {
+		if err := r.refreshStreams(ctx); err != nil {
 			return err
 		}
-		messages, err := r.transport.ReadNew(ctx, stream, r.config.ConsumerGroup, r.config.ConsumerName, r.config.BatchSize, r.config.Block)
-		if err != nil {
-			return fmt.Errorf("read stream: %w", err)
-		}
-		for _, message := range messages {
-			if err := r.process(ctx, message); err != nil {
-				return err
+	}
+	r.mu.Lock()
+	streams := append([]string(nil), r.streams...)
+	r.mu.Unlock()
+
+	var failures []error
+	for _, stream := range streams {
+		if maintain {
+			if err := r.reclaim(ctx, stream); err != nil {
+				failures = append(failures, err)
 			}
 		}
+	}
+	readStreams, perStreamCount := r.nextReadLanes(streams)
+	if len(readStreams) > 0 {
+		messages, err := r.transport.ReadNew(ctx, readStreams, r.config.ConsumerGroup, r.config.ConsumerName, perStreamCount, r.config.Block)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("read streams: %w", err))
+		} else {
+			for _, message := range messages {
+				if err := r.process(ctx, message); err != nil {
+					failures = append(failures, err)
+				}
+			}
+		}
+	}
+	for _, stream := range streams {
 		stats, err := r.transport.Stats(ctx, stream, r.config.ConsumerGroup)
 		if err != nil {
-			return fmt.Errorf("inspect stream: %w", err)
+			failures = append(failures, fmt.Errorf("inspect stream %q: %w", stream, err))
+			continue
 		}
 		r.mu.Lock()
 		r.lastStats[stream] = stats
 		r.mu.Unlock()
 	}
+	if err := errors.Join(failures...); err != nil {
+		r.ready.Store(false)
+		r.mu.Lock()
+		r.up = false
+		r.mu.Unlock()
+		return err
+	}
 	r.mu.Lock()
 	r.lastSuccess, r.up = time.Now().UTC(), true
 	r.mu.Unlock()
 	r.ready.Store(true)
+	return nil
+}
+
+// nextReadLanes keeps one XREADGROUP response bounded by BatchSize even when
+// discovery finds more streams than fit in one command. The cursor advances
+// deterministically so a hot early lane cannot starve later lanes.
+func (r *Runner) nextReadLanes(streams []string) ([]string, int) {
+	if len(streams) == 0 {
+		return nil, 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	laneCount := min(len(streams), r.config.BatchSize)
+	start := r.readCursor % len(streams)
+	selected := make([]string, 0, laneCount)
+	for offset := range laneCount {
+		selected = append(selected, streams[(start+offset)%len(streams)])
+	}
+	r.readCursor = (start + laneCount) % len(streams)
+	return selected, max(1, r.config.BatchSize/laneCount)
+}
+
+func (r *Runner) refreshStreams(ctx context.Context) error {
+	streams := append([]string(nil), r.config.Streams...)
+	if len(r.config.Patterns) > 0 {
+		discoverer, ok := r.transport.(Discoverer)
+		if !ok {
+			return fmt.Errorf("stream discovery unavailable")
+		}
+		found, err := discoverer.Discover(ctx, r.config.Patterns, r.config.DiscoveryLimit)
+		if err != nil {
+			return fmt.Errorf("discover streams: %w", err)
+		}
+		streams = append(streams, found...)
+	}
+	streams = sortedUnique(streams)
+	for _, stream := range streams {
+		if err := r.transport.EnsureGroup(ctx, stream, r.config.ConsumerGroup); err != nil {
+			return fmt.Errorf("ensure group for stream %q: %w", stream, err)
+		}
+	}
+	r.mu.Lock()
+	r.streams = streams
+	if len(streams) == 0 {
+		r.readCursor = 0
+	} else {
+		r.readCursor %= len(streams)
+	}
+	active := make(map[string]struct{}, len(streams))
+	for _, stream := range streams {
+		active[stream] = struct{}{}
+	}
+	for stream := range r.lastStats {
+		if _, ok := active[stream]; !ok {
+			delete(r.lastStats, stream)
+		}
+	}
+	r.mu.Unlock()
 	return nil
 }
 
@@ -182,15 +261,24 @@ func (r *Runner) reclaim(ctx context.Context, stream string) error {
 	if err != nil {
 		return fmt.Errorf("claim pending: %w", err)
 	}
+	var failures []error
 	for _, message := range claimed {
 		r.mu.Lock()
 		r.reclaimed++
 		r.mu.Unlock()
 		if err := r.process(ctx, message); err != nil {
-			return err
+			failures = append(failures, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
+}
+
+func sortedUnique(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	slices.Sort(values)
+	return slices.Compact(values)
 }
 
 func (r *Runner) process(ctx context.Context, message Message) error {

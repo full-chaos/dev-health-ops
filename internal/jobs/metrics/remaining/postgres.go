@@ -91,11 +91,14 @@ func (store *PostgresStore) StartRun(ctx context.Context, request StartRunReques
 	}
 	request.OrganizationID = uuid.MustParse(request.OrganizationID).String()
 	for ordinal := range request.Scopes {
-		canonical, err := canonicalJSON(request.Scopes[ordinal])
+		canonical, err := validateFamilyScope(request.Family, request.Scopes[ordinal])
 		if err != nil {
 			return Run{}, ErrInvalidState
 		}
-		request.Scopes[ordinal] = canonical
+		request.Scopes[ordinal], err = canonicalJSON(canonical)
+		if err != nil {
+			return Run{}, ErrInvalidState
+		}
 	}
 
 	runID := deterministicRunID(request)

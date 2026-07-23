@@ -43,7 +43,7 @@ func TestPostgresStoreResumesPartitionsAndFencesCancellationAndExpiry(t *testing
 		Generation:     "capacity-v1",
 		ScopeKey:       "all-teams",
 		GenerationSeed: int64Pointer(42),
-		Scopes:         []json.RawMessage{json.RawMessage(`{"team":"one"}`), json.RawMessage(`{"team":"two"}`)},
+		Scopes:         []json.RawMessage{json.RawMessage(`{"version":1,"all_teams":true,"history_days":90,"simulations":10000}`), json.RawMessage(`{"version":1,"all_teams":true,"history_days":91,"simulations":10000}`)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
 		Generation:     "capacity-v1",
 		ScopeKey:       "all-teams",
 		GenerationSeed: int64Pointer(42),
-		Scopes:         []json.RawMessage{json.RawMessage(`{"team":"one"}`), json.RawMessage(`{"team":"two"}`)},
+		Scopes:         []json.RawMessage{json.RawMessage(`{"version":1,"all_teams":true,"history_days":90,"simulations":10000}`), json.RawMessage(`{"version":1,"all_teams":true,"history_days":91,"simulations":10000}`)},
 	}
 
 	start := make(chan struct{})
@@ -203,8 +203,10 @@ func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
 		if err != nil {
 			t.Fatalf("partition %d scope = %q: %v", ordinal, partition.Scope, err)
 		}
-		if partition.ID != deterministicPartitionID(runs[0].ID, ordinal) || partition.Ordinal != ordinal ||
-			string(canonical) != string(request.Scopes[index]) {
+		expected, err := validateFamilyScope(request.Family, request.Scopes[index])
+		expected, err = canonicalJSON(expected)
+		if err != nil || partition.ID != deterministicPartitionID(runs[0].ID, ordinal) || partition.Ordinal != ordinal ||
+			string(canonical) != string(expected) {
 			t.Fatalf("partition %d = %#v", ordinal, partition)
 		}
 	}
@@ -215,7 +217,7 @@ func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
 		t.Fatalf("mismatched seed replay error = %v", err)
 	}
 	mismatchedScopes := request
-	mismatchedScopes.Scopes = []json.RawMessage{json.RawMessage(`{"team":"one"}`)}
+	mismatchedScopes.Scopes = []json.RawMessage{json.RawMessage(`{"version":1,"all_teams":true,"history_days":90,"simulations":10000}`)}
 	if _, err := store.StartRun(ctx, mismatchedScopes); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("mismatched scope replay error = %v", err)
 	}

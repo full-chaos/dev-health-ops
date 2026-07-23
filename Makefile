@@ -21,15 +21,15 @@ docs\:check:
 	$(PYTHON) scripts/check_docs_links.py
 
 docs\:build:
-	$(PYTHON) -m mkdocs build --strict --site-dir .build/site
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
 
 docs\:check-built-site:
-	$(PYTHON) -m mkdocs build --strict --site-dir .build/site
-	$(PYTHON) scripts/check_built_site_links.py --site-dir .build/site
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	$(PYTHON) scripts/check_built_site_links.py --site-dir .build/docs
 
 docs\:check-external-links:
-	$(PYTHON) -m mkdocs build --strict --site-dir .build/site
-	$(PYTHON) scripts/check_external_links.py --built-site .build/site --allowlist docs/external-link-allowlist.yml --site-url https://docs.fullchaos.dev
+	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
+	$(PYTHON) scripts/check_external_links.py --built-site .build/docs --allowlist .github/docs-legacy/external-link-allowlist.yml --site-url https://docs.fullchaos.dev
 
 docs\:check-freshness:
 	$(PYTHON) scripts/check_freshness_inventory.py
@@ -37,7 +37,7 @@ docs\:check-freshness:
 docs\:check-code-prerequisites:
 	$(PYTHON) scripts/check_code_prerequisites.py
 
-# Documentation v2 lifecycle:
+# Canonical documentation lifecycle:
 #   make docs:serve
 #       Fast MkDocs live reload at http://127.0.0.1:8000.
 #   make docs:preview
@@ -50,7 +50,7 @@ docs\:check-code-prerequisites:
 #       Roll production back to an explicit Worker version.
 
 docs\:serve:
-	$(PYTHON) -m mkdocs serve --strict --config-file mkdocs.prototype.yml --dev-addr 127.0.0.1:8000
+	$(PYTHON) -m mkdocs serve --strict --config-file mkdocs.yml --dev-addr 127.0.0.1:8000
 
 docs\:check-v2:
 	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check

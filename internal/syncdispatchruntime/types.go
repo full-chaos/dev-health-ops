@@ -92,9 +92,9 @@ func (FinalizeSyncRunArgs) Kind() string                { return syncdispatchcon
 func (args FinalizeSyncRunArgs) RouteGeneration() int64 { return args.Generation() }
 func (args FinalizeSyncRunArgs) valid() error           { return args.TransportArgs.valid() }
 
-// PostSyncArgs is the exact v1 argument type for post_sync. It is also used
-// by the separately controlled mark-before external-handoff seam; creating it
-// does not publish a message or execute an external effect.
+// PostSyncArgs is the exact v1 argument type for guarded at-least-once
+// post_sync delivery. Creating it does not publish a message or execute an
+// external effect.
 type PostSyncArgs struct{ TransportArgs }
 
 func (PostSyncArgs) Kind() string                { return syncdispatchcontract.KindPostSync }

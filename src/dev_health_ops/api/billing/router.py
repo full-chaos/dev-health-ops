@@ -86,7 +86,13 @@ async def _enqueue_billing_notification(
     canonical = json.dumps(
         attributes, sort_keys=True, separators=(",", ":"), default=str
     )
-    suffix = provider_event_id or hashlib.sha256(canonical.encode()).hexdigest()
+    provider_identity = (provider_event_id or "").strip()
+    # Stripe IDs are short in normal operation, but the durable key is an
+    # untrusted-input boundary. Hash an oversized source identity rather than
+    # allowing it to violate the 256-byte unique-key contract.
+    if len(provider_identity) > 128:
+        provider_identity = hashlib.sha256(provider_identity.encode()).hexdigest()
+    suffix = provider_identity or hashlib.sha256(canonical.encode()).hexdigest()
     idempotency_key = f"billing:{email_type}:{org_uuid}:{suffix}"
     async with get_postgres_session() as session:
         notification = BillingNotification(

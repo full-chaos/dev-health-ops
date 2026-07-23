@@ -103,8 +103,13 @@ policy is loaded at process startup: before a future rollback changes the
 checked-in route, stop new production, drain or classify in-flight River work,
 restore Celery routing, and restart the reconciler. Deferred generic-outbox
 rows remain auditable; the bridge does not silently republish them to Celery.
-The separate sync-domain scheduler, lease repair, and selectable Celery/River
-transport remain unfinished CHAOS-3039 work.
+The dormant Go foundations now also include bounded read-only sync-outbox
+observation and sync-schedule evaluation. They expose comparison material only:
+the schedule repository performs one limited `SELECT`, and neither package
+locks, claims, updates, publishes, or registers a production loop. The
+mutation-capable sync-domain scheduler, organization/entitlement gates, lease
+repair, and selectable Celery/River transport remain unfinished CHAOS-3039
+work.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target

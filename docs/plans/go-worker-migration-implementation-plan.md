@@ -290,8 +290,8 @@ readiness and metrics. Startup is fail-closed until that loop succeeds once,
 and later persistence failures close readiness. Checked-in deployment profiles
 remain `coexistence_disabled` with zero replicas; both registered kinds still
 route to Celery, no producer calls the bridge, and no Go handler is compiled.
-The broader scheduler and sync-domain transport work in CHAOS-3039 therefore
-remains unported and no tandem parity is claimed.
+The mutation-capable scheduler and sync-domain transport work in CHAOS-3039
+therefore remains unported and no tandem parity is claimed.
 
 The first sync-domain transport dependency is now frozen independently of
 runtime activation. `contracts/sync-dispatch/v1/transport-routes.json`
@@ -307,6 +307,20 @@ the Celery reconciler is still the only mutation owner. The observer supplies
 an autonomous comparison surface, but observations with different cutoffs are
 operational evidence rather than tandem proof. This slice does not authorize
 promotion.
+
+The dormant `internal/scheduler/sync` package adds the corresponding
+read-only schedule-evaluation foundation. It reads at most 101 active
+configuration/job rows to produce a 100-row, deterministically ordered
+snapshot, then evaluates occurrence, manual-only, active-job,
+`is_running`-staleness, and `next_run_at` gates without a transaction, row
+lock, advisory lock, update, enqueue, or process-loop registration. Its
+versioned digest retains candidate identities only in memory. The evaluator
+matches the production five-field Croniter surface, including timezone and
+DST behavior; optional Croniter seconds/year fields remain explicitly outside
+this shadow version. Organization existence, entitlement, occurrence
+claiming, and the dispatch transaction are still Celery-owned work below.
+Nothing imports this package from a command or deployment profile, so its
+presence is comparison infrastructure rather than activation.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,

@@ -70,6 +70,7 @@ internal/
 ├── jobcontract/              # Go job-envelope and compatibility types
 ├── joboutbox/                # Transactional Python-to-River relay
 ├── joboperator/              # Payload-redacted operator policy and storage
+├── scheduler/sync/           # Dormant read-only sync-schedule evaluator
 ├── syncdispatchcontract/     # Cross-language sync-outbox route policy
 ├── syncreconciler/           # Read-only bounded sync-outbox observer
 └── testsupport/containers/   # Isolated pinned dependency harness

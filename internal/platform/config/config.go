@@ -66,20 +66,21 @@ type Config struct {
 	ClickHouseURI     secrets.Value
 	ValkeyURI         secrets.Value
 
-	QueueDatabaseMode        QueueControlMode
-	RiverDatabaseSchema      string
-	DomainDatabaseRole       string
-	QueueDatabaseRole        string
-	DomainTransactionPooler  bool
-	DomainDatabaseMaxConns   int32
-	QueueDatabaseMaxConns    int32
-	CompletedJobRetention    time.Duration
-	CancelledJobRetention    time.Duration
-	DiscardedJobRetention    time.Duration
-	RiverJobCleanerTimeout   time.Duration
-	OperationalBridgeURL     string
-	OperationalBridgeToken   secrets.Value
-	OperationalBridgeTimeout time.Duration
+	QueueDatabaseMode              QueueControlMode
+	RiverDatabaseSchema            string
+	DomainDatabaseRole             string
+	QueueDatabaseRole              string
+	DomainTransactionPooler        bool
+	DomainDatabaseMaxConns         int32
+	QueueDatabaseMaxConns          int32
+	CompletedJobRetention          time.Duration
+	CancelledJobRetention          time.Duration
+	DiscardedJobRetention          time.Duration
+	RiverJobCleanerTimeout         time.Duration
+	OperationalBridgeURL           string
+	OperationalBridgeToken         secrets.Value
+	OperationalBridgeTimeout       time.Duration
+	OperationalBridgeAllowInsecure bool
 }
 
 // Load reads and validates the process environment. CLI profile selection, if
@@ -107,6 +108,12 @@ func Load(spec Spec) (Config, error) {
 		defaultShutdownTimeout,
 		500*time.Millisecond,
 		5*time.Minute,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.OperationalBridgeAllowInsecure, err = boolEnv(
+		lookup, "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", false,
 	)
 	if err != nil {
 		return Config{}, err
@@ -295,6 +302,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("river_cancelled_job_retention", c.CancelledJobRetention),
 		slog.Duration("river_discarded_job_retention", c.DiscardedJobRetention),
 		slog.Duration("river_job_cleaner_timeout", c.RiverJobCleanerTimeout),
+		slog.Bool("operational_bridge_allow_insecure", c.OperationalBridgeAllowInsecure),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 	}

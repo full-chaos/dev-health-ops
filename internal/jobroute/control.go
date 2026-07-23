@@ -14,14 +14,15 @@ import (
 )
 
 var (
-	ErrInvalidConfiguration = errors.New("job route configuration is invalid")
-	ErrUnknownRoute         = errors.New("job route is unknown")
-	ErrDrift                = errors.New("job route drifts from checked-in policy")
-	ErrPaused               = errors.New("job route is paused")
-	ErrLiveClaims           = errors.New("job route still has live claims")
-	ErrPendingOutbox        = errors.New("job route still has pending outbox work")
-	ErrUnavailable          = errors.New("job route store is unavailable")
-	ErrOutcomeUnknown       = errors.New("job route mutation outcome is unknown")
+	ErrInvalidConfiguration    = errors.New("job route configuration is invalid")
+	ErrUnknownRoute            = errors.New("job route is unknown")
+	ErrDrift                   = errors.New("job route drifts from checked-in policy")
+	ErrPaused                  = errors.New("job route is paused")
+	ErrLiveClaims              = errors.New("job route still has live claims")
+	ErrPendingOutbox           = errors.New("job route still has pending outbox work")
+	ErrCeleryQuiescenceMissing = errors.New("celery route quiescence is not configured")
+	ErrUnavailable             = errors.New("job route store is unavailable")
+	ErrOutcomeUnknown          = errors.New("job route mutation outcome is unknown")
 )
 
 type State struct {
@@ -42,10 +43,11 @@ type Quiescer interface {
 }
 
 type Controller struct {
-	pool     *pgxpool.Pool
-	registry Registry
-	quiescer Quiescer
-	now      func() time.Time
+	pool           *pgxpool.Pool
+	registry       Registry
+	quiescer       Quiescer
+	celeryQuiescer Quiescer
+	now            func() time.Time
 }
 
 func NewController(pool *pgxpool.Pool, registry Registry, quiescer Quiescer) (*Controller, error) {
@@ -53,6 +55,23 @@ func NewController(pool *pgxpool.Pool, registry Registry, quiescer Quiescer) (*C
 		return nil, ErrInvalidConfiguration
 	}
 	return &Controller{pool: pool, registry: registry, quiescer: quiescer, now: time.Now}, nil
+}
+
+// NewControllerWithCeleryQuiescer enables forward activation only when a
+// concrete Celery ownership probe is supplied. The default constructor
+// deliberately leaves future Celery-to-River transitions fail closed.
+func NewControllerWithCeleryQuiescer(
+	pool *pgxpool.Pool,
+	registry Registry,
+	riverQuiescer Quiescer,
+	celeryQuiescer Quiescer,
+) (*Controller, error) {
+	controller, err := NewController(pool, registry, riverQuiescer)
+	if err != nil || celeryQuiescer == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	controller.celeryQuiescer = celeryQuiescer
+	return controller, nil
 }
 
 func (controller *Controller) Inspect(ctx context.Context, kind string) (State, error) {
@@ -123,6 +142,14 @@ func (controller *Controller) ApplyCheckedIn(ctx context.Context, kind string) (
 	}
 	if state.Transport == descriptor.Route && !state.Paused {
 		return state, nil
+	}
+	if state.Transport == descriptor.RollbackRoute && descriptor.Route != descriptor.RollbackRoute {
+		if controller.celeryQuiescer == nil {
+			return State{}, ErrCeleryQuiescenceMissing
+		}
+		if err := controller.celeryQuiescer.Quiesce(ctx, kind); err != nil {
+			return State{}, ErrLiveClaims
+		}
 	}
 	now := controller.now().UTC()
 	err = tx.QueryRow(ctx, `

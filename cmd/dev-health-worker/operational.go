@@ -9,8 +9,10 @@ import (
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
+	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/google/uuid"
@@ -55,10 +57,12 @@ func buildOperationalWorker(
 	if executable != len(profile) {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	specs := make([]jobruntime.HandlerSpec, 0, 2)
+	specs := make([]jobruntime.HandlerSpec, 0, len(profile))
 	for _, kind := range []string{
 		jobcontract.KindBillingNotification,
 		jobcontract.KindWebhookDelivery,
+		jobcontract.KindHeartbeat,
+		jobcontract.KindRetentionCleanup,
 	} {
 		descriptor, ok := registry.Descriptor(kind)
 		if ok && descriptor.Executable() {
@@ -76,11 +80,17 @@ func buildOperationalWorker(
 	dispatcher, err := operational.NewHTTPDispatcher(
 		&http.Client{Timeout: cfg.OperationalBridgeTimeout},
 		operational.HTTPDispatcherConfig{
-			WebhookEndpoint: baseURL + "/api/internal/worker-operational/webhook",
-			BillingEndpoint: baseURL + "/api/internal/worker-operational/billing",
-			BearerToken:     cfg.OperationalBridgeToken.Reveal(),
+			WebhookEndpoint:       baseURL + "/api/internal/worker-operational/webhook",
+			BillingEndpoint:       baseURL + "/api/internal/worker-operational/billing",
+			HeartbeatEndpoint:     baseURL + "/api/internal/worker-operational/heartbeat",
+			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
+			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
 		},
 	)
+	if err != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	outboxStore, err := joboutbox.NewRepository(postgresDatabase.pools.Domain)
 	if err != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
@@ -124,9 +134,37 @@ func buildOperationalWorker(
 				return nil, nil, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, adapter.Spec())
+		case jobcontract.KindHeartbeat:
+			handler, handlerErr := systemjobs.NewHeartbeatHandler(dispatcher)
+			if handlerErr != nil {
+				return nil, nil, errWorkerDependencyUnavailable
+			}
+			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.HeartbeatArgs](
+				registry, spec, handler, dependencies,
+			)
+			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
+				return nil, nil, errWorkerDependencyUnavailable
+			}
+			registered = append(registered, adapter.Spec())
+		case jobcontract.KindRetentionCleanup:
+			handler, handlerErr := systemjobs.NewRetentionHandler(outboxStore)
+			if handlerErr != nil {
+				return nil, nil, errWorkerDependencyUnavailable
+			}
+			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.RetentionCleanupArgs](
+				registry, spec, handler, dependencies,
+			)
+			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
+				return nil, nil, errWorkerDependencyUnavailable
+			}
+			registered = append(registered, adapter.Spec())
 		}
 	}
-	queues := map[string]river.QueueConfig{"webhooks": {MaxWorkers: 4}}
+	queues := map[string]river.QueueConfig{
+		"heartbeat": {MaxWorkers: 1},
+		"retention": {MaxWorkers: 1},
+		"webhooks":  {MaxWorkers: 4},
+	}
 	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
 		Logger: logger, Queues: queues, Schema: cfg.RiverDatabaseSchema, Workers: workers,
 	})
@@ -167,7 +205,7 @@ func newOperationalBudget() *operationalBudget {
 }
 
 func (*operationalBudget) Supports(scope string, limit int) bool {
-	return scope == "organization" && limit > 0 && limit <= 32
+	return (scope == "organization" || scope == "fleet") && limit > 0 && limit <= 32
 }
 
 func (budget *operationalBudget) Acquire(ctx context.Context, request jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {

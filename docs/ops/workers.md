@@ -72,13 +72,14 @@ River jobs. Missing, paused, or policy-drifted rows fail closed.
 The first concrete handler is the bounded `system.retention_cleanup` adapter.
 It deletes only one `worker_job_terminal` checkpoint-sized batch and marks the
 same maintenance-run claim through the common idempotency middleware. The
-`system.heartbeat` policy remains explicitly non-retryable. Neither handler is
-compiled into a production River process yet, and both registry routes remain
-Celery; this foundation creates no producer, route, schedule, or deployment
-change. Generic webhook and billing email now have persisted reference rows and
-concrete Go handlers. The `ops` profile factory wires their PostgreSQL stores,
-runtime middleware, bounded HTTP dispatcher, and River adapters, but does not
-register them while their checked-in routes remain Celery. PagerDuty remains
+`system.heartbeat` policy remains explicitly non-retryable. Heartbeat and
+retention now have concrete Go handlers, typed adapters, idempotency guards,
+and bounded stores/dispatchers. Generic webhook and billing email likewise have
+persisted reference rows and concrete Go handlers. The `ops` profile factory
+wires all four handlers only when the entire profile is executable; while the
+checked-in routes remain Celery it starts no operational River consumer. This
+foundation creates no producer, route, schedule, or deployment change.
+PagerDuty remains
 Celery-owned until Go proves the
 read/delete/retry crash windows.
 
@@ -90,8 +91,8 @@ an activation claim:
 | Generic provider webhooks | Durable `webhook_deliveries` row keyed by provider delivery identity; Celery receives only its UUID, while the 24-hour cache remains a compatibility marker | Go can consume the same payload reference once provider reconciliation is ported and shadow parity is recorded. |
 | PagerDuty webhooks | Valkey receipt plus stream entry; delete only after success or terminal dead-letter | Dormant Go stream handler uses a leased, token-fenced `worker_job_runs` receipt and `streamrunner` ACK-after-completion semantics; Celery remains owner until locked-graph parity and a shadow/canary prove read/delete/retry behavior. |
 | Billing email | Durable `billing_notifications` intent keyed by Stripe event where available, otherwise canonical notification attributes; Celery receives only its UUID | Go can own delivery after mail-provider idempotency-header parity and sandbox evidence. |
-| Phone-home heartbeat | explicit `max_attempts=1` and best-effort endpoint post | Non-retryable; frozen `system.heartbeat` policy remains Celery-routed. |
-| Worker-outbox terminal retention | durable `maintenance_run_checkpoint` claim and bounded SQL delete | Go handler implemented but uncompiled and Celery-routed. |
+| Phone-home heartbeat | explicit `max_attempts=1`, unique schedule-occurrence claim, and authenticated compatibility dispatch | Go handler is implemented and dormant; `system.heartbeat` remains Celery-routed. |
+| Worker-outbox terminal retention | durable `maintenance_run_checkpoint` claim and bounded SQL delete | Go handler is implemented and dormant; policy remains Celery-routed. |
 | Team autoimport | terminal sync-run post-sync work | Remains coupled to the sync cutover and is out of this independent operational route. |
 
 The authenticated operator surface applies only checked-in policy:
@@ -106,8 +107,11 @@ dev-health-workerctl job-routes rollback \
   operational.webhook_delivery
 ```
 
-`apply` moves Celery to the exact route committed in migration policy; it
-cannot select an arbitrary transport. `rollback` returns to the checked-in
+`apply` can move Celery only to the exact route committed in migration policy;
+it cannot select an arbitrary transport. A forward transition fails closed
+until a concrete Celery quiescence probe is supplied, so checked-in policy
+cannot cut ownership away while old Celery work may still execute. `rollback`
+returns to the checked-in
 rollback route and refuses to succeed until outbox, semantic-run, and River
 work are quiescent. Both mutations are authenticated, serialized,
 generation-fenced, and durably audited. Today all six route rows and policies
@@ -161,10 +165,13 @@ The operational effect bridge is an authenticated internal API. Set
 `WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
 `WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the
 optional `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` is bounded from 100ms to 30s and
-defaults to 10s. Plain HTTP is accepted only for loopback development, never
-for container service DNS. Requests contain durable UUID references and
-bounded routing metadata only. Webhook `success`/duplicate `skipped` and
-billing `sent` are success; deterministic `error`/`dropped` results become
+defaults to 10s. Plain HTTP defaults to loopback-only. Local container stacks
+may explicitly set `WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
+permits only private IPs and single-label/`.internal`/`.local` service-discovery
+names, while public HTTP origins remain rejected. Production must leave the
+opt-in unset and use TLS. Requests contain durable UUID references and bounded
+routing metadata only. Webhook `success`/duplicate `skipped`, billing `sent`,
+and heartbeat `ok` are success; deterministic `error`/`dropped` results become
 permanent 422 rejections, while transport failures, timeouts, 429, 5xx, and
 malformed upstream responses remain retryable.
 

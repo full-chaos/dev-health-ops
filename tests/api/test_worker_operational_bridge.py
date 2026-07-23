@@ -99,3 +99,29 @@ def test_internal_bridge_classifies_unknown_result_shape_as_retryable(
             },
         )
     assert response.status_code == 502
+
+
+def test_internal_bridge_dispatches_heartbeat_occurrence(monkeypatch) -> None:
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    with patch(
+        "dev_health_ops.api.internal.worker_operational.phone_home_heartbeat.run",
+        return_value={"status": "ok"},
+    ) as run:
+        response = TestClient(app).post(
+            "/api/internal/worker-operational/heartbeat",
+            headers={"Authorization": "Bearer test-token"},
+            json={"scheduled_for": "2026-07-21T12:00:00Z"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    run.assert_called_once_with()
+
+
+def test_internal_bridge_rejects_timezone_free_heartbeat(monkeypatch) -> None:
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    response = TestClient(app).post(
+        "/api/internal/worker-operational/heartbeat",
+        headers={"Authorization": "Bearer test-token"},
+        json={"scheduled_for": "2026-07-21T12:00:00"},
+    )
+    assert response.status_code == 422

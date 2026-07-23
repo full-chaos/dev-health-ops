@@ -853,7 +853,8 @@ func mapJobRouteError(err error) error {
 	case errors.Is(err, jobroute.ErrUnknownRoute):
 		return serviceError(CodeNotFound, err)
 	case errors.Is(err, jobroute.ErrDrift), errors.Is(err, jobroute.ErrPaused),
-		errors.Is(err, jobroute.ErrLiveClaims), errors.Is(err, jobroute.ErrPendingOutbox):
+		errors.Is(err, jobroute.ErrLiveClaims), errors.Is(err, jobroute.ErrPendingOutbox),
+		errors.Is(err, jobroute.ErrCeleryQuiescenceMissing):
 		return serviceError(CodePrecondition, err)
 	case errors.Is(err, jobroute.ErrInvalidConfiguration):
 		return serviceError(CodeInvalid, err)

@@ -5,6 +5,7 @@ package jobroute
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +108,78 @@ func TestRollbackWaitsForProducerRouteLockThenRejectsStagedOutbox(t *testing.T) 
 	if state.Transport != "river_canary" || state.Generation != 1 {
 		t.Fatalf("route changed despite staged work: %+v", state)
 	}
+
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM public.worker_job_outbox;
+		UPDATE public.worker_job_routes
+		SET transport = 'celery', generation = 2, updated_at = statement_timestamp()
+		WHERE job_kind = 'job.test'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.ApplyCheckedIn(ctx, "job.test"); !errors.Is(err, ErrCeleryQuiescenceMissing) {
+		t.Fatalf("ApplyCheckedIn() without Celery quiescer error = %v", err)
+	}
+	state, err = controller.Inspect(ctx, "job.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Transport != "celery" || state.Generation != 2 {
+		t.Fatalf("route changed without Celery quiescence: %+v", state)
+	}
+
+	celery := &observedQuiescer{}
+	activationController, err := NewControllerWithCeleryQuiescer(
+		pool,
+		integrationRegistry{jobruntime.Descriptor{
+			Kind: "job.test", Route: "river_canary", RollbackRoute: "celery",
+		}},
+		idleQuiescer{},
+		celery,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.QueryRow(ctx, `
+		SELECT transport FROM public.worker_job_routes
+		WHERE job_kind = 'job.test' FOR SHARE`).Scan(&transport); err != nil {
+		t.Fatal(err)
+	}
+	result = make(chan error, 1)
+	go func() {
+		_, applyErr := activationController.ApplyCheckedIn(ctx, "job.test")
+		result <- applyErr
+	}()
+	waitForBlockedRouteUpdate(t, ctx, pool)
+	if celery.calls.Load() != 0 {
+		t.Fatal("Celery quiescence ran before the producer transaction completed")
+	}
+	if err := producer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("ApplyCheckedIn() with quiescence: %v", err)
+	}
+	if celery.calls.Load() != 1 {
+		t.Fatalf("Celery quiescence calls = %d", celery.calls.Load())
+	}
+	state, err = activationController.Inspect(ctx, "job.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Transport != "river_canary" || state.Generation != 3 {
+		t.Fatalf("route not activated after quiescence: %+v", state)
+	}
+}
+
+type observedQuiescer struct{ calls atomic.Int32 }
+
+func (quiescer *observedQuiescer) Quiesce(context.Context, string) error {
+	quiescer.calls.Add(1)
+	return nil
 }
 
 func waitForBlockedRouteUpdate(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {

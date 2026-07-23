@@ -39,9 +39,10 @@ func TestHTTPDispatcherClassifiesBridgeResultContract(t *testing.T) {
 				}),
 			}
 			dispatcher, err := NewHTTPDispatcher(client, HTTPDispatcherConfig{
-				WebhookEndpoint: "https://api.internal.example/webhook",
-				BillingEndpoint: "https://api.internal.example/billing",
-				BearerToken:     "test-token",
+				WebhookEndpoint:   "https://api.internal.example/webhook",
+				BillingEndpoint:   "https://api.internal.example/billing",
+				HeartbeatEndpoint: "https://api.internal.example/heartbeat",
+				BearerToken:       "test-token",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -62,9 +63,10 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T) {
 	config := HTTPDispatcherConfig{
-		WebhookEndpoint: "https://api.internal.example/worker/webhook",
-		BillingEndpoint: "https://api.internal.example/worker/billing",
-		BearerToken:     "test-token",
+		WebhookEndpoint:   "https://api.internal.example/worker/webhook",
+		BillingEndpoint:   "https://api.internal.example/worker/billing",
+		HeartbeatEndpoint: "https://api.internal.example/worker/heartbeat",
+		BearerToken:       "test-token",
 	}
 	if _, err := NewHTTPDispatcher(&http.Client{}, config); err == nil {
 		t.Fatal("unbounded client accepted")
@@ -75,5 +77,13 @@ func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T)
 	config.WebhookEndpoint = "http://api:8080/worker/webhook"
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err == nil {
 		t.Fatal("unencrypted service-DNS endpoint accepted")
+	}
+	config.AllowInsecureInternal = true
+	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err != nil {
+		t.Fatalf("explicit internal service-DNS endpoint rejected: %v", err)
+	}
+	config.WebhookEndpoint = "http://api.example.com/worker/webhook"
+	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err == nil {
+		t.Fatal("public unencrypted endpoint accepted with internal opt-in")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,9 +16,11 @@ import (
 const maxResponseBytes = 4 * 1024
 
 type HTTPDispatcherConfig struct {
-	WebhookEndpoint string
-	BillingEndpoint string
-	BearerToken     string
+	WebhookEndpoint       string
+	BillingEndpoint       string
+	HeartbeatEndpoint     string
+	BearerToken           string
+	AllowInsecureInternal bool
 }
 
 type bridgeResponse struct {
@@ -28,22 +31,32 @@ type bridgeResponse struct {
 // services during coexistence. Only durable identities and bounded routing
 // metadata cross the boundary; the services reload authoritative rows.
 type HTTPDispatcher struct {
-	client          *http.Client
-	webhookEndpoint string
-	billingEndpoint string
-	token           string
+	client            *http.Client
+	webhookEndpoint   string
+	billingEndpoint   string
+	heartbeatEndpoint string
+	token             string
 }
 
 func NewHTTPDispatcher(client *http.Client, config HTTPDispatcherConfig) (*HTTPDispatcher, error) {
 	if client == nil || client.Timeout < 100*time.Millisecond || client.Timeout > 30*time.Second ||
 		strings.TrimSpace(config.BearerToken) == "" ||
-		!validInternalEndpoint(config.WebhookEndpoint) || !validInternalEndpoint(config.BillingEndpoint) {
+		!validInternalEndpoint(config.WebhookEndpoint, config.AllowInsecureInternal) ||
+		!validInternalEndpoint(config.BillingEndpoint, config.AllowInsecureInternal) ||
+		!validInternalEndpoint(config.HeartbeatEndpoint, config.AllowInsecureInternal) {
 		return nil, errors.New("operational HTTP dispatcher configuration is invalid")
 	}
 	return &HTTPDispatcher{
 		client: client, webhookEndpoint: config.WebhookEndpoint,
-		billingEndpoint: config.BillingEndpoint, token: config.BearerToken,
+		billingEndpoint: config.BillingEndpoint, heartbeatEndpoint: config.HeartbeatEndpoint,
+		token: config.BearerToken,
 	}, nil
+}
+
+func (dispatcher *HTTPDispatcher) DispatchHeartbeat(ctx context.Context, scheduledFor time.Time) error {
+	return dispatcher.post(ctx, dispatcher.heartbeatEndpoint, map[string]string{
+		"scheduled_for": scheduledFor.UTC().Format(time.RFC3339),
+	}, "ok")
 }
 
 func (dispatcher *HTTPDispatcher) DispatchWebhook(ctx context.Context, delivery WebhookDelivery) error {
@@ -110,7 +123,7 @@ func (dispatcher *HTTPDispatcher) post(
 	return ErrDispatchPermanent
 }
 
-func validInternalEndpoint(raw string) bool {
+func validInternalEndpoint(raw string, allowInsecure bool) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
@@ -119,5 +132,21 @@ func validInternalEndpoint(raw string) bool {
 		return true
 	}
 	host := strings.ToLower(parsed.Hostname())
-	return parsed.Scheme == "http" && (host == "127.0.0.1" || host == "::1" || host == "localhost")
+	if parsed.Scheme != "http" || parsed.Host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || (allowInsecure && ip.IsPrivate())
+	}
+	if !allowInsecure {
+		return false
+	}
+	// Explicit insecure mode is limited to service-discovery names. Public DNS
+	// names remain rejected even when the development opt-in is set.
+	return !strings.Contains(host, ".") ||
+		strings.HasSuffix(host, ".internal") ||
+		strings.HasSuffix(host, ".local")
 }

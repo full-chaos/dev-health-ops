@@ -48,5 +48,5 @@ var _ Quiescer = (*PostgresRiverQuiescer)(nil)
 func IsPrecondition(err error) bool {
 	return errors.Is(err, ErrDrift) || errors.Is(err, ErrPaused) ||
 		errors.Is(err, ErrLiveClaims) || errors.Is(err, ErrPendingOutbox) ||
-		errors.Is(err, ErrUnknownRoute)
+		errors.Is(err, ErrCeleryQuiescenceMissing) || errors.Is(err, ErrUnknownRoute)
 }

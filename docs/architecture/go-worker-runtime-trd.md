@@ -964,8 +964,10 @@ JSON result for Python shadow comparison and fails if any computed class differs
 from the checked-in expectation. The separate
 `tests/compatibility/provider/run.sh` harness compares Go sink-ready envelopes
 with actual Python `WorkItem`, feature-flag, and canonical operational models
-across all six covered providers. This foundation is not a worker activation;
-provider-specific canary gates remain required.
+across all six covered providers. Both runtimes derive the envelope from the
+checked-in model input; the expected envelope is a drift oracle, never an
+output shortcut. This foundation is not a worker activation; provider-specific
+canary gates remain required.
 
 River queue concurrency is insufficient for global provider limits because it is local to each client/process.
 

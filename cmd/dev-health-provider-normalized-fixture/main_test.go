@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -32,5 +33,42 @@ func TestRunValidatesFullNormalizedCorpus(t *testing.T) {
 		if !providers[provider] {
 			t.Fatalf("provider %s missing from normalized corpus", provider)
 		}
+	}
+}
+
+func TestRunRejectsModelEnvelopeDrift(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join("..", "..", "internal", "providerfoundation", "testdata", "normalized_envelope_parity.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input fixture
+	if err := json.Unmarshal(content, &input); err != nil {
+		t.Fatal(err)
+	}
+	var model map[string]any
+	if err := json.Unmarshal(input.Cases[0].Model, &model); err != nil {
+		t.Fatal(err)
+	}
+	model["title"] = "model changed without updating the expected envelope"
+	input.Cases[0].Model, err = json.Marshal(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutatedPath := filepath.Join(t.TempDir(), "normalized-drift.json")
+	if err := os.WriteFile(mutatedPath, mutated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := run([]string{"-fixture", mutatedPath}, &output); err == nil {
+		t.Fatal("model/envelope drift was accepted")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("partial output emitted for drifted fixture: %s", output.String())
 	}
 }

@@ -18,13 +18,14 @@ import (
 )
 
 var (
-	ErrInvalidScope       = errors.New("invalid provider tenant scope")
-	ErrCredentialNotFound = errors.New("provider credential not found")
-	ErrCredentialInactive = errors.New("provider credential inactive")
-	ErrCredentialInvalid  = errors.New("provider credential is invalid")
-	ErrLeaseLost          = errors.New("provider lease is no longer valid")
-	ErrBudgetUnavailable  = errors.New("provider budget unavailable")
-	ErrSinkDuplicate      = errors.New("provider sink duplicate has different content")
+	ErrInvalidScope         = errors.New("invalid provider tenant scope")
+	ErrCredentialNotFound   = errors.New("provider credential not found")
+	ErrCredentialInactive   = errors.New("provider credential inactive")
+	ErrCredentialInvalid    = errors.New("provider credential is invalid")
+	ErrLeaseLost            = errors.New("provider lease is no longer valid")
+	ErrBudgetUnavailable    = errors.New("provider budget unavailable")
+	ErrSinkDuplicate        = errors.New("provider sink duplicate has different content")
+	ErrNormalizationInvalid = errors.New("provider normalized record is invalid")
 )
 
 // TenantScope is derived from a claimed sync unit, never from a provider

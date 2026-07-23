@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,9 +19,12 @@ type fixture struct {
 }
 
 type fixtureCase struct {
-	ID       string                                `json:"id"`
-	Shape    string                                `json:"shape"`
-	Envelope providerfoundation.NormalizedEnvelope `json:"envelope"`
+	ID            string                                `json:"id"`
+	Shape         string                                `json:"shape"`
+	IntegrationID string                                `json:"integration_id"`
+	Provenance    providerfoundation.Provenance         `json:"provenance"`
+	Model         json.RawMessage                       `json:"model"`
+	Envelope      providerfoundation.NormalizedEnvelope `json:"envelope"`
 }
 
 type result struct {
@@ -59,16 +63,60 @@ func run(args []string, stdout io.Writer) error {
 			return fmt.Errorf("duplicate normalized provider fixture id")
 		}
 		seenIDs[item.ID] = struct{}{}
-		if err := item.Envelope.Validate(); err != nil {
-			return fmt.Errorf("invalid normalized provider fixture envelope")
+		derived, err := deriveEnvelope(item)
+		if err != nil {
+			return fmt.Errorf("invalid normalized provider fixture model %s", item.ID)
 		}
-		if priorID, exists := seenDedupe[item.Envelope.DedupeKey]; exists && priorID != item.ID {
+		derivedJSON, err := json.Marshal(derived)
+		if err != nil {
+			return fmt.Errorf("encode derived normalized provider envelope")
+		}
+		expectedJSON, err := json.Marshal(item.Envelope)
+		if err != nil || !bytes.Equal(derivedJSON, expectedJSON) {
+			return fmt.Errorf("normalized provider fixture model/envelope mismatch %s", item.ID)
+		}
+		if priorID, exists := seenDedupe[derived.DedupeKey]; exists && priorID != item.ID {
 			return fmt.Errorf("duplicate normalized provider fixture dedupe key")
 		}
-		seenDedupe[item.Envelope.DedupeKey] = item.ID
-		output.Cases = append(output.Cases, resultCase{ID: item.ID, Envelope: item.Envelope})
+		seenDedupe[derived.DedupeKey] = item.ID
+		output.Cases = append(output.Cases, resultCase{ID: item.ID, Envelope: derived})
 	}
 	return json.NewEncoder(stdout).Encode(output)
+}
+
+func deriveEnvelope(item fixtureCase) (providerfoundation.NormalizedEnvelope, error) {
+	context := providerfoundation.NormalizationContext{
+		IntegrationID: item.IntegrationID,
+		Provenance:    item.Provenance,
+	}
+	switch item.Shape {
+	case "work_item":
+		var model providerfoundation.WorkItemRecord
+		if err := json.Unmarshal(item.Model, &model); err != nil {
+			return providerfoundation.NormalizedEnvelope{}, err
+		}
+		return providerfoundation.NormalizeWorkItem(context, model)
+	case "feature_flag":
+		var model providerfoundation.FeatureFlagRecord
+		if err := json.Unmarshal(item.Model, &model); err != nil {
+			return providerfoundation.NormalizedEnvelope{}, err
+		}
+		return providerfoundation.NormalizeFeatureFlag(context, model)
+	case "operational_service":
+		var model providerfoundation.OperationalServiceRecord
+		if err := json.Unmarshal(item.Model, &model); err != nil {
+			return providerfoundation.NormalizedEnvelope{}, err
+		}
+		return providerfoundation.NormalizeOperationalService(context, model)
+	case "operational_incident":
+		var model providerfoundation.OperationalIncidentRecord
+		if err := json.Unmarshal(item.Model, &model); err != nil {
+			return providerfoundation.NormalizedEnvelope{}, err
+		}
+		return providerfoundation.NormalizeOperationalIncident(context, model)
+	default:
+		return providerfoundation.NormalizedEnvelope{}, providerfoundation.ErrNormalizationInvalid
+	}
 }
 
 func main() {

@@ -1,6 +1,6 @@
 ---
 page_id: int-wh-verify
-summary: Verify each provider's webhook authentication against the original request bytes before parsing, binding resolution, queue admission, or canonical writes.
+summary: Verify a webhook signature for GitHub, GitLab, Jira, or PagerDuty against the provider's exact authentication contract and original request bytes.
 content_type: task-guide
 owner: platform-api
 source_of_truth:
@@ -10,9 +10,9 @@ applicability: current
 lifecycle: active
 ---
 
-# Verify webhook signatures
+# Verify a webhook signature
 
-Webhook authentication is provider-specific. Validate the request at the receiver boundary before parsing or re-serializing the body, trusting source authority, admitting queue work, or writing canonical state.
+Use this guide when you need to verify a webhook signature or secret-token header before accepting provider delivery. Webhook authentication is provider-specific: validate the request at the receiver boundary before parsing or re-serializing the body, trusting source authority, admitting queue work, or writing canonical state.
 {: .fc-page-lede }
 
 ## General rules

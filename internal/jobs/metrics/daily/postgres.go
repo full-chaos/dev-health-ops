@@ -117,7 +117,30 @@ RETURNING id::text, run_id::text, claim_token::text`,
 	if err != nil {
 		return nil, ErrUnavailable
 	}
+	claim.LeaseDuration = store.lease
 	return &claim, nil
+}
+
+func (store *PostgresStore) RenewPartition(ctx context.Context, claim PartitionClaim) error {
+	if !store.valid() || !validUUID(claim.Partition.ID) || !validUUID(claim.Partition.RunID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	now := store.now().UTC()
+	command, err := store.pool.Exec(ctx, `
+UPDATE public.daily_metrics_partitions
+SET lease_expires_at = $1, updated_at = $2
+WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_runs AS run
+      WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
+  )`, now.Add(store.lease), now, claim.Partition.ID, claim.Partition.RunID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
 }
 
 func (store *PostgresStore) CompletePartition(ctx context.Context, claim PartitionClaim) error {
@@ -143,8 +166,11 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token
       WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
   )`,
 		status, store.now().UTC(), claim.Partition.ID, claim.Partition.RunID, claim.Token)
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
 		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
 	}
 	return nil
 }
@@ -175,7 +201,28 @@ RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finali
 	if err != nil {
 		return nil, ErrUnavailable
 	}
+	claim.LeaseDuration = store.lease
 	return &claim, nil
+}
+
+func (store *PostgresStore) RenewFinalize(ctx context.Context, claim FinalizeClaim) error {
+	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	now := store.now().UTC()
+	command, err := store.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET finalization_lease_expires_at = $1, updated_at = $2
+WHERE id = $3::uuid AND finalization_status = 'running'
+  AND finalization_claim_token = $4::uuid AND status = 'running'`,
+		now.Add(store.lease), now, claim.Run.ID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
 }
 
 func (store *PostgresStore) CompleteFinalize(ctx context.Context, claim FinalizeClaim) error {
@@ -199,8 +246,11 @@ SET finalization_status = $1, finalization_claim_token = NULL,
     updated_at = $2
 WHERE id = $3::uuid AND finalization_status = 'running'
   AND finalization_claim_token = $4::uuid AND status = 'running'`, status, store.now().UTC(), claim.Run.ID, claim.Token)
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
 		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
 	}
 	return nil
 }

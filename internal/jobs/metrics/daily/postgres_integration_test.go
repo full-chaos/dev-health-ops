@@ -65,6 +65,14 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	if duplicate, err := store.ClaimPartition(ctx, partitionID); err != nil || duplicate != nil {
 		t.Fatalf("unexpired duplicate = %#v, %v", duplicate, err)
 	}
+	now = now.Add(store.lease / 2)
+	if err := store.RenewPartition(ctx, *first); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(store.lease/2 + time.Second)
+	if duplicate, err := store.ClaimPartition(ctx, partitionID); err != nil || duplicate != nil {
+		t.Fatalf("healthy renewed partition was reclaimed = %#v, %v", duplicate, err)
+	}
 	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'canceled' WHERE id = $1::uuid", runID); err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +112,14 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	firstFinalize, err := store.ClaimFinalize(ctx, runID)
 	if err != nil || firstFinalize == nil {
 		t.Fatalf("first finalize = %#v, %v", firstFinalize, err)
+	}
+	now = now.Add(store.lease / 2)
+	if err := store.RenewFinalize(ctx, *firstFinalize); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(store.lease/2 + time.Second)
+	if duplicate, err := store.ClaimFinalize(ctx, runID); err != nil || duplicate != nil {
+		t.Fatalf("healthy renewed finalizer was reclaimed = %#v, %v", duplicate, err)
 	}
 	now = now.Add(store.lease + time.Second)
 	reclaimedFinalize, err := store.ClaimFinalize(ctx, runID)

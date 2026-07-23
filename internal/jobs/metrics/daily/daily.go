@@ -16,12 +16,14 @@ package daily
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
 var (
 	ErrInvalidState = errors.New("daily metrics durable state is invalid")
+	ErrLeaseLost    = errors.New("daily metrics execution lease was lost")
 	ErrUnavailable  = errors.New("daily metrics dependency is unavailable")
 )
 
@@ -38,13 +40,15 @@ type Partition struct {
 }
 
 type PartitionClaim struct {
-	Partition Partition
-	Token     string
+	Partition     Partition
+	Token         string
+	LeaseDuration time.Duration
 }
 
 type FinalizeClaim struct {
-	Run   Run
-	Token string
+	Run           Run
+	Token         string
+	LeaseDuration time.Duration
 }
 
 // Store is the authoritative execution-state boundary. Implementations must
@@ -54,9 +58,11 @@ type Store interface {
 	ClaimDispatch(context.Context, string) (*Run, error)
 	DispatchablePartitions(context.Context, string) ([]Partition, error)
 	ClaimPartition(context.Context, string) (*PartitionClaim, error)
+	RenewPartition(context.Context, PartitionClaim) error
 	CompletePartition(context.Context, PartitionClaim) error
 	ReleasePartition(context.Context, PartitionClaim) error
 	ClaimFinalize(context.Context, string) (*FinalizeClaim, error)
+	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
 	ReleaseFinalize(context.Context, FinalizeClaim) error
 }
@@ -162,8 +168,17 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		_ = handler.store.ReleasePartition(ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}
-	if err := handler.compatibility.ComputePartition(ctx, run, claim.Partition); err != nil {
-		_ = handler.store.ReleasePartition(ctx, *claim)
+	if err := runWithLeaseRenewal(
+		ctx,
+		claim.LeaseDuration,
+		func(renewCtx context.Context) error {
+			return handler.store.RenewPartition(renewCtx, *claim)
+		},
+		func(workCtx context.Context) error {
+			return handler.compatibility.ComputePartition(workCtx, run, claim.Partition)
+		},
+	); err != nil {
+		releasePartition(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompletePartition(ctx, *claim); err != nil {
@@ -204,12 +219,76 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		_ = handler.store.ReleaseFinalize(ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}
-	if err := handler.compatibility.Finalize(ctx, claim.Run); err != nil {
-		_ = handler.store.ReleaseFinalize(ctx, *claim)
+	if err := runWithLeaseRenewal(
+		ctx,
+		claim.LeaseDuration,
+		func(renewCtx context.Context) error {
+			return handler.store.RenewFinalize(renewCtx, *claim)
+		},
+		func(workCtx context.Context) error {
+			return handler.compatibility.Finalize(workCtx, claim.Run)
+		},
+	); err != nil {
+		releaseFinalize(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+func runWithLeaseRenewal(
+	ctx context.Context,
+	leaseDuration time.Duration,
+	renew func(context.Context) error,
+	work func(context.Context) error,
+) error {
+	if ctx == nil || leaseDuration < 3*time.Millisecond || renew == nil || work == nil {
+		return ErrInvalidState
+	}
+	workCtx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
+	stop := make(chan struct{})
+	renewalResult := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(leaseDuration / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				renewalResult <- nil
+				return
+			case <-ctx.Done():
+				cancelWork()
+				renewalResult <- ctx.Err()
+				return
+			case <-ticker.C:
+				if err := renew(ctx); err != nil {
+					cancelWork()
+					renewalResult <- err
+					return
+				}
+			}
+		}
+	}()
+	workErr := work(workCtx)
+	close(stop)
+	renewalErr := <-renewalResult
+	if renewalErr != nil {
+		return renewalErr
+	}
+	return workErr
+}
+
+func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.ReleasePartition(releaseCtx, claim)
+}
+
+func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.ReleaseFinalize(releaseCtx, claim)
 }

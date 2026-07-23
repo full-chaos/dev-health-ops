@@ -161,6 +161,11 @@ exclude = [
   "venv",
   "__pycache__",
   "docs",
+  # Non-source documentation trees. Ruff 0.16 formats Python code fences in
+  # Markdown; the preserved legacy corpus is frozen reference material that must
+  # not be reformatted, and .planning holds internal planning notes.
+  ".github/docs-legacy",
+  ".planning",
   "build",
   "dist",
   "migrations",

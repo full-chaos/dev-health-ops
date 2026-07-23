@@ -162,7 +162,29 @@ def _maybe_dispatch_config(
     occurrence -- at most one cron interval of delay, no manual cleanup.
     """
 
-    from dev_health_ops.models.settings import JobStatus, ScheduledJob
+    from dev_health_ops.models.settings import (
+        JobStatus,
+        ScheduledJob,
+        SyncConfiguration,
+    )
+
+    config_query = (
+        session.query(SyncConfiguration)
+        .filter(
+            SyncConfiguration.id == _as_uuid(config.id),
+            SyncConfiguration.org_id == _as_str(config.org_id),
+        )
+        .populate_existing()
+    )
+    if _session_dialect_name(session) == "postgresql":
+        locked_config = config_query.with_for_update(skip_locked=True).one_or_none()
+        if locked_config is None:
+            return False
+    else:
+        locked_config = config_query.one_or_none()
+        if locked_config is None:
+            return False
+    config = locked_config
 
     if not organization_exists_sync(session, config.org_id):
         return False
@@ -268,28 +290,25 @@ def _maybe_dispatch_config(
         job.next_run_at = marker
     session.flush()
 
-    session.commit()
-
-    from dev_health_ops.sync.execution_trigger import create_sync_execution_trigger
+    from dev_health_ops.sync.execution_trigger import (
+        ScheduledSyncOccurrenceIneligibleError,
+        create_scheduled_sync_execution_trigger,
+    )
     from dev_health_ops.workers.sync_units import (
         terminalize_feature_disabled_plan,
     )
 
     logger.info("Routing config %s through fan-out planner", config.id)
     try:
-        trigger = create_sync_execution_trigger(
+        trigger = create_scheduled_sync_execution_trigger(
             session,
             config,
+            job,
             org_id,
+            scheduled_for=next_run,
             triggered_by="schedule",
             mode="incremental",
         )
-        if trigger is None:
-            logger.warning(
-                "Skipping sync config %s because it has no linked integration",
-                config.id,
-            )
-            return False
         if not trigger.dispatch_required:
             session.commit()
             logger.warning(
@@ -303,6 +322,10 @@ def _maybe_dispatch_config(
                 },
             )
             return False
+    except ScheduledSyncOccurrenceIneligibleError as exc:
+        logger.warning("Skipping sync config %s: %s", config.id, exc)
+        session.rollback()
+        return False
     except Exception:
         logger.exception("Fan-out planner failed for config %s", config.id)
         session.rollback()

@@ -107,7 +107,7 @@ type reconcilerDependencySources struct {
 
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
 	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
-	buildSyncObserver        func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
+	buildSyncShadow          func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
 	syncDispatchContractRoot string
@@ -123,8 +123,8 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	buildSyncRouteFence: func(pool *pgxpool.Pool, registry *syncdispatchcontract.Registry) (syncroute.Checker, error) {
 		return syncroute.New(pool, registry)
 	},
-	buildSyncObserver: func(pool *pgxpool.Pool, registry *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
-		return syncreconciler.NewObserver(pool, registry)
+	buildSyncShadow: func(pool *pgxpool.Pool, registry *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
+		return syncreconciler.NewShadow(pool, registry)
 	},
 	newSyncRecorder: func(logger *slog.Logger) (reconcilerObservationRecorder, error) {
 		return syncreconciler.NewSlogObservationRecorder(logger)
@@ -271,7 +271,7 @@ func buildReconcilerDependencies(
 		dependencies.syncRegistryErr != nil || dependencies.syncDispatchRegistry == nil ||
 		sources.buildRelay == nil || sources.newLoop == nil ||
 		sources.buildSyncRouteFence == nil ||
-		sources.buildSyncObserver == nil || sources.newSyncRecorder == nil ||
+		sources.buildSyncShadow == nil || sources.newSyncRecorder == nil ||
 		sources.newSyncLoop == nil {
 		dependencies.relayErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()
@@ -302,8 +302,8 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	dependencies.syncRouteFence = routeFence
-	observer, err := sources.buildSyncObserver(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
-	if err != nil || observer == nil {
+	shadow, err := sources.buildSyncShadow(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
+	if err != nil || shadow == nil {
 		dependencies.syncObserverErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()
 		return dependencies
@@ -322,7 +322,7 @@ func buildReconcilerDependencies(
 	}
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
 	syncLoopConfig.Recorder = recorder
-	syncLoop, err := sources.newSyncLoop(observer, syncLoopConfig)
+	syncLoop, err := sources.newSyncLoop(shadow, syncLoopConfig)
 	if err != nil || syncLoop == nil {
 		dependencies.syncLoopErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()

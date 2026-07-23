@@ -369,20 +369,36 @@ either kernel from a command or deployment profile, and every checked-in and
 persisted route remains Celery, so these additions are failure-tested
 boundaries rather than activation.
 
-Scheduler activation has an explicit Phase 4 dependency. The atomic
-coordinator insert named by the TRD is `sync.plan_scheduled_config`, whose
-idempotent consumer must turn one stable schedule occurrence into the
-authoritative `JobRun`, `SyncRun`, units, and dispatch outbox in one domain
-transaction. `sync.dispatch_run` cannot fill that role because it requires an
-existing `SyncRun`. Until the scheduled-planning coordinator is implemented,
-Celery Beat and `dispatch_scheduled_syncs` remain the sole mutation owners; the
-Go scheduler command must not advance production markers. Scheduler activation
-still needs the planner's authoritative domain-state/outbox materialization,
-organization and entitlement policy, missing-marker and catch-up behavior, and
-command-loop wiring. Reconciler activation still needs missing-outbox
-materialization, expired-lease repair, persisted failure backoff, concrete
-River insertion and handlers, command/operator wiring, and the bounded
-`post_sync` quiescence plus external-handoff path.
+Migration `0050` and the active Python scheduler now provide the first Phase 4
+planning boundary. A stable, language-neutral occurrence row links one
+configuration/cron timestamp to its authoritative `JobRun` and `SyncRun`.
+`dispatch_scheduled_syncs` locks configuration then marker state, revalidates
+organization and entitlement policy, and commits the occurrence, planner graph,
+reference-discovery outbox, and `next_run_at` in one transaction. A planner or
+marker failure rolls back the whole graph; replay of the same occurrence reuses
+the typed plan links. Missing-marker and coalesced catch-up behavior remain
+Celery-owned and are covered by PostgreSQL replica tests.
+
+The dormant Go occurrence coordinator can insert or verify the same identity
+through the scheduler transaction. The active Python planner completes an
+existing pending row when its own Celery dispatch reaches the same occurrence,
+so concurrent/retried cross-language handoff is idempotent. No independent
+consumer scans pending occurrences, however, and no command constructs the Go
+coordinator; if Go advanced the marker alone, that row would be stranded. This
+is therefore a cross-language persistence contract, not authorization to
+advance production markers. Scheduler activation still needs a durable
+pending-occurrence consumer (or equivalent Go planner), command wiring,
+unsupported-cron fallback, and operator rollout controls.
+
+The Go reconciler command now constructs only an explicit no-begin shadow
+adapter around the transport kernel. A separate command-unwired materializer
+can reconstruct bounded dispatch, finalize, discovery, and missing post-sync
+wakeups in one domain transaction. It never reads routes, claims rows, or
+publishes work; existing pending rows and at-most-once post-sync rows retain
+their current semantics. Reconciler activation still needs expired-lease
+repair, persisted failure backoff, concrete River insertion and handlers, a
+capability-aware route/operator control plane, and the bounded `post_sync`
+quiescence plus external-handoff path.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,
@@ -412,8 +428,12 @@ sync-domain outbox remains part of the work below.
 Foundation status: the scheduler transaction handoff and reconciler transport
 kernels exist with unit/failure-injection coverage, the reconciler image
 packages its sync-dispatch contract, and a containerized parity target exists.
-They remain command-unwired and Celery-only; the materialization, backoff,
-concrete River delivery, and `post_sync` activation gaps above remain open.
+The Python scheduler now persists idempotent occurrences and its complete plan
+atomically. The reconciler command is wired only to the shadow adapter, while
+the Go outbox materializer remains command-unwired. Every route remains
+Celery-only; expired-lease repair, persisted backoff, concrete River delivery,
+capability/operator controls, the independent pending-occurrence consumer (or
+equivalent Go planner), and `post_sync` activation gaps above remain open.
 
 #### Acceptance
 

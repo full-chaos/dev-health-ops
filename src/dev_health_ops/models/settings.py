@@ -18,6 +18,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -637,6 +638,63 @@ class JobRun(Base):
         self.triggered_by = triggered_by
         self.status = status
         self.created_at = datetime.now(timezone.utc)
+
+
+class ScheduledSyncOccurrence(Base):
+    """Stable identity and authoritative plan links for one scheduled sync."""
+
+    __tablename__ = "scheduled_sync_occurrences"
+
+    occurrence_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    identity_version: Mapped[str] = mapped_column(Text, nullable=False)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    sync_config_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("sync_configurations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_job_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("scheduled_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    job_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("job_runs.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    sync_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("sync_runs.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sync_config_id",
+            "scheduled_for",
+            name="uq_scheduled_sync_occurrence_config_time",
+        ),
+        CheckConstraint(
+            "(job_run_id IS NULL AND sync_run_id IS NULL) OR "
+            "(job_run_id IS NOT NULL AND sync_run_id IS NOT NULL)",
+            name="ck_scheduled_sync_occurrence_plan_links",
+        ),
+        Index(
+            "ix_scheduled_sync_occurrence_org_config_time",
+            "org_id",
+            "sync_config_id",
+            "scheduled_for",
+        ),
+    )
 
 
 class SyncWatermark(Base):

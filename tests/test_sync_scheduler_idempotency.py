@@ -23,7 +23,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.git import Base
@@ -39,7 +39,12 @@ from dev_health_ops.models.settings import (
     JobRunStatus,
     JobStatus,
     ScheduledJob,
+    ScheduledSyncOccurrence,
     SyncConfiguration,
+)
+from dev_health_ops.sync.execution_trigger import (
+    SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+    scheduled_sync_occurrence_identity,
 )
 
 HOUR = timedelta(hours=1)
@@ -327,13 +332,136 @@ class TestDispatchIdempotency:
 
         # Next cron interval reached (marker expired AND config due again).
         job.next_run_at = now - timedelta(seconds=1)
-        config.last_sync_at = now - 2 * HOUR
+        config.last_sync_at = now - HOUR - timedelta(seconds=10)
         db_session.flush()
 
         third = _call(task)
         assert str(config.id) in third["dispatched"]
         dispatch_mock.apply_async.assert_not_called()
         assert db_session.query(SyncDispatchOutbox).count() == 2
+
+    def test_expired_marker_reuses_same_occurrence_without_duplicate_plan(
+        self, monkeypatch, db_session
+    ):
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config)
+        db_session.add(job)
+        db_session.flush()
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
+
+        first = _call(task)
+        first_occurrence = db_session.query(ScheduledSyncOccurrence).one()
+        first_job_run_id = first_occurrence.job_run_id
+        first_sync_run_id = first_occurrence.sync_run_id
+
+        job.next_run_at = now - timedelta(seconds=1)
+        db_session.flush()
+        second = _call(task)
+
+        assert str(config.id) in first["dispatched"]
+        assert str(config.id) in second["dispatched"]
+        dispatch_mock.apply_async.assert_not_called()
+        assert db_session.query(ScheduledSyncOccurrence).count() == 1
+        assert db_session.query(JobRun).count() == 1
+        assert db_session.query(SyncRun).count() == 1
+        assert db_session.query(SyncDispatchOutbox).count() == 1
+        persisted = db_session.query(ScheduledSyncOccurrence).one()
+        assert persisted.job_run_id == first_job_run_id
+        assert persisted.sync_run_id == first_sync_run_id
+
+    def test_pending_go_occurrence_is_completed_once_by_python(
+        self, monkeypatch, db_session
+    ):
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config)
+        db_session.add(job)
+        db_session.flush()
+        scheduled_for = now - HOUR
+        occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(
+                config.id,
+                scheduled_for,
+            ),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=config.org_id,
+            sync_config_id=config.id,
+            scheduled_job_id=job.id,
+            scheduled_for=scheduled_for,
+        )
+        db_session.add(occurrence)
+        db_session.commit()
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
+
+        first = _call(task)
+        db_session.refresh(occurrence)
+        first_job_run_id = occurrence.job_run_id
+        first_sync_run_id = occurrence.sync_run_id
+
+        job.next_run_at = now - timedelta(seconds=1)
+        db_session.commit()
+        second = _call(task)
+
+        assert str(config.id) in first["dispatched"]
+        assert str(config.id) in second["dispatched"]
+        assert first_job_run_id is not None
+        assert first_sync_run_id is not None
+        assert occurrence.job_run_id == first_job_run_id
+        assert occurrence.sync_run_id == first_sync_run_id
+        assert db_session.query(ScheduledSyncOccurrence).count() == 1
+        assert db_session.query(JobRun).count() == 1
+        assert db_session.query(SyncRun).count() == 1
+        assert db_session.query(SyncDispatchOutbox).count() == 1
+        dispatch_mock.apply_async.assert_not_called()
+
+    def test_planner_failure_rolls_back_occurrence_plan_and_marker(
+        self, monkeypatch, db_session
+    ):
+        from dev_health_ops.sync import execution_trigger
+
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config)
+        db_session.add(job)
+        db_session.commit()
+        task, dispatch_mock = _run_dispatch(monkeypatch, db_session)
+
+        def fail_plan(*_args, **_kwargs):
+            raise RuntimeError("injected planner failure")
+
+        monkeypatch.setattr(execution_trigger, "plan_sync_run", fail_plan)
+        result = _call(task)
+
+        db_session.refresh(job)
+        assert result["dispatched"] == []
+        assert result["skipped"] == 1
+        assert job.next_run_at is None
+        assert db_session.query(ScheduledSyncOccurrence).count() == 0
+        assert db_session.query(JobRun).count() == 0
+        assert db_session.query(SyncRun).count() == 0
+        assert db_session.query(SyncDispatchOutbox).count() == 0
+        dispatch_mock.apply_async.assert_not_called()
+
+    def test_deleting_authoritative_job_run_cascades_occurrence(
+        self, monkeypatch, db_session
+    ):
+        db_session.execute(text("PRAGMA foreign_keys=ON"))
+        now = datetime.now(timezone.utc)
+        config = _make_config(db_session, last_sync_at=now - 2 * HOUR)
+        job = _make_job(config)
+        db_session.add(job)
+        db_session.flush()
+        task, _ = _run_dispatch(monkeypatch, db_session)
+        _call(task)
+
+        occurrence = db_session.query(ScheduledSyncOccurrence).one()
+        job_run = db_session.get(JobRun, occurrence.job_run_id)
+        assert job_run is not None
+        db_session.delete(job_run)
+        db_session.commit()
+
+        assert db_session.query(ScheduledSyncOccurrence).count() == 0
 
     def test_creates_scheduled_job_row_when_missing(self, monkeypatch, db_session):
         now = datetime.now(timezone.utc)
@@ -391,6 +519,18 @@ class TestDispatchErrorIsolation:
         assert str(bad_config.id) not in result["dispatched"]
         dispatch_mock.apply_async.assert_not_called()
         assert db_session.query(SyncDispatchOutbox).count() == 1
+
+
+def test_scheduled_occurrence_identity_matches_go_golden() -> None:
+    occurrence_id = scheduled_sync_occurrence_identity(
+        "config-a",
+        datetime(2026, 1, 1, 11, 0, tzinfo=timezone.utc),
+    )
+    assert SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION == "sync_scheduler_occurrence_v1"
+    assert (
+        occurrence_id
+        == "sha256:27478ac7c7bbcfc33caa3922492910d97220984911632d754944fdeaf405f0f9"
+    )
 
 
 class TestUnmigratedConfigsSkipped:

@@ -173,6 +173,38 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 	if handoffs != 0 || rolledBackNextRunAt != nil {
 		t.Fatalf("rollback left handoffs=%d nextRunAt=%v", handoffs, rolledBackNextRunAt)
 	}
+
+	coordinator := NewOccurrenceCoordinator()
+	occurrences, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occurrences) != 1 {
+		t.Fatalf("occurrence handoffs = %d, want 1", len(occurrences))
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE public.scheduled_jobs SET next_run_at = NULL
+		WHERE id = '00000000-0000-4000-8000-000000003039'
+	`); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := firstRepository.HandoffDue(ctx, observedAt, 1, coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retried) != 1 || retried[0].ID != occurrences[0].ID {
+		t.Fatalf("retried occurrences = %#v, want id %s", retried, occurrences[0].ID)
+	}
+	var occurrenceRows int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT count(*) FROM public.scheduled_sync_occurrences",
+	).Scan(&occurrenceRows); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceRows != 1 {
+		t.Fatalf("scheduled occurrence rows = %d, want 1", occurrenceRows)
+	}
 }
 
 func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
@@ -199,6 +231,18 @@ func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) 
 			next_run_at timestamptz
 		)`,
 		`CREATE TABLE public.scheduler_handoffs (id text PRIMARY KEY)`,
+		`CREATE TABLE public.scheduled_sync_occurrences (
+			occurrence_id text PRIMARY KEY,
+			identity_version text NOT NULL,
+			org_id text NOT NULL,
+			sync_config_id uuid NOT NULL,
+			scheduled_job_id uuid NOT NULL,
+			scheduled_for timestamptz NOT NULL,
+			job_run_id uuid,
+			sync_run_id uuid,
+			created_at timestamptz NOT NULL,
+			UNIQUE (sync_config_id, scheduled_for)
+		)`,
 		`INSERT INTO public.sync_configurations (
 			id, org_id, is_active, sync_options, last_sync_at, created_at
 		) VALUES (

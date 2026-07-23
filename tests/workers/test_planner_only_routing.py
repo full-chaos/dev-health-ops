@@ -245,7 +245,7 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     """A migrated, due config must be planned with a durable outbox wakeup."""
     from dev_health_ops.workers.sync_scheduler import _maybe_dispatch_config
 
-    org_id = str(uuid.uuid4())
+    org_id = _seed_org(db_session)
     integration = _seed_integration(db_session, org_id)
     _seed_source(db_session, org_id, integration)
     _seed_dataset(db_session, org_id, integration)

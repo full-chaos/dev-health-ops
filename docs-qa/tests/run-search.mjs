@@ -4,7 +4,10 @@ import { resolve } from "node:path";
 
 const args = process.argv.slice(2);
 const configFlag = args.indexOf("--config");
-const configValue = configFlag === -1 ? "../docs/search-acceptance.json" : args[configFlag + 1];
+const configValue =
+  configFlag === -1
+    ? "../.github/documentation-program/phase-10/search-acceptance.json"
+    : args[configFlag + 1];
 
 if (configValue === undefined) {
   throw new Error("--config requires a search acceptance file");

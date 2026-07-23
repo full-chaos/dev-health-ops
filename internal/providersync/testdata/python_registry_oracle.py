@@ -21,7 +21,7 @@ def main() -> int:
     spec.loader.exec_module(module)
 
     registry: dict[str, list[dict[str, object]]] = {}
-    for provider in ("github", "gitlab"):
+    for provider in ("github", "gitlab", "jira", "linear", "launchdarkly"):
         registry[provider] = [
             {
                 "provider": item.provider,

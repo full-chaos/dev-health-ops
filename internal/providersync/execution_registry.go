@@ -25,7 +25,7 @@ func ExecutionDescriptors(provider string) []ExecutionDescriptor {
 		descriptors = append(descriptors, ExecutionDescriptor{
 			Provider: capability.Provider, Dataset: capability.Dataset,
 			Mode: ExecutionPythonCompatibility, CompatibilityAdapter: adapter,
-			NativeShadow: nativeShadowReady(capability.Dataset),
+			NativeShadow: nativeShadowReady(capability.Provider, capability.Dataset),
 			RouteEnabled: false,
 		})
 	}
@@ -40,13 +40,16 @@ func ExecutionDescriptors(provider string) []ExecutionDescriptor {
 // labels/projects/history/comments names are not independent sink semantics.
 // Until a native handler emits that complete batch and has canary evidence,
 // only repository metadata is eligible for auditable shadow execution.
-func nativeShadowReady(dataset string) bool {
-	return dataset == "repo-metadata"
+func nativeShadowReady(provider, dataset string) bool {
+	return (provider == "github" || provider == "gitlab") && dataset == "repo-metadata"
 }
 
 type RouteSwitches struct {
-	GitHub bool
-	GitLab bool
+	GitHub       bool
+	GitLab       bool
+	Linear       bool
+	Jira         bool
+	LaunchDarkly bool
 }
 
 func (switches RouteSwitches) Descriptor(provider, dataset string) (ExecutionDescriptor, bool) {
@@ -59,6 +62,12 @@ func (switches RouteSwitches) Descriptor(provider, dataset string) (ExecutionDes
 			descriptor.RouteEnabled = switches.GitHub && descriptor.NativeShadow
 		case "gitlab":
 			descriptor.RouteEnabled = switches.GitLab && descriptor.NativeShadow
+		case "linear":
+			descriptor.RouteEnabled = switches.Linear && descriptor.NativeShadow
+		case "jira":
+			descriptor.RouteEnabled = switches.Jira && descriptor.NativeShadow
+		case "launchdarkly":
+			descriptor.RouteEnabled = switches.LaunchDarkly && descriptor.NativeShadow
 		default:
 			return ExecutionDescriptor{}, false
 		}

@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestCapabilitiesMatchPythonGitHubAndGitLabRegistry(t *testing.T) {
+func TestCapabilitiesMatchPythonProviderRegistry(t *testing.T) {
 	python := pythonExecutable(t)
 	_, currentFile, _, _ := runtime.Caller(0)
 	packageDir := filepath.Dir(currentFile)
@@ -27,7 +27,7 @@ func TestCapabilitiesMatchPythonGitHubAndGitLabRegistry(t *testing.T) {
 		t.Fatalf("decode Python registry oracle: %v: %s", err, output)
 	}
 	got := map[string][]registryEntry{}
-	for _, provider := range []string{"github", "gitlab"} {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear", "launchdarkly"} {
 		sort.Slice(want[provider], func(left, right int) bool {
 			return want[provider][left].Dataset < want[provider][right].Dataset
 		})
@@ -84,6 +84,10 @@ func TestCapabilityCostWatermarkAndFlagsAreExact(t *testing.T) {
 		{"github", "commit-stats", CostHeavy, WatermarkIncremental, map[string]bool{"sync_git": true, "sync_commit_stats": true}},
 		{"gitlab", "incidents", CostLight, WatermarkIncremental, map[string]bool{"sync_incidents": true}},
 		{"gitlab", "feature-flags", CostMedium, WatermarkIncremental, map[string]bool{}},
+		{"jira", "incidents", CostMedium, WatermarkIncremental, map[string]bool{}},
+		{"jira", "work-item-labels", CostLight, WatermarkIncremental, map[string]bool{}},
+		{"linear", "work-items", CostMedium, WatermarkIncremental, map[string]bool{}},
+		{"launchdarkly", "feature-flags", CostMedium, WatermarkIncremental, map[string]bool{}},
 	}
 	for _, test := range tests {
 		capability, ok := Capability(test.provider, test.dataset)

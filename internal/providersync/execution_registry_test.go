@@ -4,7 +4,7 @@ import "testing"
 
 func TestExecutionRegistryMachineCoversEveryProviderCapability(t *testing.T) {
 	t.Parallel()
-	for _, provider := range []string{"github", "gitlab"} {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear", "launchdarkly"} {
 		capabilities := Capabilities(provider)
 		descriptors := ExecutionDescriptors(provider)
 		if len(descriptors) != len(capabilities) {
@@ -18,10 +18,31 @@ func TestExecutionRegistryMachineCoversEveryProviderCapability(t *testing.T) {
 				descriptor.RouteEnabled {
 				t.Fatalf("%s/%s descriptor=%+v", provider, capability.Dataset, descriptor)
 			}
-			if descriptor.NativeShadow != nativeShadowReady(capability.Dataset) {
+			if descriptor.NativeShadow != nativeShadowReady(provider, capability.Dataset) {
 				t.Fatalf("%s/%s native shadow=%v", provider, capability.Dataset, descriptor.NativeShadow)
 			}
 		}
+	}
+}
+
+func TestNewProviderRouteSwitchesAreIndependentAndFailClosedUntilComplete(t *testing.T) {
+	t.Parallel()
+	switches := RouteSwitches{Linear: true, Jira: true, LaunchDarkly: true}
+	for _, test := range []struct {
+		provider string
+		dataset  string
+	}{
+		{provider: "linear", dataset: "work-items"},
+		{provider: "jira", dataset: "incidents"},
+		{provider: "launchdarkly", dataset: "feature-flags"},
+	} {
+		descriptor, ok := switches.Descriptor(test.provider, test.dataset)
+		if !ok || descriptor.NativeShadow || descriptor.RouteEnabled {
+			t.Fatalf("%s/%s descriptor=%+v ok=%v", test.provider, test.dataset, descriptor, ok)
+		}
+	}
+	if github, ok := switches.Descriptor("github", "repo-metadata"); !ok || github.RouteEnabled {
+		t.Fatalf("unrelated GitHub route=%+v ok=%v", github, ok)
 	}
 }
 

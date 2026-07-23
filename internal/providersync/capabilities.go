@@ -1,6 +1,5 @@
-// Package providersync owns dormant GitHub and GitLab sync-unit execution
-// primitives. Nothing in this package registers a River worker or changes a
-// sync route.
+// Package providersync owns dormant provider sync-unit execution primitives.
+// Nothing in this package registers a River worker or changes a sync route.
 package providersync
 
 import (
@@ -38,7 +37,7 @@ type DatasetCapability struct {
 var datasetCapabilities = buildDatasetCapabilities()
 
 func buildDatasetCapabilities() map[string]map[string]DatasetCapability {
-	registry := make(map[string]map[string]DatasetCapability, 2)
+	registry := make(map[string]map[string]DatasetCapability, 5)
 	add := func(provider, dataset string, cost CostClass, watermark WatermarkBehavior, targets []string, flags map[string]bool) {
 		if registry[provider] == nil {
 			registry[provider] = map[string]DatasetCapability{}
@@ -87,6 +86,23 @@ func buildDatasetCapabilities() map[string]map[string]DatasetCapability {
 	}
 	add("gitlab", "incidents", CostLight, WatermarkIncremental, []string{"incidents"}, map[string]bool{"sync_incidents": true})
 	add("gitlab", "feature-flags", CostMedium, WatermarkIncremental, []string{"feature-flags"}, nil)
+	for _, provider := range []string{"jira", "linear"} {
+		for _, capability := range common {
+			if !strings.HasPrefix(capability.dataset, "work-item") {
+				continue
+			}
+			add(
+				provider,
+				capability.dataset,
+				capability.cost,
+				capability.watermark,
+				[]string{"work-items"},
+				nil,
+			)
+		}
+	}
+	add("jira", "incidents", CostMedium, WatermarkIncremental, []string{"operational"}, nil)
+	add("launchdarkly", "feature-flags", CostMedium, WatermarkIncremental, []string{"feature-flags"}, nil)
 	return registry
 }
 

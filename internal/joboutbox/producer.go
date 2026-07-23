@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,6 +38,28 @@ func (producer *Producer) Publish(
 	kind string,
 	envelope jobcontract.Envelope,
 ) error {
+	return producer.publish(ctx, tx, kind, envelope, false)
+}
+
+// PublishDeferred persists a reviewed Celery-routed handoff without making it
+// executable. The relay excludes these rows until the checked-in route is
+// promoted, preserving the domain transaction while Celery remains primary.
+func (producer *Producer) PublishDeferred(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind string,
+	envelope jobcontract.Envelope,
+) error {
+	return producer.publish(ctx, tx, kind, envelope, true)
+}
+
+func (producer *Producer) publish(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind string,
+	envelope jobcontract.Envelope,
+	deferred bool,
+) error {
 	if producer == nil || producer.pool == nil || producer.registry == nil || producer.now == nil || tx == nil {
 		return ErrInvalidConfiguration
 	}
@@ -44,7 +67,7 @@ func (producer *Producer) Publish(
 	if !ok {
 		return ErrContractRejected
 	}
-	if !descriptor.Executable() {
+	if !descriptorAllowsPublish(descriptor, deferred) {
 		return ErrPolicyRejected
 	}
 	if envelope.ContractVersion != descriptor.CurrentVersion {
@@ -95,6 +118,14 @@ WHERE dedupe_key = $1`, envelope.IdempotencyKey).
 		return ErrContractRejected
 	}
 	return nil
+}
+
+func descriptorAllowsPublish(descriptor jobruntime.Descriptor, deferred bool) bool {
+	if !deferred {
+		return descriptor.Executable()
+	}
+	return descriptor.MigrationState == "go_implemented" &&
+		descriptor.Route == "celery" && descriptor.RollbackRoute == "celery"
 }
 
 func (producer *Producer) PublishStandalone(

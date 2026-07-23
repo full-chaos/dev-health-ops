@@ -187,6 +187,112 @@ func (InvestmentFinalizeArgs) SupportedContractVersions() []int {
 }
 func (args InvestmentFinalizeArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
 
+type RemainingCapacityArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingCapacityArgs) Kind() string { return jobcontract.KindRemainingCapacity }
+func (RemainingCapacityArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingCapacityArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+type RemainingComplexityArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingComplexityArgs) Kind() string { return jobcontract.KindRemainingComplexity }
+func (RemainingComplexityArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingComplexityArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+type RemainingDORAArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingDORAArgs) Kind() string { return jobcontract.KindRemainingDORA }
+func (RemainingDORAArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingDORAArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+type RemainingExtraMetricsArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingExtraMetricsArgs) Kind() string { return jobcontract.KindRemainingExtraMetrics }
+func (RemainingExtraMetricsArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingExtraMetricsArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+type RemainingMembershipArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingMembershipArgs) Kind() string { return jobcontract.KindRemainingMembership }
+func (RemainingMembershipArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingMembershipArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+type RemainingRecommendationsArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingRecommendationsArgs) Kind() string {
+	return jobcontract.KindRemainingRecommendations
+}
+func (RemainingRecommendationsArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingRecommendationsArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+type RemainingReleaseImpactArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingReleaseImpactArgs) Kind() string { return jobcontract.KindRemainingReleaseImpact }
+func (RemainingReleaseImpactArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingReleaseImpactArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+type RemainingTeamMetricsArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingTeamMetricsArgs) Kind() string { return jobcontract.KindRemainingTeamMetrics }
+func (RemainingTeamMetricsArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingTeamMetricsArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
+func remainingEnvelope(
+	args EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload],
+	kind string,
+) jobcontract.Envelope {
+	args.Payload.JobKind = kind
+	return args.envelope()
+}
+
 func (ScheduledReportExecutionArgs) Kind() string { return jobcontract.KindReportExecuteScheduled }
 
 func (ScheduledReportExecutionArgs) SupportedContractVersions() []int {

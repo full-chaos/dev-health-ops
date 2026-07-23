@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -121,6 +122,10 @@ func TestPostgresStoreResumesPartitionsAndFencesCancellationAndExpiry(t *testing
 	}
 	if err := store.CompletePartition(ctx, *reclaimed, "rows=1;sha256=golden"); err != nil {
 		t.Fatal(err)
+	}
+	run, err = store.LoadRun(ctx, runID)
+	if err != nil || run.Status != "succeeded" {
+		t.Fatalf("last partition did not atomically finalize run=%#v err=%v", run, err)
 	}
 	if err := store.FinalizeRun(ctx, runID); err != nil {
 		t.Fatal(err)
@@ -254,6 +259,37 @@ func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
 	}
 	assertRunAndPartitionCounts(t, ctx, pool, deterministicRunID(invalid), 0, 0)
 
+	atomic := request
+	atomic.ScopeKey = "post-sync-atomic"
+	failingPublisher := &fakePartitionPublisher{failAt: 2}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRunTx(ctx, tx, atomic, failingPublisher); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("atomic fanout failure = %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertRunAndPartitionCounts(t, ctx, pool, deterministicRunID(atomic), 0, 0)
+
+	successPublisher := &fakePartitionPublisher{}
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRunTx(ctx, tx, atomic, successPublisher); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if successPublisher.calls != len(atomic.Scopes) {
+		t.Fatalf("published partitions = %d, want %d", successPublisher.calls, len(atomic.Scopes))
+	}
+	assertRunAndPartitionCounts(t, ctx, pool, deterministicRunID(atomic), 1, len(atomic.Scopes))
+
 	if _, err := pool.Exec(ctx, `
 CREATE FUNCTION reject_remaining_partition() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -274,6 +310,24 @@ FOR EACH ROW EXECUTE FUNCTION reject_remaining_partition()`); err != nil {
 }
 
 func int64Pointer(value int64) *int64 { return &value }
+
+type fakePartitionPublisher struct {
+	calls  int
+	failAt int
+}
+
+func (publisher *fakePartitionPublisher) PublishPartitionTx(
+	context.Context,
+	pgx.Tx,
+	Run,
+	Partition,
+) error {
+	publisher.calls++
+	if publisher.calls == publisher.failAt {
+		return ErrUnavailable
+	}
+	return nil
+}
 
 func assertRunAndPartitionCounts(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID string, wantRuns, wantPartitions int) {
 	t.Helper()

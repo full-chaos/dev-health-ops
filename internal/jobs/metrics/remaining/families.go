@@ -70,7 +70,7 @@ func (inventory Inventory) Validate() error {
 			family.Profile != "heavy" || family.MaxConcurrency < 1 || family.MaxConcurrency > 4 ||
 			family.ClickHouseReadBudget < 1 || family.ClickHouseReadBudget > 2 ||
 			family.ClickHouseWriteBudget < 1 || family.ClickHouseWriteBudget > 2 ||
-			family.Route != "celery" || family.RollbackRoute != "celery" ||
+			!validRoutePair(family.Route, family.RollbackRoute) ||
 			!strings.HasPrefix(family.RouteKey, "metrics.remaining.") ||
 			family.Replay == "" || family.HistoricalLimitation == "" || family.ParityState == "" {
 			return fmt.Errorf("remaining metrics family %q is incomplete", family.Name)
@@ -85,4 +85,21 @@ func (inventory Inventory) Validate() error {
 		return fmt.Errorf("remaining metrics family set drift: %v", names)
 	}
 	return nil
+}
+
+func (family Family) Executable() bool {
+	return family.Route == "shadow" || family.Route == "river_canary" || family.Route == "river"
+}
+
+func validRoutePair(route, rollback string) bool {
+	switch route {
+	case "celery":
+		return rollback == "celery"
+	case "shadow", "river_canary":
+		return rollback == "celery"
+	case "river":
+		return rollback == "celery" || rollback == "none"
+	default:
+		return false
+	}
 }

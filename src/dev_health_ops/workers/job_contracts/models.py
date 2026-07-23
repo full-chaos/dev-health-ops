@@ -20,6 +20,14 @@ KIND_INVESTMENT_MATERIALIZE = "investment.materialize"
 KIND_INVESTMENT_DISPATCH = "investment.dispatch"
 KIND_INVESTMENT_CHUNK = "investment.chunk"
 KIND_INVESTMENT_FINALIZE = "investment.finalize"
+KIND_REMAINING_CAPACITY = "metrics.remaining.capacity"
+KIND_REMAINING_COMPLEXITY = "metrics.remaining.complexity"
+KIND_REMAINING_DORA = "metrics.remaining.dora"
+KIND_REMAINING_EXTRA_METRICS = "metrics.remaining.extra_metrics"
+KIND_REMAINING_MEMBERSHIP = "metrics.remaining.membership_backfill"
+KIND_REMAINING_RECOMMENDATIONS = "metrics.remaining.recommendations"
+KIND_REMAINING_RELEASE_IMPACT = "metrics.remaining.release_impact"
+KIND_REMAINING_TEAM_METRICS = "metrics.remaining.team_metrics"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 MAX_ENVELOPE_BYTES = 16 * 1024
 
@@ -173,6 +181,78 @@ class InvestmentFinalizePayload:
     run_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class RemainingCapacityPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_CAPACITY
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingComplexityPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_COMPLEXITY
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingDORAPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_DORA
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingExtraMetricsPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_EXTRA_METRICS
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingMembershipPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_MEMBERSHIP
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingRecommendationsPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_RECOMMENDATIONS
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingReleaseImpactPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_RELEASE_IMPACT
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemainingTeamMetricsPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_TEAM_METRICS
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
 JobPayload: TypeAlias = (
     BillingNotificationPayload
     | WebhookDeliveryPayload
@@ -188,6 +268,14 @@ JobPayload: TypeAlias = (
     | InvestmentDispatchPayload
     | InvestmentChunkPayload
     | InvestmentFinalizePayload
+    | RemainingCapacityPayload
+    | RemainingComplexityPayload
+    | RemainingDORAPayload
+    | RemainingExtraMetricsPayload
+    | RemainingMembershipPayload
+    | RemainingRecommendationsPayload
+    | RemainingReleaseImpactPayload
+    | RemainingTeamMetricsPayload
 )
 
 

@@ -29,6 +29,26 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 		{KindInvestmentChunk, "examples/investment.chunk.v1.json", InvestmentChunkPayload{ChunkID: "00000000-0000-4000-8000-000000000104"}},
 		{KindInvestmentFinalize, "examples/investment.finalize.v1.json", InvestmentFinalizePayload{RunID: "00000000-0000-4000-8000-000000000105"}},
 	}
+	for _, kind := range []string{
+		KindRemainingCapacity,
+		KindRemainingComplexity,
+		KindRemainingDORA,
+		KindRemainingExtraMetrics,
+		KindRemainingMembership,
+		KindRemainingRecommendations,
+		KindRemainingReleaseImpact,
+		KindRemainingTeamMetrics,
+	} {
+		tests = append(tests, struct {
+			kind    string
+			fixture string
+			payload any
+		}{
+			kind:    kind,
+			fixture: "examples/metrics.remaining_partition.v1.json",
+			payload: NewRemainingMetricsPartitionPayload(kind, "00000000-0000-4000-8000-000000000102"),
+		})
+	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
 			t.Parallel()

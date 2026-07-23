@@ -105,20 +105,28 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 14 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
+	if len(descriptors) != 22 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
 		descriptors[1].Kind != jobcontract.KindInvestmentDispatch ||
 		descriptors[2].Kind != jobcontract.KindInvestmentFinalize ||
 		descriptors[3].Kind != jobcontract.KindInvestmentMaterialize ||
 		descriptors[4].Kind != jobcontract.KindDailyMetricsDispatch ||
 		descriptors[5].Kind != jobcontract.KindDailyMetricsFinalize ||
 		descriptors[6].Kind != jobcontract.KindDailyMetricsPartition ||
-		descriptors[7].Kind != jobcontract.KindBillingNotification ||
-		descriptors[8].Kind != jobcontract.KindWebhookDelivery ||
-		descriptors[9].Kind != jobcontract.KindReportExecuteOnDemand ||
-		descriptors[10].Kind != jobcontract.KindReportExecuteScheduled ||
-		descriptors[11].Kind != jobcontract.KindHeartbeat ||
-		descriptors[12].Kind != jobcontract.KindRetentionCleanup ||
-		descriptors[13].Kind != jobcontract.KindWorkGraphBuild {
+		descriptors[7].Kind != jobcontract.KindRemainingCapacity ||
+		descriptors[8].Kind != jobcontract.KindRemainingComplexity ||
+		descriptors[9].Kind != jobcontract.KindRemainingDORA ||
+		descriptors[10].Kind != jobcontract.KindRemainingExtraMetrics ||
+		descriptors[11].Kind != jobcontract.KindRemainingMembership ||
+		descriptors[12].Kind != jobcontract.KindRemainingRecommendations ||
+		descriptors[13].Kind != jobcontract.KindRemainingReleaseImpact ||
+		descriptors[14].Kind != jobcontract.KindRemainingTeamMetrics ||
+		descriptors[15].Kind != jobcontract.KindBillingNotification ||
+		descriptors[16].Kind != jobcontract.KindWebhookDelivery ||
+		descriptors[17].Kind != jobcontract.KindReportExecuteOnDemand ||
+		descriptors[18].Kind != jobcontract.KindReportExecuteScheduled ||
+		descriptors[19].Kind != jobcontract.KindHeartbeat ||
+		descriptors[20].Kind != jobcontract.KindRetentionCleanup ||
+		descriptors[21].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	for _, descriptor := range descriptors {

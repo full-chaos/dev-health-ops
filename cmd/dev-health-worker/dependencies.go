@@ -146,8 +146,8 @@ func defaultRiverClientID() string {
 }
 
 // compiledWorkerHandlers advertises code capability independently of routing.
-// Report and daily-metrics adapters are complete for the disabled heavy
-// profile, but their checked-in routes remain Celery and cannot fetch work.
+// Report, daily, and remaining-metrics adapters are complete for the disabled
+// heavy profile, but their checked-in routes remain Celery and cannot fetch.
 func compiledWorkerHandlers(profile string) []jobruntime.HandlerSpec {
 	return compiledWorkerHandlersFromRoot(profile, defaultContractRoot)
 }
@@ -156,6 +156,14 @@ var compiledHeavyHandlerKinds = []string{
 	jobcontract.KindDailyMetricsDispatch,
 	jobcontract.KindDailyMetricsFinalize,
 	jobcontract.KindDailyMetricsPartition,
+	jobcontract.KindRemainingCapacity,
+	jobcontract.KindRemainingComplexity,
+	jobcontract.KindRemainingDORA,
+	jobcontract.KindRemainingExtraMetrics,
+	jobcontract.KindRemainingMembership,
+	jobcontract.KindRemainingRecommendations,
+	jobcontract.KindRemainingReleaseImpact,
+	jobcontract.KindRemainingTeamMetrics,
 	jobcontract.KindReportExecuteOnDemand,
 	jobcontract.KindReportExecuteScheduled,
 }

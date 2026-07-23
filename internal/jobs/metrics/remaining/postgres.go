@@ -71,6 +71,10 @@ type PostgresStore struct {
 	now   func() time.Time
 }
 
+type PartitionPublisher interface {
+	PublishPartitionTx(context.Context, pgx.Tx, Run, Partition) error
+}
+
 func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, ErrUnavailable
@@ -83,6 +87,41 @@ func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 // seed, count, and ordered scopes exactly match the original request.
 func (store *PostgresStore) StartRun(ctx context.Context, request StartRunRequest) (Run, error) {
 	if !store.valid() {
+		return Run{}, ErrUnavailable
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return Run{}, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	run, err := store.StartRunTx(ctx, tx, request, nil)
+	if err != nil {
+		return Run{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Run{}, ErrUnavailable
+	}
+	return run, nil
+}
+
+// StartRunTx creates or verifies a deterministic run, every ordered
+// partition, and each optional outbox handoff inside the caller's transaction.
+// This is the post-sync fanout seam: the source transition cannot commit while
+// any remaining-metrics domain row or deferred/executable handoff is missing.
+// It never commits. Run identity is derived from organization, family,
+// generation, and scope key; partition identity is derived from that run ID
+// and the one-based scope ordinal. The returned Run carries the canonical ID.
+func (store *PostgresStore) StartRunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	request StartRunRequest,
+	publisher PartitionPublisher,
+) (Run, error) {
+	if !store.valid() || tx == nil {
 		return Run{}, ErrUnavailable
 	}
 	request.Scopes = cloneScopes(request.Scopes)
@@ -103,12 +142,6 @@ func (store *PostgresStore) StartRun(ctx context.Context, request StartRunReques
 
 	runID := deterministicRunID(request)
 	now := store.now().UTC()
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return Run{}, ErrUnavailable
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.remaining_metric_runs
     (id, org_id, family, generation, scope_key, generation_seed, status, created_at, updated_at)
@@ -129,27 +162,13 @@ ON CONFLICT DO NOTHING`,
 		if err := verifyStartedPartitions(ctx, tx, runID, request.Scopes); err != nil {
 			return Run{}, err
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return Run{}, ErrUnavailable
+		if err := publishStartedPartitions(ctx, tx, publisher, run, request.Scopes); err != nil {
+			return Run{}, err
 		}
 		return run, nil
 	}
 
-	for index, scope := range request.Scopes {
-		ordinal := index + 1
-		_, err := tx.Exec(ctx, `
-INSERT INTO public.remaining_metric_partitions
-    (id, run_id, ordinal, scope, status, attempt_count, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
-			deterministicPartitionID(runID, ordinal), runID, ordinal, scope, now)
-		if err != nil {
-			return Run{}, ErrUnavailable
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Run{}, ErrUnavailable
-	}
-	return Run{
+	run := Run{
 		ID:             runID,
 		OrganizationID: request.OrganizationID,
 		Family:         request.Family,
@@ -157,7 +176,28 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 		ScopeKey:       request.ScopeKey,
 		Status:         "pending",
 		Seed:           request.GenerationSeed,
-	}, nil
+	}
+	for index, scope := range request.Scopes {
+		ordinal := index + 1
+		partition := Partition{
+			ID: deterministicPartitionID(runID, ordinal), RunID: runID,
+			Ordinal: ordinal, Scope: scope,
+		}
+		_, err := tx.Exec(ctx, `
+INSERT INTO public.remaining_metric_partitions
+    (id, run_id, ordinal, scope, status, attempt_count, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
+			partition.ID, runID, ordinal, scope, now)
+		if err != nil {
+			return Run{}, ErrUnavailable
+		}
+		if publisher != nil {
+			if err := publisher.PublishPartitionTx(ctx, tx, run, partition); err != nil {
+				return Run{}, err
+			}
+		}
+	}
+	return run, nil
 }
 
 func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, error) {
@@ -276,7 +316,16 @@ func (store *PostgresStore) CompletePartition(ctx context.Context, claim Claim, 
 		return ErrInvalidState
 	}
 	now := store.now().UTC()
-	command, err := store.pool.Exec(ctx, `
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	command, err := tx.Exec(ctx, `
 UPDATE public.remaining_metric_partitions
 SET status = 'succeeded', output_evidence = $1, completed_at = $2,
     claim_token = NULL, lease_expires_at = NULL, updated_at = $2
@@ -291,6 +340,23 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running'
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE public.remaining_metric_runs AS run
+SET status = 'succeeded', updated_at = $1
+WHERE run.id = $2::uuid AND run.status = 'running'
+  AND EXISTS (
+      SELECT 1 FROM public.remaining_metric_partitions AS partition
+      WHERE partition.run_id = run.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.remaining_metric_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )`, now, claim.Partition.RunID); err != nil {
+		return ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrUnavailable
 	}
 	return nil
 }
@@ -500,6 +566,30 @@ WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
 	}
 	if expectedCount != len(scopes) {
 		return fmt.Errorf("%w: partition count mismatch", ErrInvalidState)
+	}
+	return nil
+}
+
+func publishStartedPartitions(
+	ctx context.Context,
+	tx pgx.Tx,
+	publisher PartitionPublisher,
+	run Run,
+	scopes []json.RawMessage,
+) error {
+	if publisher == nil {
+		return nil
+	}
+	for index, scope := range scopes {
+		ordinal := index + 1
+		if err := publisher.PublishPartitionTx(ctx, tx, run, Partition{
+			ID:      deterministicPartitionID(run.ID, ordinal),
+			RunID:   run.ID,
+			Ordinal: ordinal,
+			Scope:   scope,
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -14,22 +14,30 @@ const (
 	// MaxEnvelopeBytes bounds River encoded_args before any job-specific decode.
 	MaxEnvelopeBytes = 16 * 1024
 
-	ContractVersionV1          = 1
-	KindBillingNotification    = "operational.billing_notification"
-	KindWebhookDelivery        = "operational.webhook_delivery"
-	KindHeartbeat              = "system.heartbeat"
-	KindRetentionCleanup       = "system.retention_cleanup"
-	KindReportExecuteOnDemand  = "report.execute_on_demand"
-	KindReportExecuteScheduled = "report.execute_scheduled"
-	KindDailyMetricsDispatch   = "metrics.daily_dispatch"
-	KindDailyMetricsPartition  = "metrics.daily_partition"
-	KindDailyMetricsFinalize   = "metrics.daily_finalize"
-	KindWorkGraphBuild         = "workgraph.build"
-	KindInvestmentMaterialize  = "investment.materialize"
-	KindInvestmentDispatch     = "investment.dispatch"
-	KindInvestmentChunk        = "investment.chunk"
-	KindInvestmentFinalize     = "investment.finalize"
-	RetentionWorkerTerminal    = "worker_job_terminal"
+	ContractVersionV1            = 1
+	KindBillingNotification      = "operational.billing_notification"
+	KindWebhookDelivery          = "operational.webhook_delivery"
+	KindHeartbeat                = "system.heartbeat"
+	KindRetentionCleanup         = "system.retention_cleanup"
+	KindReportExecuteOnDemand    = "report.execute_on_demand"
+	KindReportExecuteScheduled   = "report.execute_scheduled"
+	KindDailyMetricsDispatch     = "metrics.daily_dispatch"
+	KindDailyMetricsPartition    = "metrics.daily_partition"
+	KindDailyMetricsFinalize     = "metrics.daily_finalize"
+	KindRemainingCapacity        = "metrics.remaining.capacity"
+	KindRemainingComplexity      = "metrics.remaining.complexity"
+	KindRemainingDORA            = "metrics.remaining.dora"
+	KindRemainingExtraMetrics    = "metrics.remaining.extra_metrics"
+	KindRemainingMembership      = "metrics.remaining.membership_backfill"
+	KindRemainingRecommendations = "metrics.remaining.recommendations"
+	KindRemainingReleaseImpact   = "metrics.remaining.release_impact"
+	KindRemainingTeamMetrics     = "metrics.remaining.team_metrics"
+	KindWorkGraphBuild           = "workgraph.build"
+	KindInvestmentMaterialize    = "investment.materialize"
+	KindInvestmentDispatch       = "investment.dispatch"
+	KindInvestmentChunk          = "investment.chunk"
+	KindInvestmentFinalize       = "investment.finalize"
+	RetentionWorkerTerminal      = "worker_job_terminal"
 )
 
 var (
@@ -133,6 +141,18 @@ type InvestmentFinalizePayload struct {
 	RunID string `json:"run_id"`
 }
 
+// RemainingMetricsPartitionPayload carries only the authoritative partition
+// identity. JobKind is injected by the fixed per-family type and never crosses
+// the wire.
+type RemainingMetricsPartitionPayload struct {
+	PartitionID string `json:"partition_id"`
+	JobKind     string `json:"-"`
+}
+
+func NewRemainingMetricsPartitionPayload(kind, partitionID string) RemainingMetricsPartitionPayload {
+	return RemainingMetricsPartitionPayload{PartitionID: partitionID, JobKind: kind}
+}
+
 type wireEnvelope struct {
 	ContractVersion int             `json:"contract_version"`
 	OrganizationID  *string         `json:"organization_id,omitempty"`
@@ -214,11 +234,27 @@ var definitions = map[string]contractDefinition{
 		DomainLink:        "daily_metrics_run",
 		OrganizationScope: "tenant",
 	},
-	KindWorkGraphBuild:        {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
-	KindInvestmentMaterialize: {Kind: KindInvestmentMaterialize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
-	KindInvestmentDispatch:    {Kind: KindInvestmentDispatch, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
-	KindInvestmentChunk:       {Kind: KindInvestmentChunk, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_chunk", OrganizationScope: "tenant"},
-	KindInvestmentFinalize:    {Kind: KindInvestmentFinalize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_run", OrganizationScope: "tenant"},
+	KindWorkGraphBuild:           {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
+	KindInvestmentMaterialize:    {Kind: KindInvestmentMaterialize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
+	KindInvestmentDispatch:       {Kind: KindInvestmentDispatch, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
+	KindInvestmentChunk:          {Kind: KindInvestmentChunk, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_chunk", OrganizationScope: "tenant"},
+	KindInvestmentFinalize:       {Kind: KindInvestmentFinalize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_run", OrganizationScope: "tenant"},
+	KindRemainingCapacity:        remainingDefinition(KindRemainingCapacity),
+	KindRemainingComplexity:      remainingDefinition(KindRemainingComplexity),
+	KindRemainingDORA:            remainingDefinition(KindRemainingDORA),
+	KindRemainingExtraMetrics:    remainingDefinition(KindRemainingExtraMetrics),
+	KindRemainingMembership:      remainingDefinition(KindRemainingMembership),
+	KindRemainingRecommendations: remainingDefinition(KindRemainingRecommendations),
+	KindRemainingReleaseImpact:   remainingDefinition(KindRemainingReleaseImpact),
+	KindRemainingTeamMetrics:     remainingDefinition(KindRemainingTeamMetrics),
+}
+
+func remainingDefinition(kind string) contractDefinition {
+	return contractDefinition{
+		Kind: kind, CurrentVersion: ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "remaining_metric_partition", OrganizationScope: "tenant",
+	}
 }
 
 // Decode strictly decodes a registered kind. The kind is supplied by River's
@@ -368,6 +404,19 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindRemainingCapacity, KindRemainingComplexity, KindRemainingDORA,
+		KindRemainingExtraMetrics, KindRemainingMembership,
+		KindRemainingRecommendations, KindRemainingReleaseImpact,
+		KindRemainingTeamMetrics:
+		var value RemainingMetricsPartitionPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode remaining metrics payload: %w", err)
+		}
+		value.JobKind = kind
+		if err := value.validate(); err != nil {
+			return Envelope{}, err
+		}
+		payload = value
 	default:
 		return Envelope{}, fmt.Errorf("job kind %q has no decoder", kind)
 	}
@@ -414,6 +463,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindInvestmentChunk
 	case InvestmentFinalizePayload:
 		kind = KindInvestmentFinalize
+	case RemainingMetricsPartitionPayload:
+		kind = envelope.Payload.(RemainingMetricsPartitionPayload).JobKind
 	default:
 		return nil, errors.New("unsupported payload type")
 	}
@@ -572,6 +623,28 @@ func validateUUID(name, value string) error {
 		return fmt.Errorf("%s must be a lowercase UUID", name)
 	}
 	return nil
+}
+
+func (payload RemainingMetricsPartitionPayload) validate() error {
+	if !remainingKind(payload.JobKind) {
+		return errors.New("remaining metrics job kind is invalid")
+	}
+	if !uuidPattern.MatchString(payload.PartitionID) {
+		return errors.New("partition_id must be a lowercase UUID")
+	}
+	return nil
+}
+
+func remainingKind(kind string) bool {
+	switch kind {
+	case KindRemainingCapacity, KindRemainingComplexity, KindRemainingDORA,
+		KindRemainingExtraMetrics, KindRemainingMembership,
+		KindRemainingRecommendations, KindRemainingReleaseImpact,
+		KindRemainingTeamMetrics:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateUTCTimestamp(name, value string) error {

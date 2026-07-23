@@ -722,8 +722,9 @@ The checked-in compatibility bridge is a dormant, fail-closed foundation. Its
 HTTP requests carry only durable run/partition identifiers and a fixed
 operation; PostgreSQL supplies the organization, generation, scope, claim, and
 lease. Celery remains the production owner. No remaining-metrics family is
-promoted or independently rollback-capable merely because its reviewed Python
-callable appears in the bridge allowlist.
+promoted merely because its reviewed Python callable appears in the bridge
+allowlist. Each family now has a distinct versioned job kind and route/rollback
+pair, but every checked-in route remains `celery`.
 
 Each output identity has one durable execution row. A new row starts at attempt
 one. A completed row returns `skipped`; an `executing` or `ambiguous` row never
@@ -751,13 +752,23 @@ repair identity, and persist an immutable repair audit row. This is the bounded
 repair path required for a single-attempt effect boundary; it is not a generic
 task/command executor.
 
-The family inventory's `max_concurrency`, ClickHouse read budget, and
-ClickHouse write budget are still declarative evidence at this foundation
-stage. Promotion remains blocked until worker registration enforces those
-limits, per-family shadow/parity evidence is reviewed, each route has an
-audited Celery/River transition and rollback, and the four `inventory_only`
-families have independent compute/write parity rather than broad shared-job
-coverage.
+The shared heavy metrics River client now registers each executable family
+independently, rejects registry/inventory drift, and enforces the inventory's
+per-organization concurrency plus process-wide ClickHouse read/write budgets.
+The reviewed PostgreSQL deployment contract keeps the metrics queue at two
+workers within its domain and queue-control pool ceilings. Last-partition
+completion and run finalization commit atomically. Promotion remains blocked
+until per-family shadow/parity evidence is reviewed, each route's
+Celery/River transition and rollback is approved, and the four
+`inventory_only` families have independent compute/write parity rather than
+broad shared-job coverage.
+
+Native post-sync fanout uses `remaining.PostgresStore.StartRunTx` inside its
+existing domain transaction. That API does not commit: it derives the run ID
+from organization, family, generation, and scope key, derives partition IDs
+from the run ID plus one-based scope ordinal, and creates/verifies both domain
+rows and their deferred or executable outbox handoffs before returning the
+canonical `Run`.
 
 #### Work
 

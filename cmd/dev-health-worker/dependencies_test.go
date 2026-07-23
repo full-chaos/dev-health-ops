@@ -427,7 +427,7 @@ func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T
 		t.Fatal(err)
 	}
 	if len(components) != 2 || components[0].Name() != "postgres-runtime-pools" ||
-		components[1].Name() != "river-daily-metrics-worker" {
+		components[1].Name() != "river-heavy-metrics-worker" {
 		t.Fatalf("production components = %#v", components)
 	}
 	if err := components[0].Shutdown(ctx); err != nil {

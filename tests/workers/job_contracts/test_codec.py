@@ -10,6 +10,14 @@ from dev_health_ops.workers.job_contracts import (
     KIND_DAILY_METRICS_FINALIZE,
     KIND_DAILY_METRICS_PARTITION,
     KIND_HEARTBEAT,
+    KIND_REMAINING_CAPACITY,
+    KIND_REMAINING_COMPLEXITY,
+    KIND_REMAINING_DORA,
+    KIND_REMAINING_EXTRA_METRICS,
+    KIND_REMAINING_MEMBERSHIP,
+    KIND_REMAINING_RECOMMENDATIONS,
+    KIND_REMAINING_RELEASE_IMPACT,
+    KIND_REMAINING_TEAM_METRICS,
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
@@ -21,6 +29,14 @@ from dev_health_ops.workers.job_contracts import (
     DailyMetricsPartitionPayload,
     HeartbeatPayload,
     OnDemandReportExecutionPayload,
+    RemainingCapacityPayload,
+    RemainingComplexityPayload,
+    RemainingDORAPayload,
+    RemainingExtraMetricsPayload,
+    RemainingMembershipPayload,
+    RemainingRecommendationsPayload,
+    RemainingReleaseImpactPayload,
+    RemainingTeamMetricsPayload,
     RetentionCleanupPayload,
     ScheduledReportExecutionPayload,
     build_envelope,
@@ -79,6 +95,23 @@ from dev_health_ops.workers.job_contracts import (
             "metrics.daily_finalize.v1.json",
             DailyMetricsFinalizePayload(run_id="00000000-0000-4000-8000-000000000001"),
         ),
+        *[
+            (
+                kind,
+                "metrics.remaining_partition.v1.json",
+                payload_type(partition_id="00000000-0000-4000-8000-000000000102"),
+            )
+            for kind, payload_type in [
+                (KIND_REMAINING_CAPACITY, RemainingCapacityPayload),
+                (KIND_REMAINING_COMPLEXITY, RemainingComplexityPayload),
+                (KIND_REMAINING_DORA, RemainingDORAPayload),
+                (KIND_REMAINING_EXTRA_METRICS, RemainingExtraMetricsPayload),
+                (KIND_REMAINING_MEMBERSHIP, RemainingMembershipPayload),
+                (KIND_REMAINING_RECOMMENDATIONS, RemainingRecommendationsPayload),
+                (KIND_REMAINING_RELEASE_IMPACT, RemainingReleaseImpactPayload),
+                (KIND_REMAINING_TEAM_METRICS, RemainingTeamMetricsPayload),
+            ]
+        ],
     ],
 )
 def test_go_and_python_share_canonical_golden_fixtures(

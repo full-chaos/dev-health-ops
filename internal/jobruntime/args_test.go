@@ -14,6 +14,14 @@ var (
 	_ ContractArgs                = BillingNotificationArgs{}
 	_ ContractArgs                = RetentionCleanupArgs{}
 	_ ContractArgs                = WebhookDeliveryArgs{}
+	_ ContractArgs                = RemainingCapacityArgs{}
+	_ ContractArgs                = RemainingComplexityArgs{}
+	_ ContractArgs                = RemainingDORAArgs{}
+	_ ContractArgs                = RemainingExtraMetricsArgs{}
+	_ ContractArgs                = RemainingMembershipArgs{}
+	_ ContractArgs                = RemainingRecommendationsArgs{}
+	_ ContractArgs                = RemainingReleaseImpactArgs{}
+	_ ContractArgs                = RemainingTeamMetricsArgs{}
 	_ river.Worker[HeartbeatArgs] = (*Adapter[HeartbeatArgs])(nil)
 )
 
@@ -53,6 +61,22 @@ func TestTypedArgsPreserveVersionedContractEnvelope(t *testing.T) {
 				},
 			}},
 		},
+		{
+			kind: jobcontract.KindRemainingCapacity,
+			args: RemainingCapacityArgs{EnvelopeArgs: EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]{
+				ContractVersion: 1,
+				OrganizationID:  stringPointer("33333333-3333-4333-8333-333333333333"),
+				CorrelationID:   "corr-remaining",
+				IdempotencyKey:  "remaining:partition:44444444-4444-4444-8444-444444444444",
+				Domain: jobcontract.DomainLink{
+					Type: "remaining_metric_partition",
+					ID:   "44444444-4444-4444-8444-444444444444",
+				},
+				Payload: jobcontract.RemainingMetricsPartitionPayload{
+					PartitionID: "44444444-4444-4444-8444-444444444444",
+				},
+			}},
+		},
 	}
 
 	for _, test := range tests {
@@ -71,3 +95,5 @@ func TestTypedArgsPreserveVersionedContractEnvelope(t *testing.T) {
 		})
 	}
 }
+
+func stringPointer(value string) *string { return &value }

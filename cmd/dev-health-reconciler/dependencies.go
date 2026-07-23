@@ -108,10 +108,21 @@ type reconcilerDependencySources struct {
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
 	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
 	buildSyncShadow          func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
+	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
 	syncDispatchContractRoot string
 }
+
+// reconcilerActivation is a source-reviewed composition seam. It is
+// deliberately not configurable through environment or deployment profiles:
+// changing from observation to mutation must retain concrete River delivery
+// capabilities in the same reviewed source change.
+type reconcilerActivation struct {
+	syncMutation bool
+}
+
+var checkedInReconcilerActivation = reconcilerActivation{}
 
 var productionReconcilerDependencySources = reconcilerDependencySources{
 	openDatabase:             openReconcilerDatabase,
@@ -126,11 +137,53 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	buildSyncShadow: func(pool *pgxpool.Pool, registry *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
 		return syncreconciler.NewShadow(pool, registry)
 	},
+	buildSyncMutation: buildSyncMutationPipeline,
 	newSyncRecorder: func(logger *slog.Logger) (reconcilerObservationRecorder, error) {
 		return syncreconciler.NewSlogObservationRecorder(logger)
 	},
 	newSyncLoop:              syncreconciler.NewLoop,
 	syncDispatchContractRoot: defaultSyncDispatchContractRoot,
+}
+
+func buildSyncMutationPipeline(
+	domainPool *pgxpool.Pool,
+	queuePool *pgxpool.Pool,
+	registry *syncdispatchcontract.Registry,
+) (syncreconciler.Stepper, error) {
+	repair, err := syncreconciler.NewLeaseRepair(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	materializer, err := syncreconciler.NewMaterializer(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	kernel, err := syncreconciler.NewKernel(
+		domainPool,
+		queuePool,
+		registry,
+		syncreconciler.KernelModeMutation,
+	)
+	if err != nil {
+		return nil, err
+	}
+	observer, err := syncreconciler.NewObserver(domainPool, registry)
+	if err != nil {
+		return nil, err
+	}
+	// The checked-in contract is Celery-only, so nil delivery callbacks are
+	// valid and the mutation kernel performs no transport transaction. A later
+	// River route fails closed until that same source-reviewed composition binds
+	// its concrete publisher and post-sync handoff.
+	return syncreconciler.NewMutationPipeline(
+		repair,
+		materializer,
+		kernel,
+		observer,
+		nil,
+		nil,
+		syncreconciler.DefaultMutationPipelineConfig(),
+	)
 }
 
 // reconcilerObservationRecorder is the command-owned recorder seam. The
@@ -185,11 +238,29 @@ func configureReconcilerDependenciesWithSourcesAndLogger(
 	logger *slog.Logger,
 	sources reconcilerDependencySources,
 ) ([]lifecycle.Component, error) {
+	return configureReconcilerDependenciesWithActivationSourcesAndLogger(
+		ctx,
+		cfg,
+		registry,
+		logger,
+		checkedInReconcilerActivation,
+		sources,
+	)
+}
+
+func configureReconcilerDependenciesWithActivationSourcesAndLogger(
+	ctx context.Context,
+	cfg config.Config,
+	registry *health.Registry,
+	logger *slog.Logger,
+	activation reconcilerActivation,
+	sources reconcilerDependencySources,
+) ([]lifecycle.Component, error) {
 	if registry == nil {
 		return nil, errReconcilerDependencyUnavailable
 	}
 
-	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, sources)
+	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, activation, sources)
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -244,6 +315,7 @@ func buildReconcilerDependencies(
 	cfg config.Config,
 	registry *health.Registry,
 	logger *slog.Logger,
+	activation reconcilerActivation,
 	sources reconcilerDependencySources,
 ) *reconcilerDependencies {
 	dependencies := &reconcilerDependencies{}
@@ -271,7 +343,9 @@ func buildReconcilerDependencies(
 		dependencies.syncRegistryErr != nil || dependencies.syncDispatchRegistry == nil ||
 		sources.buildRelay == nil || sources.newLoop == nil ||
 		sources.buildSyncRouteFence == nil ||
-		sources.buildSyncShadow == nil || sources.newSyncRecorder == nil ||
+		(!activation.syncMutation && sources.buildSyncShadow == nil) ||
+		(activation.syncMutation && sources.buildSyncMutation == nil) ||
+		sources.newSyncRecorder == nil ||
 		sources.newSyncLoop == nil {
 		dependencies.relayErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()
@@ -302,8 +376,20 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	dependencies.syncRouteFence = routeFence
-	shadow, err := sources.buildSyncShadow(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
-	if err != nil || shadow == nil {
+	var syncStepper syncreconciler.Stepper
+	if activation.syncMutation {
+		syncStepper, err = sources.buildSyncMutation(
+			dependencies.database.DomainPool(),
+			dependencies.database.QueuePool(),
+			dependencies.syncDispatchRegistry,
+		)
+	} else {
+		syncStepper, err = sources.buildSyncShadow(
+			dependencies.database.DomainPool(),
+			dependencies.syncDispatchRegistry,
+		)
+	}
+	if err != nil || syncStepper == nil {
 		dependencies.syncObserverErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()
 		return dependencies
@@ -322,7 +408,7 @@ func buildReconcilerDependencies(
 	}
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
 	syncLoopConfig.Recorder = recorder
-	syncLoop, err := sources.newSyncLoop(shadow, syncLoopConfig)
+	syncLoop, err := sources.newSyncLoop(syncStepper, syncLoopConfig)
 	if err != nil || syncLoop == nil {
 		dependencies.syncLoopErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()

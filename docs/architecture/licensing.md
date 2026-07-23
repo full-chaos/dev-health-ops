@@ -66,6 +66,27 @@ repository scope. `false`, a missing feature row, or an unavailable entitlement
 record denies access. The Dev Health license key is entitlement evidence only;
 it is never an ACR API bearer credential.
 
+### Canonical Incident Ingestion
+
+`canonical_incident_ingestion` is a Community-tier feature and is therefore enabled
+by default for Community, Team, and Enterprise organizations. Alembic revision `0048`
+upserts the feature row and globally enables it, repairing installations that missed
+the original revision `0042` seed. The global row remains an availability and kill
+switch.
+
+An active false `OrgFeatureOverride` disables the feature for one organization. An
+expired override falls back to the tier default, and removing an override restores
+the default-on behavior. A missing row, storage failure, or globally disabled flag
+still denies access.
+
+Backend call sites use the shared typed evaluator exported by
+`dev_health_ops.licensing`: `evaluate_org_feature_sync` or
+`evaluate_org_feature_async` when they need the typed reason, and
+`is_org_feature_enabled_sync` or `is_org_feature_enabled_async` for a fail-closed
+boolean. All four accept `(session, org_id, feature_key)`. Entitlement REST
+responses retain their existing shape and expose the effective value additively
+as `features.canonical_incident_ingestion`.
+
 ---
 
 ## Self-Hosted Licensing (Secondary)

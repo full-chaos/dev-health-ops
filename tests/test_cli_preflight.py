@@ -54,6 +54,10 @@ _MISSING_CASES = [
     (("metrics", "validate-flags"), ("ClickHouse",)),
     (("metrics", "rebuild"), ("ClickHouse",)),
     (("sync", "work-items"), ("ClickHouse",)),
+    (
+        ("audit", "completeness", "--db", "clickhouse://localhost"),
+        ("organization",),
+    ),
     (("audit", "perf"), ("ClickHouse",)),
     (("audit", "schema"), ("ClickHouse",)),
     (("recommendations", "compute", "--team", "t1"), ("ClickHouse",)),

@@ -1,0 +1,982 @@
+{
+  "schema_version": 1,
+  "evidence_version": "v0-celery-baseline",
+  "capture_status": "recorded_with_explicit_observability_gaps",
+  "scope": "production_equivalent_local",
+  "authoritative_for_baseline": true,
+  "authoritative_for_canary": false,
+  "captured_at": "2026-07-23T11:53:12.925Z",
+  "source_revision": "a1d86deb1610123ed542262c5b273dab5cc090e3",
+  "runtime": {
+    "compose_project": "dev-health",
+    "dataset_scope": "shared_production_equivalent_dataset",
+    "runtime_kind": "celery",
+    "source_revision_basis": "bind_mount_git_head_at_capture",
+    "source_worktree_dirty": false,
+    "services": {
+      "worker": {
+        "profile": "general",
+        "image_id": "sha256:9006be5caa9d267ebe1fa4912a96e79ea2a7ece8648d71701b849d73dd3a9c8a",
+        "started_at": "2026-07-22T21:32:50.721Z",
+        "restart_count": 0
+      },
+      "worker-ingest": {
+        "profile": "ingest",
+        "image_id": "sha256:06dd5bc7203d4b2a391f910f7b2cf4efeb7dd56bc385311ee7c2eb4dd74cea68",
+        "started_at": "2026-07-22T21:32:50.712Z",
+        "restart_count": 0
+      },
+      "worker-wi": {
+        "profile": "work_item_provider_medium",
+        "image_id": "sha256:eff7ec8b9551ff7d8431758c03a53ae6541223e1f05709e2fae9bcfb1e143ad5",
+        "started_at": "2026-07-22T21:32:50.720Z",
+        "restart_count": 0
+      },
+      "worker-heavy": {
+        "profile": "heavy",
+        "image_id": "sha256:7cda9b580f076e04006c17b30fbd9230cf3ab5c6b0ec77e51487a7813c47c757",
+        "started_at": "2026-07-22T21:32:50.719Z",
+        "restart_count": 0
+      },
+      "beat": {
+        "profile": "scheduler",
+        "image_id": "sha256:40ddcbb0778b0bc7746a818ae6e22122a2c90cdd19c7ef10fe57276f7e662a91",
+        "started_at": "2026-07-22T21:32:50.718Z",
+        "restart_count": 0
+      },
+      "postgres": {
+        "profile": "postgres",
+        "image_id": "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+        "started_at": "2026-07-22T16:50:16.503Z",
+        "restart_count": 0
+      },
+      "pgbouncer": {
+        "profile": "pgbouncer",
+        "image_id": "sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
+        "started_at": "2026-07-22T16:50:22.095Z",
+        "restart_count": 0
+      },
+      "valkey": {
+        "profile": "valkey",
+        "image_id": "sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02",
+        "started_at": "2026-07-22T16:50:16.503Z",
+        "restart_count": 0
+      }
+    }
+  },
+  "window": {
+    "start": "2026-07-22T21:32:50.721Z",
+    "end": "2026-07-23T11:53:12.925Z",
+    "timezone": "UTC",
+    "contains_worker_deployment": true,
+    "live_sampling": {
+      "start": "2026-07-23T11:47:42.186Z",
+      "end": "2026-07-23T11:52:42.191Z",
+      "requested_duration_seconds": 300.0,
+      "interval_seconds": 30.0,
+      "sample_count": 9
+    }
+  },
+  "sources": {
+    "recorder": "scripts/worker/capture_celery_baseline.py",
+    "task_outcomes": "docker_logs_streamed_and_reduced_in_memory",
+    "queue_state": "read_only_kombu_valkey_probe",
+    "stream_state": "read_only_valkey_xinfo_xpending_probe",
+    "worker_resources": "docker_stats_no_stream",
+    "postgres": "read_only_pg_stat_database_pg_locks",
+    "sync_leases": "read_only_sync_run_units_aggregate",
+    "restricted_raw_evidence_reference": null,
+    "raw_evidence_retained": false,
+    "label_substitutions": [],
+    "missing_series": [
+      "enqueue_to_start_not_emitted_by_celery_workers",
+      "no_controlled_process_crash_in_read_only_window",
+      "deployment_drain_start_not_emitted",
+      "task_discard_not_distinguishable_from_all_terminal_paths",
+      "celery_process_metrics_not_exported"
+    ]
+  },
+  "measurements": {
+    "enqueue_to_start_seconds_by_profile": {
+      "status": "unavailable",
+      "reason_code": "enqueue_timestamp_not_present_in_worker_completion_logs"
+    },
+    "oldest_queue_age_seconds_by_profile": {
+      "external_ingest": {
+        "sample_count": 9,
+        "min": 1174872.796656,
+        "p50": 1175042.680349,
+        "p95": 1175172.946211,
+        "max": 1175172.946211,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "recorded"
+      },
+      "general": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      },
+      "heavy": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      },
+      "ingest": {
+        "sample_count": 8,
+        "min": 0.598132,
+        "p50": 17.517448,
+        "p95": 24.098264,
+        "max": 24.098264,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "recorded"
+      },
+      "monitoring": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      },
+      "work_item_provider_medium": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "nonempty_samples_without_enqueued_at": 0,
+        "status": "not_observed_during_sampling_window"
+      }
+    },
+    "queue_depth_by_profile": {
+      "external_ingest": {
+        "sample_count": 9,
+        "min": 28207.0,
+        "p50": 28213.0,
+        "p95": 28217.0,
+        "max": 28217.0
+      },
+      "general": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "heavy": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "ingest": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1.0
+      },
+      "monitoring": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "work_item_provider_medium": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      }
+    },
+    "task_outcome_rates_by_family": {
+      "billing_email": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 12,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000232458,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "capacity_recommendations": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 2,
+          "retry": 0,
+          "failure": 12,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 3.8743e-05,
+          "retry": 0.0,
+          "failure": 0.000232458,
+          "discard": 0.0
+        }
+      },
+      "complexity": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 31,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000600517,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "dora_release": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 31,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000600517,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "external_stream_health": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 860,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.016659498,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "heartbeat": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 1,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 1.9372e-05,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "ingest": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 1719,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.033299624,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "membership": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 31,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000600517,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "metrics": {
+        "task_name_count": 5,
+        "counts": {
+          "success": 206,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.003990531,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "other": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 30,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000581145,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "product_telemetry": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 1719,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.033299624,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "queue_monitor": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 860,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.016659498,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "reports": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 172,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.0033319,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "retention": {
+        "task_name_count": 2,
+        "counts": {
+          "success": 2,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 3.8743e-05,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "scheduled_sync_dispatch": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 172,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.0033319,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_dispatch": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 14,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000271201,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_finalizer": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 182,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.003525615,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_other": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 26,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.000503659,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_outbox_reconciler": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 860,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.016659498,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "sync_unit": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 154,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.002983212,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      },
+      "webhooks": {
+        "task_name_count": 1,
+        "counts": {
+          "success": 72,
+          "retry": 0,
+          "failure": 0,
+          "discard": 0
+        },
+        "rates_per_second": {
+          "success": 0.001394749,
+          "retry": 0.0,
+          "failure": 0.0,
+          "discard": 0.0
+        }
+      }
+    },
+    "successful_task_duration_seconds_by_family": {
+      "billing_email": {
+        "sample_count": 12,
+        "min": 0.002044,
+        "p50": 0.002397,
+        "p95": 0.036261,
+        "max": 0.036261
+      },
+      "capacity_recommendations": {
+        "sample_count": 2,
+        "min": 0.112861,
+        "p50": 0.112861,
+        "p95": 0.323327,
+        "max": 0.323327
+      },
+      "complexity": {
+        "sample_count": 31,
+        "min": 0.007263,
+        "p50": 0.009226,
+        "p95": 0.019849,
+        "max": 6.321275
+      },
+      "dora_release": {
+        "sample_count": 31,
+        "min": 0.017923,
+        "p50": 0.021512,
+        "p95": 0.027915,
+        "max": 0.029781
+      },
+      "external_stream_health": {
+        "sample_count": 860,
+        "min": 0.001187,
+        "p50": 0.001721,
+        "p95": 0.002717,
+        "max": 0.2165
+      },
+      "heartbeat": {
+        "sample_count": 1,
+        "min": 0.009053,
+        "p50": 0.009053,
+        "p95": 0.009053,
+        "max": 0.009053
+      },
+      "ingest": {
+        "sample_count": 1719,
+        "min": 0.001273,
+        "p50": 0.001787,
+        "p95": 0.002518,
+        "max": 0.037861
+      },
+      "membership": {
+        "sample_count": 31,
+        "min": 0.008152,
+        "p50": 0.008586,
+        "p95": 0.024678,
+        "max": 0.372872
+      },
+      "metrics": {
+        "sample_count": 206,
+        "min": 0.003715,
+        "p50": 0.004785,
+        "p95": 0.012946,
+        "max": 7.351498
+      },
+      "other": {
+        "sample_count": 30,
+        "min": 0.042714,
+        "p50": 0.044818,
+        "p95": 0.071884,
+        "max": 11.50929
+      },
+      "product_telemetry": {
+        "sample_count": 1719,
+        "min": 18.345494,
+        "p50": 25.330736,
+        "p95": 25.410463,
+        "max": 25.462729
+      },
+      "queue_monitor": {
+        "sample_count": 860,
+        "min": 0.003535,
+        "p50": 0.005766,
+        "p95": 0.007812,
+        "max": 0.018277
+      },
+      "reports": {
+        "sample_count": 172,
+        "min": 0.003952,
+        "p50": 0.0048,
+        "p95": 0.00685,
+        "max": 0.167437
+      },
+      "retention": {
+        "sample_count": 2,
+        "min": 0.00559,
+        "p50": 0.00559,
+        "p95": 0.014374,
+        "max": 0.014374
+      },
+      "scheduled_sync_dispatch": {
+        "sample_count": 172,
+        "min": 0.047174,
+        "p50": 0.055399,
+        "p95": 0.132558,
+        "max": 0.221162
+      },
+      "sync_dispatch": {
+        "sample_count": 14,
+        "min": 5.257,
+        "p50": 5.366658,
+        "p95": 5.84777,
+        "max": 5.84777
+      },
+      "sync_finalizer": {
+        "sample_count": 182,
+        "min": 0.003441,
+        "p50": 0.004812,
+        "p95": 0.01688,
+        "max": 0.033263
+      },
+      "sync_other": {
+        "sample_count": 26,
+        "min": 0.00778,
+        "p50": 0.249999,
+        "p95": 0.308274,
+        "max": 0.334238
+      },
+      "sync_outbox_reconciler": {
+        "sample_count": 860,
+        "min": 0.01726,
+        "p50": 0.020835,
+        "p95": 0.034394,
+        "max": 0.169667
+      },
+      "sync_unit": {
+        "sample_count": 154,
+        "min": 0.466119,
+        "p50": 0.633303,
+        "p95": 2.894734,
+        "max": 3.010907
+      },
+      "webhooks": {
+        "sample_count": 72,
+        "min": 0.001576,
+        "p50": 0.002594,
+        "p95": 0.086219,
+        "max": 0.15622
+      }
+    },
+    "process_crash_recovery_seconds": {
+      "status": "not_observed",
+      "reason_code": "read_only_capture_did_not_inject_a_crash",
+      "container_restart_counts": {
+        "worker": 0,
+        "worker-ingest": 0,
+        "worker-wi": 0,
+        "worker-heavy": 0,
+        "beat": 0
+      }
+    },
+    "deployment_drain_and_recovery_seconds": {
+      "status": "unavailable",
+      "reason_code": "drain_start_marker_not_emitted"
+    },
+    "worker_start_to_ready_seconds_by_profile": {
+      "general": {
+        "status": "recorded",
+        "seconds": 6.778191
+      },
+      "ingest": {
+        "status": "recorded",
+        "seconds": 6.498652
+      },
+      "work_item_provider_medium": {
+        "status": "recorded",
+        "seconds": 6.59309
+      },
+      "heavy": {
+        "status": "recorded",
+        "seconds": 7.01551
+      }
+    },
+    "sync_unit_lease_expiry_rate": {
+      "status": "recorded_from_monotonic_row_counters",
+      "expired_lease_retry_count_delta": 0,
+      "counter_reset_detected": false,
+      "rate_per_second": 0.0,
+      "unit_count_end": 32638,
+      "units_with_expired_lease_retry_end": 9,
+      "currently_leased_units_end": 0,
+      "currently_expired_leases_end": 0
+    },
+    "stream_pending_count_by_group": {
+      "ingest": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "stream_count": {
+          "sample_count": 9,
+          "min": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        }
+      },
+      "product_telemetry": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "stream_count": {
+          "sample_count": 9,
+          "min": 3.0,
+          "p50": 3.0,
+          "p95": 3.0,
+          "max": 3.0
+        }
+      },
+      "external_ingest": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "stream_count": {
+          "sample_count": 9,
+          "min": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        }
+      }
+    },
+    "stream_lag_by_group": {
+      "ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "consumer_group_lag_unavailable"
+      },
+      "product_telemetry": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0,
+        "status": "recorded"
+      },
+      "external_ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "consumer_group_lag_unavailable"
+      }
+    },
+    "stream_oldest_pending_seconds_by_group": {
+      "ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "no_pending_entries_observed"
+      },
+      "product_telemetry": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "no_pending_entries_observed"
+      },
+      "external_ingest": {
+        "sample_count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "status": "no_pending_entries_observed"
+      }
+    },
+    "worker_cpu_cores_by_profile": {
+      "general": {
+        "sample_count": 9,
+        "min": 0.0002,
+        "p50": 0.0011,
+        "p95": 0.0014,
+        "max": 0.0014
+      },
+      "heavy": {
+        "sample_count": 9,
+        "min": 0.0002,
+        "p50": 0.0003,
+        "p95": 0.0012,
+        "max": 0.0012
+      },
+      "ingest": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0007,
+        "p95": 0.0013,
+        "max": 0.0013
+      },
+      "scheduler": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0466,
+        "max": 0.0466
+      },
+      "work_item_provider_medium": {
+        "sample_count": 9,
+        "min": 0.0002,
+        "p50": 0.001,
+        "p95": 0.0012,
+        "max": 0.0012
+      }
+    },
+    "worker_memory_bytes_by_profile": {
+      "general": {
+        "sample_count": 9,
+        "min": 1203664584.0,
+        "p50": 1203664584.0,
+        "p95": 1203664584.0,
+        "max": 1203664584.0
+      },
+      "heavy": {
+        "sample_count": 9,
+        "min": 754345574.0,
+        "p50": 754345574.0,
+        "p95": 754345574.0,
+        "max": 754345574.0
+      },
+      "ingest": {
+        "sample_count": 9,
+        "min": 299473305.0,
+        "p50": 299473305.0,
+        "p95": 299473305.0,
+        "max": 299473305.0
+      },
+      "scheduler": {
+        "sample_count": 9,
+        "min": 231106150.0,
+        "p50": 231106150.0,
+        "p95": 231106150.0,
+        "max": 231106150.0
+      },
+      "work_item_provider_medium": {
+        "sample_count": 9,
+        "min": 578604236.0,
+        "p50": 578604236.0,
+        "p95": 578709094.0,
+        "max": 578709094.0
+      }
+    },
+    "postgres_connections": {
+      "sample_count": 9,
+      "min": 6.0,
+      "p50": 6.0,
+      "p95": 6.0,
+      "max": 6.0
+    },
+    "postgres_transactions_per_second": 0.503324,
+    "postgres_lock_or_io_pressure": {
+      "status": "recorded",
+      "connections": {
+        "sample_count": 9,
+        "min": 6.0,
+        "p50": 6.0,
+        "p95": 6.0,
+        "max": 6.0
+      },
+      "max_connections": 100,
+      "connection_saturation_ratio_max": 0.06,
+      "transactions_per_second": 0.503324,
+      "waiting_locks": {
+        "sample_count": 9,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "total_locks": {
+        "sample_count": 9,
+        "min": 2.0,
+        "p50": 2.0,
+        "p95": 2.0,
+        "max": 2.0
+      },
+      "block_read_ratio": 0.2845915,
+      "block_read_time_delta_ms": 0.0,
+      "block_write_time_delta_ms": 0.0,
+      "track_io_timing": "off",
+      "deadlock_count_delta": 0,
+      "temp_file_count_delta": 0,
+      "temp_bytes_delta": 0
+    },
+    "celery_inspect": {
+      "status": "recorded",
+      "samples": [
+        {
+          "active_jobs": 1,
+          "reserved_jobs": 0,
+          "responding_workers": 4,
+          "scheduled_jobs": 0
+        },
+        {
+          "active_jobs": 1,
+          "reserved_jobs": 0,
+          "responding_workers": 4,
+          "scheduled_jobs": 0
+        }
+      ]
+    }
+  },
+  "observability_gaps": [
+    {
+      "code": "enqueue_to_start_not_emitted_by_celery_workers",
+      "effect": "cannot_set_enqueue_latency_parity_threshold"
+    },
+    {
+      "code": "no_controlled_process_crash_in_read_only_window",
+      "effect": "cannot_set_process_crash_recovery_threshold"
+    },
+    {
+      "code": "deployment_drain_start_not_emitted",
+      "effect": "start_to_ready_is_recorded_but_drain_duration_is_not"
+    },
+    {
+      "code": "task_discard_not_distinguishable_from_all_terminal_paths",
+      "effect": "discard_rate_is_a_lower_bound_from_explicit_log_markers"
+    },
+    {
+      "code": "celery_process_metrics_not_exported",
+      "effect": "task_aggregates_use_ephemeral_log_reduction_instead_of_prometheus"
+    }
+  ],
+  "review": {
+    "reviewed_by": [],
+    "reviewed_at": null,
+    "parity_thresholds_approved": false
+  },
+  "gates": {
+    "phase_1_foundation": "complete",
+    "production_canary": "blocked_until_observability_gaps_and_threshold_review"
+  },
+  "redaction": {
+    "contains_raw_logs": false,
+    "contains_task_args_results_or_payloads": false,
+    "contains_credentials_or_dsns": false,
+    "contains_tenant_identifiers": false,
+    "contains_stream_keys": false,
+    "automated_validation": "pass"
+  }
+}

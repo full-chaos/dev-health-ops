@@ -7,15 +7,23 @@ a cycle between `models.licensing` and `licensing.types`.
 
 from __future__ import annotations
 
+from typing import Final
+
 from dev_health_ops.licensing.types import TIER_ORDER, FeatureCategory, LicenseTier
 
 STANDARD_FEATURE_ROW = tuple[str, str, FeatureCategory, LicenseTier, str]
 
+CANONICAL_INCIDENT_INGESTION_FEATURE: Final = "canonical_incident_ingestion"
 EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset({"agent_context_runtime"})
+ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset()
 
 
 def is_explicit_purchase_feature(feature_key: str) -> bool:
     return feature_key in EXPLICIT_PURCHASE_FEATURES
+
+
+def is_org_override_only_feature(feature_key: str) -> bool:
+    return feature_key in ORG_OVERRIDE_ONLY_FEATURES
 
 
 def get_features_for_tier(tier: LicenseTier) -> dict[str, bool]:
@@ -144,6 +152,13 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         FeatureCategory.INTEGRATIONS,
         LicenseTier.TEAM,
         "Customer-owned external ingestion runners",
+    ),
+    (
+        CANONICAL_INCIDENT_INGESTION_FEATURE,
+        "Canonical Incident Ingestion",
+        FeatureCategory.INTEGRATIONS,
+        LicenseTier.COMMUNITY,
+        "Canonical operational incident ingestion and consumption",
     ),
     (
         "agent_context_runtime",

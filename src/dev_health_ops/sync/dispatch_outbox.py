@@ -25,19 +25,26 @@ tolerated because consumers are idempotent by contract.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypedDict
 
-from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy import and_, case, exists, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
     SyncDispatchOutbox,
+    SyncDispatchTransportRoute,
     SyncRun,
+)
+from dev_health_ops.sync.dispatch_routes import (
+    DispatchRouteContractError,
+    TransportRoute,
+    load_transport_routes,
 )
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
@@ -50,6 +57,19 @@ OUTBOX_STATUS_PENDING = "pending"
 OUTBOX_STATUS_DISPATCHED = "dispatched"
 
 _MAX_ERROR_LENGTH = 2000
+_TERMINAL_DENIAL_ERROR = "feature_disabled"
+
+SYNC_DISPATCH_PARITY_EVENT = "sync_dispatch_parity_observation"
+SYNC_DISPATCH_PARITY_PREDICATE_VERSION = "sync_dispatch_active_celery_due_v2"
+SYNC_DISPATCH_PARITY_DIGEST_VERSION = "sync_dispatch_candidate_digest_v1"
+_SYNC_DISPATCH_PARITY_MIN_LIMIT = 1
+_SYNC_DISPATCH_PARITY_MAX_LIMIT = 100
+_SYNC_DISPATCH_PARITY_DELIVERY = {
+    OUTBOX_KIND_DISPATCH: "at_least_once",
+    OUTBOX_KIND_FINALIZE: "at_least_once",
+    OUTBOX_KIND_POST_SYNC: "at_most_once_mark_before",
+    OUTBOX_KIND_DISCOVERY: "at_least_once",
+}
 
 
 @dataclass(frozen=True)
@@ -61,6 +81,23 @@ class ClaimedOutboxRow:
     attempts: int
     available_at: datetime
     claim_token: str
+    transport: str
+    route_generation: int
+
+
+class SyncDispatchParityObservationUnavailable(RuntimeError):
+    """A bounded reason why the optional read-only parity capture is unavailable."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class _ParityKindRecord(TypedDict):
+    kind: str
+    route: str
+    due_pending: int
+    expired_claims: int
 
 
 def backoff_seconds(attempts: int) -> int:
@@ -114,21 +151,83 @@ def upsert_outbox_wakeup(
     table: Any = SyncDispatchOutbox.__table__
     stmt = dialect_insert(table).values(**insert_values)
     live_claim = _live_claim_condition(table, upsert_now)
+    terminal_denial = _terminal_denial_condition(table)
     stmt = stmt.on_conflict_do_update(
         index_elements=["sync_run_id", "kind"],
         set_={
             "available_at": case(
+                (
+                    terminal_denial,
+                    table.c.available_at,
+                ),
                 (
                     stmt.excluded.available_at < table.c.available_at,
                     stmt.excluded.available_at,
                 ),
                 else_=table.c.available_at,
             ),
-            "status": OUTBOX_STATUS_PENDING,
-            "dispatched_at": None,
-            "claim_token": case((live_claim, table.c.claim_token), else_=None),
+            "status": case(
+                (
+                    terminal_denial,
+                    OUTBOX_STATUS_DISPATCHED,
+                ),
+                else_=OUTBOX_STATUS_PENDING,
+            ),
+            "dispatched_at": case(
+                (
+                    terminal_denial,
+                    table.c.dispatched_at,
+                ),
+                else_=None,
+            ),
+            "dispatched_transport": case(
+                (
+                    terminal_denial,
+                    table.c.dispatched_transport,
+                ),
+                else_=None,
+            ),
+            "dispatched_route_generation": case(
+                (
+                    terminal_denial,
+                    table.c.dispatched_route_generation,
+                ),
+                else_=None,
+            ),
+            "transport_job_id": case(
+                (
+                    terminal_denial,
+                    table.c.transport_job_id,
+                ),
+                else_=None,
+            ),
+            "claim_token": case(
+                (
+                    ~terminal_denial & live_claim,
+                    table.c.claim_token,
+                ),
+                else_=None,
+            ),
+            "claim_transport": case(
+                (
+                    ~terminal_denial & live_claim,
+                    table.c.claim_transport,
+                ),
+                else_=None,
+            ),
+            "claim_route_generation": case(
+                (
+                    ~terminal_denial & live_claim,
+                    table.c.claim_route_generation,
+                ),
+                else_=None,
+            ),
             "claim_expires_at": case(
-                (live_claim, table.c.claim_expires_at), else_=None
+                (
+                    ~terminal_denial & live_claim,
+                    table.c.claim_expires_at,
+                ),
+                else_=None,
             ),
             "updated_at": upsert_now,
         },
@@ -186,11 +285,13 @@ def _execute_claim_aware_rearm_update(
 ) -> None:
     table = SyncDispatchOutbox.__table__
     live_claim = _live_claim_condition(table, now)
+    terminal_denial = _terminal_denial_condition(table)
     session.execute(
         update(SyncDispatchOutbox)
         .where(
             SyncDispatchOutbox.sync_run_id == run_uuid,
             SyncDispatchOutbox.kind == kind,
+            ~terminal_denial,
         )
         .values(
             available_at=case(
@@ -199,8 +300,15 @@ def _execute_claim_aware_rearm_update(
             ),
             status=OUTBOX_STATUS_PENDING,
             dispatched_at=None,
+            dispatched_transport=None,
+            dispatched_route_generation=None,
+            transport_job_id=None,
             claim_token=case((live_claim, table.c.claim_token), else_=None),
             claim_expires_at=case((live_claim, table.c.claim_expires_at), else_=None),
+            claim_transport=case((live_claim, table.c.claim_transport), else_=None),
+            claim_route_generation=case(
+                (live_claim, table.c.claim_route_generation), else_=None
+            ),
             updated_at=now,
         )
         .execution_options(synchronize_session=False)
@@ -232,6 +340,177 @@ def _live_claim_condition(table: Any, now: datetime) -> Any:
     return and_(table.c.claim_expires_at.isnot(None), table.c.claim_expires_at > now)
 
 
+def _terminal_denial_condition(table: Any) -> Any:
+    return and_(
+        table.c.status == OUTBOX_STATUS_DISPATCHED,
+        table.c.last_error == _TERMINAL_DENIAL_ERROR,
+    )
+
+
+def observe_due_outbox_rows(
+    session: Session,
+    *,
+    now: datetime,
+    limit: int,
+) -> dict[str, Any]:
+    """Build one bounded, read-only parity record in Python claim order.
+
+    The record intentionally contains aggregates and a digest only. It never
+    exposes candidate identifiers, tenant data, claim tokens, or payloads.
+    """
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not (
+            _SYNC_DISPATCH_PARITY_MIN_LIMIT <= limit <= _SYNC_DISPATCH_PARITY_MAX_LIMIT
+        )
+    ):
+        raise SyncDispatchParityObservationUnavailable("invalid_limit")
+
+    observed_at = _as_aware(now)
+    routes = _validated_parity_routes()
+    try:
+        rows = list(
+            session.execute(
+                select(
+                    SyncDispatchOutbox.id,
+                    SyncDispatchOutbox.kind,
+                    SyncDispatchOutbox.claim_expires_at,
+                )
+                .join(
+                    SyncDispatchTransportRoute,
+                    SyncDispatchTransportRoute.kind == SyncDispatchOutbox.kind,
+                )
+                .where(
+                    SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
+                    SyncDispatchOutbox.available_at <= observed_at,
+                    SyncDispatchTransportRoute.transport == "celery",
+                    SyncDispatchTransportRoute.paused.is_(False),
+                    or_(
+                        SyncDispatchOutbox.claim_expires_at.is_(None),
+                        SyncDispatchOutbox.claim_expires_at <= observed_at,
+                    ),
+                )
+                .order_by(SyncDispatchOutbox.available_at, SyncDispatchOutbox.id)
+                .limit(limit + 1)
+            ).all()
+        )
+    except Exception as error:
+        raise SyncDispatchParityObservationUnavailable("query_unavailable") from error
+
+    if len(rows) > limit + 1:
+        raise SyncDispatchParityObservationUnavailable("query_unavailable")
+    sampled_rows = rows[:limit]
+    truncated = len(rows) > limit
+    kinds: dict[str, _ParityKindRecord] = {
+        kind: {
+            "kind": kind,
+            "route": route.route,
+            "due_pending": 0,
+            "expired_claims": 0,
+        }
+        for kind, route in routes.items()
+    }
+    hasher = hashlib.sha256()
+    _write_parity_digest_field(
+        hasher, "digest_version", SYNC_DISPATCH_PARITY_DIGEST_VERSION
+    )
+    _write_parity_digest_field(
+        hasher, "predicate_version", SYNC_DISPATCH_PARITY_PREDICATE_VERSION
+    )
+    _write_parity_digest_field(
+        hasher, "observed_at", _canonical_parity_observed_at(observed_at)
+    )
+    _write_parity_digest_field(hasher, "limit", str(limit))
+
+    unknown_kind_count = 0
+    celery_due_pending = 0
+    river_due_pending = 0
+    for row_id, kind, claim_expires_at in sampled_rows:
+        candidate_id = _canonical_parity_candidate_id(row_id)
+        if claim_expires_at is not None and _as_aware(claim_expires_at) > observed_at:
+            raise SyncDispatchParityObservationUnavailable("query_unavailable")
+        _write_parity_digest_field(hasher, "candidate_kind", kind)
+        _write_parity_digest_field(hasher, "candidate_id", candidate_id)
+        kind_record = kinds.get(kind)
+        if kind_record is None:
+            unknown_kind_count += 1
+            continue
+        kind_record["due_pending"] += 1
+        if claim_expires_at is not None:
+            kind_record["expired_claims"] += 1
+        if kind_record["route"] == "celery":
+            celery_due_pending += 1
+        elif kind_record["route"] == "river":
+            river_due_pending += 1
+        else:
+            raise SyncDispatchParityObservationUnavailable("route_unavailable")
+
+    sampled_candidates = len(sampled_rows)
+    if (
+        celery_due_pending + river_due_pending + unknown_kind_count
+        != sampled_candidates
+    ):
+        raise SyncDispatchParityObservationUnavailable("query_unavailable")
+    return {
+        "event": SYNC_DISPATCH_PARITY_EVENT,
+        "runtime": "celery",
+        "observed_at": _canonical_parity_observed_at(observed_at),
+        "limit": limit,
+        "predicate_version": SYNC_DISPATCH_PARITY_PREDICATE_VERSION,
+        "digest_version": SYNC_DISPATCH_PARITY_DIGEST_VERSION,
+        "candidate_digest": f"sha256:{hasher.hexdigest()}",
+        "sampled_candidates": sampled_candidates,
+        "truncated": truncated,
+        "unknown_kind_count": unknown_kind_count,
+        "celery_due_pending": celery_due_pending,
+        "river_due_pending": river_due_pending,
+        "kinds": [kinds[kind] for kind in sorted(kinds)],
+    }
+
+
+def _validated_parity_routes() -> dict[str, TransportRoute]:
+    try:
+        loaded = load_transport_routes()
+        routes = {kind: loaded.by_kind(kind) for kind in _SYNC_DISPATCH_PARITY_DELIVERY}
+    except DispatchRouteContractError as error:
+        raise SyncDispatchParityObservationUnavailable("route_unavailable") from error
+    for kind, expected_delivery in _SYNC_DISPATCH_PARITY_DELIVERY.items():
+        route = routes.get(kind)
+        if (
+            route is None
+            or route.delivery != expected_delivery
+            or route.rollback_route != "celery"
+            or route.route not in {"celery", "river"}
+        ):
+            raise SyncDispatchParityObservationUnavailable("route_unavailable")
+    return routes
+
+
+def _canonical_parity_candidate_id(value: object) -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise SyncDispatchParityObservationUnavailable("query_unavailable") from error
+
+
+def _canonical_parity_observed_at(value: datetime) -> str:
+    value = _as_aware(value)
+    return value.strftime("%Y-%m-%dT%H:%M:%S") + f".{value.microsecond:06d}000Z"
+
+
+def _write_parity_digest_field(hasher: Any, name: str, value: str) -> None:
+    name_bytes = name.encode("utf-8")
+    value_bytes = value.encode("utf-8")
+    hasher.update(str(len(name_bytes)).encode("ascii"))
+    hasher.update(b":")
+    hasher.update(name_bytes)
+    hasher.update(str(len(value_bytes)).encode("ascii"))
+    hasher.update(b":")
+    hasher.update(value_bytes)
+    hasher.update(b"\n")
+
+
 def claim_due_outbox_rows(
     session: Session,
     *,
@@ -244,9 +523,15 @@ def claim_due_outbox_rows(
     candidate_ids = list(
         session.execute(
             select(SyncDispatchOutbox.id)
+            .join(
+                SyncDispatchTransportRoute,
+                SyncDispatchTransportRoute.kind == SyncDispatchOutbox.kind,
+            )
             .where(
                 SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
                 SyncDispatchOutbox.available_at <= claim_now,
+                SyncDispatchTransportRoute.transport == "celery",
+                SyncDispatchTransportRoute.paused.is_(False),
                 or_(
                     SyncDispatchOutbox.claim_expires_at.is_(None),
                     SyncDispatchOutbox.claim_expires_at <= claim_now,
@@ -262,6 +547,24 @@ def claim_due_outbox_rows(
     claim_expires_at = claim_now + timedelta(seconds=_claim_timeout_seconds())
     for candidate_id in candidate_ids:
         claim_token = str(uuid.uuid4())
+        route_transport = (
+            select(SyncDispatchTransportRoute.transport)
+            .where(
+                SyncDispatchTransportRoute.kind == SyncDispatchOutbox.kind,
+                SyncDispatchTransportRoute.transport == "celery",
+                SyncDispatchTransportRoute.paused.is_(False),
+            )
+            .scalar_subquery()
+        )
+        route_generation = (
+            select(SyncDispatchTransportRoute.generation)
+            .where(
+                SyncDispatchTransportRoute.kind == SyncDispatchOutbox.kind,
+                SyncDispatchTransportRoute.transport == "celery",
+                SyncDispatchTransportRoute.paused.is_(False),
+            )
+            .scalar_subquery()
+        )
         row = session.execute(
             update(SyncDispatchOutbox)
             .where(
@@ -272,10 +575,13 @@ def claim_due_outbox_rows(
                     SyncDispatchOutbox.claim_expires_at.is_(None),
                     SyncDispatchOutbox.claim_expires_at <= claim_now,
                 ),
+                _active_claim_route_exists(expected_transport="celery"),
             )
             .values(
                 claim_token=claim_token,
                 claim_expires_at=claim_expires_at,
+                claim_transport=route_transport,
+                claim_route_generation=route_generation,
                 attempts=SyncDispatchOutbox.attempts + 1,
                 updated_at=claim_now,
             )
@@ -286,6 +592,8 @@ def claim_due_outbox_rows(
                 SyncDispatchOutbox.kind,
                 SyncDispatchOutbox.attempts,
                 SyncDispatchOutbox.available_at,
+                SyncDispatchOutbox.claim_transport,
+                SyncDispatchOutbox.claim_route_generation,
             )
             .execution_options(synchronize_session=False)
         ).one_or_none()
@@ -300,10 +608,42 @@ def claim_due_outbox_rows(
                 attempts=row[4],
                 available_at=_as_aware(row[5]),
                 claim_token=claim_token,
+                transport=row[6],
+                route_generation=row[7],
             )
         )
     session.flush()
     return claimed
+
+
+def lock_outbox_claim_for_publish(
+    session: Session,
+    row_id: str | uuid.UUID,
+    claim_token: str,
+) -> bool:
+    publish_now = _utcnow()
+    route = SyncDispatchTransportRoute
+    locked_id = session.scalar(
+        select(SyncDispatchOutbox.id)
+        .join(
+            route,
+            and_(
+                route.kind == SyncDispatchOutbox.kind,
+                route.transport == SyncDispatchOutbox.claim_transport,
+                route.generation == SyncDispatchOutbox.claim_route_generation,
+                route.paused.is_(False),
+            ),
+        )
+        .where(
+            SyncDispatchOutbox.id == uuid.UUID(str(row_id)),
+            SyncDispatchOutbox.claim_token == claim_token,
+            SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
+            SyncDispatchOutbox.claim_expires_at.is_not(None),
+            SyncDispatchOutbox.claim_expires_at > publish_now,
+        )
+        .with_for_update(of=(SyncDispatchOutbox, route))
+    )
+    return locked_id is not None
 
 
 def mark_outbox_dispatched(
@@ -312,6 +652,7 @@ def mark_outbox_dispatched(
     row_id: str | uuid.UUID,
     claim_token: str,
     now: datetime | None = None,
+    transport_job_id: str | None = None,
 ) -> bool:
     """Mark a row dispatched only while the caller still owns a live lease."""
     dispatch_now = _as_aware(now or _utcnow())
@@ -323,12 +664,18 @@ def mark_outbox_dispatched(
             SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
             SyncDispatchOutbox.claim_expires_at.is_not(None),
             SyncDispatchOutbox.claim_expires_at > dispatch_now,
+            _active_claim_route_exists(),
         )
         .values(
             status=OUTBOX_STATUS_DISPATCHED,
             dispatched_at=dispatch_now,
+            dispatched_transport=SyncDispatchOutbox.claim_transport,
+            dispatched_route_generation=SyncDispatchOutbox.claim_route_generation,
+            transport_job_id=transport_job_id,
             claim_token=None,
             claim_expires_at=None,
+            claim_transport=None,
+            claim_route_generation=None,
             last_error=None,
             updated_at=dispatch_now,
         )
@@ -357,11 +704,14 @@ def mark_outbox_publish_failed(
             SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
             SyncDispatchOutbox.claim_expires_at.is_not(None),
             SyncDispatchOutbox.claim_expires_at > failure_now,
+            _active_claim_route_exists(),
         )
         .values(
             status=OUTBOX_STATUS_PENDING,
             claim_token=None,
             claim_expires_at=None,
+            claim_transport=None,
+            claim_route_generation=None,
             available_at=failure_now + timedelta(seconds=backoff_seconds(attempts)),
             last_error=sanitize_error_text(error, max_length=_MAX_ERROR_LENGTH),
             updated_at=failure_now,
@@ -370,6 +720,24 @@ def mark_outbox_publish_failed(
     )
     session.flush()
     return _rowcount(result) == 1
+
+
+def _active_claim_route_exists(*, expected_transport: str | None = None) -> Any:
+    route = SyncDispatchTransportRoute
+    conditions = [
+        route.kind == SyncDispatchOutbox.kind,
+        route.paused.is_(False),
+    ]
+    if expected_transport is None:
+        conditions.extend(
+            (
+                route.transport == SyncDispatchOutbox.claim_transport,
+                route.generation == SyncDispatchOutbox.claim_route_generation,
+            )
+        )
+    else:
+        conditions.append(route.transport == expected_transport)
+    return exists(select(1).where(*conditions))
 
 
 def _claim_timeout_seconds() -> int:

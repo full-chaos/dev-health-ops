@@ -8,10 +8,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field, fields
+from dataclasses import InitVar, dataclass, field, fields
 from datetime import datetime, timezone
 from typing import ClassVar, Final
 from uuid import UUID
+
+from dev_health_ops.models.operational_ordering_types import (
+    OPERATIONAL_ORDERING_CONTRACT,
+    IngestRevision,
+    OperationRank,
+    SourceConflictKey,
+    SourceRevision,
+)
 
 
 def canonical_operational_id(
@@ -73,6 +81,11 @@ class CanonicalOperationalEntity:
     source_entity_type: str
     external_id: str
     source_version_at: datetime
+    operation_rank: InitVar[OperationRank | None] = None
+    source_revision: SourceRevision = field(init=False)
+    source_conflict_key: SourceConflictKey = field(init=False)
+    ingest_revision: IngestRevision = field(init=False)
+    ordering_contract: int = field(init=False, default=OPERATIONAL_ORDERING_CONTRACT)
     id: str = field(init=False)
     source_id: UUID | None = None
     source_url: str | None = None
@@ -89,7 +102,9 @@ class CanonicalOperationalEntity:
     relationship_provenance: str | None = None
     relationship_confidence: float | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, operation_rank: OperationRank | None = None) -> None:
+        from dev_health_ops.models.operational_ordering import build_entity_ordering
+
         for value, vocabulary, field_name in (
             (self.normalized_status, CANONICAL_STATUSES, "normalized_status"),
             (self.normalized_severity, CANONICAL_SEVERITIES, "normalized_severity"),
@@ -119,6 +134,11 @@ class CanonicalOperationalEntity:
                 self.external_id,
             ),
         )
+        ordering = build_entity_ordering(self, operation_rank)
+        object.__setattr__(self, "source_revision", ordering.source_revision)
+        object.__setattr__(self, "source_conflict_key", ordering.source_conflict_key)
+        object.__setattr__(self, "ingest_revision", ordering.ingest_revision)
+        object.__setattr__(self, "ordering_contract", ordering.ordering_contract)
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,8 +278,8 @@ class ServiceRepositoryMapping(CanonicalOperationalEntity):
     valid_to: datetime | None = None
     is_active: bool = True
 
-    def __post_init__(self) -> None:
-        CanonicalOperationalEntity.__post_init__(self)
+    def __post_init__(self, operation_rank: OperationRank | None = None) -> None:
+        CanonicalOperationalEntity.__post_init__(self, operation_rank)
         if self.repo_id is None and (not self.repo_provider or not self.repo_full_name):
             raise OperationalContractError(
                 "repository_mapping",

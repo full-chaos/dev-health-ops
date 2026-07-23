@@ -11,10 +11,16 @@ from sqlalchemy.orm import Mapped, mapped_column
 from dev_health_ops.models.git import GUID, Base
 
 INTERNAL_SERVICE_TOKEN_PREFIX = "svc_acr_"
+WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"
 
 
-def generate_internal_service_token() -> str:
-    return f"{INTERNAL_SERVICE_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+def generate_internal_service_token(service_name: str = "acr") -> str:
+    prefix = (
+        WORKER_OPERATOR_TOKEN_PREFIX
+        if service_name == "worker-operator"
+        else INTERNAL_SERVICE_TOKEN_PREFIX
+    )
+    return f"{prefix}{secrets.token_urlsafe(32)}"
 
 
 def hash_internal_service_token(token: str) -> str:
@@ -85,7 +91,7 @@ class InternalServiceCredential(Base):
         created_by_user_id: uuid.UUID | None,
         expires_at: datetime | None = None,
     ) -> tuple[InternalServiceCredential, str]:
-        token = generate_internal_service_token()
+        token = generate_internal_service_token(service_name)
         return (
             cls.from_plaintext_token(
                 token=token,

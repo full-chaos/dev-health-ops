@@ -224,11 +224,14 @@ dev-hops sync deployments --provider github \
 Sync incident data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-dev-hops sync incidents --provider github \
-  --auth "$GITHUB_TOKEN" \
-  --owner org \
-  --repo repo
+dev-hops sync incidents --provider gitlab \
+  --auth "$GITLAB_TOKEN" \
+  --gitlab-url "https://gitlab.com" \
+  --project-id 123
 ```
+
+GitLab selects native `issue_type=incident` rows. GitHub is intentionally unsupported:
+ordinary GitHub issues, including label-bearing issues, remain work items.
 
 ### `sync blame`
 
@@ -520,16 +523,17 @@ Check data freshness and completeness across providers within a time window.
 
 ```bash
 # Table output (default)
-dev-hops audit completeness --db "clickhouse://localhost:8123/default" --days 7
+dev-hops audit completeness --db "clickhouse://localhost:8123/default" --org ORG_ID --days 7
 
 # JSON output
-dev-hops audit completeness --db "clickhouse://localhost:8123/default" --days 30 --format json
+dev-hops audit completeness --db "clickhouse://localhost:8123/default" --org ORG_ID --days 30 --format json
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
 | `--db` | Database connection string (required) |
+| `--org` | Organization ID used to scope canonical incident and mapping rows (required) |
 | `--days N` | Lookback window in days (default: 7) |
 | `--format` | Output format: `table` or `json` (default: `table`) |
 

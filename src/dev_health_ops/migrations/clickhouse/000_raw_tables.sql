@@ -120,13 +120,3 @@ CREATE TABLE IF NOT EXISTS deployments (
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, deployment_id);
-
-CREATE TABLE IF NOT EXISTS incidents (
-    repo_id UUID,
-    incident_id String,
-    status Nullable(String),
-    started_at DateTime64(3, 'UTC'),
-    resolved_at Nullable(DateTime64(3, 'UTC')),
-    last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (repo_id, incident_id);

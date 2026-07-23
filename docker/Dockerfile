@@ -1,3 +1,37 @@
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.25.9-alpine@sha256:5caaf1cca9dc351e13deafbc3879fd4754801acba8653fa9540cea125d01a71f"
+
+# ── Stage 0: one-shot River migrator builder ──────────────────────────────────
+# The Python migration command invokes this static binary only when the
+# dedicated MIGRATION_DATABASE_URI contract is configured. Long-running
+# processes never invoke it and never receive the migration role.
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-migrator-builder
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG SOURCE_DATE_EPOCH="0"
+
+ENV CGO_ENABLED=0 \
+  GOFLAGS="-mod=readonly" \
+  SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY cmd/dev-health-worker-migrate ./cmd/dev-health-worker-migrate
+COPY internal ./internal
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
+      -buildvcs=false \
+      -trimpath \
+      -ldflags="-s -w -buildid=" \
+      -o /out/dev-health-worker-migrate \
+      ./cmd/dev-health-worker-migrate \
+    && touch -d "@${SOURCE_DATE_EPOCH}" /out/dev-health-worker-migrate
+
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 # Install build dependencies and compile wheels. This stage is NOT shipped.
 FROM python:3.14-slim AS builder
@@ -48,6 +82,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git wget \
 
 # Copy installed packages from builder (no build tools, pip, or setuptools).
 COPY --from=builder /install /usr/local
+COPY --from=go-migrator-builder /out/dev-health-worker-migrate /usr/local/bin/dev-health-worker-migrate
 
 RUN useradd --create-home --shell /bin/bash appuser
 

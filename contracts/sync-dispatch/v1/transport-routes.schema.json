@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/sync-dispatch/v1/transport-routes.schema.json",
+  "title": "Dev Health sync-dispatch transport routes",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "routes"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "routes": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {"$ref": "#/$defs/dispatch_sync_run"},
+        {"$ref": "#/$defs/finalize_sync_run"},
+        {"$ref": "#/$defs/post_sync"},
+        {"$ref": "#/$defs/reference_discovery"}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "transport": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "enum": ["celery", "river"]
+    },
+    "transport_pair": {
+      "anyOf": [
+        {
+          "properties": {
+            "route": {"const": "celery"},
+            "rollback_route": {"const": "celery"}
+          }
+        },
+        {
+          "properties": {
+            "route": {"const": "river"},
+            "rollback_route": {"const": "celery"}
+          }
+        }
+      ]
+    },
+    "dispatch_sync_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "delivery", "route", "rollback_route"],
+      "allOf": [{"$ref": "#/$defs/transport_pair"}],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "dispatch_sync_run"},
+        "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_least_once"},
+        "route": {"$ref": "#/$defs/transport"},
+        "rollback_route": {"$ref": "#/$defs/transport"}
+      }
+    },
+    "finalize_sync_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "delivery", "route", "rollback_route"],
+      "allOf": [{"$ref": "#/$defs/transport_pair"}],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "finalize_sync_run"},
+        "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_least_once"},
+        "route": {"$ref": "#/$defs/transport"},
+        "rollback_route": {"$ref": "#/$defs/transport"}
+      }
+    },
+    "post_sync": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "delivery", "route", "rollback_route"],
+      "allOf": [{"$ref": "#/$defs/transport_pair"}],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "post_sync"},
+        "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_most_once_mark_before"},
+        "route": {"$ref": "#/$defs/transport"},
+        "rollback_route": {"$ref": "#/$defs/transport"}
+      }
+    },
+    "reference_discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "delivery", "route", "rollback_route"],
+      "allOf": [{"$ref": "#/$defs/transport_pair"}],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "reference_discovery"},
+        "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_least_once"},
+        "route": {"$ref": "#/$defs/transport"},
+        "rollback_route": {"$ref": "#/$defs/transport"}
+      }
+    }
+  }
+}

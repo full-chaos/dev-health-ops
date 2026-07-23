@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "contract_family": "dev-health.jobs",
+  "envelope_schema": "envelope.schema.json",
+  "version_policy": {
+    "compatibility": "additive_optional_only",
+    "minimum_consumer_window": 2,
+    "same_version_rollout": "schema_digest_all_live_profiles"
+  },
+  "jobs": [
+    {
+      "kind": "system.heartbeat",
+      "current_version": 1,
+      "supported_versions": [1],
+      "profile": "ops",
+      "queue": "heartbeat",
+      "handler_owner": "internal/jobs/system",
+      "execution_mode": "command",
+      "priority": 2,
+      "timeout_seconds": 30,
+      "max_attempts": 1,
+      "retry_policy": "none",
+      "cancellation": "cooperative",
+      "delivery": "guarded_at_least_once",
+      "idempotency": "unique_schedule_occurrence",
+      "concurrency": {
+        "scope": "fleet",
+        "limit": 1
+      },
+      "sensitive_fields": [],
+      "domain_link": "schedule_occurrence",
+      "organization_scope": "global",
+      "schema_versions": {
+        "1": "schemas/system.heartbeat.v1.schema.json"
+      },
+      "fixtures": {
+        "1": ["examples/system.heartbeat.v1.json"]
+      }
+    },
+    {
+      "kind": "system.retention_cleanup",
+      "current_version": 1,
+      "supported_versions": [1],
+      "profile": "ops",
+      "queue": "retention",
+      "handler_owner": "internal/jobs/system/retention",
+      "execution_mode": "command",
+      "priority": 3,
+      "timeout_seconds": 300,
+      "max_attempts": 3,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative_checkpoint",
+      "delivery": "guarded_at_least_once",
+      "idempotency": "maintenance_run_checkpoint",
+      "concurrency": {
+        "scope": "fleet",
+        "limit": 1
+      },
+      "sensitive_fields": [],
+      "domain_link": "maintenance_run",
+      "organization_scope": "global",
+      "schema_versions": {
+        "1": "schemas/system.retention_cleanup.v1.schema.json"
+      },
+      "fixtures": {
+        "1": ["examples/system.retention_cleanup.v1.json"]
+      }
+    }
+  ]
+}

@@ -12,7 +12,8 @@ layers. Changes must be coordinated across all downstream consumers.
 
 Existing infrastructure this extends:
 - metrics/schemas.py: PipelineRunRow, CICDMetricsDailyRecord, DORAMetricsRecord
-- migrations/clickhouse/000_raw_tables.sql: ci_pipeline_runs, deployments, incidents
+- migrations/clickhouse/000_raw_tables.sql: ci_pipeline_runs, deployments
+- migrations/clickhouse/066_operational_canonical.sql: operational_incidents
 
 Scale convention (CHAOS-1192)
 -----------------------------

@@ -1,6 +1,154 @@
-# Workers & Celery
+# Workers: Celery and Go foundation
 
-Background job processing for dev-health-ops, powered by Celery with Redis as broker and result backend.
+Production background job processing for dev-health-ops is currently powered by
+Celery with Redis/Valkey as broker and result backend.
+
+## Runtime status and coexistence
+
+Phase 1 of the [Go worker migration](../architecture/go-worker-runtime-trd.md)
+adds four process foundations: `dev-health-worker`, `dev-health-scheduler`,
+`dev-health-reconciler`, and `dev-health-stream-runner`. It also adds shared
+configuration, lifecycle, health, River storage, versioned-contract,
+middleware, telemetry, and operator packages. Those components are additive
+during coexistence:
+
+- Python remains the owner of FastAPI/GraphQL, providers, processors, domain
+  behavior, and every job listed in this document.
+- No production job is routed to River solely because a Go binary builds,
+  starts, or reports healthy.
+- Celery workers and Beat schedules remain required until each job's migration
+  issue changes its route behind rollback controls and passes shadow, parity,
+  and canary gates.
+- Separate worker stacks may run against the same representative dataset for
+  on-the-fly comparison, but they must use isolated process/container projects
+  and must not mutate, drain, purge, or normalize away the Celery baseline.
+
+River queue control uses a small, bounded direct PostgreSQL pool configured by
+`WORKER_DATABASE_URI`; transaction-mode PgBouncer remains supported for the
+separate `POSTGRES_URI` domain pool and is insufficient as the sole production
+queue-control path. Session-mode queue control remains fail-closed until it
+passes the same compatibility matrix. `WORKER_DATABASE_URI` is a Go runtime
+setting, not a Python database alias. Long-running processes never apply River
+migrations; `MIGRATION_DATABASE_URI` is injected only into the one-shot
+migration job.
+
+All Go profiles have zero minimum replicas and the current registry routes
+remain `celery`. Their readiness stays closed until a profile has complete
+compiled handler coverage and its database/schema checks pass. The canonical
+disabled topology and its connection budget live in
+`deploy/go-workers/profiles.json`.
+
+The Go worker exposes `/healthz` for process liveness, `/readyz` for required
+dependencies, and `/metrics` for bounded Prometheus telemetry. Worker readiness
+checks domain-role authorization, registry load, complete compiled-handler
+coverage, available-job contract-version support, the queue-control
+configuration category, queue-control connectivity, and the pinned River
+schema. A `queue_control_config` failure specifically directs operators to the
+dedicated DSN/mode/role-separation contract without exposing a DSN. Queue
+depth, oldest eligible age, execution
+saturation, and both PostgreSQL pool saturation ratios are sampled from the
+live database on each metrics scrape. A database sampling failure makes that
+scrape unavailable instead of publishing a misleading zero. Because Phase 1
+does not compile or start any migrated River handlers, this observability does
+not transfer queue ownership away from Celery.
+
+`dev-health-workerctl` is the Phase 1 payload-redacted operator surface. It is
+shipped as a dedicated non-root image target and serialized to one invocation
+per semantic database with a PostgreSQL advisory transaction lock. Create its
+service credential with:
+
+```bash
+dev-hops service-credentials create \
+  --service worker-operator \
+  --scope workers:read \
+  --scope workers:operate
+```
+
+The plaintext token is printed once and is then supplied as
+`WORKER_OPERATOR_TOKEN` or its `_FILE` form. Read commands include `status`,
+`jobs list`, `jobs inspect`,
+`queues`, `streams status`, and `contracts`. During Phase 1, `streams status`
+reports the validated disabled deployment profiles and their Celery ownership;
+live backlog and pending-entry state remains on the stream-runner metrics
+surface once a stream profile is composed. Mutations require both `--reason` and
+`--correlation-id`, verify an exact state transition, and persist a bounded
+audit intent before changing River state. A PostgreSQL commit ambiguity is
+recorded and returned as `outcome_unknown`, never as a false failure; inspect
+the resource before any retry. A confirmed mutation whose audit finalization
+is delayed returns `audit_pending` while retaining its durable `started`
+intent. Cancel/retry remain intentionally
+fail-closed for the two foundation kinds because their frozen domain links do
+not yet have authoritative semantic rows; queue pause/resume and profile drain
+are available to an authorized operator. Encoded arguments, driver errors,
+DSNs, and tokens are absent from command output and audit records.
+
+The generic `worker_job_outbox` bridge is now route-safe foundation rather than
+a dormant placeholder. Python's producer helper refuses to enqueue unless the
+checked-in migration state and route pair is executable (`shadow`,
+`river_canary`, or `river`), and the Go relay leaves known Celery-routed rows
+untouched before independently rechecking the route at River insertion.
+Unknown kinds still get claimed so contract failures can terminalize with
+bounded evidence, and the
+`dev-health-reconciler` command now composes the bounded immediate+poll loop
+with explicit packaged-registry readiness and low-cardinality metrics. Startup
+is fail-closed: the loop only opens readiness after one successful step, and
+persistence failures close it instead of being reported as harmless lease
+races.
+
+The checked-in deployment profile still keeps the topology disabled
+(`coexistence_disabled`, all replicas `0`), both registered kinds still route
+to Celery, no current domain producer calls the bridge, and no Go handler is
+compiled. Celery therefore remains the only production writer. Migration
+policy is loaded at process startup: before a future rollback changes the
+checked-in route, stop new production, drain or classify in-flight River work,
+restore Celery routing, and restart the reconciler. Deferred generic-outbox
+rows remain auditable; the bridge does not silently republish them to Celery.
+The Go foundations now also include bounded read-only sync-outbox observation,
+sync-schedule evaluation, and a database-backed sync-dispatch ownership fence.
+Migration `0049` seeds the four fixed sync wakeup kinds as active Celery routes
+at generation 1. Each Python claim binds the route and generation. For
+dispatch, finalize, and discovery, the publish transaction locks both the
+outbox row and route row through publish and mark; success/failure writes must
+still match that active generation. `post_sync` preserves its existing
+mark-before-publish commit, so its route lock ends at that commit. A future
+route switch therefore needs a separate bounded post-sync quiescence proof in
+addition to draining live claims. Unknown, paused, and River-routed kinds are
+not claimable by Python. The Go reconciler checks the persisted four-row set
+against the checked-in contract and closes readiness on a pause, missing row,
+generation error, or route drift.
+
+This is a fail-closed selector foundation, not River activation. All persisted
+and checked-in routes remain Celery, deployment profiles remain
+`coexistence_disabled` with zero replicas, and no Go sync handler or River
+sync-domain claimant exists. Do not change a route to River: it would strand
+the wakeup. The mutation-capable sync-domain scheduler,
+organization/entitlement gates, lease repair, River insertion, and handlers
+remain unfinished CHAOS-3039 work.
+
+For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`
+and run:
+
+```bash
+go run ./cmd/dev-health-sync-parity --limit 100
+```
+
+The command holds one exported read-only `REPEATABLE READ` snapshot across the
+Python and Go observations and emits only a safe match/mismatch report. It
+does not claim or publish work. See the
+[v2 parity evidence](../architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md).
+
+The Go scheduler also remains blocked on the Phase 4
+`sync.plan_scheduled_config` coordinator. `sync.dispatch_run` starts from an
+existing `SyncRun` and cannot replace scheduled planning. Until the new
+coordinator consumes a stable occurrence identity and creates the scheduled
+domain plan transactionally, Celery Beat and `dispatch_scheduled_syncs` remain
+the sole schedule mutation owners.
+
+The rest of this page documents the active Celery runtime. See the
+[Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target
+topology and the
+[CHAOS-3034 decision](../decisions/chaos-3034-river-compatibility.md) for the
+direct-PostgreSQL compatibility boundary.
 
 ---
 

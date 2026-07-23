@@ -1,7 +1,7 @@
 """Planner-only routing invariants (CHAOS-2647).
 
 Asserts that manual "Sync now", scheduler, and backfill ALL route through
-plan_sync_run + dispatch_sync_run, and that an unmigrated config (no
+plan_sync_run + the transactional dispatch outbox, and that an unmigrated config (no
 integration_id) causes:
   - manual trigger  → planner_request_for_config_if_routed returns None
                        (the HTTP layer converts this to HTTP 400)
@@ -27,6 +27,7 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRunMode,
     SyncRunUnit,
 )
@@ -236,12 +237,12 @@ def test_scheduler_skips_unmigrated_config(db_session, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Test 5d: migrated config with schedule → scheduler calls plan_sync_run + dispatch
+# Test 5d: migrated config with schedule → scheduler plans durable outbox handoff
 # ---------------------------------------------------------------------------
 
 
 def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatch):
-    """A migrated, due config must be routed through plan_sync_run + dispatch_sync_run."""
+    """A migrated, due config must be planned with a durable outbox wakeup."""
     from dev_health_ops.workers.sync_scheduler import _maybe_dispatch_config
 
     org_id = str(uuid.uuid4())
@@ -262,10 +263,11 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
     db_session.flush()
 
     plan_calls: list[object] = []
-    dispatch_calls: list[object] = []
-
     from dev_health_ops.sync import execution_trigger as execution_trigger_mod
-    from dev_health_ops.workers import sync_units as sync_units_mod
+    from dev_health_ops.sync.dispatch_outbox import (
+        OUTBOX_KIND_DISCOVERY,
+        OUTBOX_STATUS_PENDING,
+    )
 
     original_plan = execution_trigger_mod.plan_sync_run
 
@@ -274,11 +276,6 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
         return original_plan(session, request)
 
     monkeypatch.setattr(execution_trigger_mod, "plan_sync_run", fake_plan)
-    monkeypatch.setattr(
-        sync_units_mod.dispatch_sync_run,
-        "apply_async",
-        lambda args=None, queue=None, **kw: dispatch_calls.append((args, queue)),
-    )
     monkeypatch.setattr(
         "dev_health_ops.workers.sync_scheduler.organization_exists_sync",
         lambda session, org_id_arg: True,
@@ -294,7 +291,9 @@ def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatc
         "_maybe_dispatch_config must return True for a due, migrated config"
     )
     assert len(plan_calls) == 1, "plan_sync_run must be called exactly once"
-    assert len(dispatch_calls) == 1, "dispatch_sync_run.apply_async must be called once"
+    outbox = db_session.query(SyncDispatchOutbox).one()
+    assert outbox.kind == OUTBOX_KIND_DISCOVERY
+    assert outbox.status == OUTBOX_STATUS_PENDING
     dataset_keys = {
         unit.dataset_key
         for unit in db_session.query(SyncRunUnit).order_by(SyncRunUnit.dataset_key)

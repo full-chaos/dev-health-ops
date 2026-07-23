@@ -15,7 +15,7 @@ The platform already has partial CI/CD and delivery analytics that TestOps will 
 | Capability | Status | Key Files |
 |---|---|---|
 | Pipeline run ingestion (status, duration, queue time) | **Exists** | `connectors/github.py`, `connectors/gitlab.py`, `storage/mixins/cicd.py` |
-| ClickHouse tables: `ci_pipeline_runs`, `deployments`, `incidents` | **Exists** | `migrations/clickhouse/000_raw_tables.sql` |
+| ClickHouse tables: `ci_pipeline_runs`, `deployments`, `operational_incidents` | **Exists** | `migrations/clickhouse/000_raw_tables.sql`, `migrations/clickhouse/066_operational_canonical.sql` |
 | Pipeline metrics: success_rate, avg/p90 duration, queue minutes | **Exists** | `metrics/compute_cicd.py` |
 | DORA metrics: deploy frequency, lead time, MTTR, change failure rate | **Exists** | `metrics/job_dora.py`, `migrations/clickhouse/023b_dora_metrics.sql` |
 | Well-being metrics: after-hours ratio, weekend ratio | **Exists** | `metrics/compute_wellbeing.py` |

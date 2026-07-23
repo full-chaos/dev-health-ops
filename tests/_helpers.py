@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from sqlalchemy import Table
+from sqlalchemy.orm import Session
 
 
 def tables_of(*models: Any) -> list[Table]:
@@ -54,3 +55,28 @@ def closing_coroutine_runner(
         return return_value
 
     return _run
+
+
+def seed_sync_dispatch_transport_routes(session: Session) -> None:
+    """Seed the migration-default Celery routes for isolated outbox tests."""
+    from dev_health_ops.models import SyncDispatchTransportRoute
+
+    session.add_all(
+        [
+            SyncDispatchTransportRoute(
+                kind=kind,
+                transport="celery",
+                generation=1,
+                paused=False,
+                paused_at=None,
+                rollback_transport="celery",
+            )
+            for kind in (
+                "dispatch_sync_run",
+                "finalize_sync_run",
+                "post_sync",
+                "reference_discovery",
+            )
+        ]
+    )
+    session.flush()

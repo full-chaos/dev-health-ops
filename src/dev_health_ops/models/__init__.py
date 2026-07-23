@@ -41,6 +41,7 @@ from .integrations import (
     IntegrationDataset,
     IntegrationSource,
     SyncDispatchOutbox,
+    SyncDispatchTransportRoute,
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
@@ -66,6 +67,7 @@ from .licensing import (
     OrgLicense,
 )
 from .org_invite import OrgInvite
+from .pagerduty_webhook_binding import PagerDutyWebhookBinding
 from .rate_limit_observations import ProviderRateLimitObservation
 from .refresh_token import RefreshToken
 from .refunds import Refund, RefundStatus
@@ -114,6 +116,7 @@ from .work_items import (
     WorkItemReopenEvent,
     WorkItemStatusTransition,
 )
+from .worker_job_outbox import WorkerJobOutbox
 
 __all__ = [
     "AuditAction",
@@ -171,6 +174,7 @@ __all__ = [
     "OrgIPAllowlist",
     "OrgLicense",
     "OrgRetentionPolicy",
+    "PagerDutyWebhookBinding",
     "ProviderRateLimitObservation",
     "Refund",
     "RefundStatus",
@@ -195,6 +199,7 @@ __all__ = [
     "SyncComputeCheckpointStatus",
     "SyncComputeType",
     "SyncDispatchOutbox",
+    "SyncDispatchTransportRoute",
     "SyncRun",
     "SyncRunMode",
     "SyncRunPostDispatch",
@@ -215,4 +220,5 @@ __all__ = [
     "WorkItemInteractionEvent",
     "WorkItemReopenEvent",
     "WorkItemStatusTransition",
+    "WorkerJobOutbox",
 ]

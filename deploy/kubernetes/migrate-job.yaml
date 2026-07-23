@@ -1,8 +1,10 @@
 ---
 # Database migration Job (CHAOS-2304)
 #
-# Applies PostgreSQL (Alembic, when POSTGRES_URI is set) and ClickHouse schema
-# migrations, then exits. App pods run with AUTO_RUN_MIGRATIONS=false (see
+# Applies PostgreSQL (Alembic plus River when MIGRATION_DATABASE_URI is set)
+# and ClickHouse schema migrations, then exits. Existing direct POSTGRES_URI
+# deployments remain Alembic-only compatible. App pods run with
+# AUTO_RUN_MIGRATIONS=false (see
 # configmap.yaml) so they never ambient-migrate — migration 042+ does
 # shadow-table rebuilds that are not safe to run concurrently from workers.
 #
@@ -22,8 +24,9 @@
 # poll the read-only `dev-hops migrate clickhouse status --check` (no DDL)
 # until this Job has brought the schema current.
 #
-# POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
-# transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.
+# MIGRATION_DATABASE_URI (preferred) or compatibility POSTGRES_URI must point
+# DIRECTLY at Postgres (port 5432), never at a transaction-mode pooler
+# (PgBouncer/RDS Proxy): migrations run raw DDL.
 # See docs/ops/database-connection-pooling.md.
 apiVersion: batch/v1
 kind: Job
@@ -54,13 +57,18 @@ spec:
             - sh
             - -c
             - >-
-              if [ -n "$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+              if [ -z "${MIGRATION_DATABASE_URI:-}" ];
+              then unset MIGRATION_DATABASE_URI; fi;
+              if [ -n "$POSTGRES_URI" ]
+              || [ "${MIGRATION_DATABASE_URI+x}" = x ]
+              || [ "${MIGRATION_DATABASE_URI_FILE+x}" = x ];
+              then dev-hops migrate postgres; fi
               && dev-hops migrate clickhouse
           envFrom:
             - configMapRef:
                 name: dev-health-config
             - secretRef:
-                name: dev-health-secrets
+                name: dev-health-migration-secrets
           resources:
             requests:
               memory: "256Mi"

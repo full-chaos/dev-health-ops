@@ -160,6 +160,22 @@ _NO_WATERMARK_DATASETS = frozenset(
     }
 )
 
+_PAGERDUTY_LEGACY_TARGET_OVERRIDES: dict[str, frozenset[str]] = {
+    DatasetKey.INCIDENTS.value: frozenset({"operational"}),
+}
+
+_PROVIDER_DATASET_COST_CLASSES: dict[tuple[str, str], CostClass] = {
+    ("jira", DatasetKey.INCIDENTS.value): CostClass.MEDIUM,
+}
+
+_PROVIDER_DATASET_LEGACY_TARGETS: dict[tuple[str, str], frozenset[str]] = {
+    ("jira", DatasetKey.INCIDENTS.value): frozenset({"operational"}),
+}
+
+_PROVIDER_DATASET_PROCESSOR_FLAGS: dict[tuple[str, str], dict[str, bool]] = {
+    ("jira", DatasetKey.INCIDENTS.value): {},
+}
+
 _LEGACY_TARGET_ORDER = (
     "git",
     "prs",
@@ -188,7 +204,6 @@ _PROVIDER_SUPPORTED_DATASETS: dict[str, frozenset[str]] = {
             DatasetKey.CICD.value,
             DatasetKey.TESTS.value,
             DatasetKey.DEPLOYMENTS.value,
-            DatasetKey.INCIDENTS.value,
             DatasetKey.SECURITY.value,
             DatasetKey.WORK_ITEMS.value,
             DatasetKey.WORK_ITEM_LABELS.value,
@@ -222,6 +237,7 @@ _PROVIDER_SUPPORTED_DATASETS: dict[str, frozenset[str]] = {
     ),
     "jira": frozenset(
         {
+            DatasetKey.INCIDENTS.value,
             DatasetKey.WORK_ITEMS.value,
             DatasetKey.WORK_ITEM_LABELS.value,
             DatasetKey.WORK_ITEM_PROJECTS.value,
@@ -274,12 +290,29 @@ def _watermark_behavior(dataset_key: str) -> WatermarkBehavior:
 
 
 def _build_spec(provider: str, dataset_key: str) -> DatasetSpec:
+    provider_key = provider.lower()
+    scope = (provider_key, dataset_key)
     return DatasetSpec(
-        provider=provider,
+        provider=provider_key,
         dataset_key=dataset_key,
-        legacy_targets=_LEGACY_TARGETS_BY_DATASET[dataset_key],
-        processor_flags=dict(_PROCESSOR_FLAGS_BY_DATASET.get(dataset_key, {})),
-        default_cost_class=_cost_class(dataset_key),
+        legacy_targets=(
+            _PROVIDER_DATASET_LEGACY_TARGETS.get(
+                scope,
+                _PAGERDUTY_LEGACY_TARGET_OVERRIDES.get(
+                    dataset_key, _LEGACY_TARGETS_BY_DATASET[dataset_key]
+                )
+                if provider_key == "pagerduty"
+                else _LEGACY_TARGETS_BY_DATASET[dataset_key],
+            )
+        ),
+        processor_flags=dict(
+            _PROVIDER_DATASET_PROCESSOR_FLAGS.get(
+                scope, _PROCESSOR_FLAGS_BY_DATASET.get(dataset_key, {})
+            )
+        ),
+        default_cost_class=_PROVIDER_DATASET_COST_CLASSES.get(
+            scope, _cost_class(dataset_key)
+        ),
         watermark_behavior=_watermark_behavior(dataset_key),
         supported=True,
     )

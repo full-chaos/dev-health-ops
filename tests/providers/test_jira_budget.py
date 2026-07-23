@@ -184,6 +184,24 @@ def test_jira_budget_estimator_returns_jql_and_enrichment_budgets() -> None:
     assert estimates[0].to_dict()["bucket"]["dimension"] == "search"
 
 
+def test_jira_budget_estimator_reserves_jsm_incident_collection() -> None:
+    estimates = JiraBudgetEstimator().estimate(_context(dataset_key="incidents"))
+
+    assert [
+        (estimate.bucket.dimension, estimate.route_family) for estimate in estimates
+    ] == [
+        (BudgetDimension.REST_CORE, "jira_metadata"),
+        (BudgetDimension.SEARCH, "jira_jql"),
+        (BudgetDimension.REST_CORE, "jira_jsm_incident_admission"),
+    ]
+    assert [estimate.estimated_units for estimate in estimates] == [2, 2, 100_000]
+    assert [estimate.confidence for estimate in estimates] == [
+        "medium",
+        "medium",
+        "low",
+    ]
+
+
 def test_jira_budget_estimator_adds_optional_worklog_and_gql_budgets() -> None:
     estimates = JiraBudgetEstimator().estimate(
         _context(

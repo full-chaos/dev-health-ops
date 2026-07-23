@@ -40,6 +40,7 @@ nav:
       - Configure a workspace: configuration.md
       - Manage teams: team-configuration.md
       - Connect GitHub: user-guide/github-app-setup.md
+      - Connect PagerDuty: user-guide/pagerduty-oauth-app-setup.md
       - Ingest your data: customer-push-ingestion/overview.md
       - Set up webhooks: webhooks.md
   - Deploy & operate:
@@ -55,6 +56,8 @@ nav:
       - Understand provider limits: providers/rate-limit-policy.md
   - Reference & history:
       - Architecture overview: architecture.md
+      - Canonical operational model: architecture/canonical-operational-model.md
+      - Jira Service Management provider contract: providers/jira-service-management.md
       - API field mapping: api/view-mapping.md
       - Canonical metrics: canonical-metrics.md
       - Investment taxonomy: product/investment-taxonomy.md

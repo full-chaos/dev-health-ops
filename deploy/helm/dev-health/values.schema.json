@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "object",
+          "description": "Shared application secrets must never contain the elevated migration DSN.",
+          "not": {
+            "anyOf": [
+              {
+                "required": ["MIGRATION_DATABASE_URI"]
+              },
+              {
+                "required": ["MIGRATION_DATABASE_URI_FILE"]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

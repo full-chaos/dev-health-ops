@@ -107,7 +107,12 @@ sequenceDiagram
     Note over Relay: If publish fails here, task is lost (At-Most-Once)
     Relay->>Broker: Publish post_sync fanout tasks
 
-    Note over DB, Worker: Case 5: Eligible Linear backfill expired lease (Retry, not Fail) [CHAOS-2710]
+    Note over DB, Worker: Case 5: Permanent feature denial (Consumed, no publication)
+    Worker->>DB: Terminalize run, units, discovery, and observers atomically
+    Worker->>DB: Mark discovery/finalize outbox rows dispatched with feature_disabled
+    Note over Relay: Denied rows are terminal and never claimable or re-armed
+
+    Note over DB, Worker: Case 6: Eligible Linear backfill expired lease (Retry, not Fail) [CHAOS-2710]
     Worker->>DB: run_sync_unit holds lease; worker dies mid-chunk, lease expires
     Relay->>DB: Expired-lease loop finds RUNNING unit with dead lease
     Note over Relay: Eligible? provider=linear AND mode=backfill AND work-item family AND retry-SAFE surfaces AND count < max
@@ -159,9 +164,46 @@ The outbox kinds have different delivery guarantees depending on their idempoten
 
 | Outbox Kind | Delivery Guarantee | Idempotency Mechanism |
 | :--- | :--- | :--- |
+| `reference_discovery` | At-Least-Once | The durable discovery ledger and lease allow an expired attempt to resume, while the successful transition arms dispatch once. |
 | `dispatch_sync_run` | At-Least-Once | Unit claim guards prevent duplicate execution. Capped units remain in `PLANNED` status. |
 | `finalize_sync_run` | At-Least-Once | The `SyncRunPostDispatch` ledger enforces once-only finalization. |
 | `post_sync` | At-Most-Once | The relay marks the row as dispatched before publishing. It never re-arms on publish failure. |
+
+A permanent authorization denial consumes the transition using the existing
+`dispatched` status and stores `feature_disabled` as the durable reason. These
+rows are excluded from relay claims, and `upsert_outbox_wakeup` preserves that
+terminal denial rather than re-arming it. A pending finalizer remains recoverable
+after other terminal outcomes without reopening feature-denied work.
+
+### Transport Route Contract
+
+[`contracts/sync-dispatch/v1/transport-routes.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/sync-dispatch/v1/transport-routes.json)
+is the language-neutral route and delivery contract for these four outbox
+kinds. Python and Go validate the same bounded artifact and reject missing,
+duplicate, reordered, or semantically mismatched entries. The route is
+selected per kind so a later migration can preserve the existing Celery
+rollback path without treating queue state as product state.
+
+The checked-in Phase 2 foundation remains deliberately inactive: every
+`route` and `rollback_route` is `celery`, and the existing Celery reconciler
+remains the only mutation owner. The dormant Go reconciler loads the contract
+and observes only the first bounded due-row window in the same
+`(available_at, id)` claim order. It never locks, claims, updates, or publishes
+an outbox row. Its readiness and fixed-cardinality metrics fail closed on
+contract drift, database errors, or an unknown kind inside the sampled window.
+Both runtimes emit a redacted `sync_dispatch_parity_observation`: Celery
+immediately before its claim and Go initially and at most once per minute.
+The event carries the UTC cutoff, bounded limit, predicate and digest versions,
+aggregate counts, and a SHA-256 digest over the ordered candidate identities;
+it never carries the identities themselves, tenant data, claim tokens, or
+payloads. Capture failure is telemetry-only and cannot prevent the existing
+Celery claim path. Changing the artifact alone therefore cannot activate a Go
+transport.
+
+Matching digests prove parity only when the two observations use the same
+cutoff and limit against a quiescent or otherwise correlated dataset.
+Independent live timestamps are operational evidence, not a promotion gate.
+Promotion still requires separately reviewed tandem evidence.
 
 ### At-Most-Once post_sync Semantics
 

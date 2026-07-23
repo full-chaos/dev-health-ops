@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
+from dev_health_ops.models import SyncDispatchOutbox
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import ScheduledJob, SyncConfiguration
 from dev_health_ops.workers import sync_scheduler, sync_units
@@ -73,7 +74,8 @@ def test_second_dispatcher_after_first_stamp_does_not_double_dispatch(
     assert second["dispatched"] == []
     assert first["errors"] == 0
     assert second["errors"] == 0
-    dispatch_mock.apply_async.assert_called_once()
+    dispatch_mock.apply_async.assert_not_called()
+    assert db_session.query(SyncDispatchOutbox).count() == 1
 
 
 @contextmanager
@@ -168,7 +170,11 @@ def test_postgres_existing_job_marker_prevents_second_dispatcher(
             assert not sync_scheduler._maybe_dispatch_config(
                 session_two, config_two, now
             )
-            dispatch_mock.apply_async.assert_called_once()
+            dispatch_mock.apply_async.assert_not_called()
+            assert (
+                session_one.query(SyncDispatchOutbox).filter_by(org_id=org_id).count()
+                == 1
+            )
         finally:
             session_one.close()
             session_two.close()
@@ -225,7 +231,7 @@ def test_postgres_missing_job_row_race_dispatches_once(monkeypatch):
             results = [future.result(timeout=30) for future in futures]
 
         assert sorted(results) == [False, True]
-        dispatch_mock.apply_async.assert_called_once()
+        dispatch_mock.apply_async.assert_not_called()
 
         with _session_scope(session_factory) as verify:
             jobs = (
@@ -240,6 +246,9 @@ def test_postgres_missing_job_row_race_dispatches_once(monkeypatch):
             assert len(jobs) == 1
             assert jobs[0].next_run_at is not None
             assert jobs[0].next_run_at > now
+            assert (
+                verify.query(SyncDispatchOutbox).filter_by(org_id=org_id).count() == 1
+            )
     finally:
         with _session_scope(session_factory) as cleanup:
             for job in (

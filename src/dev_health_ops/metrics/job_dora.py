@@ -195,10 +195,9 @@ def run_dora_metrics_job(
             f"sink='{sink}' requires db backend '{sink}', got '{backend}'."
         )
 
-    # CHAOS-2382: DORA is now provider-agnostic — the four metrics are derived
-    # from already-synced ClickHouse rows (deployments / incidents) that both
-    # the GitHub and GitLab processors write. No live provider fetch and no
-    # GITLAB_TOKEN is required, so GitHub-only orgs no longer crash.
+    # CHAOS-2382: DORA is provider-agnostic. It derives deployments and canonical
+    # operational incidents from already-synced ClickHouse rows. No live provider
+    # fetch or GITLAB_TOKEN is required, so GitHub-only orgs no longer crash.
     del interval, gitlab_url, auth  # legacy GitLab-API knobs, retained for API compat
 
     resolved_org_id = (org_id or "").strip()

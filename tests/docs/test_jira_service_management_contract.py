@@ -3,8 +3,35 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PROVIDER_DOC = ROOT / "docs" / "providers" / "jira-service-management.md"
-MODEL_DOC = ROOT / "docs" / "architecture" / "canonical-operational-model.md"
+# Directly migrated public contract (see
+# .github/documentation-program/content/migrated-source-pages.json). While the
+# direct migration is active it is a byte-for-byte copy of its archived source.
+PROVIDER_DOC = ROOT / "docs" / "admin" / "data-sources" / "jira-atlassian.md"
+ARCHIVED_PROVIDER_SOURCE = (
+    ROOT / ".github" / "docs-legacy" / "providers" / "jira-service-management.md"
+)
+# The canonical operational model is preserved source evidence, not a public page.
+MODEL_DOC = (
+    ROOT / ".github" / "docs-legacy" / "architecture" / "canonical-operational-model.md"
+)
+
+
+def test_jsm_public_contract_is_byte_identical_to_archived_source() -> None:
+    """The migrated public JSM contract must match its archived source byte-for-byte.
+
+    docs/admin/data-sources/jira-atlassian.md is a direct migration of
+    .github/docs-legacy/providers/jira-service-management.md. While the direct
+    migration is active the checked-in public body must not drift from its source.
+    """
+    assert PROVIDER_DOC.is_file(), f"missing public JSM contract: {PROVIDER_DOC}"
+    assert ARCHIVED_PROVIDER_SOURCE.is_file(), (
+        f"missing archived JSM source: {ARCHIVED_PROVIDER_SOURCE}"
+    )
+    assert PROVIDER_DOC.read_bytes() == ARCHIVED_PROVIDER_SOURCE.read_bytes(), (
+        "docs/admin/data-sources/jira-atlassian.md must remain byte-identical to "
+        ".github/docs-legacy/providers/jira-service-management.md while the direct "
+        "migration is active"
+    )
 
 
 def test_jsm_matrix_uses_only_canonical_outcomes() -> None:

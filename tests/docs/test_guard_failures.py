@@ -1,6 +1,9 @@
 import subprocess
 from datetime import date
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from scripts.check_built_site_links import check_built_site
 from scripts.check_code_prerequisites import pages_missing_prerequisite_link
@@ -112,28 +115,121 @@ def test_missing_code_prerequisite_fails(tmp_path: Path) -> None:
     assert missing == ["guide.md"]
 
 
-def test_skipped_deploy_no_op_condition_fails() -> None:
-    """Given the docs-guards aggregate job's real bash script, when the
-    upstream changes job fails and docs-guards-job is consequently skipped,
-    then the aggregate reports failure rather than a masked pass."""
-    root = Path(__file__).resolve().parents[2]
-    workflow_path = root / ".github" / "workflows" / "docs-guards.yml"
+CLOUDFLARE_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[2]
+    / ".github"
+    / "workflows"
+    / "docs-cloudflare.yml"
+)
 
-    import yaml
 
-    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
-    script = workflow["jobs"]["docs-guards"]["steps"][0]["run"]
+def _cloudflare_workflow() -> dict[object, Any]:
+    return yaml.safe_load(CLOUDFLARE_WORKFLOW_PATH.read_text(encoding="utf-8"))
 
-    result = subprocess.run(
+
+def _cloudflare_step_run(job_name: str, step_name: str) -> str:
+    workflow = _cloudflare_workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    job = jobs[job_name]
+    assert isinstance(job, dict)
+    steps = job["steps"]
+    assert isinstance(steps, list)
+    step = next(
+        candidate
+        for candidate in steps
+        if isinstance(candidate, dict) and candidate.get("name") == step_name
+    )
+    run_script = step["run"]
+    assert isinstance(run_script, str)
+    return run_script
+
+
+def _run_confirmation(script: str, **env: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["bash", "-c", script],
         check=False,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "CHANGES_RESULT": "failure",
-            "DOCS_GUARDS_RESULT": "skipped",
-        },
+        env={"PATH": "/usr/bin:/bin", **env},
         capture_output=True,
         text=True,
     )
 
-    assert result.returncode == 1, result.stdout + result.stderr
+
+def test_cloudflare_production_deploy_fails_closed_without_confirmation() -> None:
+    """Given the real production-deploy confirmation gate, when the feature
+    flag or the typed confirmation is wrong, then the step exits non-zero
+    rather than deploying to the canonical domain."""
+    script = _cloudflare_step_run(
+        "deploy-production", "Confirm production deployment is enabled"
+    )
+
+    # Flag disabled -> refuse regardless of confirmation.
+    assert (
+        _run_confirmation(
+            script, ENABLED="false", CONFIRMATION="docs.fullchaos.dev"
+        ).returncode
+        == 1
+    )
+    # Flag enabled but confirmation wrong -> refuse.
+    assert (
+        _run_confirmation(script, ENABLED="true", CONFIRMATION="nope").returncode == 1
+    )
+    # Both correct -> the guard passes and hands off to the deploy step.
+    assert (
+        _run_confirmation(
+            script, ENABLED="true", CONFIRMATION="docs.fullchaos.dev"
+        ).returncode
+        == 0
+    )
+
+
+def test_cloudflare_rollback_requires_enable_confirmation_and_version() -> None:
+    """The rollback gate refuses unless the flag, the typed confirmation, and
+    an explicit Worker version ID are all supplied."""
+    script = _cloudflare_step_run("rollback-production", "Validate rollback request")
+
+    good = {
+        "ENABLED": "true",
+        "CONFIRMATION": "docs.fullchaos.dev",
+        "VERSION_ID": "abc123",
+    }
+    assert _run_confirmation(script, **good).returncode == 0
+
+    for missing in ("ENABLED", "CONFIRMATION", "VERSION_ID"):
+        broken = dict(good)
+        broken[missing] = ""
+        assert _run_confirmation(script, **broken).returncode == 1, missing
+
+
+def test_cloudflare_preview_build_streams_full_check_under_pipefail() -> None:
+    """The pull-request preview build runs the validated Cloudflare build with
+    pipefail so a checker failure is not masked by ``tee``."""
+    script = _cloudflare_step_run(
+        "preview-or-build", "Build and prepare validated preview assets"
+    )
+
+    assert "set -o pipefail" in script
+    assert "build_docs_cloudflare.py --mode preview --full-check" in script
+    assert "| tee " in script
+
+
+def test_cloudflare_preview_records_a_no_op_when_upload_is_skipped() -> None:
+    """When a live Worker preview is not uploaded (fork PR, missing secrets, or
+    disabled feature flag), the workflow records why instead of failing or
+    silently passing an empty deploy."""
+    workflow = _cloudflare_workflow()
+    steps = workflow["jobs"]["preview-or-build"]["steps"]
+    assert isinstance(steps, list)
+    record = next(
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and step.get("name") == "Record why a Cloudflare preview was not uploaded"
+    )
+
+    condition = str(record.get("if", ""))
+    assert "steps.upload.outcome == 'skipped'" in condition
+    # It only reports; it must not attempt any deploy/upload itself.
+    run_script = str(record.get("run", ""))
+    assert "wrangler" not in run_script
+    assert "$GITHUB_STEP_SUMMARY" in run_script

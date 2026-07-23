@@ -1,6 +1,9 @@
 package providersync
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 type ExecutionMode string
 
@@ -50,6 +53,85 @@ type RouteSwitches struct {
 	Linear       bool
 	Jira         bool
 	LaunchDarkly bool
+}
+
+type CompleteRouteDescriptor struct {
+	Provider         string
+	RequestedDataset string
+	RouteDataset     string
+	Destinations     []string
+	RouteReady       bool
+	RouteEnabled     bool
+}
+
+type CompleteRouteSwitches struct {
+	LinearWorkItems          bool
+	JiraWorkItems            bool
+	JiraIncidents            bool
+	LaunchDarklyFeatureFlags bool
+}
+
+// Descriptor collapses Python's five work-item dataset aliases onto the one
+// complete work-items unit. Alias identities remain visible for audit and
+// watermark compatibility, but they can never be activated as partial routes.
+func (switches CompleteRouteSwitches) Descriptor(
+	provider string,
+	dataset string,
+) (CompleteRouteDescriptor, bool) {
+	descriptor := CompleteRouteDescriptor{
+		Provider: provider, RequestedDataset: dataset, RouteDataset: dataset,
+	}
+	workItemAlias := slices.Contains(linearBackfillWorkItemDatasets, dataset)
+	switch {
+	case provider == "linear" && workItemAlias:
+		descriptor.RouteDataset = "work-items"
+		descriptor.Destinations = workItemRouteDestinations()
+		// The aliases are one complete Python collector, but the complete native
+		// handler is not wired yet. Preserve the manifest while failing closed.
+		descriptor.RouteReady = false
+		descriptor.RouteEnabled = false
+	case provider == "jira" && workItemAlias:
+		descriptor.RouteDataset = "work-items"
+		descriptor.Destinations = workItemRouteDestinations()
+		descriptor.RouteReady = false
+		descriptor.RouteEnabled = false
+	case provider == "jira" && dataset == "incidents":
+		descriptor.Destinations = []string{"operational_incidents"}
+		descriptor.RouteReady = false
+		descriptor.RouteEnabled = false
+	case provider == "launchdarkly" && dataset == "feature-flags":
+		descriptor.Destinations = []string{
+			"feature_flag",
+			"feature_flag_event",
+			"feature_flag_link",
+			"work_graph_edges",
+		}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.LaunchDarklyFeatureFlags
+	default:
+		return CompleteRouteDescriptor{}, false
+	}
+	return descriptor, true
+}
+
+func workItemRouteDestinations() []string {
+	return []string{
+		"estimate_coverage_metrics_daily",
+		"investment_classifications_daily",
+		"investment_metrics_daily",
+		"issue_type_metrics_daily",
+		"sprints",
+		"work_item_cycle_times",
+		"work_item_dependencies",
+		"work_item_interactions",
+		"work_item_metrics_daily",
+		"work_item_reopen_events",
+		"work_item_state_durations_daily",
+		"work_item_team_attributions",
+		"work_item_transitions",
+		"work_item_user_metrics_daily",
+		"work_items",
+	}
 }
 
 func (switches RouteSwitches) Descriptor(provider, dataset string) (ExecutionDescriptor, bool) {

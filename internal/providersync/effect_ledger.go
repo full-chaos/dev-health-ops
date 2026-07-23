@@ -264,6 +264,9 @@ func (repository *PostgresRepository) LoadEffects(
 		}
 		return EffectLedgerState{}, ErrEffectLedgerConflict
 	}
+	if len(raw) == 0 {
+		return EffectLedgerState{}, ErrEffectLedgerNotFound
+	}
 	return decodeEffectLedgerState(raw)
 }
 

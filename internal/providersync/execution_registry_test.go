@@ -46,6 +46,39 @@ func TestNewProviderRouteSwitchesAreIndependentAndFailClosedUntilComplete(t *tes
 	}
 }
 
+func TestCompleteRouteSwitchesCollapseWorkItemAliasesAndRemainIndependent(t *testing.T) {
+	t.Parallel()
+	switches := CompleteRouteSwitches{
+		LinearWorkItems: true, JiraIncidents: true,
+	}
+	linear, ok := switches.Descriptor("linear", "work-items")
+	if !ok || linear.RouteReady || linear.RouteEnabled ||
+		linear.RouteDataset != "work-items" ||
+		len(linear.Destinations) != len(workItemRouteDestinations()) {
+		t.Fatalf("linear route=%+v ok=%v", linear, ok)
+	}
+	for _, alias := range []string{
+		"work-item-labels", "work-item-projects",
+		"work-item-history", "work-item-comments",
+	} {
+		descriptor, ok := switches.Descriptor("linear", alias)
+		if !ok || descriptor.RouteReady || descriptor.RouteEnabled ||
+			descriptor.RouteDataset != "work-items" {
+			t.Fatalf("linear alias %s=%+v ok=%v", alias, descriptor, ok)
+		}
+	}
+	jiraWorkItems, _ := switches.Descriptor("jira", "work-items")
+	jiraIncidents, _ := switches.Descriptor("jira", "incidents")
+	launchDarkly, _ := switches.Descriptor("launchdarkly", "feature-flags")
+	if jiraWorkItems.RouteEnabled || jiraIncidents.RouteEnabled ||
+		launchDarkly.RouteEnabled {
+		t.Fatalf(
+			"independent routes jira_work=%+v jira_incidents=%+v ld=%+v",
+			jiraWorkItems, jiraIncidents, launchDarkly,
+		)
+	}
+}
+
 func TestProviderRouteSwitchesAreIndependentAndOnlyEnableAuditableNativeShadows(t *testing.T) {
 	t.Parallel()
 	switches := RouteSwitches{GitHub: true}

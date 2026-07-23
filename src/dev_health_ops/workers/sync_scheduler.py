@@ -37,6 +37,12 @@ STALE_RUNNING_TTL_SECONDS = 2 * 60 * 60  # 2 hours
 
 DEFAULT_SYNC_CRON = "0 * * * *"
 
+# This is intentionally only a bounded, callable reconciliation slice.  The
+# active scheduler paths do not invoke it while the Go scheduler remains
+# shadow-only; an operator-owned consumer can opt in after that hand-off is
+# reviewed.
+DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT = 100
+
 
 def _ensure_utc(value: datetime | None) -> datetime | None:
     """Coerce a DB timestamp to an aware UTC datetime (SQLite returns naive)."""
@@ -145,6 +151,159 @@ def _ensure_due_job_marker(
         session.add(job)
         session.flush()
     return job
+
+
+def _complete_pending_scheduled_sync_occurrence(
+    session: Session,
+    *,
+    occurrence_id: str,
+    org_id: str,
+    sync_config_id: uuid.UUID,
+    scheduled_job_id: uuid.UUID,
+) -> bool:
+    """Plan one Go-authored occurrence after config, job, occurrence locks.
+
+    The initial scan is deliberately unlocked so reconciliation stays bounded
+    and deterministic.  Before doing any work, this function reacquires the
+    authoritative rows in the same order as the scheduler hand-off contract:
+    configuration, scheduled job, then occurrence.  PostgreSQL consumers skip
+    a row another consumer owns instead of waiting behind a potentially slow
+    planner transaction.
+    """
+    from dev_health_ops.models.settings import (
+        ScheduledJob,
+        ScheduledSyncOccurrence,
+        SyncConfiguration,
+    )
+    from dev_health_ops.sync.execution_trigger import (
+        create_scheduled_sync_execution_trigger,
+    )
+
+    config_query = (
+        session.query(SyncConfiguration)
+        .filter(
+            SyncConfiguration.id == sync_config_id,
+            SyncConfiguration.org_id == org_id,
+        )
+        .populate_existing()
+    )
+    job_query = session.query(ScheduledJob).filter(
+        ScheduledJob.id == scheduled_job_id,
+        ScheduledJob.sync_config_id == sync_config_id,
+        ScheduledJob.org_id == org_id,
+        ScheduledJob.job_type == "sync",
+    )
+    occurrence_query = session.query(ScheduledSyncOccurrence).filter(
+        ScheduledSyncOccurrence.occurrence_id == occurrence_id,
+        ScheduledSyncOccurrence.org_id == org_id,
+        ScheduledSyncOccurrence.sync_config_id == sync_config_id,
+        ScheduledSyncOccurrence.scheduled_job_id == scheduled_job_id,
+    )
+
+    if _session_dialect_name(session) == "postgresql":
+        config = config_query.with_for_update(skip_locked=True).one_or_none()
+        if config is None:
+            return False
+        job = job_query.with_for_update(skip_locked=True).one_or_none()
+        if job is None:
+            return False
+        occurrence = occurrence_query.with_for_update(skip_locked=True).one_or_none()
+    else:
+        config = config_query.one_or_none()
+        if config is None:
+            return False
+        job = job_query.one_or_none()
+        if job is None:
+            return False
+        occurrence = occurrence_query.one_or_none()
+
+    if occurrence is None:
+        return False
+    if occurrence.job_run_id is not None or occurrence.sync_run_id is not None:
+        return False
+
+    create_scheduled_sync_execution_trigger(
+        session,
+        config,
+        job,
+        org_id,
+        scheduled_for=occurrence.scheduled_for,
+        triggered_by="schedule",
+        mode="incremental",
+    )
+    return True
+
+
+def reconcile_pending_scheduled_sync_occurrences(
+    session: Session,
+    *,
+    limit: int = DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT,
+) -> dict[str, int]:
+    """Complete a deterministic, bounded batch of unplanned Go occurrences.
+
+    This helper is deliberately dormant: it is not registered with Celery Beat,
+    called by :func:`dispatch_scheduled_syncs`, or exposed to the Go scheduler.
+    It lets a separately authorized Python consumer materialize the existing
+    stable occurrence identities without reconsidering ``next_run_at``.
+    """
+    from dev_health_ops.models.settings import ScheduledSyncOccurrence
+
+    if limit <= 0:
+        return {"scanned": 0, "completed": 0, "skipped": 0, "errors": 0}
+
+    candidates = (
+        session.query(
+            ScheduledSyncOccurrence.occurrence_id,
+            ScheduledSyncOccurrence.org_id,
+            ScheduledSyncOccurrence.sync_config_id,
+            ScheduledSyncOccurrence.scheduled_job_id,
+        )
+        .filter(
+            ScheduledSyncOccurrence.job_run_id.is_(None),
+            ScheduledSyncOccurrence.sync_run_id.is_(None),
+        )
+        .order_by(
+            ScheduledSyncOccurrence.org_id,
+            ScheduledSyncOccurrence.sync_config_id,
+            ScheduledSyncOccurrence.scheduled_for,
+            ScheduledSyncOccurrence.occurrence_id,
+        )
+        .limit(limit)
+        .all()
+    )
+    completed = 0
+    skipped = 0
+    errors = 0
+
+    for occurrence_id, org_id, sync_config_id, scheduled_job_id in candidates:
+        try:
+            # A malformed/ineligible occurrence must not roll back a prior
+            # completion or prevent the rest of this bounded batch from being
+            # reconciled.
+            with session.begin_nested():
+                if _complete_pending_scheduled_sync_occurrence(
+                    session,
+                    occurrence_id=str(occurrence_id),
+                    org_id=str(org_id),
+                    sync_config_id=_as_uuid(sync_config_id),
+                    scheduled_job_id=_as_uuid(scheduled_job_id),
+                ):
+                    completed += 1
+                else:
+                    skipped += 1
+        except Exception:
+            logger.exception(
+                "pending_scheduled_sync_occurrence_reconciliation_failed",
+                extra={"occurrence_id": str(occurrence_id), "org_id": str(org_id)},
+            )
+            errors += 1
+
+    return {
+        "scanned": len(candidates),
+        "completed": completed,
+        "skipped": skipped,
+        "errors": errors,
+    }
 
 
 def _maybe_dispatch_config(

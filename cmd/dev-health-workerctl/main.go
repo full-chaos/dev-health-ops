@@ -30,6 +30,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -206,11 +207,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
-	jobQuiescer, err := jobroute.NewPostgresRiverQuiescer(pools.QueueControl, schema)
-	if err != nil {
-		return nil, writeError(stderr, "operator_backend_unavailable")
-	}
-	jobRouteController, err := jobroute.NewController(pools.Domain, registry, jobQuiescer)
+	jobRouteController, err := newJobRouteController(pools.Domain, pools.QueueControl, schema, registry)
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
@@ -254,6 +251,28 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
 		streamDeploymentState: manifest.DeploymentState, streams: streams,
 	}, 0
+}
+
+// newJobRouteController composes the only currently approved forward cutover:
+// sync.provider_unit from its legacy Celery owner to the checked-in River
+// canary. The controller remains fail-closed for every other kind because the
+// Celery quiescer accepts that exact durable unit ledger only.
+func newJobRouteController(
+	domainPool, queuePool *pgxpool.Pool,
+	schema string,
+	registry *jobruntime.Registry,
+) (*jobroute.Controller, error) {
+	riverQuiescer, err := jobroute.NewPostgresRiverQuiescer(queuePool, schema)
+	if err != nil {
+		return nil, err
+	}
+	celeryQuiescer, err := jobroute.NewPostgresCelerySyncProviderQuiescer(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	return jobroute.NewControllerWithCeleryQuiescer(
+		domainPool, registry, riverQuiescer, celeryQuiescer,
+	)
 }
 
 func rollbackOperatorLock(lockTx pgx.Tx) {

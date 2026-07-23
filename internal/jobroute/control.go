@@ -148,7 +148,10 @@ func (controller *Controller) ApplyCheckedIn(ctx context.Context, kind string) (
 			return State{}, ErrCeleryQuiescenceMissing
 		}
 		if err := controller.celeryQuiescer.Quiesce(ctx, kind); err != nil {
-			return State{}, ErrLiveClaims
+			if errors.Is(err, ErrLiveClaims) {
+				return State{}, ErrLiveClaims
+			}
+			return State{}, err
 		}
 	}
 	now := controller.now().UTC()

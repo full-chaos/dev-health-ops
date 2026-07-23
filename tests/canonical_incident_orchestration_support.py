@@ -19,6 +19,7 @@ from dev_health_ops.models import (
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Organization
+from tests._helpers import seed_sync_dispatch_transport_routes
 
 FEATURE_KEY = "canonical_incident_ingestion"
 
@@ -44,6 +45,7 @@ def canonical_state_context() -> Iterator[CanonicalState]:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     session = Session(engine)
+    seed_sync_dispatch_transport_routes(session)
     enabled_org_id = uuid.uuid4()
     disabled_org_id = uuid.uuid4()
     feature = FeatureFlag(

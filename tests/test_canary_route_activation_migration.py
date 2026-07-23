@@ -106,3 +106,33 @@ def test_0061_refuses_to_replace_a_conflicting_runtime_route() -> None:
                 _upgrade(migration, connection)
     finally:
         engine.dispose()
+
+
+def test_0062_adds_the_bounded_canary_quiescence_index() -> None:
+    migration = importlib.import_module(
+        "dev_health_ops.alembic.versions.0062_add_sync_provider_canary_quiescence_index"
+    )
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    """
+                    CREATE TABLE sync_run_units (
+                        id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        dataset_key TEXT NOT NULL
+                    )
+                    """
+                )
+            )
+            _upgrade(migration, connection)
+
+            index_names = {
+                index["name"]
+                for index in sa.inspect(connection).get_indexes("sync_run_units")
+            }
+            assert "ix_sync_run_units_canary_quiescence" in index_names
+    finally:
+        engine.dispose()

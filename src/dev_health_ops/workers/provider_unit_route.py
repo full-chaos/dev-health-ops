@@ -52,8 +52,15 @@ class ProviderUnitRouteSwitches:
 
     def routes_to_river(self, provider: str, dataset: str) -> bool:
         self.require_complete_routes()
+        return self.launchdarkly_feature_flags and self.is_canary_scope(
+            provider, dataset
+        )
+
+    @staticmethod
+    def is_canary_scope(provider: str, dataset: str) -> bool:
+        """Return whether a unit is covered by the checked-in canary scope."""
+
         return (
-            self.launchdarkly_feature_flags
-            and provider.strip().lower() == "launchdarkly"
+            provider.strip().lower() == "launchdarkly"
             and dataset.strip().lower() == "feature-flags"
         )

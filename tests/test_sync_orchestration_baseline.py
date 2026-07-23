@@ -21,6 +21,7 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from tests._helpers import seed_sync_dispatch_transport_routes
 
 
 @contextmanager
@@ -52,6 +53,7 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
     Base.metadata.create_all(engine)
     queued: list[str] = []
     with Session(engine) as session:
+        seed_sync_dispatch_transport_routes(session)
         org_id = str(uuid.uuid4())
         integration = Integration(
             org_id=org_id,

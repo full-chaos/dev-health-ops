@@ -106,6 +106,11 @@ from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.job_contracts import ProviderUnitPayload
 from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_routes import (
+    RIVER_CANARY_ROUTE,
+    WorkerJobRouteError,
+    resolve_worker_job_route,
+)
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
 from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
@@ -769,7 +774,6 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             session.commit()
         if not session.in_transaction():
             session.begin()
-        provider_unit_routes = ProviderUnitRouteSwitches.from_environment()
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is None:
@@ -943,12 +947,36 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         ):
             next_deferred_at = reconfirm_result.next_deferred_at
 
+        # The durable route row, not a process-local capability flag, owns the
+        # transport decision. This FOR SHARE lock remains held through the
+        # unit claim and outbox commit, serializing an operator FOR UPDATE
+        # transition with every producer, including a non-canary batch during
+        # a paused or drifted control-plane state.
+        provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
+        provider_unit_routes = (
+            ProviderUnitRouteSwitches.from_environment()
+            if provider_unit_route == RIVER_CANARY_ROUTE
+            else None
+        )
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
-            if provider_unit_routes.routes_to_river(
+            in_canary_scope = ProviderUnitRouteSwitches.is_canary_scope(
                 str(unit.provider), str(unit.dataset_key)
-            ):
+            )
+            if in_canary_scope and provider_unit_route == RIVER_CANARY_ROUTE:
+                if (
+                    provider_unit_routes is None
+                    or not provider_unit_routes.routes_to_river(
+                        str(unit.provider), str(unit.dataset_key)
+                    )
+                ):
+                    # A checked-in canary route without its complete runtime
+                    # capability is an ownership fault, never a reason to
+                    # silently publish legacy Celery work.
+                    raise WorkerJobRouteError(
+                        "sync provider canary capability is unavailable"
+                    )
                 enqueue_worker_job(
                     session,
                     ProviderUnitPayload(unit_id=str(unit.id)),

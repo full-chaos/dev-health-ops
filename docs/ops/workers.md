@@ -39,6 +39,13 @@ policy; every other current route is also `celery`. The disabled topology still
 prevents a Go worker deployment from starting by default, and a route policy
 alone is not canary approval. Readiness stays closed until a profile has
 complete compiled handler coverage and its database/schema checks pass. The
+provider-unit producer takes that durable route row with `FOR SHARE` before it
+claims units, and holds the lock through the claim/outbox commit. A durable
+`celery` row forces every provider unit to Celery regardless of process flags.
+For durable `river_canary`, only the reviewed LaunchDarkly `feature-flags`
+scope may enter `worker_job_outbox`, and it requires the matching complete
+runtime capability; a missing capability fails the transaction closed rather
+than falling back to Celery. Units outside that scope remain Celery-owned.
 canonical disabled topology and its connection budget live in
 `deploy/go-workers/profiles.json`.
 
@@ -72,6 +79,14 @@ job transport and generation. Producers read the route with `FOR SHARE` in the
 same transaction that stages `worker_job_outbox`; rollback takes `FOR UPDATE`
 and refuses pending/claimed outbox rows, running semantic claims, or active
 River jobs. Missing, paused, or policy-drifted rows fail closed.
+
+Before `sync.provider_unit` can move from its seeded Celery route to
+`river_canary`, the operator additionally checks the durable legacy unit ledger
+for `DISPATCHING` or `RUNNING` LaunchDarkly `feature-flags` rows. The check uses
+a bounded PostgreSQL query and a partial index; unavailable database evidence
+is an unavailable precondition, never a successful quiescence result. The
+producer lock and operator `FOR UPDATE` serialize the final producer commit
+with this check, so a just-committed old-route unit blocks the transition.
 
 The first concrete handler is the bounded `system.retention_cleanup` adapter.
 It deletes only one `worker_job_terminal` checkpoint-sized batch and marks the

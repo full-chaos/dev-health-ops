@@ -37,6 +37,7 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
     SyncWatermark,
     WorkerJobOutbox,
+    WorkerJobRoute,
 )
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
@@ -2480,6 +2481,10 @@ def test_dispatch_sync_run_routes_only_enabled_launchdarkly_unit_to_river(
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -2526,6 +2531,115 @@ def test_dispatch_sync_run_launchdarkly_route_off_stays_on_celery(
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
+def test_dispatch_sync_run_durable_celery_route_overrides_enabled_capability(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+
+    run, _ = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    monkeypatch.setenv("WORKER_LINEAR_WORK_ITEMS_ENABLED", "true")
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert len(unit_publish_calls) == 1
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+def test_dispatch_sync_run_river_canary_requires_enabled_capability(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
+
+    with pytest.raises(WorkerJobRouteError, match="capability"):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert len(unit_publish_calls) == 0
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+@pytest.mark.parametrize("state", ("missing", "paused", "drifted"))
+def test_dispatch_sync_run_canary_scope_route_faults_fail_closed(
+    db_session, monkeypatch, state: str
+):
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    route_row = db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    )
+    if state == "missing":
+        route_row.delete()
+    elif state == "paused":
+        route_row.update({WorkerJobRoute.paused: True})
+    else:
+        route_row.update({WorkerJobRoute.transport: "river"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+
+    with pytest.raises(WorkerJobRouteError):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert len(unit_publish_calls) == 0
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+def test_dispatch_sync_run_noncanary_route_fault_fails_closed(db_session, monkeypatch):
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
+
+    run, unit = _seed_run(db_session, provider="github", dataset_key="commits")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.paused: True})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+
+    with pytest.raises(WorkerJobRouteError):
+        sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert len(unit_publish_calls) == 0
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
 def test_dispatch_sync_run_provider_outbox_claim_rolls_back_and_dedupes(
     db_session, monkeypatch
 ):
@@ -2540,6 +2654,10 @@ def test_dispatch_sync_run_provider_outbox_claim_rolls_back_and_dedupes(
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
     real_enqueue = sync_units.enqueue_worker_job
 
     def die_after_staging(*args, **kwargs):

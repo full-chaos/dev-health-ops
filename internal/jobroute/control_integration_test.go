@@ -58,9 +58,21 @@ func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
 		CREATE TABLE public.worker_job_runs (
 			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
 		);
+		CREATE TABLE public.sync_run_units (
+			id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
+			status text NOT NULL
+		);
 		INSERT INTO public.worker_job_routes
 			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('sync.provider_unit', 'celery', FALSE, 1, statement_timestamp())`); err != nil {
+		VALUES ('sync.provider_unit', 'celery', FALSE, 1, statement_timestamp());
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status) VALUES
+			('00000000-0000-4000-8000-000000000001', 'launchdarkly', 'feature-flags', 'planned'),
+			('00000000-0000-4000-8000-000000000002', 'launchdarkly', 'feature-flags', 'retrying'),
+			('00000000-0000-4000-8000-000000000003', 'github', 'commits', 'running')`); err != nil {
+		t.Fatal(err)
+	}
+	celeryQuiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
+	if err != nil {
 		t.Fatal(err)
 	}
 	controller, err := NewControllerWithCeleryQuiescer(
@@ -69,7 +81,7 @@ func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
 			Kind: "sync.provider_unit", Route: "river_canary", RollbackRoute: "celery",
 		}},
 		idleQuiescer{},
-		idleQuiescer{},
+		celeryQuiescer,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +99,43 @@ func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
 	}
 	if state.Transport != "celery" || state.Generation != 3 {
 		t.Fatalf("rollback state = %+v", state)
+	}
+	producer, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var transport string
+	if err := producer.QueryRow(ctx, `
+		SELECT transport FROM public.worker_job_routes
+		WHERE job_kind = 'sync.provider_unit' FOR SHARE`).Scan(&transport); err != nil {
+		t.Fatal(err)
+	}
+	if transport != "celery" {
+		t.Fatalf("producer observed route %q", transport)
+	}
+	if _, err := producer.Exec(ctx, `
+		INSERT INTO public.sync_run_units (id, provider, dataset_key, status)
+		VALUES ('00000000-0000-4000-8000-000000000004', 'launchdarkly', 'feature-flags', 'dispatching')`); err != nil {
+		t.Fatal(err)
+	}
+	applyResult := make(chan error, 1)
+	go func() {
+		_, applyErr := controller.ApplyCheckedIn(ctx, "sync.provider_unit")
+		applyResult <- applyErr
+	}()
+	waitForBlockedRouteUpdate(t, ctx, pool)
+	if err := producer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-applyResult; !errors.Is(err, ErrLiveClaims) {
+		t.Fatalf("ApplyCheckedIn() with active Celery unit error = %v, want %v", err, ErrLiveClaims)
+	}
+	state, err = controller.Inspect(ctx, "sync.provider_unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Transport != "celery" || state.Generation != 3 {
+		t.Fatalf("active unit changed route: %+v", state)
 	}
 }
 
@@ -243,13 +292,27 @@ func TestRollbackWaitsForProducerRouteLockThenRejectsStagedOutbox(t *testing.T) 
 	if state.Transport != "celery" || state.Generation != 4 {
 		t.Fatalf("route not restored after rollback: %+v", state)
 	}
+	celery.err = ErrUnavailable
+	if _, err := activationController.ApplyCheckedIn(ctx, "job.test"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("ApplyCheckedIn() unavailable Celery probe error = %v, want %v", err, ErrUnavailable)
+	}
+	state, err = activationController.Inspect(ctx, "job.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Transport != "celery" || state.Generation != 4 {
+		t.Fatalf("unavailable probe changed route: %+v", state)
+	}
 }
 
-type observedQuiescer struct{ calls atomic.Int32 }
+type observedQuiescer struct {
+	calls atomic.Int32
+	err   error
+}
 
 func (quiescer *observedQuiescer) Quiesce(context.Context, string) error {
 	quiescer.calls.Add(1)
-	return nil
+	return quiescer.err
 }
 
 func waitForBlockedRouteUpdate(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {

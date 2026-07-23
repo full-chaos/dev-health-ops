@@ -18,6 +18,9 @@ var (
 	ErrGenerationJournalConflict = errors.New("provider sync generation journal conflicts with persisted state")
 	ErrGenerationBlockAmbiguous  = errors.New("provider sync generation block requires readback reconciliation")
 	ErrGenerationRecoveryUnsafe  = errors.New("provider sync generation recovery payload is outside the bounded contract")
+	ErrEffectLedgerConflict      = errors.New("provider sync effect ledger conflicts with persisted state")
+	ErrEffectRecoveryAmbiguous   = errors.New("provider sync effect recovery requires exact reconciliation")
+	ErrEffectRecoveryUnsafe      = errors.New("provider sync effect recovery is outside the bounded contract")
 	ErrShadowMismatch            = errors.New("provider sync native shadow differs from Python compatibility output")
 )
 

@@ -152,6 +152,67 @@ FROM public.sync_run_units WHERE id = $1`, firstUnitID).Scan(&attempts, &recover
 		t.Fatalf("manifest conflict error=%v", err)
 	}
 
+	effectBatches := []EffectBatch{
+		effectBatchFixture(
+			t, "work_items", EffectReplaySafe,
+			`{"org_id":"org-acme","work_item_id":"linear:ENG-1"}`,
+		),
+		effectBatchFixture(
+			t, "work_item_transitions", EffectReadbackRequired,
+			`{"org_id":"org-acme","work_item_id":"linear:ENG-1","occurred_at":"2026-07-23T12:00:00Z"}`,
+		),
+	}
+	effectDesired, err := NewEffectLedgerState(
+		second, effectBatches, now.Add(101*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effectPrepared, err := repository.PrepareEffects(
+		ctx, second, effectDesired, now.Add(101*time.Second),
+	)
+	if err != nil || len(effectPrepared.Effects) != 2 {
+		t.Fatalf("effect prepared=%+v error=%v", effectPrepared, err)
+	}
+	firstEffect := effectPrepared.Effects[0]
+	if err := repository.BeginEffect(
+		ctx, second, firstEffect.Index, firstEffect.ContentDigest,
+		now.Add(102*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ResolveEffect(
+		ctx, second, firstEffect.Index, firstEffect.ContentDigest,
+		GenerationBlockRetryPending, now.Add(103*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.BeginEffect(
+		ctx, second, firstEffect.Index, firstEffect.ContentDigest,
+		now.Add(104*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.CommitEffect(
+		ctx, second, firstEffect.Index, firstEffect.ContentDigest,
+		now.Add(105*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	effectLoaded, err := repository.LoadEffects(
+		ctx, second, now.Add(106*time.Second),
+	)
+	if err != nil || effectLoaded.Effects[0].Status != GenerationBlockCommitted ||
+		effectLoaded.Effects[1].Status != GenerationBlockPending {
+		t.Fatalf("effect loaded=%+v error=%v", effectLoaded, err)
+	}
+	// The dedicated effect ledger must coexist with the singleton repository
+	// recovery journal without rewriting or weakening its v2 payload contract.
+	resumed, err = repository.Load(ctx, second, now.Add(106*time.Second))
+	if err != nil || resumed.Blocks[0].Status != GenerationBlockCommitted {
+		t.Fatalf("generation journal after effect ledger=%+v error=%v", resumed, err)
+	}
+
 	if _, err := pool.Exec(ctx, "UPDATE public.sync_runs SET status = 'failed' WHERE id = $1", firstRunID); err != nil {
 		t.Fatal(err)
 	}

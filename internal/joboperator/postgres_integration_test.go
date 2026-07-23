@@ -34,6 +34,26 @@ type allowIntegrationDomainGuard struct{}
 
 func (allowIntegrationDomainGuard) Check(context.Context, Action, JobSummary) error { return nil }
 
+// operatorIntegrationPolicyRegistry changes only the fixture's insertion
+// policy. The operator backend continues to use the checked-in, Celery-routed
+// registry so this test cannot weaken or misrepresent production routing.
+type operatorIntegrationPolicyRegistry struct {
+	registry *jobruntime.Registry
+}
+
+func (policy operatorIntegrationPolicyRegistry) Descriptor(kind string) (jobruntime.Descriptor, bool) {
+	descriptor, ok := policy.registry.Descriptor(kind)
+	if !ok {
+		return jobruntime.Descriptor{}, false
+	}
+	if kind == jobcontract.KindHeartbeat {
+		descriptor.MigrationState = "canary"
+		descriptor.Route = "river_canary"
+		descriptor.RollbackRoute = "celery"
+	}
+	return descriptor, true
+}
+
 func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -77,8 +97,18 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	heartbeat, ok := registry.Descriptor(jobcontract.KindHeartbeat)
+	if !ok || heartbeat.Executable() {
+		t.Fatalf("checked-in heartbeat policy = %#v, want non-executable", heartbeat)
+	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	jobID := insertOperatorIntegrationJob(t, ctx, adminPool, registry, now)
+	jobID := insertOperatorIntegrationJob(
+		t,
+		ctx,
+		adminPool,
+		operatorIntegrationPolicyRegistry{registry: registry},
+		now,
+	)
 	if _, err := adminPool.Exec(ctx, `
 		INSERT INTO river.river_queue (name, updated_at)
 		VALUES ('heartbeat', $1), ('retention', $1)
@@ -252,7 +282,7 @@ func insertOperatorIntegrationJob(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	registry *jobruntime.Registry,
+	registry joboutbox.PolicyRegistry,
 	now time.Time,
 ) int64 {
 	t.Helper()

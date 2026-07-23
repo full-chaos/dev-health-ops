@@ -102,7 +102,7 @@ func (handler NativeRESTHandler) fetchGitHub(
 		envelope, err := handler.normalizeRepository(claim, "github:repo:"+claim.SourceExternalID, payload)
 		return singleFetchResult(claim, envelope, err)
 	case "work-items":
-		items, evidence, err := collectGitHubIssues(ctx, claim, client, root)
+		items, evidence, err := collectGitHubWorkItems(ctx, claim, client, root)
 		if err != nil {
 			return FetchResult{}, err
 		}
@@ -207,7 +207,6 @@ func (handler NativeRESTHandler) normalizeRepository(
 	attributes := map[string]string{
 		"name":           name,
 		"default_branch": payload.DefaultBranch,
-		"archived":       strconv.FormatBool(payload.Archived),
 	}
 	if payload.HTMLURL != "" {
 		attributes["url"] = payload.HTMLURL
@@ -251,7 +250,50 @@ func collectGitHubIssues(
 	if err != nil {
 		return nil, evidence, err
 	}
-	return filterWorkItemWindow(page.Items, claim), evidence, nil
+	items := make([]json.RawMessage, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var item workItemPayload
+		if json.Unmarshal(raw, &item) != nil {
+			return nil, evidence, providerfoundation.ErrNormalizationInvalid
+		}
+		// GitHub's /issues endpoint includes pull requests. The production
+		// GitHubWorkClient always removes them here and fetches /pulls only when
+		// the frozen sync_prs processor flag is true.
+		if len(item.PullRequest) != 0 && string(item.PullRequest) != "null" {
+			continue
+		}
+		items = append(items, raw)
+	}
+	return filterWorkItemWindow(items, claim), evidence, nil
+}
+
+func collectGitHubWorkItems(
+	ctx context.Context,
+	claim Claim,
+	client *providerfoundation.HTTPClient,
+	root string,
+) ([]json.RawMessage, FetchEvidence, error) {
+	items, evidence, err := collectGitHubIssues(ctx, claim, client, root)
+	if err != nil || !claim.ProcessorFlags["sync_prs"] {
+		return items, evidence, err
+	}
+	query := url.Values{
+		"state":     {"all"},
+		"sort":      {"updated"},
+		"direction": {"desc"},
+		"per_page":  {"100"},
+	}
+	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+		Path: root + "/pulls", Query: query, MaxPages: nativeMaxPages,
+	})
+	evidence.Requests += page.Pages
+	evidence.Pages += page.Pages
+	evidence.CapReached = evidence.CapReached || page.CapReached
+	if err != nil {
+		return nil, evidence, err
+	}
+	items = append(items, filterWorkItemWindow(page.Items, claim)...)
+	return items, evidence, nil
 }
 
 func collectGitLabWorkItems(
@@ -296,10 +338,25 @@ func (handler NativeRESTHandler) normalizeGitHubWorkItems(
 		}
 		status, itemType := issueStatusAndType(item.State, item.Draft, labels(raw))
 		statusRaw := item.State
+		workItemPrefix := "gh:"
+		if rawFieldPresent(raw, "merged_at") {
+			workItemPrefix = "ghpr:"
+			itemType = "pr"
+			switch {
+			case item.MergedAt != "" || item.State == "merged":
+				status, statusRaw = "done", "merged"
+			case item.State == "closed":
+				status = "canceled"
+			case item.Draft:
+				status = "todo"
+			default:
+				status = "in_progress"
+			}
+		}
 		projectID := claim.SourceExternalID
 		envelope, err := providerfoundation.NormalizeWorkItem(normalizationContext(claim), providerfoundation.WorkItemRecord{
 			Provider: claim.Provider, OrgID: claim.OrgID,
-			WorkItemID: "gh:" + claim.SourceExternalID + "#" + strconv.Itoa(item.Number),
+			WorkItemID: workItemPrefix + claim.SourceExternalID + "#" + strconv.Itoa(item.Number),
 			Title:      item.Title, Type: itemType, Status: status, StatusRaw: &statusRaw,
 			ProjectID: &projectID, UpdatedAt: firstTime(item.UpdatedAt, item.CreatedAt),
 		})
@@ -444,7 +501,7 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 	client *providerfoundation.HTTPClient,
 	root string,
 ) (FetchResult, error) {
-	parents, evidence, err := collectGitHubIssues(ctx, claim, client, root)
+	parents, evidence, err := collectGitHubWorkItems(ctx, claim, client, root)
 	if err != nil {
 		return FetchResult{}, err
 	}

@@ -67,13 +67,38 @@ func (comparator NormalizedShadowComparator) Compare(
 	return result, nil
 }
 
+type comparableEnvelope struct {
+	SchemaVersion string                        `json:"schema_version"`
+	Provider      string                        `json:"provider"`
+	OrgID         string                        `json:"org_id"`
+	IntegrationID string                        `json:"integration_id"`
+	EntityType    string                        `json:"entity_type"`
+	SourceID      string                        `json:"source_id"`
+	DedupeKey     string                        `json:"dedupe_key"`
+	Provenance    providerfoundation.Provenance `json:"provenance"`
+	Attributes    map[string]string             `json:"attributes"`
+}
+
 func comparableEnvelopes(input []providerfoundation.NormalizedEnvelope) (map[string]string, error) {
 	records := make(map[string]string, len(input))
 	for _, envelope := range input {
 		if err := envelope.Validate(); err != nil {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
-		encoded, err := json.Marshal(envelope)
+		// observed_at is an ingestion observation, not provider entity content.
+		// Python and Go may observe the same immutable record at different
+		// instants, so exact comparison would report false semantic drift.
+		encoded, err := json.Marshal(comparableEnvelope{
+			SchemaVersion: envelope.SchemaVersion,
+			Provider:      envelope.Provider,
+			OrgID:         envelope.OrgID,
+			IntegrationID: envelope.IntegrationID,
+			EntityType:    envelope.EntityType,
+			SourceID:      envelope.SourceID,
+			DedupeKey:     envelope.DedupeKey,
+			Provenance:    envelope.Provenance,
+			Attributes:    envelope.Attributes,
+		})
 		if err != nil {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}

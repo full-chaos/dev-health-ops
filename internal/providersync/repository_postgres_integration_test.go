@@ -122,16 +122,33 @@ FROM public.sync_run_units WHERE id = $1`, firstUnitID).Scan(&attempts, &recover
 	if err := repository.BeginBlock(ctx, second, 0, generationBlocks[0].ContentDigest(), now.Add(94*time.Second)); !errors.Is(err, ErrGenerationBlockAmbiguous) {
 		t.Fatalf("ambiguous block replay error=%v", err)
 	}
-	if err := repository.CommitBlock(ctx, second, 0, generationBlocks[0].ContentDigest(), now.Add(95*time.Second)); err != nil {
+	if err := repository.ResolveBlock(
+		ctx, second, 0, generationBlocks[0].ContentDigest(),
+		GenerationBlockRetryPending, now.Add(95*time.Second),
+	); err != nil {
 		t.Fatal(err)
 	}
 	resumed, err := repository.Prepare(ctx, second, desired, now.Add(96*time.Second))
+	if err != nil || resumed.Blocks[0].Status != GenerationBlockPending ||
+		resumed.Blocks[0].StartedAt != nil {
+		t.Fatalf("reset=%+v error=%v", resumed, err)
+	}
+	if err := repository.BeginBlock(ctx, second, 0, generationBlocks[0].ContentDigest(), now.Add(97*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ResolveBlock(
+		ctx, second, 0, generationBlocks[0].ContentDigest(),
+		GenerationBlockMarkCommitted, now.Add(98*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err = repository.Prepare(ctx, second, desired, now.Add(99*time.Second))
 	if err != nil || resumed.Blocks[0].Status != GenerationBlockCommitted {
 		t.Fatalf("resumed=%+v error=%v", resumed, err)
 	}
 	conflict := desired
 	conflict.Generation = "sync-unit:different"
-	if _, err := repository.Prepare(ctx, second, conflict, now.Add(97*time.Second)); !errors.Is(err, ErrGenerationJournalConflict) {
+	if _, err := repository.Prepare(ctx, second, conflict, now.Add(100*time.Second)); !errors.Is(err, ErrGenerationJournalConflict) {
 		t.Fatalf("manifest conflict error=%v", err)
 	}
 

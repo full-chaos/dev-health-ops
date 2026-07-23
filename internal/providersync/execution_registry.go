@@ -25,7 +25,7 @@ func ExecutionDescriptors(provider string) []ExecutionDescriptor {
 		descriptors = append(descriptors, ExecutionDescriptor{
 			Provider: capability.Provider, Dataset: capability.Dataset,
 			Mode: ExecutionPythonCompatibility, CompatibilityAdapter: adapter,
-			NativeShadow: isNativeReferenceWorkItemDataset(capability.Dataset),
+			NativeShadow: nativeShadowReady(capability.Dataset),
 			RouteEnabled: false,
 		})
 	}
@@ -33,6 +33,15 @@ func ExecutionDescriptors(provider string) []ExecutionDescriptor {
 		return descriptors[left].Dataset < descriptors[right].Dataset
 	})
 	return descriptors
+}
+
+// nativeShadowReady is deliberately narrower than the REST fixture collectors.
+// Production maps every work-item* dataset unit to one full work-item job; the
+// labels/projects/history/comments names are not independent sink semantics.
+// Until a native handler emits that complete batch and has canary evidence,
+// only repository metadata is eligible for auditable shadow execution.
+func nativeShadowReady(dataset string) bool {
+	return dataset == "repo-metadata"
 }
 
 type RouteSwitches struct {

@@ -55,8 +55,16 @@ func TestClickHouseGenerationBlocksDeduplicateRetriesAndRetainDistinctBlocks(t *
 		}),
 		ReplayGuard: NewGenerationReplayGuard(),
 	}
+	if inspection, err := sink.InspectGenerationBlock(ctx, blocks[0]); err != nil ||
+		inspection != GenerationBlockAbsent {
+		t.Fatalf("pre-write inspection=%q error=%v", inspection, err)
+	}
 	if err := sink.WriteGenerationBlock(ctx, blocks[0]); err != nil {
 		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGenerationBlock(ctx, blocks[0]); err != nil ||
+		inspection != GenerationBlockExact {
+		t.Fatalf("post-write inspection=%q error=%v", inspection, err)
 	}
 	if err := sink.WriteGenerationBlock(ctx, blocks[0]); err != nil {
 		t.Fatalf("identical block retry failed: %v", err)
@@ -70,6 +78,25 @@ func TestClickHouseGenerationBlocksDeduplicateRetriesAndRetainDistinctBlocks(t *
 	}
 	if rows != 2 || uniqueRows != 2 {
 		t.Fatalf("rows=%d unique_rows=%d", rows, uniqueRows)
+	}
+
+	partialBlocks, err := BuildGenerationBlocks(
+		"sync-unit:33333333-3333-4333-8333-333333333333",
+		"provider_records",
+		[]NormalizedEnvelope{
+			testGenerationEnvelope("partial-a"),
+			testGenerationEnvelope("partial-b"),
+		},
+	)
+	if err != nil || len(partialBlocks) != 1 {
+		t.Fatalf("partial blocks=%d error=%v", len(partialBlocks), err)
+	}
+	if err := sink.WriteBatch(ctx, partialBlocks[0].Batch()[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGenerationBlock(ctx, partialBlocks[0]); err != nil ||
+		inspection != GenerationBlockConflict {
+		t.Fatalf("partial inspection=%q error=%v", inspection, err)
 	}
 
 	unsafeBlocks, err := buildGenerationBlocks(

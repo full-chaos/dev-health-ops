@@ -15,7 +15,7 @@ import (
 func TestExecutorUsesCredentialLeaseShadowBudgetJournalAndGenerationSink(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	unit := nativeTestClaim("github", "work-items").Unit
+	unit := nativeTestClaim("github", "repo-metadata").Unit
 	leases := newMemoryLeaseRepository(unit, "dispatching")
 	claim, err := leases.Claim(context.Background(), ClaimRequest{
 		UnitID: unit.ID, Owner: uuid.NewString(), Now: now, LeaseDuration: time.Minute,
@@ -40,7 +40,7 @@ func TestExecutorUsesCredentialLeaseShadowBudgetJournalAndGenerationSink(t *test
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},
 		Budget:       executorBudgetStore{},
-		BudgetLimits: map[CostClass]int{CostMedium: 2},
+		BudgetLimits: map[CostClass]int{CostLight: 2},
 		BudgetTTL:    time.Minute,
 		Gate: func(Claim, *providerfoundation.HTTPClient) providerfoundation.BackoffGate {
 			return executorBackoffGate{}
@@ -54,7 +54,7 @@ func TestExecutorUsesCredentialLeaseShadowBudgetJournalAndGenerationSink(t *test
 		Destination: "provider_records", HeartbeatInterval: 30 * time.Second,
 		Now: func() time.Time { return now },
 	}
-	descriptor, ok := (RouteSwitches{GitHub: true}).Descriptor("github", "work-items")
+	descriptor, ok := (RouteSwitches{GitHub: true}).Descriptor("github", "repo-metadata")
 	if !ok || !descriptor.RouteEnabled {
 		t.Fatal("GitHub native route was not explicitly enabled")
 	}
@@ -110,7 +110,7 @@ func TestExecutorDormantRouteRunsShadowWithoutSinkSideEffects(t *testing.T) {
 func TestExecutorRefusesAmbiguousWritingBlockOutsideFiniteDedupeWindow(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	unit := nativeTestClaim("github", "work-items").Unit
+	unit := nativeTestClaim("github", "repo-metadata").Unit
 	leases := newMemoryLeaseRepository(unit, "dispatching")
 	claim, err := leases.Claim(context.Background(), ClaimRequest{
 		UnitID: unit.ID, Owner: uuid.NewString(), Now: now, LeaseDuration: time.Minute,
@@ -133,7 +133,7 @@ func TestExecutorRefusesAmbiguousWritingBlockOutsideFiniteDedupeWindow(t *testin
 			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
 		},
 		Budget:       executorBudgetStore{},
-		BudgetLimits: map[CostClass]int{CostMedium: 2},
+		BudgetLimits: map[CostClass]int{CostLight: 2},
 		BudgetTTL:    time.Minute,
 		Gate: func(Claim, *providerfoundation.HTTPClient) providerfoundation.BackoffGate {
 			return executorBackoffGate{}
@@ -147,7 +147,7 @@ func TestExecutorRefusesAmbiguousWritingBlockOutsideFiniteDedupeWindow(t *testin
 		Destination: "provider_records", HeartbeatInterval: 30 * time.Second,
 		Now: func() time.Time { return now },
 	}
-	descriptor, _ := (RouteSwitches{GitHub: true}).Descriptor("github", "work-items")
+	descriptor, _ := (RouteSwitches{GitHub: true}).Descriptor("github", "repo-metadata")
 	if _, err := executor.Execute(context.Background(), session, descriptor); !errors.Is(err, ErrGenerationBlockAmbiguous) {
 		t.Fatalf("error=%v", err)
 	}
@@ -182,6 +182,31 @@ func TestNormalizedShadowComparatorReportsMissingAndChangedSinkRecords(t *testin
 		comparison.MissingNative != 1 || comparison.MissingPython != 0 ||
 		comparison.ContentMismatch != 1 {
 		t.Fatalf("comparison=%+v", comparison)
+	}
+}
+
+func TestNormalizedShadowComparatorIgnoresVolatileObservationTime(t *testing.T) {
+	t.Parallel()
+	native := providerfoundation.NormalizedEnvelope{
+		SchemaVersion: "v1", Provider: "github", OrgID: "org",
+		IntegrationID: "integration", EntityType: "repository",
+		SourceID: "one", DedupeKey: "github:repository:one",
+		ObservedAt: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+		Provenance: providerfoundation.Provenance{Source: "github_rest", Confidence: "1.0"},
+		Attributes: map[string]string{"name": "one"},
+	}
+	python := native
+	python.ObservedAt = native.ObservedAt.Add(37 * time.Second)
+	comparator := NormalizedShadowComparator{
+		Python: staticShadowSource{records: []providerfoundation.NormalizedEnvelope{python}},
+	}
+	comparison, err := comparator.Compare(
+		context.Background(),
+		nativeTestClaim("github", "repo-metadata"),
+		[]providerfoundation.NormalizedEnvelope{native},
+	)
+	if err != nil || !comparison.Match || comparison.ContentMismatch != 0 {
+		t.Fatalf("comparison=%+v error=%v", comparison, err)
 	}
 }
 
@@ -300,6 +325,17 @@ func (ambiguousGenerationJournal) CommitBlock(
 	panic("ambiguous block must not commit")
 }
 
+func (ambiguousGenerationJournal) ResolveBlock(
+	context.Context,
+	Claim,
+	int,
+	string,
+	GenerationBlockResolution,
+	time.Time,
+) error {
+	panic("executor must not reconcile implicitly")
+}
+
 func (journal *memoryGenerationJournal) Prepare(
 	_ context.Context,
 	_ Claim,
@@ -351,6 +387,41 @@ func (journal *memoryGenerationJournal) CommitBlock(
 	now = now.UTC()
 	block.CommittedAt = &now
 	block.Status = GenerationBlockCommitted
+	return nil
+}
+
+func (journal *memoryGenerationJournal) ResolveBlock(
+	_ context.Context,
+	_ Claim,
+	index int,
+	digest string,
+	resolution GenerationBlockResolution,
+	now time.Time,
+) error {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	block := &journal.state.Blocks[index]
+	if block.ContentDigest != digest {
+		return ErrGenerationJournalConflict
+	}
+	switch resolution {
+	case GenerationBlockMarkCommitted:
+		if block.Status != GenerationBlockWriting {
+			return ErrGenerationJournalConflict
+		}
+		now = now.UTC()
+		block.CommittedAt = &now
+		block.Status = GenerationBlockCommitted
+	case GenerationBlockRetryPending:
+		if block.Status != GenerationBlockWriting {
+			return ErrGenerationJournalConflict
+		}
+		block.StartedAt = nil
+		block.CommittedAt = nil
+		block.Status = GenerationBlockPending
+	default:
+		return ErrInvalidConfiguration
+	}
 	return nil
 }
 

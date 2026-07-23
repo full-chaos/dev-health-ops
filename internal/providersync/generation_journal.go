@@ -13,11 +13,15 @@ import (
 const generationJournalResultKey = "go_generation_v1"
 
 type GenerationBlockStatus string
+type GenerationBlockResolution string
 
 const (
 	GenerationBlockPending   GenerationBlockStatus = "pending"
 	GenerationBlockWriting   GenerationBlockStatus = "writing"
 	GenerationBlockCommitted GenerationBlockStatus = "committed"
+
+	GenerationBlockRetryPending  GenerationBlockResolution = "retry_pending"
+	GenerationBlockMarkCommitted GenerationBlockResolution = "mark_committed"
 )
 
 type GenerationJournalBlock struct {
@@ -116,6 +120,7 @@ type GenerationJournal interface {
 	Prepare(context.Context, Claim, GenerationJournalState, time.Time) (GenerationJournalState, error)
 	BeginBlock(context.Context, Claim, int, string, time.Time) error
 	CommitBlock(context.Context, Claim, int, string, time.Time) error
+	ResolveBlock(context.Context, Claim, int, string, GenerationBlockResolution, time.Time) error
 }
 
 func (repository *PostgresRepository) Prepare(
@@ -174,6 +179,62 @@ func (repository *PostgresRepository) CommitBlock(
 	return repository.transitionGenerationBlock(
 		ctx, claim, index, digest, now, GenerationBlockWriting, GenerationBlockCommitted,
 	)
+}
+
+// ResolveBlock is intentionally separate from CommitBlock: only an operator
+// readback path may use it to decide whether a writing block is already exact
+// in ClickHouse or wholly absent and therefore safe to retry.
+func (repository *PostgresRepository) ResolveBlock(
+	ctx context.Context,
+	claim Claim,
+	index int,
+	digest string,
+	resolution GenerationBlockResolution,
+	now time.Time,
+) error {
+	if index < 0 || digest == "" || now.IsZero() {
+		return ErrInvalidConfiguration
+	}
+	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
+		var state GenerationJournalState
+		if json.Unmarshal(document[generationJournalResultKey], &state) != nil ||
+			state.validate() != nil || index >= len(state.Blocks) ||
+			state.Blocks[index].ContentDigest != digest {
+			return ErrGenerationJournalConflict
+		}
+		block := &state.Blocks[index]
+		now = now.UTC()
+		switch resolution {
+		case GenerationBlockMarkCommitted:
+			if block.Status == GenerationBlockCommitted {
+				return nil
+			}
+			if block.Status != GenerationBlockWriting {
+				return ErrGenerationJournalConflict
+			}
+			block.Status = GenerationBlockCommitted
+			block.CommittedAt = &now
+		case GenerationBlockRetryPending:
+			if block.Status == GenerationBlockPending {
+				return nil
+			}
+			if block.Status != GenerationBlockWriting {
+				return ErrGenerationJournalConflict
+			}
+			block.Status = GenerationBlockPending
+			block.StartedAt = nil
+			block.CommittedAt = nil
+		default:
+			return ErrInvalidConfiguration
+		}
+		state.UpdatedAt = now
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			return ErrInvalidConfiguration
+		}
+		document[generationJournalResultKey] = encoded
+		return nil
+	})
 }
 
 func (repository *PostgresRepository) transitionGenerationBlock(

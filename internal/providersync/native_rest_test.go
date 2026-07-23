@@ -143,7 +143,12 @@ func fixtureResponse(t *testing.T, provider, path string) string {
 		case path == "/repos/acme/api":
 			return `{"id":1,"name":"api","full_name":"acme/api","html_url":"https://github.example/acme/api","default_branch":"main","archived":false,"updated_at":"2026-07-20T10:00:00Z"}`
 		case path == "/repos/acme/api/issues":
-			return `[{"number":42,"title":"Bound retries","state":"open","created_at":"2026-07-10T10:00:00Z","updated_at":"2026-07-20T10:00:00Z","labels":[{"name":"in progress"},{"name":"bug"}]}]`
+			return `[
+				{"number":42,"title":"Bound retries","state":"open","created_at":"2026-07-10T10:00:00Z","updated_at":"2026-07-20T10:00:00Z","labels":[{"name":"in progress"},{"name":"bug"}]},
+				{"number":43,"title":"Issue endpoint PR","state":"open","created_at":"2026-07-11T10:00:00Z","updated_at":"2026-07-21T10:00:00Z","pull_request":{"url":"https://api.github.example/pulls/43"},"labels":[]}
+			]`
+		case path == "/repos/acme/api/pulls":
+			return `[{"number":43,"title":"Ship retry bound","state":"open","draft":false,"created_at":"2026-07-11T10:00:00Z","updated_at":"2026-07-21T10:00:00Z","merged_at":null,"labels":[]}]`
 		case path == "/repos/acme/api/labels":
 			return `[{"id":10,"name":"bug","color":"d73a4a"}]`
 		case path == "/repos/acme/api/milestones":
@@ -176,6 +181,44 @@ func fixtureResponse(t *testing.T, provider, path string) string {
 	}
 	t.Fatalf("unexpected fixture request %s %s", provider, path)
 	return ""
+}
+
+func TestGitHubWorkItemsHonorFrozenSyncPRsFlag(t *testing.T) {
+	t.Parallel()
+	handler := NativeRESTHandler{}
+	fetch := func(syncPRs bool) (FetchResult, int) {
+		t.Helper()
+		doer := &fixtureDoer{t: t, provider: "github"}
+		client, err := providerfoundation.NewHTTPClient(
+			"github", "https://fixture.test", doer,
+			func(*http.Request) error { return nil },
+			providerfoundation.RetryPolicy{
+				MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+			},
+			providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claim := nativeTestClaim("github", "work-items")
+		claim.ProcessorFlags = map[string]bool{"sync_prs": syncPRs}
+		result, err := handler.Fetch(context.Background(), claim, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result, doer.requests
+	}
+	issuesOnly, issuesRequests := fetch(false)
+	if issuesRequests != 1 || len(issuesOnly.Envelopes) != 1 ||
+		issuesOnly.Envelopes[0].SourceID != "gh:acme/api#42" {
+		t.Fatalf("issues_only=%+v requests=%d", issuesOnly, issuesRequests)
+	}
+	withPRs, withPRRequests := fetch(true)
+	if withPRRequests != 2 || len(withPRs.Envelopes) != 2 ||
+		withPRs.Envelopes[1].SourceID != "ghpr:acme/api#43" ||
+		withPRs.Envelopes[1].Attributes["type"] != "pr" {
+		t.Fatalf("with_prs=%+v requests=%d", withPRs, withPRRequests)
+	}
 }
 
 type noRequestDoer struct{}

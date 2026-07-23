@@ -115,13 +115,10 @@ def prune_rate_limit_observations(retention_days: int | None = None) -> dict[str
     return {"status": "completed", "deleted": deleted, "retention_days": days}
 
 
-# Relay contract (CHAOS-2581 / CHAOS-2596): dispatch_sync_run and
-# finalize_sync_run wakeups remain durable at-least-once because their consumers
-# are idempotent. post_sync is intentionally AT-MOST-ONCE: the relay marks the
-# outbox row dispatched before publishing and never re-arms it on publish
-# failure, because downstream metrics readers raw-aggregate computed_at
-# generations and can double-count duplicate post-sync fanout. Durable
-# exactly-once post-sync re-drive is deferred to CHAOS-2596.
+# Relay contract (CHAOS-2581 / CHAOS-3051): all wakeups are durable
+# at-least-once. post_sync relies on the generation-safe reader contract from
+# CHAOS-2596, so the relay may release its guarded claim after a failed publish
+# and safely re-drive it with bounded backoff.
 
 
 @celery_app.task(
@@ -397,47 +394,6 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                 session.rollback()
                 session.expire_all()
                 continue
-            if row.kind == OUTBOX_KIND_POST_SYNC:
-                post_sync_marked = mark_outbox_dispatched(
-                    session,
-                    row_id=row.id,
-                    claim_token=row.claim_token,
-                    now=datetime.now(timezone.utc),
-                )
-                session.commit()
-                session.expire_all()
-                if not post_sync_marked:
-                    logger.warning(
-                        "reconcile_sync_dispatch.post_sync_mark_dispatched_failed",
-                        extra={
-                            "outbox_id": str(row.id),
-                            "sync_run_id": str(row.sync_run_id),
-                            "kind": row.kind,
-                        },
-                    )
-                    continue
-                try:
-                    if _publish_claimed_post_sync_row(
-                        session,
-                        row=row,
-                        build_post_sync_dispatch_payload=build_post_sync_dispatch_payload,
-                        dispatch_post_sync_tasks=_dispatch_post_sync_tasks,
-                    ):
-                        relayed_post_sync += 1
-                except Exception:
-                    logger.exception(
-                        "reconcile_sync_dispatch.post_sync_publish_lost",
-                        extra={
-                            "outbox_id": str(row.id),
-                            "sync_run_id": str(row.sync_run_id),
-                            "kind": row.kind,
-                        },
-                    )
-                finally:
-                    session.rollback()
-                    session.expire_all()
-                continue
-
             try:
                 relayed_kind = _publish_claimed_outbox_row(
                     session,
@@ -447,6 +403,8 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                     finalize_sync_run=finalize_sync_run,
                     run_sync_reference_discovery=run_sync_reference_discovery,
                     upsert_outbox_wakeup=upsert_outbox_wakeup,
+                    build_post_sync_dispatch_payload=build_post_sync_dispatch_payload,
+                    dispatch_post_sync_tasks=_dispatch_post_sync_tasks,
                 )
             except Exception as exc:
                 publish_failures += 1
@@ -495,6 +453,8 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
                 relayed_dispatch += 1
             elif relayed_kind == OUTBOX_KIND_FINALIZE:
                 relayed_finalize += 1
+            elif relayed_kind == OUTBOX_KIND_POST_SYNC:
+                relayed_post_sync += 1
 
     return {
         "expired_units": expired_count,
@@ -843,6 +803,8 @@ def _publish_claimed_outbox_row(
     finalize_sync_run,
     run_sync_reference_discovery,
     upsert_outbox_wakeup,
+    build_post_sync_dispatch_payload,
+    dispatch_post_sync_tasks,
 ) -> str | None:
     from dev_health_ops.sync.canonical_incident_gate import (
         CanonicalIncidentFeatureDisabledError,
@@ -853,6 +815,7 @@ def _publish_claimed_outbox_row(
         OUTBOX_KIND_DISCOVERY,
         OUTBOX_KIND_DISPATCH,
         OUTBOX_KIND_FINALIZE,
+        OUTBOX_KIND_POST_SYNC,
     )
     from dev_health_ops.workers.sync_units import terminalize_feature_disabled_plan
 
@@ -907,6 +870,16 @@ def _publish_claimed_outbox_row(
             args=(str(row.sync_run_id),), queue="sync"
         )
         return OUTBOX_KIND_FINALIZE
+
+    if row.kind == OUTBOX_KIND_POST_SYNC:
+        if not _publish_claimed_post_sync_row(
+            session,
+            row=row,
+            build_post_sync_dispatch_payload=build_post_sync_dispatch_payload,
+            dispatch_post_sync_tasks=dispatch_post_sync_tasks,
+        ):
+            return None
+        return OUTBOX_KIND_POST_SYNC
 
     logger.warning(
         "reconcile_sync_dispatch.unknown_outbox_kind",

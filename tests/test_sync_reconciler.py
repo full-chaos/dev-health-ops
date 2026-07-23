@@ -1112,7 +1112,7 @@ def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
     assert post_sync_row.dispatched_route_generation == 1
 
 
-def test_reconciler_post_sync_publish_failure_stays_marked_and_is_not_retried(
+def test_reconciler_post_sync_publish_failure_rearms_for_safe_retry(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
@@ -1155,21 +1155,42 @@ def test_reconciler_post_sync_publish_failure_stays_marked_and_is_not_retried(
     )
 
     first = sync_reconciler.reconcile_sync_dispatch(limit=10)
-    second = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     post_sync_row = _outbox_row(db_session, run, OUTBOX_KIND_POST_SYNC)
     assert first["relayed_post_sync"] == 0
-    assert first["publish_failures"] == 0
-    assert second["relayed_post_sync"] == 0
+    assert first["publish_failures"] == 1
     assert len(publish_attempts) == 1
-    assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
+    assert post_sync_row.status == OUTBOX_STATUS_PENDING
     assert post_sync_row.claim_token is None
     assert post_sync_row.claim_expires_at is None
     assert post_sync_row.claim_transport is None
     assert post_sync_row.claim_route_generation is None
+    assert post_sync_row.dispatched_transport is None
+    assert post_sync_row.dispatched_route_generation is None
+    assert post_sync_row.last_error == "RuntimeError: broker down"
+    assert _aware(post_sync_row.available_at) > datetime.now(timezone.utc)
+
+    def complete_post_sync_publish(**kwargs):
+        publish_attempts.append(kwargs)
+
+    monkeypatch.setattr(
+        post_sync_dispatch,
+        "_dispatch_post_sync_tasks",
+        complete_post_sync_publish,
+    )
+    post_sync_row.available_at = datetime.now(timezone.utc)
+    db_session.flush()
+
+    second = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    db_session.refresh(post_sync_row)
+    assert second["relayed_post_sync"] == 1
+    assert second["publish_failures"] == 0
+    assert len(publish_attempts) == 2
+    assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
+    assert post_sync_row.claim_token is None
     assert post_sync_row.dispatched_transport == "celery"
     assert post_sync_row.dispatched_route_generation == 1
-    assert post_sync_row.last_error is None
 
 
 def test_reconciler_materializes_missing_post_sync_outbox_for_ledger(

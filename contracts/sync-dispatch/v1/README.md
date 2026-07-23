@@ -10,8 +10,8 @@ reconciler is therefore the only mutation owner. A later, separately approved
 migration may select `river` per kind, but its rollback route remains `celery`;
 editing this artifact alone cannot activate that migration.
 
-`dispatch_sync_run`, `finalize_sync_run`, and `reference_discovery` are
-`at_least_once`. `post_sync` is intentionally
-`at_most_once_mark_before`: the outbox row is marked dispatched before
-publication and is not re-armed if that publication fails, preventing duplicate
-post-sync fanout until its downstream consumers are replay-safe.
+All four wakeups are `at_least_once`. `post_sync` uses the same live-claim,
+publish-or-insert, and terminal-mark transaction boundary as the other kinds.
+On a publish or insert failure the claim is released with bounded backoff. The
+post-sync consumers are generation-safe: readers select the newest compute
+generation per logical key, so a re-drive cannot inflate their result.

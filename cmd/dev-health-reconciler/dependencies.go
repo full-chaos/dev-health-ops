@@ -175,7 +175,7 @@ func buildSyncMutationPipeline(
 	// The checked-in contract is Celery-only, so nil delivery callbacks are
 	// valid and the mutation kernel performs no transport transaction. A later
 	// River route fails closed until that same source-reviewed composition binds
-	// its concrete publisher and post-sync handoff.
+	// its concrete publisher.
 	return syncreconciler.NewMutationPipeline(
 		repair,
 		materializer,

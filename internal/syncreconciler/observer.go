@@ -204,9 +204,6 @@ func fixedDescriptors(registry Registry) ([]syncdispatchcontract.Descriptor, err
 	for _, kind := range frozenKinds {
 		descriptor, ok := registry.Lookup(kind)
 		expectedDelivery := syncdispatchcontract.DeliveryAtLeastOnce
-		if kind == syncdispatchcontract.KindPostSync {
-			expectedDelivery = syncdispatchcontract.DeliveryAtMostOnceMarkBefore
-		}
 		if !ok || descriptor.Kind != kind || descriptor.Delivery != expectedDelivery ||
 			descriptor.RollbackRoute != syncdispatchcontract.RouteCelery ||
 			(descriptor.Route != syncdispatchcontract.RouteCelery && descriptor.Route != syncdispatchcontract.RouteRiver) {

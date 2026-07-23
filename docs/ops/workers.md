@@ -206,8 +206,8 @@ Migration `0049` seeds the four fixed sync wakeup kinds as active Celery routes
 at generation 1. Each Python claim binds the route and generation. For
 dispatch, finalize, and discovery, the publish transaction locks both the
 outbox row and route row through publish and mark; success/failure writes must
-still match that active generation. `post_sync` preserves its existing
-mark-before-publish commit, so its route lock ends at that commit. Unknown,
+still match that active generation. `post_sync` uses the same guarded
+publish-or-retry boundary as every other wakeup. Unknown,
 paused, and River-routed kinds are not claimable by Python. The Go reconciler
 checks the persisted four-row set against the checked-in contract and closes
 readiness on a pause, missing row, generation error, or route drift.
@@ -240,9 +240,8 @@ so the factory is unreachable and the disabled command does not open
 PostgreSQL. An unsupported or invalid cron candidate rolls back the entire
 locked window with readiness closed, so Celery remains sole owner instead of
 allowing a healthy-but-starved Go window. The sync reconciler kernel first commits a bounded claim set, then
-delivers and terminally marks each at-least-once claim in its own fresh
-transaction, while `post_sync` is terminally marked and committed before the
-external handoff begins. The reconciler command retains a complete
+delivers and terminally marks every claim, including `post_sync`, in its own
+fresh transaction. The reconciler command retains a complete
 repair-materialize-deliver-observe mutation-pipeline factory, but its private
 activation gate remains checked-in false and the running command selects the
 read-only shadow stepper.

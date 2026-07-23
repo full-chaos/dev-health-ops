@@ -373,7 +373,7 @@ A separate dormant transaction kernel now locks an existing-marker due window,
 calls an injected coordinator through the same PostgreSQL transaction, and
 advances the marker only after that durable handoff succeeds. A second dormant
 kernel can claim River-routed sync outbox rows and invoke transaction-local
-at-least-once or `post_sync` mark-before seams. The Go reconciler image packages
+at-least-once seams, including `post_sync`. The Go reconciler image packages
 the sync-dispatch contract needed to construct that kernel. Nothing imports
 either kernel from a command or deployment profile, and every checked-in and
 persisted route remains Celery, so these additions are failure-tested
@@ -419,8 +419,8 @@ materialization, transport delivery, and post-mutation observation, but the
 private activation gate remains checked-in false. The materializer
 can reconstruct bounded dispatch, finalize, discovery, and missing post-sync
 wakeups in one domain transaction. It never reads routes, claims rows, or
-publishes work; existing pending rows and at-most-once post-sync rows retain
-their current semantics. The composed repair step preserves the
+publishes work; existing pending rows, including guarded at-least-once
+post-sync rows, retain their current semantics. The composed repair step preserves the
 current eligible Linear-backfill expired-lease transition, including bounded
 retry exhaustion and provider/org/cost-class serialization. A persisted
 publish-failure recorder can rearm an already committed River claim with the
@@ -457,9 +457,9 @@ sync-domain outbox remains part of the work below.
 - Port the sync reconciler loops:
   - expired lease handling;
   - materialization of missing dispatch/finalize/post-sync rows;
-  - outbox claiming;
-  - River insertion;
-  - current mark-before/mark-after semantics.
+	- outbox claiming;
+	- River insertion;
+	- guarded insert-and-terminal-mark semantics for every replay-safe kind.
 - Add no-op/shadow transport mode.
 - Keep Celery transport selectable until sync cutover.
 - Expose schedule/reconciler metrics and readiness.
@@ -476,8 +476,7 @@ observation but remains unreachable while the private activation gate is
 false. Persisted transport-failure
 backoff and the least-privilege River transaction boundary are implemented as
 dormant primitives, but the kernel now claims first and then performs fresh
-per-claim insert/mark transactions, with `post_sync` committed before its
-external handoff. The scheduler has an opaque default-Celery
+per-claim insert/mark transactions, including `post_sync`. The scheduler has an opaque default-Celery
 ownership fence, the remaining Python policy-parity blockers are organization
 existence, entitlement, occurrence claiming, catch-up, and unsupported-cron
 policy; an unsupported or invalid cron currently rolls back the whole Go
@@ -493,7 +492,7 @@ quiescer/controller plus external-handoff binding remain open.
 - Two replicas cannot duplicate a schedule occurrence.
 - Every documented outbox crash window passes failure-injection tests.
 - Existing eligible Linear expired-lease behavior is unchanged.
-- Post-sync remains at-most-once.
+- Post-sync is guarded at-least-once after the CHAOS-2596 reader remediation.
 - Transport can route per outbox kind to Celery or River for rollback.
 - Scheduler contains no heavy business work.
 
@@ -963,7 +962,7 @@ Before each family enters canary:
 | River UI deployment | P6 infra | do not deploy; use sanitized CLI/endpoints |
 | temporary Python algorithm service | before affected P5 issue | keep task on Celery |
 | external ingest horizontal scaling | separate future design | singleton |
-| post-sync durable retry | CHAOS-2596 | preserve at-most-once |
+| post-sync durable retry | CHAOS-3051 | guarded at-least-once relay |
 | Celery removal approval | P7 stability gate | retain fallback |
 
 ## 20. Definition of done for the program

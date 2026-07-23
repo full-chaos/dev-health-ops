@@ -65,8 +65,8 @@ func (config MutationPipelineConfig) valid() bool {
 //
 // Construction and execution do not change transport routes. With the
 // checked-in Celery-only registry, Kernel performs no transport transaction.
-// A future River route still fails closed unless concrete publisher and
-// post-sync handoff callbacks are supplied by command composition.
+// A future River route still fails closed unless a concrete publisher is
+// supplied by command composition.
 type MutationPipeline struct {
 	repair       LeaseRepairStepper
 	materializer MaterializerStepper

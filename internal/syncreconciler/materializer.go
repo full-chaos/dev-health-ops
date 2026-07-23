@@ -432,7 +432,7 @@ SET available_at = CASE
 WHERE sync_dispatch_outbox.status <> 'pending'
 `
 
-// post_sync is reconstructed only when the at-most-once ledger exists and the
+// post_sync is reconstructed only when the once-only finalizer ledger exists and the
 // outbox row does not. An existing row in any state is immutable here.
 const materializePostSyncSQL = `
 WITH candidates AS (

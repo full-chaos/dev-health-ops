@@ -26,10 +26,10 @@ Idempotency and Durability rules:
   * Metrics are never dispatched from individual units. Post-sync durability
     flows through the sync_dispatch_outbox table and the reconciler relay,
     rather than only the SyncRunPostDispatch ledger. The post_sync kind is
-    relayed at-most-once by the reconciler. It marks the outbox row dispatched
-    before publishing and never re-arms on publish failure. This prevents
-    downstream metrics readers from double-counting duplicate computed_at
-    generations. Durable exactly-once post-sync is deferred to CHAOS-2596.
+    relayed guarded at-least-once: the reconciler terminally marks it only
+    after scheduling succeeds, and a failure releases the claim with bounded
+    backoff. CHAOS-2596 made supported downstream readers generation-safe, so
+    a duplicate compute generation cannot inflate their results.
 Observability (CHAOS-2519):
   Every structured log line emitted by the three tasks carries the full unit
   context: sync_run_id, unit_id, source_id, dataset_key, provider, cost_class.
@@ -1871,11 +1871,9 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
 
     No-op until all units are terminal; once-only via the SyncRunPostDispatch
     ledger. The reconciler relay is the sole post-sync publisher. post_sync is
-    at-most-once: the relay marks dispatched before publishing and never re-arms
-    on publish failure because downstream raw-aggregation readers can
-    double-count duplicate computed_at generations. Durable exactly-once
-    post-sync re-drive is deferred to CHAOS-2596; dispatch/finalize wakeups
-    remain at-least-once because their consumers are idempotent.
+    at-least-once: a publish failure releases its guarded outbox claim for a
+    bounded re-drive. Downstream readers select the newest compute generation
+    per logical key, so duplicate deliveries cannot inflate supported metrics.
     """
 
     from dev_health_ops.db import get_postgres_session_sync

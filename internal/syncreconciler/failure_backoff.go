@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,7 +57,7 @@ func (recorder *PublishFailureRecorder) Record(
 ) error {
 	if recorder == nil || recorder.begin == nil || ctx == nil || now.IsZero() || failure == nil ||
 		!uuidPattern.MatchString(claim.ID) || !uuidPattern.MatchString(claim.ClaimToken) ||
-		claim.Kind == "" || claim.Kind == syncdispatchcontract.KindPostSync ||
+		claim.Kind == "" ||
 		claim.RouteGeneration < 1 || claim.Attempts < 1 {
 		return ErrInvalidConfiguration
 	}

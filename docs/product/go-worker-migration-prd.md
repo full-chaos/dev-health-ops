@@ -199,7 +199,7 @@ Until a task family completes its stability gate, routing can be returned to its
 
 - replacement of Redis Streams with NATS JetStream;
 - adoption of Temporal for cross-service workflows;
-- durable re-drive of post-sync work before CHAOS-2596 closes;
+- durable re-drive of post-sync work before CHAOS-2596 closes (completed);
 - extraction of a shared public Go platform module until ownership and licensing are approved;
 - removal of Python from domain areas whose libraries or algorithms have not yet been ported or isolated behind a stable boundary.
 
@@ -285,7 +285,9 @@ Before migration, every task family must document:
 - how stale work is repaired;
 - whether operator retry is allowed.
 
-`post_sync` remains at-most-once until CHAOS-2596 proves all affected ClickHouse reads/writes safe under re-drive.
+`post_sync` is guarded at-least-once: CHAOS-2596 made supported ClickHouse
+read paths generation-safe under re-drive, so a failed relay claim can be
+retried without inflating reader results.
 
 ### FR-7: Cancellation, drain, and shutdown
 
@@ -357,7 +359,7 @@ Promotion requires documented parity thresholds and zero unresolved correctness 
 |---|---|---|---|
 | Sync planning and dispatch | Celery coordinators + DB outbox | Coordinator jobs | Preserve outbox, claim/lease, cost class, provider routing, and bounded fan-out |
 | Sync unit execution | Long bounded provider work | Command jobs in `sync` profile | Explicit credentials, rate budgets, lease heartbeats, retry matrix |
-| Sync finalization/post-sync | Celery callbacks/relay | Coordinator jobs | Preserve once-only ledgers; post-sync remains at-most-once until CHAOS-2596 |
+| Sync finalization/post-sync | Celery callbacks/relay | Coordinator jobs | Preserve once-only ledgers; post-sync is guarded at-least-once after CHAOS-2596 |
 | Team drift/autoimport | Provider discovery + ClickHouse projection tasks | Sync commands/coordinators | Preserve provider matrix, fail-closed auth, and ClickHouse authority |
 | Daily and extra metrics | Fan-out/batch/finalize | Coordinator + heavy command jobs | Deterministic partitions, generation identity, ClickHouse dedup |
 | Work graph/investment | Heavy compute and LLM calls | Heavy command jobs | Persisted run identity, LLM adapter parity, bounded concurrency |
@@ -414,7 +416,7 @@ After full cutover:
 - Zero lost committed sync dispatches in broker/process failure tests.
 - All migrated jobs have passing replay and crash-window tests.
 - Product-visible run states remain consistent with job states.
-- CHAOS-2596 is completed before durable post-sync re-drive is enabled.
+- CHAOS-2596 is complete before durable post-sync re-drive is enabled.
 - Credentials and payload secrets do not appear in logs, metrics, traces, job UI, or operator output.
 
 ### Reliability and latency

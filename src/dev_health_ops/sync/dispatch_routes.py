@@ -28,7 +28,7 @@ _EXPECTED_DELIVERY = MappingProxyType(
     {
         "dispatch_sync_run": "at_least_once",
         "finalize_sync_run": "at_least_once",
-        "post_sync": "at_most_once_mark_before",
+        "post_sync": "at_least_once",
         "reference_discovery": "at_least_once",
     }
 )

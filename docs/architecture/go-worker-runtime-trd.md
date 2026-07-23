@@ -88,7 +88,7 @@ This means the queue is not the workflow system of record. It is a delivery tran
 - Long-running units can approach one hour and must remain deploy-safe.
 - Provider limits are fleet-wide and organization-scoped.
 - External ingest is intentionally singleton until pending-entry reclaim semantics are redesigned.
-- `post_sync` is intentionally at-most-once until CHAOS-2596 makes downstream reads/writes replay-safe.
+- `post_sync` is guarded at-least-once; CHAOS-2596 made supported downstream readers generation-safe.
 
 ## 3. Alternatives considered
 
@@ -681,12 +681,11 @@ updates also require the same active generation. A claim that loses the race
 to a route change cannot publish and becomes reclaimable after its bounded
 lease expires.
 
-`post_sync` remains the deliberate exception: its mark-before-publish commit
-releases the route lock before the broker call. That preserves the current
-at-most-once loss window but means live-claim drain alone cannot prove a safe
-post-sync transport cutover. Before that kind can change route, the operator
-surface must add a bounded quiescence barrier that proves no marked publisher
-from the old generation can still issue its broker call.
+`post_sync` follows the same guarded publish-then-terminal-mark sequence as
+the other wakeups. Its consumers are generation-safe, so a failed insert can
+be retried without double-counting. Route cutover still needs the normal bounded
+generation drain and a concrete River handler, but it has no mark-before loss
+window.
 
 The Go reconciler treats the checked-in transport registry and persisted route
 set as one readiness contract. Missing, extra, paused, malformed, or divergent
@@ -723,8 +722,7 @@ pre-commit window before it changes the route generation.
 An unregistered sync-reconciler transaction kernel now implements the narrow
 transport boundary: it first commits a bounded set of River claims, then each
 at-least-once claim is delivered and terminally marked in its own fresh
-transaction. For the at-most-once `post_sync` kind the terminal mark is
-committed before the external handoff is invoked. Route generation and
+transaction, including `post_sync`. Route generation and
 claim-token predicates fail closed at the terminal write. The checked-in
 contract currently contains no River route, so even explicit mutation mode
 returns without opening a write transaction.
@@ -764,12 +762,14 @@ available at runtime; that packaging does not change route ownership.
 
 - `dispatch_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; unit claims prevent duplicate provider work.
 - `finalize_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; finalization ledger prevents duplicate finalization.
-- `post_sync`: mark-before-external-handoff/at-most-once, with the terminal mark committed before the external handoff begins, until CHAOS-2596 closes.
+- `post_sync`: guarded at-least-once insertion; generation-safe readers make duplicate fanout replay-safe.
 - eligible Linear backfill expired leases: continue `RUNNING -> RETRYING` with current eligibility matrix.
 
 No second generic sync workflow is introduced in River.
 
-`post_sync` is the deliberate exception to atomic insert-and-mark during coexistence: its current mark-before-insert loss window and non-retryable behavior remain until CHAOS-2596 makes every downstream consumer replay-safe.
+`post_sync` uses the same guarded publish-then-terminal-mark boundary as the
+other sync wakeups. CHAOS-2596 established reader compatibility for existing and
+re-driven compute generations.
 
 ## 12. Post-sync and analytics idempotency
 
@@ -780,7 +780,7 @@ The Go migration must preserve current delivery semantics, not “improve” the
 | sync dispatch | at-least-once | guarded at-least-once | same |
 | sync unit | duplicate wake-up possible; one lease owner | guarded at-least-once | same |
 | finalization | at-least-once + ledger | guarded at-least-once | same |
-| post-sync fan-out | at-most-once | at-most-once | durable guarded at-least-once |
+| post-sync fan-out | guarded at-least-once | guarded at-least-once | same |
 | metric partitions | mixed by table/read path | migrate only with explicit matrix | replay-safe where proven |
 | billing/email | task-specific | idempotency key or non-retryable | same |
 | reports | run-row uniqueness required | guarded at-least-once | same |
@@ -1448,7 +1448,7 @@ Measure:
 | External stream singleton is duplicated | readiness/config validation fails deployment |
 | New producer emits unsupported contract | insertion/routing gate rejects before execution |
 | Queue migration mismatch | process fails readiness and does not consume |
-| Post-sync insert fails | preserve current at-most-once marking order until CHAOS-2596 |
+| Post-sync River insert fails | roll back the insert transaction, exact-CAS rearm the guarded outbox claim with bounded backoff, then re-drive safely under the recorded generation |
 | Operator retries unsafe job | command is rejected with audited reason |
 
 ## 27. Performance and capacity requirements

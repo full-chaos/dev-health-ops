@@ -123,7 +123,7 @@ func TestPublishFailureRecorderClassifiesCASAndPersistenceFailures(t *testing.T)
 	}
 }
 
-func TestPublishFailureRecorderRejectsPostSyncBeforePersistence(t *testing.T) {
+func TestPublishFailureRecorderRearmsPostSyncLikeEveryOtherWakeup(t *testing.T) {
 	began := false
 	recorder := mustFailureRecorder(t, func(context.Context) (failureTransaction, error) {
 		began = true
@@ -132,11 +132,11 @@ func TestPublishFailureRecorderRejectsPostSyncBeforePersistence(t *testing.T) {
 	claim := failureClaim()
 	claim.Kind = syncdispatchcontract.KindPostSync
 	err := recorder.Record(context.Background(), claim, time.Now(), errors.New("publish failed"))
-	if !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("Record(post_sync) error = %v, want ErrInvalidConfiguration", err)
+	if err != nil {
+		t.Fatalf("Record(post_sync) error = %v", err)
 	}
-	if began {
-		t.Fatal("post_sync failure recorder began a persistence transaction")
+	if !began {
+		t.Fatal("post_sync failure recorder did not persist its guarded retry")
 	}
 }
 

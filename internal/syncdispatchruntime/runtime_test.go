@@ -151,7 +151,7 @@ func TestPublisherRejectsTypedNilClientAndMissingReturnedArgs(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesCannotAdvertiseWithoutEveryConcreteHandlerAndHandoff(t *testing.T) {
+func TestCapabilitiesCannotAdvertiseWithoutEveryConcreteHandler(t *testing.T) {
 	t.Parallel()
 	publisher := mustPublisher(t)
 	if _, err := NewCapabilities(&Publisher{}, completeHandlers(), NewGenerationTracker()); !errors.Is(err, ErrCapabilityUnavailable) {
@@ -176,6 +176,12 @@ func TestCapabilitiesCannotAdvertiseWithoutEveryConcreteHandlerAndHandoff(t *tes
 	if len(descriptors) != 4 || descriptors[0].Kind != syncdispatchcontract.KindDispatchSyncRun ||
 		!descriptors[0].HandlerRegistered || !descriptors[0].PublisherBound {
 		t.Fatalf("descriptors = %#v", descriptors)
+	}
+	withoutLegacyHandoff := completeHandlers()
+	withoutLegacyHandoff.PostSyncHandoff = nil
+	capabilities, err = NewCapabilities(publisher, withoutLegacyHandoff, NewGenerationTracker())
+	if err != nil || !capabilities.Descriptors()[2].PublisherBound {
+		t.Fatalf("post_sync must be publishable without legacy handoff: %#v / %v", capabilities, err)
 	}
 }
 

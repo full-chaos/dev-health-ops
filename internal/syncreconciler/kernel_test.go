@@ -573,138 +573,117 @@ func TestKernelMutationUnknownClaimDescriptorFailsClosedAfterClaimCommit(t *test
 	}
 }
 
-func TestKernelPostSyncCommitsMarkBeforePostCommitHandoff(t *testing.T) {
+func TestKernelPostSyncUsesGuardedAtLeastOncePublisher(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
-	events := []string{}
 	claimTx := &fakeKernelTx{name: "claim", claims: []TransportClaim{
 		kernelClaim(syncdispatchcontract.KindPostSync, now, candidateID1),
 	}}
-	markTx := &fakeKernelTx{name: "mark", terminalRows: 1}
+	deliveryTx := &fakeKernelTx{name: "delivery", terminalRows: 1}
 	kernel, err := newKernel(
 		riverRegistry(t, syncdispatchcontract.KindPostSync), KernelModeMutation,
-		&kernelStepper{}, kernelBeginSequence(t, &events, claimTx, markTx),
+		&kernelStepper{}, kernelBeginSequence(t, nil, claimTx, deliveryTx),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	published := false
-	marked := false
 	result, err := kernel.Step(context.Background(), now, 1, time.Minute,
 		func(context.Context, pgx.Tx, TransportClaim) (string, error) {
 			published = true
-			return "", nil
-		}, func(_ context.Context, claim TransportClaim) error {
-			if claim.Kind != syncdispatchcontract.KindPostSync || !markTx.commit || len(markTx.execSQL) != 1 {
-				t.Fatalf("post-sync handoff ran before mark commit: mark=%#v claim=%#v", markTx, claim)
-			}
-			events = append(events, "handoff")
-			marked = true
-			return nil
-		})
+			return "river-post-sync", nil
+		}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if published || !marked || !claimTx.commit || !markTx.commit ||
-		result.PostSyncMark != 1 || result.Dispatched != 1 ||
-		events[len(events)-1] != "handoff" {
-		t.Fatalf("post-sync result = %#v published:%t marked:%t events:%v", result, published, marked, events)
+	if !published || !claimTx.commit || !deliveryTx.commit || result.Dispatched != 1 {
+		t.Fatalf("post-sync result = %#v published:%t claim:%#v delivery:%#v", result, published, claimTx, deliveryTx)
 	}
 }
 
-func TestKernelPostSyncHandoffFailureNeverRearmsCommittedMark(t *testing.T) {
+func TestKernelPostSyncPublisherFailureRearmsCommittedClaim(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 	claimTx := &fakeKernelTx{claims: []TransportClaim{
 		kernelClaim(syncdispatchcontract.KindPostSync, now, candidateID1),
 	}}
-	markTx := &fakeKernelTx{terminalRows: 1}
+	failedDelivery := &fakeKernelTx{terminalRows: 1}
+	backoffTx := &fakeKernelTx{terminalRows: 1}
 	kernel, err := newKernel(
 		riverRegistry(t, syncdispatchcontract.KindPostSync), KernelModeMutation,
-		&kernelStepper{}, kernelBeginSequence(t, nil, claimTx, markTx),
+		&kernelStepper{}, kernelBeginSequence(t, nil, claimTx, failedDelivery, backoffTx),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapterErr := errors.New("adapter secret: post-commit handoff failed")
-	result, err := kernel.Step(context.Background(), now, 1, time.Minute, nil,
-		func(context.Context, TransportClaim) error { return adapterErr })
-	if !errors.Is(err, ErrPostSyncHandoffFailed) || errors.Is(err, adapterErr) ||
-		strings.Contains(err.Error(), adapterErr.Error()) || result.PostSyncHandoffFailed != 1 {
+	result, err := kernel.Step(context.Background(), now, 1, time.Minute,
+		func(context.Context, pgx.Tx, TransportClaim) (string, error) {
+			return "", errors.New("river insert failed")
+		}, nil)
+	if err != nil || result.Claimed != 1 || result.Retried != 1 || result.Dispatched != 0 {
 		t.Fatalf("Step() error/result = %v / %#v", err, result)
 	}
-	if !claimTx.commit || !markTx.commit || len(markTx.execSQL) != 1 {
-		t.Fatalf("post-sync handoff failure rearmed terminal mark: claim=%#v mark=%#v", claimTx, markTx)
+	if !claimTx.commit || failedDelivery.commit || failedDelivery.rollback == 0 || !backoffTx.commit {
+		t.Fatalf("post-sync failure did not rearm guarded claim: claim=%#v delivery=%#v backoff=%#v", claimTx, failedDelivery, backoffTx)
 	}
 }
 
-func TestKernelPostSyncLeaseLossAndHandoffFailureContinueAlreadyClaimedBatch(t *testing.T) {
+func TestKernelPostSyncLeaseLossContinuesAlreadyClaimedBatch(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 	claimTx := &fakeKernelTx{claims: []TransportClaim{
 		kernelClaim(syncdispatchcontract.KindPostSync, now, candidateID1),
 		kernelClaim(syncdispatchcontract.KindPostSync, now.Add(time.Second), candidateID2),
 		kernelClaim(syncdispatchcontract.KindPostSync, now.Add(2*time.Second), candidateID3),
 	}}
-	staleMark := &fakeKernelTx{terminalRows: 0}
-	firstMark := &fakeKernelTx{terminalRows: 1}
-	secondMark := &fakeKernelTx{terminalRows: 1}
+	staleDelivery := &fakeKernelTx{execRows: []int64{0}}
+	firstDelivery := &fakeKernelTx{terminalRows: 1}
+	secondDelivery := &fakeKernelTx{terminalRows: 1}
 	kernel, err := newKernel(
 		riverRegistry(t, syncdispatchcontract.KindPostSync), KernelModeMutation,
-		&kernelStepper{}, kernelBeginSequence(t, nil, claimTx, staleMark, firstMark, secondMark),
+		&kernelStepper{}, kernelBeginSequence(t, nil, claimTx, staleDelivery, firstDelivery, secondDelivery),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapterErr := errors.New("adapter secret: callback failed")
-	var handedOff []string
-	result, err := kernel.Step(context.Background(), now, 3, time.Minute, nil,
-		func(_ context.Context, claim TransportClaim) error {
-			handedOff = append(handedOff, claim.ID)
-			if claim.ID == candidateID2 {
-				return adapterErr
-			}
-			return nil
-		})
-	if !errors.Is(err, ErrPostSyncHandoffFailed) || errors.Is(err, adapterErr) ||
-		strings.Contains(err.Error(), adapterErr.Error()) || result.Claimed != 3 ||
-		result.LeaseLost != 1 || result.PostSyncMark != 2 || result.Dispatched != 2 ||
-		result.PostSyncHandoffFailed != 1 ||
-		!reflect.DeepEqual(handedOff, []string{candidateID2, candidateID3}) ||
-		staleMark.commit || staleMark.rollback == 0 || !firstMark.commit || !secondMark.commit {
-		t.Fatalf("post-sync batch result=%#v error=%v handoffs=%v stale=%#v first=%#v second=%#v", result, err, handedOff, staleMark, firstMark, secondMark)
+	var published []string
+	result, err := kernel.Step(context.Background(), now, 3, time.Minute,
+		func(_ context.Context, _ pgx.Tx, claim TransportClaim) (string, error) {
+			published = append(published, claim.ID)
+			return "river-" + claim.ID, nil
+		}, nil)
+	if err != nil || result.Claimed != 3 || result.LeaseLost != 1 || result.Dispatched != 2 ||
+		!reflect.DeepEqual(published, []string{candidateID2, candidateID3}) ||
+		staleDelivery.commit || staleDelivery.rollback == 0 || !firstDelivery.commit || !secondDelivery.commit {
+		t.Fatalf("post-sync batch result=%#v error=%v published=%v stale=%#v first=%#v second=%#v", result, err, published, staleDelivery, firstDelivery, secondDelivery)
 	}
 }
 
-func TestKernelPostSyncFailureIsPreservedWithLaterFatalError(t *testing.T) {
+func TestKernelPostSyncFailureRecorderOutageStopsBatch(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 	claimTx := &fakeKernelTx{claims: []TransportClaim{
 		kernelClaim(syncdispatchcontract.KindPostSync, now, candidateID1),
 		kernelClaim(syncdispatchcontract.KindDispatchSyncRun, now.Add(time.Second), candidateID2),
 	}}
-	markTx := &fakeKernelTx{terminalRows: 1}
-	failedDelivery := &fakeKernelTx{
+	failedDelivery := &fakeKernelTx{terminalRows: 1}
+	backoffTx := &fakeKernelTx{
 		terminalRows: 1,
-		execErrs:     []error{errors.New("delivery database unavailable")},
+		execErr:      errors.New("failure recorder database unavailable"),
 	}
 	kernel, err := newKernel(
 		riverRegistry(t, syncdispatchcontract.KindPostSync, syncdispatchcontract.KindDispatchSyncRun),
 		KernelModeMutation,
 		&kernelStepper{},
-		kernelBeginSequence(t, nil, claimTx, markTx, failedDelivery),
+		kernelBeginSequence(t, nil, claimTx, failedDelivery, backoffTx),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapterErr := errors.New("adapter secret: callback failed")
+	published := 0
 	result, err := kernel.Step(context.Background(), now, 2, time.Minute,
 		func(context.Context, pgx.Tx, TransportClaim) (string, error) {
-			t.Fatal("publisher ran after the delivery lock failed")
-			return "", nil
+			published++
+			return "", errors.New("river insert failed")
 		},
-		func(context.Context, TransportClaim) error { return adapterErr },
-	)
-	if !errors.Is(err, ErrPostSyncHandoffFailed) || !errors.Is(err, ErrUnavailable) ||
-		errors.Is(err, adapterErr) || strings.Contains(err.Error(), adapterErr.Error()) ||
-		result.PostSyncHandoffFailed != 1 || result.PostSyncMark != 1 ||
-		result.Dispatched != 1 || result.LeaseLost != 0 {
+		nil)
+	if !errors.Is(err, ErrUnavailable) || published != 1 || result.Retried != 0 || result.Dispatched != 0 {
 		t.Fatalf("Step() = %#v, %v", result, err)
 	}
 }
@@ -744,10 +723,10 @@ func TestKernelRejectsInvalidModesAndMissingMutationSeams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := postSync.Step(context.Background(), now, 1, time.Minute, nil, nil); !errors.Is(err, ErrPostSyncHandoffRequired) {
-		t.Fatalf("missing post-sync handoff error = %v", err)
+	if _, err := postSync.Step(context.Background(), now, 1, time.Minute, nil, nil); !errors.Is(err, ErrPublisherRequired) {
+		t.Fatalf("missing post-sync publisher error = %v", err)
 	}
 	if began {
-		t.Fatal("missing post-sync handoff began a claim transaction")
+		t.Fatal("missing post-sync publisher began a claim transaction")
 	}
 }

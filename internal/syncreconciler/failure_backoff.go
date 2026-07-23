@@ -21,8 +21,9 @@ type failureTransaction interface {
 type failureBegin func(context.Context) (failureTransaction, error)
 
 // PublishFailureRecorder persists a retry after a publisher fails outside the
-// transaction that committed its claim. It is deliberately command-unwired:
-// activation must first split claim commit from per-claim dispatch.
+// transaction that committed its claim. The dormant Kernel invokes it after
+// rolling back the failed per-claim delivery transaction; command activation
+// remains a separate reviewed boundary.
 type PublishFailureRecorder struct {
 	begin failureBegin
 }

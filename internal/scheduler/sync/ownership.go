@@ -51,6 +51,14 @@ func DefaultOwnershipPolicy() OwnershipPolicy {
 	}
 }
 
+// reviewedGoMutationOwnershipPolicy is intentionally package-private. Tests
+// and a future audited command composition can exercise the Go-owned kernel,
+// but neither environment nor an external package can manufacture marker
+// mutation authority.
+func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
+	return OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation}
+}
+
 // Validate rejects every owner/mode pair except the bounded current and future
 // states. In particular, a Go shadow process never acquires mutation authority.
 func (policy OwnershipPolicy) Validate() error {

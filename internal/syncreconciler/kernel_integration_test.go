@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,9 +266,68 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		if jobs != 1 {
 			t.Fatalf("same-transaction River jobs = %d, want 1", jobs)
 		}
+		again, err := kernel.Step(ctx, now, 1, time.Minute, publish, nil)
+		if err != nil || again.Claimed != 0 || again.Dispatched != 0 {
+			t.Fatalf("terminal row was reclaimed: %#v, %v", again, err)
+		}
+		if err := adminPool.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&jobs); err != nil {
+			t.Fatal(err)
+		}
+		if jobs != 1 {
+			t.Fatalf("repeat Step() inserted %d River jobs, want 1", jobs)
+		}
 	})
 
-	t.Run("concurrent route change rolls back River insert and outbox claim", func(t *testing.T) {
+	t.Run("crash after claim commit leaves a durable bounded lease for later retry", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		now := time.Date(2026, time.July, 23, 12, 0, 15, 0, time.UTC)
+		seedKernelOutbox(t, ctx, adminPool, integrationDispatchID, now.Add(-time.Second))
+
+		claims, err := kernel.commitClaims(ctx, now, 1, time.Minute)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("commitClaims() = %#v, %v", claims, err)
+		}
+		var token string
+		var attempts int
+		var expiresAt time.Time
+		if err := adminPool.QueryRow(ctx, `
+			SELECT claim_token, claim_expires_at, attempts
+			FROM public.sync_dispatch_outbox WHERE id = $1`, integrationDispatchID).Scan(
+			&token, &expiresAt, &attempts,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if token != claims[0].ClaimToken || !expiresAt.Equal(now.Add(time.Minute)) || attempts != 1 {
+			t.Fatalf("durable claim token:%s expires:%s attempts:%d", token, expiresAt, attempts)
+		}
+		var jobs int
+		if err := adminPool.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&jobs); err != nil {
+			t.Fatal(err)
+		}
+		if jobs != 0 {
+			t.Fatalf("claim-only crash window inserted %d River jobs", jobs)
+		}
+		blocked, err := kernel.Step(ctx, now, 1, time.Minute, publish, nil)
+		if err != nil || blocked.Claimed != 0 {
+			t.Fatalf("live durable lease was reclaimed: %#v, %v", blocked, err)
+		}
+		retryNow := now.Add(time.Minute + time.Nanosecond)
+		retried, err := kernel.Step(ctx, retryNow, 1, time.Minute, publish, nil)
+		if err != nil || retried.Claimed != 1 || retried.Dispatched != 1 {
+			t.Fatalf("expired durable claim retry = %#v, %v", retried, err)
+		}
+		if err := adminPool.QueryRow(ctx, `
+			SELECT attempts FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationDispatchID,
+		).Scan(&attempts); err != nil {
+			t.Fatal(err)
+		}
+		if attempts != 2 {
+			t.Fatalf("retry attempts = %d, want 2", attempts)
+		}
+	})
+
+	t.Run("concurrent route change rolls back River insert but preserves durable claim", func(t *testing.T) {
 		resetKernelIntegrationTables(t, ctx, adminPool)
 		now := time.Date(2026, time.July, 23, 12, 0, 30, 0, time.UTC)
 		seedKernelOutbox(t, ctx, adminPool, integrationDispatchID, now.Add(-time.Second))
@@ -314,7 +374,7 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 			t.Fatalf("concurrent route update: %v", err)
 		}
 		close(release)
-		if err := <-firstDone; !errors.Is(err, ErrLeaseLost) {
+		if err := <-firstDone; err != nil {
 			t.Fatalf("Step() after route change error = %v", err)
 		}
 		var status string
@@ -328,7 +388,7 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		).Scan(&status, &attempts, &claimToken); err != nil {
 			t.Fatal(err)
 		}
-		if status != "pending" || attempts != 0 || claimToken != nil {
+		if status != "pending" || attempts != 1 || claimToken == nil {
 			t.Fatalf(
 				"route-fenced outbox = status:%s attempts:%d claim:%v",
 				status,
@@ -393,12 +453,47 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		}
 	})
 
-	t.Run("failure after River InsertTx rolls back claim, job, and terminal mark", func(t *testing.T) {
+	t.Run("stale committed lease is rejected before River insertion", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		now := time.Date(2026, time.July, 23, 12, 1, 30, 0, time.UTC)
+		seedKernelOutbox(t, ctx, adminPool, integrationStaleID, now.Add(-time.Second))
+		claims, err := kernel.commitClaims(ctx, now, 1, time.Minute)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("commitClaims() = %#v, %v", claims, err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE public.sync_dispatch_outbox SET claim_expires_at = $2
+			WHERE id = $1`, claims[0].ID, now); err != nil {
+			t.Fatal(err)
+		}
+		published := false
+		outcome, err := kernel.deliverAtLeastOnce(
+			ctx,
+			claims[0],
+			now,
+			func(context.Context, pgx.Tx, TransportClaim) (string, error) {
+				published = true
+				return "", nil
+			},
+		)
+		if !errors.Is(err, ErrLeaseLost) || outcome != deliveryLeaseLost || published {
+			t.Fatalf("stale delivery outcome=%d published=%t error=%v", outcome, published, err)
+		}
+		var jobs int
+		if err := adminPool.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&jobs); err != nil {
+			t.Fatal(err)
+		}
+		if jobs != 0 {
+			t.Fatalf("stale lease inserted %d River jobs", jobs)
+		}
+	})
+
+	t.Run("failure after River InsertTx rolls back job and records durable retry", func(t *testing.T) {
 		resetKernelIntegrationTables(t, ctx, adminPool)
 		now := time.Date(2026, time.July, 23, 12, 2, 0, 0, time.UTC)
 		seedKernelOutbox(t, ctx, adminPool, integrationDispatchID, now.Add(-time.Second))
 		publisherErr := errors.New("injected publisher failure")
-		if _, err := kernel.Step(
+		result, err := kernel.Step(
 			ctx,
 			now,
 			1,
@@ -410,26 +505,33 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 				return "", publisherErr
 			},
 			nil,
-		); !errors.Is(err, publisherErr) {
-			t.Fatalf("Step() error = %v", err)
+		)
+		if err != nil || result.Retried != 1 || result.Dispatched != 0 {
+			t.Fatalf("Step() = %#v, %v", result, err)
 		}
 		var status string
 		var attempts int
 		var claimToken *string
+		var availableAt time.Time
+		var lastError string
 		if err := adminPool.QueryRow(
 			ctx,
-			`SELECT status, attempts, claim_token
+			`SELECT status, attempts, claim_token, available_at, COALESCE(last_error, '')
 			FROM public.sync_dispatch_outbox WHERE id = $1`,
 			integrationDispatchID,
-		).Scan(&status, &attempts, &claimToken); err != nil {
+		).Scan(&status, &attempts, &claimToken, &availableAt, &lastError); err != nil {
 			t.Fatal(err)
 		}
-		if status != "pending" || attempts != 0 || claimToken != nil {
+		if status != "pending" || attempts != 1 || claimToken != nil ||
+			!availableAt.Equal(now.Add(time.Minute)) ||
+			lastError != transportPublishFailureEvidence {
 			t.Fatalf(
-				"rolled-back outbox = status:%s attempts:%d claim:%v",
+				"retried outbox = status:%s attempts:%d claim:%v available:%s error:%s",
 				status,
 				attempts,
 				claimToken,
+				availableAt,
+				lastError,
 			)
 		}
 		var jobs int
@@ -438,6 +540,132 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		}
 		if jobs != 0 {
 			t.Fatalf("rolled-back River jobs = %d, want 0", jobs)
+		}
+	})
+
+	t.Run("partial batch commits successful claims and records failed claim retry", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		now := time.Date(2026, time.July, 23, 12, 3, 0, 0, time.UTC)
+		seedKernelOutbox(t, ctx, adminPool, integrationDispatchID, now.Add(-2*time.Second))
+		seedKernelOutbox(t, ctx, adminPool, integrationStaleID, now.Add(-time.Second))
+		result, err := kernel.Step(
+			ctx,
+			now,
+			2,
+			time.Minute,
+			func(publisherCtx context.Context, tx pgx.Tx, claim TransportClaim) (string, error) {
+				jobID, insertErr := publish(publisherCtx, tx, claim)
+				if insertErr != nil {
+					return "", insertErr
+				}
+				if claim.ID == integrationStaleID {
+					return "", errors.New("injected second publish failure")
+				}
+				return jobID, nil
+			},
+			nil,
+		)
+		if err != nil || result.Claimed != 2 || result.Dispatched != 1 || result.Retried != 1 {
+			t.Fatalf("partial Step() = %#v, %v", result, err)
+		}
+		var (
+			firstStatus, secondStatus string
+			secondToken               *string
+			secondAvailable           time.Time
+			jobs                      int
+		)
+		if err := adminPool.QueryRow(ctx, `
+			SELECT status FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationDispatchID,
+		).Scan(&firstStatus); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminPool.QueryRow(ctx, `
+			SELECT status, claim_token, available_at
+			FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationStaleID,
+		).Scan(&secondStatus, &secondToken, &secondAvailable); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminPool.QueryRow(ctx, "SELECT count(*) FROM river.river_job").Scan(&jobs); err != nil {
+			t.Fatal(err)
+		}
+		if firstStatus != "dispatched" || secondStatus != "pending" || secondToken != nil ||
+			!secondAvailable.Equal(now.Add(time.Minute)) || jobs != 1 {
+			t.Fatalf(
+				"partial batch first:%s second:%s/%v/%s jobs:%d",
+				firstStatus,
+				secondStatus,
+				secondToken,
+				secondAvailable,
+				jobs,
+			)
+		}
+	})
+
+	t.Run("post_sync handoff observes committed mark and failure never rearms", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		now := time.Date(2026, time.July, 23, 12, 4, 0, 0, time.UTC)
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE public.sync_dispatch_transport_routes
+			SET transport = 'river', generation = 7
+			WHERE kind = $1`, syncdispatchcontract.KindPostSync); err != nil {
+			t.Fatal(err)
+		}
+		seedKernelOutboxKind(
+			t,
+			ctx,
+			adminPool,
+			integrationStaleID,
+			syncdispatchcontract.KindPostSync,
+			now.Add(-time.Second),
+		)
+		postKernel, err := NewKernel(
+			domainPool,
+			queuePool,
+			riverRegistry(t, syncdispatchcontract.KindPostSync),
+			KernelModeMutation,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handoffErr := errors.New("injected post-sync handoff failure")
+		result, err := postKernel.Step(
+			ctx,
+			now,
+			1,
+			time.Minute,
+			nil,
+			func(_ context.Context, claim TransportClaim) error {
+				var status string
+				var claimToken *string
+				if err := adminPool.QueryRow(ctx, `
+					SELECT status, claim_token
+					FROM public.sync_dispatch_outbox WHERE id = $1`,
+					claim.ID,
+				).Scan(&status, &claimToken); err != nil {
+					return err
+				}
+				if status != "dispatched" || claimToken != nil {
+					return fmt.Errorf("handoff observed row %s/%v", status, claimToken)
+				}
+				return handoffErr
+			},
+		)
+		if !errors.Is(err, ErrPostSyncHandoffFailed) || errors.Is(err, handoffErr) ||
+			strings.Contains(err.Error(), handoffErr.Error()) ||
+			result.Dispatched != 1 || result.PostSyncMark != 1 || result.PostSyncHandoffFailed != 1 {
+			t.Fatalf("post_sync Step() = %#v, %v", result, err)
+		}
+		var status string
+		if err := adminPool.QueryRow(ctx, `
+			SELECT status FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationStaleID,
+		).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != "dispatched" {
+			t.Fatalf("post_sync handoff failure rearmed status %q", status)
 		}
 	})
 }
@@ -516,15 +744,34 @@ func seedKernelOutbox(
 	id string,
 	availableAt time.Time,
 ) {
+	seedKernelOutboxKind(
+		t,
+		ctx,
+		pool,
+		id,
+		syncdispatchcontract.KindDispatchSyncRun,
+		availableAt,
+	)
+}
+
+func seedKernelOutboxKind(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	id string,
+	kind string,
+	availableAt time.Time,
+) {
 	t.Helper()
 	if _, err := pool.Exec(
 		ctx,
 		`INSERT INTO public.sync_dispatch_outbox (
 			id, org_id, sync_run_id, kind, status, available_at, attempts, created_at, updated_at
 		) VALUES ($1, 'org-integration', '00000000-0000-4000-8000-000000003300',
-			'dispatch_sync_run', 'pending', $2, 0, $2, $2)`,
+			$3, 'pending', $2, 0, $2, $2)`,
 		id,
 		availableAt,
+		kind,
 	); err != nil {
 		t.Fatal(err)
 	}

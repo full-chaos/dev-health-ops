@@ -217,7 +217,7 @@ check_integration() {
 		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=10m \
 			./internal/testsupport/containers ./internal/storage/postgres ./internal/storage/river \
 			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute \
-			./internal/scheduler/sync
+			./internal/scheduler/sync ./internal/syncdispatchruntime
 	)
 }
 

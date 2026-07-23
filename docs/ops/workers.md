@@ -96,6 +96,23 @@ is fail-closed: the loop only opens readiness after one successful step, and
 persistence failures close it instead of being reported as harmless lease
 races.
 
+The typed `syncdispatchruntime` package is dormant and all-or-nothing. Its
+claim projection drops the claim token, its River args validate the exact
+contract/version/UUID/generation tuple, its publisher only calls `InsertTx`
+through the caller's transaction, and its `GenerationTracker` exposes a
+publisher-owned local generation-drain API for `post_sync`. It does not
+register routes or workers, and it is not a controller capability.
+
+The scheduler track is complete in code, but the checked-in ownership policy
+still keeps Celery as the production owner. The scheduler loop is
+package-private and fail-closed: `HandoffDueResult` treats unsupported or
+invalid cron as a whole-window activation boundary, rolls the locked window
+back with `ErrSchedulerFallbackRequired`, and performs no coordinator or
+marker writes for that window; readiness only flips after one successful
+handoff window. Celery remains the sole owner until policy parity is complete,
+so the checked-in scheduler state stays non-authoritative and avoids silent
+candidate starvation.
+
 The checked-in deployment profile still keeps the topology disabled
 (`coexistence_disabled`, all replicas `0`), both registered kinds still route
 to Celery, no current domain producer calls the bridge, and no Go handler is
@@ -121,32 +138,39 @@ surface. Pause and resume lock the route row first, then hold an outbox-table
 barrier and re-read state and live claims, covering both Celery's
 route-plus-outbox transaction and Go's outbox-only terminal commit. Resume
 requires the target to equal the checked-in route. River requires an exact
-compiled capability, and a transport-changing `post_sync` resume additionally
-requires an external quiescer registered under the old transport capability and
-invoked for its old generation. The shipped command registers no capabilities,
-so today it can pause, inspect/drain, and resume the same Celery route,
-including `post_sync`, but cannot activate River. A future cutover quiescer must
-prove it honors context cancellation; its configured timeout is cooperative.
+typed capability, and a transport-changing `post_sync` resume requires a
+separately proven cross-process quiescer/controller under the old transport
+boundary. The publisher-owned local generation-drain API honors cancellation
+inside one Go process, but it neither implements the route quiescer contract
+nor proves other Go or Celery publishers have drained. The shipped command
+registers no capabilities, so today it can
+pause, inspect/drain, and resume the same Celery route, including `post_sync`,
+but cannot activate River.
 
 Two dormant transaction kernels now sit behind that foundation. The scheduler
 kernel locks a bounded due window with `FOR UPDATE ... SKIP LOCKED`, invokes an
 injected coordinator through the same PostgreSQL transaction, and advances the
-schedule marker only after that durable handoff succeeds. Its public repository
-constructor embeds an opaque Celery/`coexistence_disabled` ownership policy, so
-`HandoffDue` rejects mutation before beginning a transaction; Go mutation
-authority requires a reviewed package-private source change. The sync reconciler
-kernel can claim only unpaused River-routed rows, invoke an injected
-same-transaction River publisher for at-least-once kinds, and preserve a
-separate mark-before seam for `post_sync`. Neither kernel is constructed by
-the scheduler or reconciler command.
+schedule marker only after that durable handoff succeeds. Its public
+repository constructor embeds an opaque Celery/`coexistence_disabled`
+ownership policy, so `HandoffDue` rejects mutation before beginning a
+transaction; Go mutation authority requires a reviewed package-private source
+change. The dormant lifecycle loop exists, but its checked-in composition has
+no mutation repository or coordinator factory. An unsupported or invalid cron
+candidate rolls back the entire locked window with readiness closed, so Celery
+remains sole owner instead of allowing a healthy-but-starved Go window. The
+sync reconciler kernel first commits a bounded claim set, then
+delivers and terminally marks each at-least-once claim in its own fresh
+transaction, while `post_sync` is terminally marked and committed before the
+external handoff begins. Neither kernel is constructed by the scheduler or
+reconciler command.
 
 This remains a fail-closed selector foundation, not River activation. All
 persisted and checked-in routes remain Celery, deployment profiles remain
 `coexistence_disabled` with zero replicas, and no Go sync handler is compiled.
 Do not change a route to River: it would strand the wakeup. Activation still
-requires a scheduler command loop and remaining policy parity; reconciler loop
-wiring; split claim-commit/publish flow; concrete River publishers, handlers,
-and capabilities; and the bounded post-sync quiescence/external-handoff path.
+requires scheduler coordinator/policy composition, reconciler loop wiring,
+concrete River publishers, handlers, and capabilities, and a cross-process
+`post_sync` quiescer/controller plus external-handoff binding.
 
 For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`
 and run:
@@ -175,10 +199,10 @@ the sole schedule mutation owners by default. An operator may separately set
 consumer materialize pre-existing Go-authored identities; it does not own
 timing or activate the Go command loop. The default-off consumer now provides
 the authoritative Python planner path for a valid pending identity, while the
-dormant transaction kernel still needs organization/entitlement and
-missing-marker parity, catch-up and unsupported-cron policy, and a command
-loop. Its ownership fence prevents the current command from mutating production
-markers.
+dormant transaction kernel still needs organization existence, entitlement, and
+occurrence-claim parity, catch-up, and unsupported-cron policy parity. Its
+checked-in lifecycle composition has no mutation factory, and its ownership
+fence prevents the current command from mutating production markers.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target

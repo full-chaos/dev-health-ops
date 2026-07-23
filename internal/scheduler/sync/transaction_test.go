@@ -69,7 +69,7 @@ type fakeSchedulerTransaction struct {
 
 func mutationRepository(transaction schedulerTransaction) *Repository {
 	return &Repository{
-		ownership: OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation},
+		ownership: reviewedGoMutationOwnershipPolicy(),
 		begin: func(context.Context) (schedulerTransaction, error) {
 			return transaction, nil
 		},
@@ -226,6 +226,71 @@ func TestHandoffDueRollsBackWithoutMarkerWhenCoordinatorFails(t *testing.T) {
 	}
 }
 
+func TestHandoffDueResultLeavesUnsupportedCronForCeleryWithoutMarkerMutation(t *testing.T) {
+	observedAt := at("2026-01-01T12:00:00Z")
+	transaction := &fakeSchedulerTransaction{
+		rows: &fakeLockedRows{rows: [][]any{
+			lockedRow("config-random", "org-a", "job-a", "R * * * *", at("2026-01-01T09:00:00Z"), at("2026-01-01T10:00:00Z")),
+		}},
+		execTag: pgconn.NewCommandTag("UPDATE 1"),
+	}
+	result, err := mutationRepository(transaction).HandoffDueResult(
+		context.Background(), observedAt, 1,
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
+			t.Fatal("unsupported cron reached coordinator")
+			return nil
+		}),
+	)
+	if !errors.Is(err, ErrSchedulerFallbackRequired) {
+		t.Fatalf("HandoffDueResult() error = %v", err)
+	}
+	if result.Candidates != 1 || result.UnsupportedCron != 1 || result.InvalidCron != 0 || len(result.HandedOff) != 0 {
+		t.Fatalf("handoff result = %#v", result)
+	}
+	if len(transaction.execArgs) != 0 || transaction.committed || !transaction.rolledBack {
+		t.Fatalf(
+			"unsupported fallback marker calls=%d committed=%v rolledBack=%v",
+			len(transaction.execArgs),
+			transaction.committed,
+			transaction.rolledBack,
+		)
+	}
+}
+
+func TestHandoffDueResultFailsClosedBeforeMixedFallbackWindowWrites(t *testing.T) {
+	observedAt := at("2026-01-01T12:00:00Z")
+	transaction := &fakeSchedulerTransaction{
+		rows: &fakeLockedRows{rows: [][]any{
+			lockedRow("config-unsupported", "org-a", "job-a", "R * * * *", at("2026-01-01T09:00:00Z"), at("2026-01-01T10:00:00Z")),
+			lockedRow("config-valid", "org-b", "job-b", "0 * * * *", at("2026-01-01T09:00:00Z"), at("2026-01-01T10:00:00Z")),
+		}},
+		execTag: pgconn.NewCommandTag("UPDATE 1"),
+	}
+	coordinatorCalls := 0
+	result, err := mutationRepository(transaction).HandoffDueResult(
+		context.Background(), observedAt, 2,
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error {
+			coordinatorCalls++
+			return nil
+		}),
+	)
+	if !errors.Is(err, ErrSchedulerFallbackRequired) {
+		t.Fatalf("HandoffDueResult() error = %v", err)
+	}
+	if result.Candidates != 2 || result.UnsupportedCron != 1 || result.TimingEligible != 1 {
+		t.Fatalf("handoff result = %#v", result)
+	}
+	if coordinatorCalls != 0 || len(transaction.execArgs) != 0 || transaction.committed || !transaction.rolledBack {
+		t.Fatalf(
+			"mixed fallback wrote: coordinator=%d marker=%d committed=%v rolledBack=%v",
+			coordinatorCalls,
+			len(transaction.execArgs),
+			transaction.committed,
+			transaction.rolledBack,
+		)
+	}
+}
+
 func TestHandoffDueRejectsLostMarkerAndRollsBackHandoff(t *testing.T) {
 	observedAt := at("2026-01-01T12:00:00Z")
 	transaction := &fakeSchedulerTransaction{
@@ -329,7 +394,7 @@ func TestHandoffStatementIsBoundedAndMultiReplicaSafe(t *testing.T) {
 func TestHandoffDueValidatesRequestBeforeOpeningTransaction(t *testing.T) {
 	calls := 0
 	repository := &Repository{
-		ownership: OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation},
+		ownership: reviewedGoMutationOwnershipPolicy(),
 		begin: func(context.Context) (schedulerTransaction, error) {
 			calls++
 			return nil, errors.New("unexpected begin")

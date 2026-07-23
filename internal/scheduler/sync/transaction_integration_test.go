@@ -58,7 +58,7 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 	if defaultOccurrences != 0 || defaultNextRunAt != nil {
 		t.Fatalf("default ownership mutated occurrences=%d nextRunAt=%v", defaultOccurrences, defaultNextRunAt)
 	}
-	ownership := OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation}
+	ownership := reviewedGoMutationOwnershipPolicy()
 	firstRepository, err := newRepositoryWithOwnership(pool, ownership)
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +226,60 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 	}
 	if occurrenceRows != 1 {
 		t.Fatalf("scheduled occurrence rows = %d, want 1", occurrenceRows)
+	}
+}
+
+func TestHandoffDuePostgresUnsupportedCronFallsBackWithoutMarkerWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE public.sync_configurations SET sync_options =
+		'{"schedule_cron":"R * * * *","timezone":"UTC"}'::jsonb;
+		UPDATE public.scheduled_jobs SET schedule_cron = 'R * * * *'
+	`); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := repository.HandoffDueResult(ctx, at("2026-01-01T12:00:00Z"), 1, NewOccurrenceCoordinator())
+	if !errors.Is(err, ErrSchedulerFallbackRequired) {
+		t.Fatalf("HandoffDueResult() error = %v", err)
+	}
+	if result.UnsupportedCron != 1 || len(result.HandedOff) != 0 {
+		t.Fatalf("unsupported result = %#v", result)
+	}
+	var occurrences int
+	var nextRunAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM public.scheduled_sync_occurrences), next_run_at
+		FROM public.scheduled_jobs
+		WHERE id = '00000000-0000-4000-8000-000000003039'
+	`).Scan(&occurrences, &nextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences != 0 || nextRunAt != nil {
+		t.Fatalf("unsupported fallback mutated occurrences=%d nextRunAt=%v", occurrences, nextRunAt)
 	}
 }
 

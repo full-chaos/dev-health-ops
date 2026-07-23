@@ -1,1 +1,1 @@
-Trigger the same-repository PR #1256 canonical documentation cleanup applier.
+Retrigger the PR #1256 canonical documentation cleanup applier and preserve its output.

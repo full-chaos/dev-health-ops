@@ -75,6 +75,7 @@ func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, leas
 			return ErrCredentialInvalid
 		}
 		request.SetBasicAuth(email.Reveal(), token.Reveal())
+		request.Header.Set("Accept", "application/json")
 		return nil
 	}
 	return NewHTTPClient("jira", credentialBaseURL(credential, ""), doer, auth, retry, lease)

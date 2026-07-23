@@ -279,6 +279,12 @@ func (executor Executor) newClient(
 		return providerfoundation.NewGitHubClient(credential, executor.Doer, retry, guard)
 	case "gitlab":
 		return providerfoundation.NewGitLabClient(credential, executor.Doer, retry, guard)
+	case "jira":
+		return providerfoundation.NewJiraClient(credential, executor.Doer, retry, guard)
+	case "linear":
+		return providerfoundation.NewLinearClient(credential, executor.Doer, retry, guard)
+	case "launchdarkly":
+		return providerfoundation.NewLaunchDarklyClient(credential, executor.Doer, retry, guard)
 	default:
 		return nil, ErrInvalidConfiguration
 	}

@@ -2,10 +2,12 @@ package providerfoundation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +158,140 @@ func TestGitLabMalformedNextPageStopsWithoutSpeculation(t *testing.T) {
 	}
 }
 
+func TestLinearGraphQLPaginationPostsFirstAfterAndRejectsErrors(t *testing.T) {
+	t.Parallel()
+	doer := &paginationDoer{responses: []paginationResponse{
+		{body: `{"data":{"issues":{"nodes":[{"id":"one"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-2"}}}}`},
+		{body: `{"data":{"issues":{"nodes":[{"id":"two"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`},
+	}}
+	client := paginationClient(t, "linear", "https://api.linear.app", doer)
+	result, err := CollectLinearGraphQLPages(context.Background(), client, LinearPageOptions{
+		Query: "query Issues($first: Int!, $after: String) { issues { nodes { id } } }",
+		Variables: map[string]any{
+			"filter": map[string]any{"archivedAt": map[string]any{"null": true}},
+		},
+		ConnectionPath: []string{"issues"},
+		PerPage:        50,
+		MaxPages:       10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Pages != 2 || result.CapReached || len(result.Items) != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+	var first, second struct {
+		Variables map[string]any `json:"variables"`
+	}
+	if json.Unmarshal([]byte(doer.bodies[0]), &first) != nil ||
+		json.Unmarshal([]byte(doer.bodies[1]), &second) != nil {
+		t.Fatalf("request bodies=%q", doer.bodies)
+	}
+	if first.Variables["first"] != float64(50) || first.Variables["after"] != nil {
+		t.Fatalf("first variables=%v", first.Variables)
+	}
+	if second.Variables["after"] != "cursor-2" {
+		t.Fatalf("second variables=%v", second.Variables)
+	}
+
+	errorDoer := &paginationDoer{responses: []paginationResponse{{
+		body: `{"errors":[{"message":"Query is too complex","extensions":{"code":"COMPLEXITY_LIMIT"}}]}`,
+	}}}
+	errorClient := paginationClient(t, "linear", "https://api.linear.app", errorDoer)
+	_, err = CollectLinearGraphQLPages(context.Background(), errorClient, LinearPageOptions{
+		Query:          "query Issues { issues { nodes { id } } }",
+		ConnectionPath: []string{"issues"},
+		PerPage:        50, MaxPages: 1,
+	})
+	if !errors.Is(err, ErrGraphQLComplexity) || len(errorDoer.requests) != 1 {
+		t.Fatalf("complexity error=%v calls=%d", err, len(errorDoer.requests))
+	}
+}
+
+func TestJiraPaginationPreservesTokenThenOffsetAndIsLast(t *testing.T) {
+	t.Parallel()
+	doer := &paginationDoer{responses: []paginationResponse{
+		{body: `{"issues":[{"id":"1"}],"nextPageToken":"opaque"}`},
+		{body: `{"issues":[{"id":"2"},{"id":"3"}]}`},
+		{body: `{"issues":[{"id":"4"}],"isLast":true}`},
+	}}
+	client := paginationClient(t, "jira", "https://acme.atlassian.net", doer)
+	result, err := CollectJiraTokenOffsetPages(context.Background(), client, JiraPageOptions{
+		Path: "/rest/api/3/search/jql",
+		Query: url.Values{
+			"jql":    {`project = "OPS"`},
+			"fields": {"*all"},
+		},
+		DataKey: "issues", MaxResults: 100, MaxPages: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Pages != 3 || result.CapReached || len(result.Items) != 4 {
+		t.Fatalf("result=%+v", result)
+	}
+	if got := doer.requests[0].URL.Query().Get("startAt"); got != "0" {
+		t.Fatalf("first startAt=%q", got)
+	}
+	if got := doer.requests[1].URL.Query().Get("nextPageToken"); got != "opaque" ||
+		doer.requests[1].URL.Query().Has("startAt") {
+		t.Fatalf("token request=%s", doer.requests[1].URL.RawQuery)
+	}
+	if got := doer.requests[2].URL.Query().Get("startAt"); got != "2" ||
+		doer.requests[2].URL.Query().Has("nextPageToken") {
+		t.Fatalf("offset request=%s", doer.requests[2].URL.RawQuery)
+	}
+}
+
+func TestLaunchDarklyFlagAndAuditPagination(t *testing.T) {
+	t.Parallel()
+	firstFlags := make([]map[string]any, launchDarklyFlagPageSize)
+	for index := range firstFlags {
+		firstFlags[index] = map[string]any{"key": strconv.Itoa(index)}
+	}
+	firstBody, err := json.Marshal(map[string]any{"items": firstFlags, "totalCount": 51})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagDoer := &paginationDoer{responses: []paginationResponse{
+		{body: string(firstBody)},
+		{body: `{"items":[{"key":"last"}],"totalCount":51}`},
+	}}
+	flagClient := paginationClient(t, "launchdarkly", "https://app.launchdarkly.com", flagDoer)
+	flags, err := CollectLaunchDarklyOffsetPages(context.Background(), flagClient, LaunchDarklyOffsetOptions{
+		Path: "/api/v2/flags/project", MaxPages: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags.Pages != 2 || flags.CapReached || len(flags.Items) != 51 ||
+		flagDoer.requests[1].URL.Query().Get("offset") != "50" {
+		t.Fatalf("flags=%+v second=%s", flags, flagDoer.requests[1].URL.RawQuery)
+	}
+
+	since := time.UnixMilli(1_725_000_000_123).UTC()
+	auditDoer := &paginationDoer{responses: []paginationResponse{
+		{body: `{"items":[{"_id":"1"},{"_id":"2"}],"_links":{"next":{"href":"/api/v2/auditlog?limit=20&after=opaque"}}}`},
+		{body: `{"items":[{"_id":"3"}]}`},
+	}}
+	auditClient := paginationClient(t, "launchdarkly", "https://app.launchdarkly.com", auditDoer)
+	audit, err := CollectLaunchDarklyAuditPages(context.Background(), auditClient, LaunchDarklyAuditOptions{
+		Since: &since, MaxItems: 25,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit.Pages != 2 || audit.CapReached || len(audit.Items) != 3 {
+		t.Fatalf("audit=%+v", audit)
+	}
+	if got := auditDoer.requests[0].URL.Query().Get("after"); got != "1725000000123" {
+		t.Fatalf("after=%q", got)
+	}
+	if got := auditDoer.requests[1].URL.Path; got != "/api/v2/auditlog" {
+		t.Fatalf("next path=%q", got)
+	}
+}
+
 func paginationClient(t *testing.T, provider, base string, doer HTTPDoer) *HTTPClient {
 	t.Helper()
 	client, err := NewHTTPClient(
@@ -180,9 +316,17 @@ type paginationResponse struct {
 type paginationDoer struct {
 	responses []paginationResponse
 	requests  []*http.Request
+	bodies    []string
 }
 
 func (d *paginationDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.Body != nil {
+		body, _ := io.ReadAll(request.Body)
+		d.bodies = append(d.bodies, string(body))
+		request.Body = io.NopCloser(strings.NewReader(string(body)))
+	} else {
+		d.bodies = append(d.bodies, "")
+	}
 	d.requests = append(d.requests, request.Clone(request.Context()))
 	response := d.responses[len(d.requests)-1]
 	return &http.Response{

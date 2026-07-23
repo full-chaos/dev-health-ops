@@ -243,8 +243,9 @@ timing or activate the Go command loop. The default-off consumer now provides
 the authoritative Python planner path for a valid pending identity, while the
 dormant transaction kernel still needs organization existence, entitlement, and
 occurrence-claim parity, catch-up, and unsupported-cron policy parity. Its
-checked-in lifecycle composition has no mutation factory, and its ownership
-fence prevents the current command from mutating production markers.
+checked-in lifecycle composition includes a dormant mutation factory, but its
+ownership and policy-parity fences prevent the current command from mutating
+production markers.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target

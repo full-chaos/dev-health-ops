@@ -1,0 +1,241 @@
+package providerfoundation
+
+import (
+	"bytes"
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"golang.org/x/crypto/pbkdf2"
+)
+
+func TestFernetDecryptorMatchesPythonV1Contract(t *testing.T) {
+	t.Parallel()
+	key := secrets.NewValue("test-master-key")
+	decryptor, err := NewFernetDecryptor(key, "salt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipherText := encryptForTest(t, []byte(`{"token":"secret","base_url":"https://example.test"}`), key.Reveal(), "salt")
+	plain, err := decryptor.Decrypt(secrets.NewValue("v1:" + cipherText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain) != `{"token":"secret","base_url":"https://example.test"}` {
+		t.Fatalf("plaintext mismatch")
+	}
+}
+func TestCredentialResolverRequiresLeaseAndDoesNotExposeSecret(t *testing.T) {
+	t.Parallel()
+	key := secrets.NewValue("test-master-key")
+	decryptor, _ := NewFernetDecryptor(key, "salt")
+	resolver := CredentialResolver{Repository: testRepository{cipherText: "v1:" + encryptForTest(t, []byte(`{"token":"secret"}`), key.Reveal(), "salt")}, Decryptor: decryptor}
+	credential, err := resolver.Resolve(context.Background(), LeaseGuardFunc(func(context.Context) error { return nil }), TenantScope{OrgID: "org", Provider: "gitlab", IntegrationID: "integration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered := fmt.Sprint(credential.SafeAttributes()); strings.Contains(rendered, "secret") {
+		t.Fatalf("safe attributes leaked secret: %s", rendered)
+	}
+	token, _ := credential.Secret("token")
+	if token.Reveal() != "secret" {
+		t.Fatal("wrong secret")
+	}
+}
+func TestHTTPClassificationAndPaginationFixtures(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		provider string
+		status   int
+		headers  http.Header
+		want     ErrorClass
+	}{{"github", 403, http.Header{"X-RateLimit-Remaining": []string{"0"}}, ErrorRateLimited}, {"github", 403, http.Header{}, ErrorAuthentication}, {"gitlab", 401, http.Header{}, ErrorAuthentication}, {"jira", 404, http.Header{}, ErrorNotFound}, {"linear", 409, http.Header{}, ErrorConflict}, {"gitlab", 429, http.Header{"Retry-After": []string{"2"}}, ErrorRateLimited}, {"gitlab", 503, http.Header{}, ErrorTransient}}
+	for _, test := range cases {
+		if got := ClassifyHTTP(test.provider, test.status, test.headers); got == nil || got.Class != test.want {
+			t.Fatalf("%s/%d=%v want %s", test.provider, test.status, got, test.want)
+		}
+	}
+	calls := 0
+	values, err := CollectPages(context.Background(), 2, func(context.Context, string) ([]int, string, error) {
+		calls++
+		if calls == 1 {
+			return []int{1}, "next", nil
+		}
+		return []int{2}, "", nil
+	})
+	if err != nil || fmt.Sprint(values) != "[1 2]" {
+		t.Fatalf("pagination=%v,%v", values, err)
+	}
+}
+
+func TestProviderParityFixture(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile("testdata/provider_parity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		SchemaVersion string `json:"schema_version"`
+		Cases         []struct {
+			ID             string            `json:"id"`
+			Provider       string            `json:"provider"`
+			Status         int               `json:"status"`
+			Headers        map[string]string `json:"headers"`
+			Message        string            `json:"message"`
+			Classification ErrorClass        `json:"classification"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(content, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.SchemaVersion != "v1" || len(fixture.Cases) == 0 {
+		t.Fatal("invalid parity fixture")
+	}
+	for _, item := range fixture.Cases {
+		headers := http.Header{}
+		for key, value := range item.Headers {
+			headers.Set(key, value)
+		}
+		got := ClassifyHTTPWithMessage(item.Provider, item.Status, headers, item.Message)
+		if got == nil || got.Class != item.Classification {
+			t.Fatalf("%s: got %v, want %s", item.ID, got, item.Classification)
+		}
+	}
+}
+
+func TestGitHubSecondaryLimitBodyClassification(t *testing.T) {
+	t.Parallel()
+	got := ClassifyHTTPWithMessage("github", http.StatusForbidden, http.Header{}, `{"message":"You have triggered a secondary rate limit"}`)
+	if got == nil || got.Class != ErrorRateLimited {
+		t.Fatalf("classification=%v", got)
+	}
+}
+
+func TestHTTPClientRetriesOnlyWithinConfiguredBudget(t *testing.T) {
+	t.Parallel()
+	doer := &sequenceDoer{statuses: []int{http.StatusServiceUnavailable, http.StatusOK}}
+	client, err := NewHTTPClient("gitlab", "https://gitlab.example", doer, TokenAuth("Authorization", "Bearer ", secrets.NewValue("token")), RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(context.Background(), http.MethodGet, "/api/v4/projects", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if doer.calls != 2 {
+		t.Fatalf("calls=%d, want 2", doer.calls)
+	}
+}
+
+func TestSharedBackoffKeyMatchesPythonContract(t *testing.T) {
+	t.Parallel()
+	gate := ValkeyBackoffGate{Provider: "github", OrgID: "", Host: ""}
+	if got, want := gate.key(), "rate_limit:github:_:_"; got != want {
+		t.Fatalf("key=%q, want %q", got, want)
+	}
+}
+
+func TestGitHubAppClientMintsInstallationTokenWithoutGlobalState(t *testing.T) {
+	t.Parallel()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	credential := Credential{Provider: "github", fields: map[string]secrets.Value{"app_id": secrets.NewValue("1"), "private_key": secrets.NewValue(privateKey), "installation_id": secrets.NewValue("2")}}
+	doer := &githubAppDoer{}
+	client, err := NewGitHubClient(credential, doer, RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(context.Background(), http.MethodGet, "/repos/o/r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if doer.calls != 2 || doer.providerAuthorization != "Bearer installation-token" {
+		t.Fatalf("app calls=%d authorization=%q", doer.calls, doer.providerAuthorization)
+	}
+}
+func TestEnvelopeDedupeRejectsConflictingContent(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	first := NormalizedEnvelope{SchemaVersion: "v1", Provider: "github", OrgID: "org", IntegrationID: "i", EntityType: "issue", SourceID: "1", DedupeKey: "same", ObservedAt: now, Provenance: Provenance{Source: "native", Confidence: "1.0"}}
+	changed := first
+	changed.SourceID = "2"
+	if err := validateBatch([]NormalizedEnvelope{first, changed}); err != ErrSinkDuplicate {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+type testRepository struct{ cipherText string }
+
+func (r testRepository) ResolveEncrypted(context.Context, TenantScope) (EncryptedCredential, error) {
+	return EncryptedCredential{ID: "id", Provider: "gitlab", Name: "default", Active: true, Ciphertext: secrets.NewValue(r.cipherText)}, nil
+}
+
+type sequenceDoer struct {
+	statuses []int
+	calls    int
+}
+
+func (d *sequenceDoer) Do(request *http.Request) (*http.Response, error) {
+	status := d.statuses[d.calls]
+	d.calls++
+	return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+}
+
+type githubAppDoer struct {
+	calls                 int
+	providerAuthorization string
+}
+
+func (d *githubAppDoer) Do(request *http.Request) (*http.Response, error) {
+	d.calls++
+	if strings.Contains(request.URL.Path, "/access_tokens") {
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ") {
+			return nil, fmt.Errorf("missing app jwt")
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"token":"installation-token","expires_at":"2099-01-01T00:00:00Z"}`)), Request: request}, nil
+	}
+	d.providerAuthorization = request.Header.Get("Authorization")
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: request}, nil
+}
+func encryptForTest(t *testing.T, plain []byte, secret, salt string) string {
+	t.Helper()
+	key := pbkdf2.Key([]byte(secret), []byte(salt), 600000, 32, sha256.New)
+	padded := append([]byte(nil), plain...)
+	n := aes.BlockSize - len(padded)%aes.BlockSize
+	padded = append(padded, bytes.Repeat([]byte{byte(n)}, n)...)
+	block, err := aes.NewCipher(key[16:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := append([]byte{fernetVersion}, make([]byte, 8)...)
+	iv := bytes.Repeat([]byte{7}, aes.BlockSize)
+	payload = append(payload, iv...)
+	encrypted := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(encrypted, padded)
+	payload = append(payload, encrypted...)
+	mac := hmac.New(sha256.New, key[:16])
+	_, _ = mac.Write(payload)
+	payload = append(payload, mac.Sum(nil)...)
+	return base64.RawURLEncoding.EncodeToString(payload)
+}

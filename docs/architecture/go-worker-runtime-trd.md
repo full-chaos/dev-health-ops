@@ -924,6 +924,36 @@ Exact durations are configuration, not contract, and must be validated against P
 
 ## 15. Provider concurrency and rate limits
 
+CHAOS-3044 supplies the additive, dormant Go provider boundary. A sync-unit
+claim supplies its tenant scope; the resolver verifies that lease before lookup
+and decryption, then reads the existing organization/provider-scoped
+`integration_credentials` row. It is wire-compatible with the current v1
+Fernet ciphertext (and the legacy format), never reads or writes provider
+credentials through process-global environment mutation, and only reveals a
+typed secret at explicit HTTP-auth construction.
+
+The shared Valkey backoff gate uses the current Python key exactly:
+`rate_limit:<provider>:<org-or-_>:<host-or-_>`. Its Lua operation preserves the
+maximum next-allowed timestamp during Celery/Go coexistence. Budget admission
+uses the current Python SHA-256-derived PostgreSQL advisory-lock key for each
+provider/org/host/credential-fingerprint/dimension/route-family bucket; the
+authoritative durable reservation remains the unit's `DISPATCHING`/`RUNNING`
+lease. Provider/org/host/cost local concurrency counters use bounded Valkey Lua
+counters and must be released in `defer`; an unavailable reservation causes
+unit deferral rather than a sleeping worker.
+HTTP retry has a total-attempt budget, bounded backoff, `Retry-After`, and job
+context cancellation. It returns a sanitized error class, never a raw response
+body or credentials.
+
+Provider adapters emit versioned normalized envelopes containing tenant and
+source identity, dedupe key, observation time, and provenance. Postgres writes
+run in one transaction and ClickHouse writes use a fixed provenance-preserving
+column set. The sanitized `internal/providerfoundation/testdata/provider_parity.json`
+corpus covers auth, not-found, conflict, rate-limit, transient, and pagination
+cases. `go run ./cmd/dev-health-provider-fixture` emits the evaluated canonical
+JSON result for Python shadow comparison. This foundation is not a worker
+activation; provider-specific canary gates remain required.
+
 River queue concurrency is insufficient for global provider limits because it is local to each client/process.
 
 Preserve and generalize:

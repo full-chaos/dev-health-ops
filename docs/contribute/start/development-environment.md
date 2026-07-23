@@ -157,7 +157,7 @@ Run the v2 documentation with live reload:
 ```bash
 python -m mkdocs serve \
   --strict \
-  --config-file mkdocs.prototype.yml \
+  --config-file mkdocs.yml \
   --dev-addr 127.0.0.1:8000
 ```
 

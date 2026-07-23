@@ -78,11 +78,6 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         KIND_INVESTMENT_DISPATCH,
         KIND_INVESTMENT_CHUNK,
         KIND_INVESTMENT_FINALIZE,
-        KIND_INVESTMENT_CHUNK,
-        KIND_INVESTMENT_DISPATCH,
-        KIND_INVESTMENT_FINALIZE,
-        KIND_INVESTMENT_MATERIALIZE,
-        KIND_WORK_GRAPH_BUILD,
     }:
         raise ContractDecodeError("unknown job kind")
     document = load_json_document(data, max_bytes=MAX_ENVELOPE_BYTES)

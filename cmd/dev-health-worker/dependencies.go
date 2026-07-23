@@ -264,6 +264,7 @@ func configureWorkerDependenciesWithSources(
 		return nil, nil
 	}
 	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
+	var activeHandlers []jobruntime.HandlerSpec
 	for _, build := range []func(
 		config.Config,
 		workerDatabase,
@@ -284,11 +285,20 @@ func configureWorkerDependenciesWithSources(
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
 		}
-		if len(handlers) > 0 {
-			dependencies.startup.Handlers = handlers
+		activeHandlers, err = composeHandlerSpecs(activeHandlers, handlers)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
 		}
 		if component != nil {
 			components = append(components, component)
+		}
+	}
+	if len(activeHandlers) > 0 {
+		dependencies.startup.Handlers = activeHandlers
+		if err := dependencies.profileReady(ctx); err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
 		}
 	}
 	if sources.buildSyncCoordinator != nil {
@@ -302,6 +312,34 @@ func configureWorkerDependenciesWithSources(
 		}
 	}
 	return components, nil
+}
+
+func composeHandlerSpecs(
+	existing []jobruntime.HandlerSpec,
+	additional []jobruntime.HandlerSpec,
+) ([]jobruntime.HandlerSpec, error) {
+	result := append([]jobruntime.HandlerSpec(nil), existing...)
+	seen := make(map[string]struct{}, len(existing)+len(additional))
+	for _, handler := range existing {
+		if handler.Kind == "" {
+			return nil, errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[handler.Kind]; duplicate {
+			return nil, errWorkerDependencyUnavailable
+		}
+		seen[handler.Kind] = struct{}{}
+	}
+	for _, handler := range additional {
+		if handler.Kind == "" {
+			return nil, errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[handler.Kind]; duplicate {
+			return nil, errWorkerDependencyUnavailable
+		}
+		seen[handler.Kind] = struct{}{}
+		result = append(result, handler)
+	}
+	return result, nil
 }
 
 type workerMetricsSource struct {

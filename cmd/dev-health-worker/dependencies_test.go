@@ -3,16 +3,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 )
@@ -242,6 +248,117 @@ func TestHeavyHandlersAdvertiseDormantCompiledCapability(t *testing.T) {
 	}
 }
 
+func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, contractRoot := executableHeavyRegistry(t)
+	database := &fakeWorkerDatabase{}
+	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return database, nil
+	}
+	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+		return runtimeRegistry, nil
+	}
+	sources.compiledHandlers = func(string) []jobruntime.HandlerSpec {
+		return runtimeRegistry.Profile("heavy")
+	}
+	reportKinds := map[string]bool{
+		jobcontract.KindReportExecuteOnDemand:  true,
+		jobcontract.KindReportExecuteScheduled: true,
+	}
+	dailyKinds := map[string]bool{
+		jobcontract.KindDailyMetricsDispatch:  true,
+		jobcontract.KindDailyMetricsPartition: true,
+		jobcontract.KindDailyMetricsFinalize:  true,
+	}
+	sources.buildOperational = fakeHandlerBuilder(
+		"reports", selectSpecs(runtimeRegistry.Profile("heavy"), reportKinds),
+	)
+	sources.buildDaily = fakeHandlerBuilder(
+		"daily", selectSpecs(runtimeRegistry.Profile("heavy"), dailyKinds),
+	)
+
+	components, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{Profile: "heavy", RiverDatabaseSchema: "river"},
+		health.NewRegistry(time.Second),
+		sources,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 3 || components[1].Name() != "reports" ||
+		components[2].Name() != "daily" {
+		t.Fatalf("composed components = %#v", components)
+	}
+}
+
+func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	for _, test := range []struct {
+		name   string
+		first  []string
+		second []string
+	}{
+		{
+			name: "duplicate",
+			first: []string{
+				jobcontract.KindReportExecuteOnDemand,
+				jobcontract.KindReportExecuteScheduled,
+			},
+			second: []string{
+				jobcontract.KindReportExecuteScheduled,
+				jobcontract.KindDailyMetricsDispatch,
+				jobcontract.KindDailyMetricsPartition,
+				jobcontract.KindDailyMetricsFinalize,
+			},
+		},
+		{
+			name: "missing",
+			first: []string{
+				jobcontract.KindReportExecuteOnDemand,
+			},
+			second: []string{
+				jobcontract.KindDailyMetricsDispatch,
+				jobcontract.KindDailyMetricsPartition,
+				jobcontract.KindDailyMetricsFinalize,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtimeRegistry, contractRoot := executableHeavyRegistry(t)
+			database := &fakeWorkerDatabase{}
+			sources := productionWorkerDependencySources
+			sources.contractRoot = contractRoot
+			sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+				return database, nil
+			}
+			sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+				return runtimeRegistry, nil
+			}
+			sources.compiledHandlers = func(string) []jobruntime.HandlerSpec {
+				return runtimeRegistry.Profile("heavy")
+			}
+			sources.buildOperational = fakeHandlerBuilder(
+				"first", selectNamedSpecs(runtimeRegistry, test.first),
+			)
+			sources.buildDaily = fakeHandlerBuilder(
+				"second", selectNamedSpecs(runtimeRegistry, test.second),
+			)
+			_, err := configureWorkerDependenciesWithSources(
+				context.Background(),
+				config.Config{Profile: "heavy", RiverDatabaseSchema: "river"},
+				health.NewRegistry(time.Second),
+				sources,
+			)
+			if !errors.Is(err, errWorkerDependencyUnavailable) || !database.closed.Load() {
+				t.Fatalf("configure error=%v database_closed=%t", err, database.closed.Load())
+			}
+		})
+	}
+}
+
 func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{
@@ -386,6 +503,98 @@ type fakeWorkerDatabase struct {
 	telemetryErr     error
 	telemetryConfig  riverstore.QueueTelemetryConfig
 	closed           atomic.Bool
+}
+
+type namedComponent string
+
+func (component namedComponent) Name() string         { return string(component) }
+func (namedComponent) Start(context.Context) error    { return nil }
+func (namedComponent) Shutdown(context.Context) error { return nil }
+
+func fakeHandlerBuilder(
+	name string,
+	specs []jobruntime.HandlerSpec,
+) func(
+	config.Config,
+	workerDatabase,
+	*jobruntime.Registry,
+	jobruntime.Observer,
+	*slog.Logger,
+) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+	return func(
+		config.Config,
+		workerDatabase,
+		*jobruntime.Registry,
+		jobruntime.Observer,
+		*slog.Logger,
+	) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+		return namedComponent(name), specs, nil
+	}
+}
+
+func executableHeavyRegistry(t *testing.T) (*jobruntime.Registry, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "v1")
+	if err := os.CopyFS(root, os.DirFS(defaultContractRoot)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "migration-state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		SchemaVersion int              `json:"schema_version"`
+		Jobs          []map[string]any `json:"jobs"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range document.Jobs {
+		kind, _ := job["kind"].(string)
+		if strings.HasPrefix(kind, "metrics.daily_") ||
+			strings.HasPrefix(kind, "report.execute_") {
+			job["state"] = "go_default"
+			job["route"] = "river"
+		}
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := jobruntime.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry, root
+}
+
+func selectSpecs(
+	specs []jobruntime.HandlerSpec,
+	kinds map[string]bool,
+) []jobruntime.HandlerSpec {
+	var result []jobruntime.HandlerSpec
+	for _, spec := range specs {
+		if kinds[spec.Kind] {
+			result = append(result, spec)
+		}
+	}
+	return result
+}
+
+func selectNamedSpecs(
+	registry *jobruntime.Registry,
+	kinds []string,
+) []jobruntime.HandlerSpec {
+	result := make([]jobruntime.HandlerSpec, 0, len(kinds))
+	for _, kind := range kinds {
+		spec, _ := registry.Descriptor(kind)
+		result = append(result, spec)
+	}
+	return result
 }
 
 func (database *fakeWorkerDatabase) DomainReady(context.Context) error {

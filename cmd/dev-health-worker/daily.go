@@ -57,11 +57,6 @@ func buildDailyWorker(
 	if len(specs) != len(kinds) {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	for _, descriptor := range registry.Profile("heavy") {
-		if descriptor.Executable() && !dailyKind(descriptor.Kind) {
-			return nil, nil, errWorkerDependencyUnavailable
-		}
-	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
 		return nil, nil, errWorkerDependencyUnavailable
@@ -150,10 +145,4 @@ func buildDailyWorker(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 	return dailyWorkerComponent{client: client}, registered, nil
-}
-
-func dailyKind(kind string) bool {
-	return kind == jobcontract.KindDailyMetricsDispatch ||
-		kind == jobcontract.KindDailyMetricsPartition ||
-		kind == jobcontract.KindDailyMetricsFinalize
 }

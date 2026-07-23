@@ -109,7 +109,11 @@ func (producer *Producer) PublishStandalone(
 	if err != nil {
 		return ErrUnavailable
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 	if err := producer.Publish(ctx, tx, kind, envelope); err != nil {
 		return err
 	}

@@ -113,7 +113,12 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	if err := store.CompletePartition(ctx, *first, publisher); err == nil {
 		t.Fatal("stale partition token completed a reclaimed partition")
 	}
-	if err := store.CompletePartition(ctx, *reclaimed, failingFinalizePublisher{publisher}); err == nil {
+	crashCtx, cancelCrash := context.WithCancel(ctx)
+	if err := store.CompletePartition(
+		crashCtx,
+		*reclaimed,
+		failingFinalizePublisher{delegate: publisher, cancel: cancelCrash},
+	); err == nil {
 		t.Fatal("injected crash after finalizer outbox insert unexpectedly committed")
 	}
 	var partitionStatus string
@@ -240,6 +245,7 @@ func (registry dailyTestRegistry) Descriptor(kind string) (jobruntime.Descriptor
 
 type failingFinalizePublisher struct {
 	delegate Publisher
+	cancel   context.CancelFunc
 }
 
 func (publisher failingFinalizePublisher) PublishPartition(
@@ -258,5 +264,6 @@ func (publisher failingFinalizePublisher) PublishFinalizeTx(
 	if err := publisher.delegate.PublishFinalizeTx(ctx, tx, run); err != nil {
 		return err
 	}
+	publisher.cancel()
 	return errors.New("injected crash after outbox insert")
 }

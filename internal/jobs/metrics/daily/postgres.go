@@ -157,7 +157,11 @@ func (store *PostgresStore) CompletePartition(
 	if err != nil {
 		return ErrUnavailable
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 	var run Run
 	err = tx.QueryRow(ctx, `
 SELECT id::text, org_id::text, generation, status

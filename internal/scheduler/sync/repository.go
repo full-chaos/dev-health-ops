@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Repository reads the legacy scheduler tables for shadow comparison only.
-// It does not expose a transaction, lock, claim, or mutation operation.
-type Repository struct{ pool *pgxpool.Pool }
+// Repository reads the legacy scheduler tables for shadow comparison and
+// exposes a separate dormant transaction kernel. Snapshot never locks or
+// writes.
+type Repository struct {
+	pool  *pgxpool.Pool
+	begin beginSchedulerTransaction
+}
 
 type candidateRows interface {
 	Next() bool
@@ -22,7 +27,16 @@ func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("scheduler shadow repository requires a pool")
 	}
-	return &Repository{pool: pool}, nil
+	return &Repository{
+		pool: pool,
+		begin: func(ctx context.Context) (schedulerTransaction, error) {
+			tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+			if err != nil {
+				return nil, err
+			}
+			return postgresSchedulerTransaction{Tx: tx}, nil
+		},
+	}, nil
 }
 
 // Snapshot reads one bounded active-config window then evaluates it locally.

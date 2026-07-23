@@ -328,7 +328,10 @@ The same-snapshot comparison is now implemented by
 `REPEATABLE READ` transaction across the Python and Go observers, and the
 sanitized production-equivalent local result is recorded in
 `v2-sync-dispatch-parity`. That match closes the observer-comparison slice
-only; it is not mutation, handler, scheduler, or canary evidence.
+only; it is not mutation, handler, scheduler, or canary evidence. The
+`sync-parity` Docker target packages the Go binary, Python observer and
+installed runtime, plus the checked-in sync-dispatch contract for repeatable
+container execution.
 
 The first mutation-safety prerequisite is also implemented without activating
 River. Migration `0049` seeds a four-row database route fence with Celery
@@ -341,13 +344,12 @@ the database fence differs from the checked-in route contract. All routes
 remain Celery and there is intentionally no operator route mutation command in
 this slice.
 
-The dormant `internal/scheduler/sync` package adds the corresponding
-read-only schedule-evaluation foundation. It reads at most 101 active
-configuration/job rows to produce a 100-row, deterministically ordered
-snapshot, then evaluates occurrence, manual-only, active-job,
-`is_running`-staleness, and `next_run_at` gates without a transaction, row
-lock, advisory lock, update, enqueue, or process-loop registration. Its
-versioned digest retains candidate identities only in memory. The evaluator
+The dormant `internal/scheduler/sync` package retains its read-only
+schedule-evaluation foundation. It reads at most 101 active configuration/job
+rows to produce a 100-row, deterministically ordered snapshot, then evaluates
+occurrence, manual-only, active-job, `is_running`-staleness, and `next_run_at`
+gates without a transaction or write. Its versioned digest retains candidate
+identities only in memory. The evaluator
 implements a versioned deterministic five-field Croniter subset, including the
 ordinary list/range/step/name forms and the explicitly tested timezone and DST
 behavior. A valid Croniter form outside that grammar is reported as
@@ -356,8 +358,16 @@ unported mixed special-day forms, and optional seconds/year fields. Results
 and their digest are labeled `schedule_and_marker_only`; they are not full
 dispatch eligibility because organization existence, entitlement, occurrence
 claiming, and the dispatch transaction are still Celery-owned work below.
-Nothing imports this package from a command or deployment profile, so its
-presence is comparison infrastructure rather than activation.
+
+A separate dormant transaction kernel now locks an existing-marker due window,
+calls an injected coordinator through the same PostgreSQL transaction, and
+advances the marker only after that durable handoff succeeds. A second dormant
+kernel can claim River-routed sync outbox rows and invoke transaction-local
+at-least-once or `post_sync` mark-before seams. The Go reconciler image packages
+the sync-dispatch contract needed to construct that kernel. Nothing imports
+either kernel from a command or deployment profile, and every checked-in and
+persisted route remains Celery, so these additions are failure-tested
+boundaries rather than activation.
 
 Scheduler activation has an explicit Phase 4 dependency. The atomic
 coordinator insert named by the TRD is `sync.plan_scheduled_config`, whose
@@ -366,9 +376,13 @@ authoritative `JobRun`, `SyncRun`, units, and dispatch outbox in one domain
 transaction. `sync.dispatch_run` cannot fill that role because it requires an
 existing `SyncRun`. Until the scheduled-planning coordinator is implemented,
 Celery Beat and `dispatch_scheduled_syncs` remain the sole mutation owners; the
-Go scheduler must not advance production markers. An earlier canary would
-require a separately reviewed durable occurrence/handoff contract rather than
-an in-memory or best-effort bridge.
+Go scheduler command must not advance production markers. Scheduler activation
+still needs the planner's authoritative domain-state/outbox materialization,
+organization and entitlement policy, missing-marker and catch-up behavior, and
+command-loop wiring. Reconciler activation still needs missing-outbox
+materialization, expired-lease repair, persisted failure backoff, concrete
+River insertion and handlers, command/operator wiring, and the bounded
+`post_sync` quiescence plus external-handoff path.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,
@@ -394,6 +408,12 @@ sync-domain outbox remains part of the work below.
 - Add no-op/shadow transport mode.
 - Keep Celery transport selectable until sync cutover.
 - Expose schedule/reconciler metrics and readiness.
+
+Foundation status: the scheduler transaction handoff and reconciler transport
+kernels exist with unit/failure-injection coverage, the reconciler image
+packages its sync-dispatch contract, and a containerized parity target exists.
+They remain command-unwired and Celery-only; the materialization, backoff,
+concrete River delivery, and `post_sync` activation gaps above remain open.
 
 #### Acceptance
 

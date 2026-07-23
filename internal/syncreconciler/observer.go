@@ -1,6 +1,8 @@
 // Package syncreconciler observes the legacy sync-dispatch outbox during the
-// phased worker migration. It is deliberately read-only: execution, claims,
-// and transport delivery remain owned by the existing Celery reconciler.
+// phased worker migration. Its production observer is deliberately read-only.
+// The package also contains an unreferenced, opt-in transaction kernel for a
+// later River cutover; execution remains owned by Celery until that kernel is
+// explicitly wired by a subsequent phase.
 package syncreconciler
 
 import (

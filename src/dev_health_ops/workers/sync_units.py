@@ -7,7 +7,7 @@ decorator. They take IDs ONLY (no credentials, no DTOs) in their payloads.
 Pipeline:
     plan_sync_run (CHAOS-2511)        -> persists SyncRun + units (status=planned)
     dispatch_sync_run(run_id)         -> DispatchGuard.authorize_run, then routes
-                                         + queues each unit (group/chord)
+                                         + queues each unit independently
     run_sync_unit(unit_id)            -> SyncTaskBootstrap.load + ProviderRuntime,
                                          executes ONE dataset, persists unit status,
                                          updates watermark ONLY if mode==incremental
@@ -51,7 +51,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
 from billiard.exceptions import SoftTimeLimitExceeded
-from celery import chord, group
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -953,10 +952,13 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 "queued_units": len(signatures),
             },
         )
-        callback = getattr(finalize_sync_run, "si")(sync_run_id)
-        callback.set(queue="sync")
         try:
-            chord(group(signatures), callback).apply_async()
+            # Unit terminal writes materialize the durable finalize wakeup.
+            # Do not use a Celery chord/result backend as a coordinator: a
+            # retry or partial publish remains recoverable through the same
+            # SyncDispatchOutbox materializer that covers worker loss.
+            for signature in signatures:
+                getattr(signature, "apply_async")()
             if next_deferred_at is not None:
                 _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
             elif capped_ids:

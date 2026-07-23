@@ -221,17 +221,20 @@ def _patch_reconciler_enqueues(
     return dispatches, finalizers, post_sync
 
 
-def _patch_chord_apply_async(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+def _patch_unit_publish(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     from dev_health_ops.workers import sync_units
 
-    chord_calls: list[str] = []
+    publishes: list[str] = []
 
-    class FakeChord:
+    class FakeSignature:
+        def set(self, *, queue: str) -> FakeSignature:
+            return self
+
         def apply_async(self) -> None:
-            chord_calls.append("apply_async")
+            publishes.append("apply_async")
 
-    monkeypatch.setattr(sync_units, "chord", lambda *_args, **_kwargs: FakeChord())
-    return chord_calls
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda _unit_id: FakeSignature())
+    return publishes
 
 
 def _mark_units_success(session: Session, run: SyncRun) -> None:
@@ -300,13 +303,7 @@ def test_b2_redispatch_loss_after_cap_defer_reconciler_drains_overflow(
     run, units = _seed_run(db_session, unit_count=3, status=SyncRunStatus.PLANNED.value)
     _patch_db_session(monkeypatch, db_session)
     _patch_reconciler_enqueues(monkeypatch)
-    chord_calls: list[str] = []
-
-    class FakeChord:
-        def apply_async(self) -> None:
-            chord_calls.append("apply_async")
-
-    monkeypatch.setattr(sync_units, "chord", lambda *_args, **_kwargs: FakeChord())
+    publish_calls = _patch_unit_publish(monkeypatch)
 
     dispatch_result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -316,7 +313,7 @@ def test_b2_redispatch_loss_after_cap_defer_reconciler_drains_overflow(
     ]
     dispatch_row = _outbox(db_session, run, OUTBOX_KIND_DISPATCH)
     assert dispatch_result == {"status": "dispatched", "queued_units": 1}
-    assert len(chord_calls) == 1
+    assert len(publish_calls) == 1
     assert len(planned_after_cap) == 2
     assert run.status == SyncRunStatus.DISPATCHING.value
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
@@ -618,7 +615,7 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     dispatches, _finalizers, post_sync = _patch_reconciler_enqueues(monkeypatch)
-    chord_calls = _patch_chord_apply_async(monkeypatch)
+    publish_calls = _patch_unit_publish(monkeypatch)
 
     first = sync_reconciler.reconcile_sync_dispatch(limit=10)
     sync_units.dispatch_sync_run(str(dispatch_run.id))
@@ -631,7 +628,7 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     assert first["relayed_dispatch"] == 1
     assert second["relayed_dispatch"] == 0
     assert dispatches == [((str(dispatch_run.id),), "sync")]
-    assert chord_calls == ["apply_async"]
+    assert publish_calls == ["apply_async"]
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
     assert dispatch_row.attempts == 1
     assert dispatch_units[0].attempts == 0
@@ -793,11 +790,7 @@ def test_a3_over_cap_backfill_queues_overflow_rearm_and_reconciler_drains(
     _patch_db_session(monkeypatch, db_session)
     _patch_reconciler_enqueues(monkeypatch)
 
-    class FakeChord:
-        def apply_async(self) -> None:
-            return None
-
-    monkeypatch.setattr(sync_units, "chord", lambda *_args, **_kwargs: FakeChord())
+    _patch_unit_publish(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -872,11 +865,11 @@ def test_a4_worker_dies_after_running_bucket_frees_and_run_redrives_terminal(
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
 
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
-    chord_calls = _patch_chord_apply_async(monkeypatch)
+    publish_calls = _patch_unit_publish(monkeypatch)
     sync_units.dispatch_sync_run(str(run.id))
     db_session.refresh(units[1])
     assert units[1].status == SyncRunUnitStatus.DISPATCHING.value
-    assert chord_calls == ["apply_async"]
+    assert publish_calls == ["apply_async"]
     units[1].status = SyncRunUnitStatus.SUCCESS.value
     units[1].lease_owner = None
     units[1].lease_expires_at = None

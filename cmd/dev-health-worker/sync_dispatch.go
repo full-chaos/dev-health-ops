@@ -52,7 +52,11 @@ func buildSyncCoordinatorWorker(
 		return nil, errWorkerDependencyUnavailable
 	}
 	workers := river.NewWorkers()
-	if err := syncdispatchruntime.RegisterWorkers(workers, bridge); err != nil {
+	// Native post-sync registration is intentionally fail-closed until the
+	// package-owned daily, remaining, and work-graph transaction writers are
+	// bound below as one service.
+	var postSync *syncdispatchruntime.NativePostSyncService
+	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync); err != nil {
 		return nil, errWorkerDependencyUnavailable
 	}
 	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{

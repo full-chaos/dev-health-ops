@@ -23,7 +23,6 @@ var (
 type CoordinatorBridge interface {
 	Dispatch(context.Context, DispatchSyncRunArgs) error
 	Finalize(context.Context, FinalizeSyncRunArgs) error
-	PostSync(context.Context, PostSyncArgs) error
 	Discover(context.Context, ReferenceDiscoveryArgs) error
 	TeamAutoImport(context.Context, DomainReference) error
 }
@@ -72,10 +71,6 @@ func (bridge *HTTPBridge) Dispatch(ctx context.Context, args DispatchSyncRunArgs
 
 func (bridge *HTTPBridge) Finalize(ctx context.Context, args FinalizeSyncRunArgs) error {
 	return bridge.call(ctx, "/api/internal/worker-sync/finalize", bridgeReferenceFor(args))
-}
-
-func (bridge *HTTPBridge) PostSync(ctx context.Context, args PostSyncArgs) error {
-	return bridge.call(ctx, "/api/internal/worker-sync/post-sync", bridgeReferenceFor(args))
 }
 
 func (bridge *HTTPBridge) Discover(ctx context.Context, args ReferenceDiscoveryArgs) error {

@@ -14,13 +14,13 @@ var ErrWorkerRegistration = errors.New("sync dispatch worker registration failed
 // RegisterWorkers adds all four guarded at-least-once coordinator consumers.
 // Each worker carries only a durable domain reference and delegates execution
 // through the authenticated compatibility boundary.
-func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge) error {
-	if workers == nil || bridge == nil {
+func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge, postSync *NativePostSyncService) error {
+	if workers == nil || bridge == nil || postSync == nil {
 		return ErrWorkerRegistration
 	}
 	if river.AddWorkerSafely(workers, &dispatchWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &finalizeWorker{bridge: bridge}) != nil ||
-		river.AddWorkerSafely(workers, &postSyncWorker{bridge: bridge}) != nil ||
+		river.AddWorkerSafely(workers, &postSyncWorker{service: postSync}) != nil ||
 		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &teamAutoimportWorker{bridge: bridge}) != nil {
 		return ErrWorkerRegistration
@@ -64,14 +64,14 @@ func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeS
 
 type postSyncWorker struct {
 	river.WorkerDefaults[PostSyncArgs]
-	bridge CoordinatorBridge
+	service *NativePostSyncService
 }
 
 func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncArgs]) error {
-	if worker == nil || worker.bridge == nil || job == nil {
+	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
 	}
-	return worker.bridge.PostSync(ctx, job.Args)
+	return worker.service.Fanout(ctx, job.Args)
 }
 
 type referenceDiscoveryWorker struct {

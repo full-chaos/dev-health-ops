@@ -76,3 +76,21 @@ func TestProductTelemetryRejectsPIIPayloadBeforeSinkWrite(t *testing.T) {
 		t.Fatalf("PII result = %v rows=%v", err, sink.batch.rows)
 	}
 }
+
+func TestInternalIngestCommitsUsesReplacingKeySinkBeforeAcknowledgement(t *testing.T) {
+	sink := &productSink{batch: &productBatch{}}
+	handler, err := NewInternalIngestHandler(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Handle(context.Background(), streamrunner.Message{Stream: "ingest:org-1:commits", Fields: map[string]string{"payload": `{"org_id":"org-1","repo_url":"https://example.test/acme/repo","items":[{"hash":"abc","author_when":"2026-07-23T12:00:00Z"}]}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sink.batch.sent || len(sink.batch.rows) != 1 {
+		t.Fatalf("internal sink = %#v", sink.batch)
+	}
+	if sink.batch.rows[0][1] != "abc" {
+		t.Fatalf("commit hash = %v", sink.batch.rows[0][1])
+	}
+}

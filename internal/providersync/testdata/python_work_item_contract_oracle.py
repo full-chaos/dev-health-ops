@@ -42,7 +42,10 @@ def selected_module(source: pathlib.Path) -> dict[str, Any]:
         "_credentials_mapping": lambda _context: {},
         "_gitlab_credentials": lambda _context: ("token", "https://gitlab.example"),
     }
-    exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), "exec"), namespace)
+    exec(
+        compile(ast.Module(body=selected, type_ignores=[]), str(source), "exec"),
+        namespace,
+    )
     return namespace
 
 

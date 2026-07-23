@@ -23,6 +23,7 @@ import (
 )
 
 const (
+	providerUnitQueue         = "sync.provider"
 	providerUnitLeaseDuration = 2 * time.Minute
 	providerUnitHeartbeat     = 30 * time.Second
 	providerUnitBudgetTTL     = 15 * time.Minute
@@ -199,14 +200,9 @@ func buildProviderSyncWorker(
 	}
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
-		&river.Config{
-			Logger: logger,
-			Queues: map[string]river.QueueConfig{
-				"sync": {MaxWorkers: 2},
-			},
-			Schema:  cfg.RiverDatabaseSchema,
-			Workers: workers,
-		},
+		providerSyncRiverConfig(
+			logger, workers, cfg.RiverDatabaseSchema,
+		),
 	)
 	if err != nil {
 		closeDependencies()
@@ -215,6 +211,21 @@ func buildProviderSyncWorker(
 	return &providerSyncWorkerComponent{
 		client: client, clickhouse: clickhouseConnection, valkey: valkeyClient,
 	}, []jobruntime.HandlerSpec{adapter.Spec()}, nil
+}
+
+func providerSyncRiverConfig(
+	logger *slog.Logger,
+	workers *river.Workers,
+	schema string,
+) *river.Config {
+	return &river.Config{
+		Logger: logger,
+		Queues: map[string]river.QueueConfig{
+			providerUnitQueue: {MaxWorkers: 2},
+		},
+		Schema:  schema,
+		Workers: workers,
+	}
 }
 
 type providerUnitTenantScope struct{}

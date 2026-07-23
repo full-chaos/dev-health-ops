@@ -86,7 +86,7 @@ func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, e
 		if err := strictScope(raw, &value); err != nil {
 			return nil, err
 		}
-		if value.Version != ScopeVersion || value.HistoryDays < 1 || value.HistoryDays > 365 || value.Simulations < 100 || value.Simulations > 100000 || (value.AllTeams && (value.TeamID != nil || value.WorkScopeID != nil)) || (!value.AllTeams && value.TeamID == nil && value.WorkScopeID == nil) || !optionalUUID(value.TeamID) || !optionalUUID(value.WorkScopeID) || !optionalPositive(value.TargetItems) || !optionalDate(value.TargetDate) {
+		if value.Version != ScopeVersion || value.HistoryDays < 1 || value.HistoryDays > 365 || value.Simulations < 100 || value.Simulations > 100000 || (value.AllTeams && (value.TeamID != nil || value.WorkScopeID != nil)) || (!value.AllTeams && value.TeamID == nil && value.WorkScopeID == nil) || !optionalUUID(value.TeamID) || !boundedOptional(value.WorkScopeID, 256) || !optionalPositive(value.TargetItems) || !optionalDate(value.TargetDate) {
 			return nil, errors.New("invalid capacity scope")
 		}
 		return json.Marshal(value)

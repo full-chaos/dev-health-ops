@@ -64,10 +64,15 @@ class CapacityScope(_StrictScope):
     simulations: int = Field(ge=100, le=100_000)
     all_teams: bool
 
-    @field_validator("team_id", "work_scope_id")
+    @field_validator("team_id")
     @classmethod
-    def validate_uuid(cls, value: str | None) -> str | None:
+    def validate_team_id(cls, value: str | None) -> str | None:
         return None if value is None else _uuid_text(value)
+
+    @field_validator("work_scope_id")
+    @classmethod
+    def validate_work_scope_id(cls, value: str | None) -> str | None:
+        return None if value is None else _bounded_text(value, maximum=256)
 
     @field_validator("target_date")
     @classmethod

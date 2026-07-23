@@ -38,6 +38,16 @@ def test_python_scopes_match_go_golden() -> None:
             },
         ),
         (
+            "capacity",
+            {
+                "version": 1,
+                "all_teams": False,
+                "work_scope_id": "",
+                "history_days": 90,
+                "simulations": 10_000,
+            },
+        ),
+        (
             "complexity",
             {"version": 1, "day": "2026-07-23", "backfill_days": 2},
         ),

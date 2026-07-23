@@ -30,6 +30,7 @@ func TestFamilyScopesCanonicalizeProductionDerivedInputs(t *testing.T) {
 func TestFamilyScopesRejectUnknownFieldsAndBounds(t *testing.T) {
 	for _, test := range []struct{ family, raw string }{
 		{"capacity", `{"version":1,"all_teams":true,"history_days":0,"simulations":10000}`},
+		{"capacity", `{"version":1,"all_teams":false,"work_scope_id":"","history_days":90,"simulations":10000}`},
 		{"complexity", `{"version":1,"day":"2026-07-23","backfill_days":2}`},
 		{"dora", `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"mongo","interval":"daily"}`},
 		{"release_impact", `{"version":1,"day":"2026-07-23","backfill_days":1,"recomputation_window_days":31}`},

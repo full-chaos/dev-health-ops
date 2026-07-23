@@ -9,10 +9,11 @@
         "version": 1,
         "all_teams": false,
         "team_id": "11111111-1111-4111-8111-111111111111",
+        "work_scope_id": "jira:ABC",
         "history_days": 90,
         "target_items": 12
       },
-      "canonical": "{\"all_teams\":false,\"history_days\":90,\"simulations\":10000,\"target_date\":\"2026-07-30\",\"target_items\":12,\"team_id\":\"11111111-1111-4111-8111-111111111111\",\"version\":1}"
+      "canonical": "{\"all_teams\":false,\"history_days\":90,\"simulations\":10000,\"target_date\":\"2026-07-30\",\"target_items\":12,\"team_id\":\"11111111-1111-4111-8111-111111111111\",\"version\":1,\"work_scope_id\":\"jira:ABC\"}"
     },
     {
       "family": "complexity",

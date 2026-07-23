@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -206,7 +207,13 @@ func configureStreamRunnerDependenciesWithSources(
 	}
 	storage, err := sources.openStorage(ctx, cfg)
 	if err != nil || storage == nil {
-		return nil, errStreamDependencyUnavailable
+		return nil, processreadiness.RegisterUnavailable(
+			registry,
+			"clickhouse",
+			"domain_postgres",
+			"stream_consumer",
+			"valkey",
+		)
 	}
 	closeOnError := true
 	defer func() {
@@ -214,16 +221,40 @@ func configureStreamRunnerDependenciesWithSources(
 			storage.Close()
 		}
 	}()
-	for _, check := range []struct {
+	storageChecks := []struct {
 		name  string
 		check health.CheckFunc
 	}{
 		{name: "clickhouse", check: storage.ClickHouseReady},
 		{name: "domain_postgres", check: storage.DomainPostgresReady},
 		{name: "valkey", check: storage.ValkeyReady},
-	} {
+	}
+	streamConsumerConfigured := false
+	checks := append(storageChecks, struct {
+		name  string
+		check health.CheckFunc
+	}{
+		name: "stream_consumer", check: func(context.Context) error {
+			if !streamConsumerConfigured {
+				return errStreamDependencyUnavailable
+			}
+			return nil
+		},
+	})
+	for _, check := range checks {
 		if err := registry.RegisterRequired(check.name, check.check); err != nil {
 			return nil, err
+		}
+	}
+	bootstrapTimeout := cfg.HealthCheckTimeout
+	if bootstrapTimeout <= 0 {
+		bootstrapTimeout = 2 * time.Second
+	}
+	bootstrapContext, cancelBootstrap := context.WithTimeout(ctx, bootstrapTimeout)
+	defer cancelBootstrap()
+	for _, check := range storageChecks {
+		if check.check(bootstrapContext) != nil {
+			return nil, nil
 		}
 	}
 
@@ -249,7 +280,10 @@ func configureStreamRunnerDependenciesWithSources(
 		} {
 			runner, err := buildStreamRunner(storage, registry, specification.kind, specification.config)
 			if err != nil {
-				return nil, err
+				if errors.Is(err, streamrunner.ErrInvalidConfig) {
+					return nil, err
+				}
+				return nil, nil
 			}
 			components = append(components, runner)
 		}
@@ -261,13 +295,17 @@ func configureStreamRunnerDependenciesWithSources(
 			externalIngestRunnerConfig(replicas),
 		)
 		if err != nil {
-			return nil, err
+			if errors.Is(err, streamrunner.ErrInvalidConfig) {
+				return nil, err
+			}
+			return nil, nil
 		}
 		components = append(components, storage.ControlComponents()...)
 		components = append(components, runner)
 	default:
 		return nil, streamrunner.ErrInvalidConfig
 	}
+	streamConsumerConfigured = true
 	closeOnError = false
 	return components, nil
 }

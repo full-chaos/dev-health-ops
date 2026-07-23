@@ -82,6 +82,12 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, descriptor := range productionRegistry.Descriptors() {
+		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
+			if descriptor.Route != "river_canary" || descriptor.MigrationState != "canary" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
+				t.Fatalf("provider-unit production canary policy drifted: %#v", descriptor)
+			}
+			continue
+		}
 		if descriptor.Route != "celery" || descriptor.Executable() {
 			t.Fatalf("checked-in production route became executable: %#v", descriptor)
 		}

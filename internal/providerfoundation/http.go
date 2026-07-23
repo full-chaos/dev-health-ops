@@ -133,7 +133,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		}()
 	}
 	target, err := c.BaseURL.Parse(path)
-	if err != nil || target.Host != c.BaseURL.Host {
+	if err != nil || target.Host != c.BaseURL.Host || target.Scheme != c.BaseURL.Scheme {
 		return nil, ErrCredentialInvalid
 	}
 	var last *ProviderError

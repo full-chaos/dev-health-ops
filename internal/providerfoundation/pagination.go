@@ -12,6 +12,8 @@ import (
 )
 
 const maxProviderPageBody = 32 << 20
+const maximumProviderPages = 10_000
+const maximumGitLabPerPage = 100
 
 var ErrPaginationInvalid = errors.New("provider pagination response is invalid")
 
@@ -39,7 +41,8 @@ func CollectGitHubLinkPages(
 	client *HTTPClient,
 	options GitHubPageOptions,
 ) (PageCollection, error) {
-	if ctx == nil || client == nil || strings.TrimSpace(options.Path) == "" || options.MaxPages < 1 {
+	if ctx == nil || client == nil || strings.TrimSpace(options.Path) == "" ||
+		options.MaxPages < 1 || options.MaxPages > maximumProviderPages {
 		return PageCollection{}, ErrPaginationInvalid
 	}
 	next, err := pageURL(options.Path, options.Query)
@@ -84,7 +87,8 @@ func CollectGitLabPageParamPages(
 	options GitLabPageOptions,
 ) (PageCollection, error) {
 	if ctx == nil || client == nil || strings.TrimSpace(options.Path) == "" ||
-		options.PerPage < 1 || options.MaxPages < 1 {
+		options.PerPage < 1 || options.PerPage > maximumGitLabPerPage ||
+		options.MaxPages < 1 || options.MaxPages > maximumProviderPages {
 		return PageCollection{}, ErrPaginationInvalid
 	}
 	page := 1

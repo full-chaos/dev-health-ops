@@ -2,6 +2,7 @@ package providerfoundation
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -59,6 +60,48 @@ func TestGitHubLinkPaginationReportsHardCapWithoutExtraCall(t *testing.T) {
 	}
 	if !result.CapReached || result.Pages != 1 || len(doer.requests) != 1 {
 		t.Fatalf("result=%+v calls=%d", result, len(doer.requests))
+	}
+}
+
+func TestGitHubLinkPaginationRejectsSameHostSchemeDowngradeBeforeRequest(t *testing.T) {
+	t.Parallel()
+	doer := &paginationDoer{responses: []paginationResponse{{
+		body:    `[{"id":1}]`,
+		headers: http.Header{"Link": {`<http://api.github.com/items?page=2>; rel="next"`}},
+	}}}
+	client := paginationClient(t, "github", "https://api.github.com", doer)
+	_, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
+		Path: "/items", MaxPages: 2,
+	})
+	if !errors.Is(err, ErrCredentialInvalid) {
+		t.Fatalf("scheme downgrade error=%v", err)
+	}
+	if len(doer.requests) != 1 {
+		t.Fatalf("downgraded request reached doer: calls=%d", len(doer.requests))
+	}
+}
+
+func TestPaginationRejectsExcessiveBoundsWithoutRequests(t *testing.T) {
+	t.Parallel()
+	doer := &paginationDoer{}
+	client := paginationClient(t, "github", "https://api.github.com", doer)
+	if _, err := CollectGitHubLinkPages(context.Background(), client, GitHubPageOptions{
+		Path: "/items", MaxPages: maximumProviderPages + 1,
+	}); !errors.Is(err, ErrPaginationInvalid) {
+		t.Fatalf("GitHub excessive cap error=%v", err)
+	}
+	if _, err := CollectGitLabPageParamPages(context.Background(), client, GitLabPageOptions{
+		Path: "/items", PerPage: maximumGitLabPerPage + 1, MaxPages: 1,
+	}); !errors.Is(err, ErrPaginationInvalid) {
+		t.Fatalf("GitLab excessive per_page error=%v", err)
+	}
+	if _, err := CollectGitLabPageParamPages(context.Background(), client, GitLabPageOptions{
+		Path: "/items", PerPage: 1, MaxPages: maximumProviderPages + 1,
+	}); !errors.Is(err, ErrPaginationInvalid) {
+		t.Fatalf("GitLab excessive cap error=%v", err)
+	}
+	if len(doer.requests) != 0 {
+		t.Fatalf("invalid pagination reached doer: calls=%d", len(doer.requests))
 	}
 }
 

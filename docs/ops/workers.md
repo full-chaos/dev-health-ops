@@ -191,22 +191,26 @@ schedule marker only after that durable handoff succeeds. Its public
 repository constructor embeds an opaque Celery/`coexistence_disabled`
 ownership policy, so `HandoffDue` rejects mutation before beginning a
 transaction; Go mutation authority requires a reviewed package-private source
-change. The dormant lifecycle loop exists, but its checked-in composition has
-no mutation repository or coordinator factory. An unsupported or invalid cron
-candidate rolls back the entire locked window with readiness closed, so Celery
-remains sole owner instead of allowing a healthy-but-starved Go window. The
-sync reconciler kernel first commits a bounded claim set, then
+change. The scheduler command now retains a production loop factory that
+composes the mutation repository, occurrence coordinator, database lifecycle,
+and readiness checks. Both private activation gates remain checked-in false,
+so the factory is unreachable and the disabled command does not open
+PostgreSQL. An unsupported or invalid cron candidate rolls back the entire
+locked window with readiness closed, so Celery remains sole owner instead of
+allowing a healthy-but-starved Go window. The sync reconciler kernel first commits a bounded claim set, then
 delivers and terminally marks each at-least-once claim in its own fresh
 transaction, while `post_sync` is terminally marked and committed before the
-external handoff begins. Neither kernel is constructed by the scheduler or
-reconciler command.
+external handoff begins. The reconciler command retains a complete
+repair-materialize-deliver-observe mutation-pipeline factory, but its private
+activation gate remains checked-in false and the running command selects the
+read-only shadow stepper.
 
 This remains a fail-closed selector foundation, not River activation. All
 persisted and checked-in routes remain Celery, deployment profiles remain
 `coexistence_disabled` with zero replicas, and no Go sync handler is compiled.
 Do not change a route to River: it would strand the wakeup. Activation still
-requires scheduler coordinator/policy composition, reconciler loop wiring,
-concrete River publishers, handlers, and capabilities, and a cross-process
+requires scheduler coordinator policy parity, concrete River publishers,
+handlers, and capabilities, and a cross-process
 `post_sync` quiescer/controller plus external-handoff binding.
 
 For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`

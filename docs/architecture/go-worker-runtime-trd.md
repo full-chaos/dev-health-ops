@@ -582,8 +582,8 @@ constructs the Go coordinator. The public scheduler repository constructor
 embeds an opaque Celery/`coexistence_disabled` ownership policy, and its
 transaction kernel rejects mutation before opening a transaction. Constructing
 Go mutation authority requires a reviewed package-private source change. Until
-an activation review enables the consumer and supplies the remaining scheduler
-lifecycle composition, unsupported-cron policy parity, and coordinator policy
+an activation review enables the consumer and supplies the remaining
+unsupported-cron policy parity and coordinator policy
 parity, Celery Beat plus `dispatch_scheduled_syncs` remains the only mutation
 owner; a Go scheduler must not advance a production marker or claim schedule
 ownership. The dormant loop rolls back the entire locked window and keeps
@@ -595,8 +595,11 @@ snapshot in memory. Beside it, an unregistered transaction kernel now locks a
 bounded due window with `FOR UPDATE ... SKIP LOCKED`, derives the shared
 config-and-occurrence identity, invokes an injected coordinator through the
 same PostgreSQL transaction, and advances `next_run_at` only after that
-coordinator reports a durable handoff. No scheduler command constructs or
-calls this kernel. The active Python path remains responsible for
+coordinator reports a durable handoff. The scheduler command retains a
+production factory that composes this kernel, the occurrence coordinator, and
+database lifecycle, but both private source-review activation gates remain
+checked-in false, so the factory is unreachable and the disabled command does
+not open PostgreSQL. The active Python path remains responsible for
 missing-marker creation, organization and entitlement policy, authoritative
 plan materialization, and catch-up behavior. Celery Beat and
 `dispatch_scheduled_syncs` therefore remain the sole production scheduler.
@@ -726,8 +729,10 @@ claim-token predicates fail closed at the terminal write. The checked-in
 contract currently contains no River route, so even explicit mutation mode
 returns without opening a write transaction.
 
-The reconciler command now reaches this package only through a shadow adapter
-whose kernel retains no transaction-begin function. The existing observer
+The reconciler command still selects a shadow adapter whose kernel retains no
+transaction-begin function. It also retains a source-gated mutation factory
+that composes lease repair, materialization, delivery, and observation. The
+private activation gate remains checked-in false, the existing observer
 readiness and metrics contract is unchanged, and there is no environment
 toggle that can select mutation.
 
@@ -739,8 +744,9 @@ materializer does not inspect route ownership, claim an outbox row, or publish a
 transport job, so running its tests beside Celery does not create a second
 execution owner.
 
-This kernel is not the complete reconciler loop. A command-unwired
-expired-domain-lease repair step now preserves the eligible Linear-backfill
+The source-gated mutation pipeline is the bounded reconciler step, but it has
+no checked-in activation authority or River callbacks. Its
+expired-domain-lease repair stage preserves the eligible Linear-backfill
 retry matrix and serializes provider/org/cost-class mutations. A separate
 persisted failure recorder can rearm an already committed River claim with
 bounded Python-parity backoff. The queue-control trust boundary is proven with

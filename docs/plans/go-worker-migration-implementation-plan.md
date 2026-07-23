@@ -399,24 +399,28 @@ state in the canonical order before materializing the authoritative plan. It
 validates the versioned identity, applies persisted retry backoff to transient
 planner failures, and quarantines malformed or exhausted occurrences so a
 poisoned prefix cannot strand later work. Both its Beat entry and call-time
-execution gate default off. No command constructs the Go coordinator and the
-consumer is not enabled by any checked-in profile, so this is still not
-authorization to advance production markers. The public scheduler repository
+execution gate default off. The scheduler command retains a production factory
+that can construct the Go coordinator and mutation repository, but both
+private source-review activation gates remain checked-in false; the consumer
+is not enabled by any checked-in profile. This is still not authorization to
+advance production markers. The public scheduler repository
 constructor embeds an opaque Celery/`coexistence_disabled` ownership policy,
 and `HandoffDue` rejects mutation before opening a transaction. Only
 package-private test and future activation composition can construct Go
 mutation authority. Scheduler activation needs a reviewed source change,
-lifecycle factory composition, unsupported-cron policy parity, remaining
+unsupported-cron policy parity, remaining
 coordinator policy parity, and an explicit review that enables the consumer
 before Go may own a marker. The dormant loop currently rolls back a whole
 locked window and keeps readiness closed if any cron requires Celery fallback.
 
-The Go reconciler command now constructs only an explicit no-begin shadow
-adapter around the transport kernel. A separate command-unwired materializer
+The Go reconciler command still selects an explicit no-begin shadow adapter.
+Its retained source-gated mutation factory composes lease repair,
+materialization, transport delivery, and post-mutation observation, but the
+private activation gate remains checked-in false. The materializer
 can reconstruct bounded dispatch, finalize, discovery, and missing post-sync
 wakeups in one domain transaction. It never reads routes, claims rows, or
 publishes work; existing pending rows and at-most-once post-sync rows retain
-their current semantics. A second command-unwired repair step preserves the
+their current semantics. The composed repair step preserves the
 current eligible Linear-backfill expired-lease transition, including bounded
 retry exhaustion and provider/org/cost-class serialization. A persisted
 publish-failure recorder can rearm an already committed River claim with the
@@ -465,9 +469,11 @@ kernels exist with unit/failure-injection coverage, the reconciler image
 packages its sync-dispatch contract, and a containerized parity target exists.
 The Python scheduler now persists idempotent occurrences and its complete plan
 atomically. A durable, default-off Python consumer can finish Go-authored
-occurrences without retrying poison rows forever. The reconciler command is
-wired only to the shadow adapter, while the Go outbox materializer and
-expired-lease repair remain command-unwired. Persisted transport-failure
+occurrences without retrying poison rows forever. The reconciler command
+selects the shadow adapter by default; its retained source-gated mutation
+factory composes expired-lease repair, outbox materialization, delivery, and
+observation but remains unreachable while the private activation gate is
+false. Persisted transport-failure
 backoff and the least-privilege River transaction boundary are implemented as
 dormant primitives, but the kernel now claims first and then performs fresh
 per-claim insert/mark transactions, with `post_sync` committed before its
@@ -478,7 +484,7 @@ policy; an unsupported or invalid cron currently rolls back the whole Go
 window and keeps readiness closed. The typed `syncdispatchruntime` generation
 tracker is only a publisher-owned local drain API today. Audited route pause/drain/resume
 controls are implemented with an empty activation-capability registry. Every
-route remains Celery-only; scheduler lifecycle factory/coordinator parity,
+route remains Celery-only; scheduler coordinator policy parity,
 concrete River delivery capabilities, and the cross-process `post_sync`
 quiescer/controller plus external-handoff binding remain open.
 

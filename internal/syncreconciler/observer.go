@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,7 +24,7 @@ const (
 
 	// PredicateVersion names the exact due-row predicate and ordering shared
 	// with Python claim_due_outbox_rows.
-	PredicateVersion = "sync_dispatch_due_v1"
+	PredicateVersion = "sync_dispatch_active_celery_due_v2"
 	// DigestVersion names the canonical metadata and candidate framing used by
 	// CandidateDigest.
 	DigestVersion = "sync_dispatch_candidate_digest_v1"
@@ -126,6 +127,30 @@ func NewObserver(pool *pgxpool.Pool, registry Registry) (*Observer, error) {
 	return newObserver(registry, func(ctx context.Context, now time.Time, limit int) ([]candidateRow, error) {
 		return readObservation(ctx, pool, now, limit)
 	})
+}
+
+// ObserveSnapshot reads one bounded candidate window through an existing
+// PostgreSQL transaction. Callers use this only for offline parity capture:
+// the transaction must already be read-only and REPEATABLE READ, and may have
+// exported its snapshot for another reader. This function never begins,
+// commits, rolls back, claims, or otherwise mutates that transaction.
+func ObserveSnapshot(
+	ctx context.Context,
+	tx pgx.Tx,
+	registry Registry,
+	now time.Time,
+	limit int,
+) (Observation, error) {
+	if tx == nil {
+		return Observation{}, ErrInvalidConfiguration
+	}
+	observer, err := newObserver(registry, func(ctx context.Context, now time.Time, limit int) ([]candidateRow, error) {
+		return readObservationFrom(ctx, tx, now, limit)
+	})
+	if err != nil {
+		return Observation{}, err
+	}
+	return observer.Step(ctx, now, limit)
 }
 
 func newObserver(registry Registry, read readFunc) (*Observer, error) {
@@ -297,7 +322,23 @@ func readObservation(
 	now time.Time,
 	limit int,
 ) ([]candidateRow, error) {
-	rows, err := pool.Query(ctx, observationSQL, now, limit)
+	return readObservationFrom(ctx, pool, now, limit)
+}
+
+type observationQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func readObservationFrom(
+	ctx context.Context,
+	queryer observationQueryer,
+	now time.Time,
+	limit int,
+) ([]candidateRow, error) {
+	if queryer == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	rows, err := queryer.Query(ctx, observationSQL, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -322,8 +363,12 @@ func readObservation(
 const observationSQL = `
 SELECT outbox.id::text, outbox.kind, outbox.claim_expires_at
 FROM public.sync_dispatch_outbox AS outbox
+JOIN public.sync_dispatch_transport_routes AS route
+    ON route.kind = outbox.kind
 WHERE outbox.status = 'pending'
     AND outbox.available_at <= $1
+    AND route.transport = 'celery'
+    AND route.paused = FALSE
     AND (outbox.claim_expires_at IS NULL OR outbox.claim_expires_at <= $1)
 ORDER BY outbox.available_at, outbox.id
 LIMIT $2

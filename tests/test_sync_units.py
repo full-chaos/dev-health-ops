@@ -45,6 +45,7 @@ from dev_health_ops.sync.dispatch_outbox import (
 )
 from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
+from tests._helpers import seed_sync_dispatch_transport_routes
 
 
 def _aware(value: datetime) -> datetime:
@@ -58,6 +59,7 @@ def db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        seed_sync_dispatch_transport_routes(session)
         yield session
     engine.dispose()
 

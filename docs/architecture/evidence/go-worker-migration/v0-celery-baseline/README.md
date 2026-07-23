@@ -62,6 +62,15 @@ recorder. Compare matching measurement paths and capture windows; do not
 compare a five-minute resource sample with a one-shot value or an unrelated
 historical log window.
 
+The read-only observer comparison now freezes one UTC cutoff and one limit
+before either runtime reads. It imports one exported PostgreSQL snapshot in
+Python and reads that same snapshot through the Go exporter transaction, then
+compares only the redacted parity fields: cutoff, limit, predicate and digest
+versions, digest, truncated state, sampled count, and per-kind aggregate
+counts. Raw candidate IDs, payloads, tenant data, claim tokens, and source URLs
+are never compared or stored. The first result is recorded in the
+[v2 sync-dispatch parity evidence](../v2-sync-dispatch-parity/README.md).
+
 ## Evidence boundary
 
 The production-equivalent designation applies to this shared dataset and
@@ -104,7 +113,8 @@ alternate source, not a requirement for the designated Compose baseline.
 
 ## Gate
 
-- Phase 1 foundation is open while baseline capture and comparisons continue.
+- Phase 1 foundation is complete. Baseline capture and comparisons continue
+  as independent promotion evidence.
 - `capture.json` is authoritative evidence for the designated
   production-equivalent session.
 - Production canary approval remains false until required observability gaps

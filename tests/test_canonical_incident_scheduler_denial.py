@@ -13,6 +13,7 @@ from dev_health_ops.models import (
     JobStatus,
     ScheduledJob,
     SyncDispatchOutbox,
+    SyncDispatchTransportRoute,
     SyncRun,
     SyncRunReferenceDiscovery,
     SyncRunStatus,
@@ -161,6 +162,76 @@ def test_scheduler_terminalizes_plan_when_feature_flips_before_enqueue(
     assert all(row.claim_token is None for row in outboxes)
     assert all(row.claim_expires_at is None for row in outboxes)
     assert graph.config.last_sync_at == original_last_sync_at
+
+
+def test_feature_denial_clears_transport_binding_from_active_claim(
+    canonical_state: CanonicalState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.licensing import FeatureDecisionReason
+    from dev_health_ops.sync.canonical_incident_gate import (
+        CanonicalIncidentFeatureDisabledError,
+    )
+    from dev_health_ops.workers import sync_scheduler
+    from dev_health_ops.workers.sync_units import terminalize_feature_disabled_plan
+
+    state = canonical_state
+    graph = _seed_due_schedule(state)
+    assert graph.config is not None
+    for kind in (
+        "dispatch_sync_run",
+        "finalize_sync_run",
+        "post_sync",
+        "reference_discovery",
+    ):
+        state.session.add(
+            SyncDispatchTransportRoute(
+                kind=kind,
+                transport="celery",
+                generation=1,
+                paused=False,
+                paused_at=None,
+                rollback_transport="celery",
+            )
+        )
+    state.session.flush()
+    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)
+
+    assert sync_scheduler._maybe_dispatch_config(
+        state.session,
+        graph.config,
+        NOW,
+    )
+    run = state.session.query(SyncRun).one()
+    claim = claim_due_outbox_rows(
+        state.session,
+        now=datetime.now(timezone.utc),
+        limit=10,
+    )[0]
+    claimed_row = state.session.get(SyncDispatchOutbox, claim.id)
+    assert claimed_row is not None
+    assert claimed_row.claim_transport == "celery"
+    assert claimed_row.claim_route_generation == 1
+
+    disable_feature_for_org(state, state.enabled_org_id, commit=False)
+    terminalize_feature_disabled_plan(
+        state.session,
+        str(run.id),
+        CanonicalIncidentFeatureDisabledError(
+            FeatureDecisionReason.ORG_OVERRIDE_DISABLED
+        ),
+    )
+    state.session.refresh(claimed_row)
+
+    assert claimed_row.status == "dispatched"
+    assert claimed_row.last_error == "feature_disabled"
+    assert claimed_row.claim_token is None
+    assert claimed_row.claim_expires_at is None
+    assert claimed_row.claim_transport is None
+    assert claimed_row.claim_route_generation is None
+    assert claimed_row.dispatched_transport is None
+    assert claimed_row.dispatched_route_generation is None
+    assert claimed_row.transport_job_id is None
 
 
 def test_scheduler_feature_denial_is_idempotent_and_not_reconciler_claimable(

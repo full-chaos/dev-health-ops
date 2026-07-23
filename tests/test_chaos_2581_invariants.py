@@ -35,6 +35,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from tests._helpers import seed_sync_dispatch_transport_routes
 
 
 @pytest.fixture
@@ -42,6 +43,7 @@ def db_session() -> Iterator[Session]:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        seed_sync_dispatch_transport_routes(session)
         yield session
     engine.dispose()
 

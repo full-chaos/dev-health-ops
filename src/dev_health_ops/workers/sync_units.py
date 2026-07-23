@@ -2379,6 +2379,11 @@ def _terminalize_feature_disabled_graph(
             last_error=FEATURE_DISABLED_ERROR_CATEGORY,
             claim_token=None,
             claim_expires_at=None,
+            claim_transport=None,
+            claim_route_generation=None,
+            dispatched_transport=None,
+            dispatched_route_generation=None,
+            transport_job_id=None,
             updated_at=now,
         )
         .execution_options(synchronize_session=False)
@@ -2410,6 +2415,11 @@ def _terminalize_feature_disabled_graph(
         finalize_row.dispatched_at = now
         finalize_row.claim_token = None
         finalize_row.claim_expires_at = None
+        finalize_row.claim_transport = None
+        finalize_row.claim_route_generation = None
+        finalize_row.dispatched_transport = None
+        finalize_row.dispatched_route_generation = None
+        finalize_row.transport_job_id = None
         finalize_row.updated_at = now
 
     sync_observers_for_terminal_sync_run(session, run)

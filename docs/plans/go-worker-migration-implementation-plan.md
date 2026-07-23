@@ -308,6 +308,39 @@ an autonomous comparison surface, but observations with different cutoffs are
 operational evidence rather than tandem proof. This slice does not authorize
 promotion.
 
+Evidence contract for the next slice:
+
+- Use one immutable UTC cutoff and one identical limit for both runtimes,
+  supplied before either claimer runs.
+- Capture both runtimes against the same quiescent or otherwise correlated
+  dataset/session.
+- Compare only the redacted parity record: cutoff, limit, predicate version,
+  digest version, candidate digest, sampled/truncated state, and per-kind
+  aggregate counts.
+- Treat raw IDs, payloads, tenant data, claim tokens, and source URLs as
+  out-of-scope for comparison.
+- Keep `deploy/go-workers/profiles.json` dormant (`coexistence_disabled`,
+  zero replicas) until a separate promotion review closes the observability
+  gaps recorded in the baseline capture.
+
+The same-snapshot comparison is now implemented by
+`cmd/dev-health-sync-parity`. It holds one exported read-only
+`REPEATABLE READ` transaction across the Python and Go observers, and the
+sanitized production-equivalent local result is recorded in
+`v2-sync-dispatch-parity`. That match closes the observer-comparison slice
+only; it is not mutation, handler, scheduler, or canary evidence.
+
+The first mutation-safety prerequisite is also implemented without activating
+River. Migration `0049` seeds a four-row database route fence with Celery
+ownership and generation 1. Python claims bind the active route generation.
+Dispatch, finalize, and discovery publish transactions lock both outbox and
+route, and mark/failure writes fail closed after any route change. `post_sync`
+retains its mark-before-publish commit, so promotion of that kind still needs a
+separate bounded quiescence barrier. The Go reconciler closes readiness when
+the database fence differs from the checked-in route contract. All routes
+remain Celery and there is intentionally no operator route mutation command in
+this slice.
+
 The dormant `internal/scheduler/sync` package adds the corresponding
 read-only schedule-evaluation foundation. It reads at most 101 active
 configuration/job rows to produce a 100-row, deterministically ordered
@@ -325,6 +358,17 @@ dispatch eligibility because organization existence, entitlement, occurrence
 claiming, and the dispatch transaction are still Celery-owned work below.
 Nothing imports this package from a command or deployment profile, so its
 presence is comparison infrastructure rather than activation.
+
+Scheduler activation has an explicit Phase 4 dependency. The atomic
+coordinator insert named by the TRD is `sync.plan_scheduled_config`, whose
+idempotent consumer must turn one stable schedule occurrence into the
+authoritative `JobRun`, `SyncRun`, units, and dispatch outbox in one domain
+transaction. `sync.dispatch_run` cannot fill that role because it requires an
+existing `SyncRun`. Until the scheduled-planning coordinator is implemented,
+Celery Beat and `dispatch_scheduled_syncs` remain the sole mutation owners; the
+Go scheduler must not advance production markers. An earlier canary would
+require a separately reviewed durable occurrence/handoff contract rather than
+an in-memory or best-effort bridge.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,
@@ -515,6 +559,9 @@ sync-domain outbox remains part of the work below.
 #### Work
 
 - Implement `sync.dispatch_run`, `sync.finalize_run`, reference discovery, `sync_team_drift`, and post-sync team autoimport.
+- Implement `sync.plan_scheduled_config` with a unique occurrence identity and
+  transactional creation of the authoritative scheduled `JobRun`, `SyncRun`,
+  units, and dispatch outbox.
 - Generate provider/cost queue routing from the registry.
 - Preserve exact cross-run concurrency and budget behavior.
 - Replace Celery group/chord assumptions with explicit domain counts and finalization outbox rows.

@@ -6,8 +6,9 @@ database schema version.
 
 | Version | Purpose | Current state |
 |---|---|---|
-| [`v0-celery-baseline`](v0-celery-baseline/README.md) | Capture the current Celery reliability, latency, resource, and deploy baseline | Local one-shot resources and an instrumentation gap are recorded; production values are not yet recorded |
+| [`v0-celery-baseline`](v0-celery-baseline/README.md) | Capture the current Celery reliability, latency, resource, and deploy baseline | Five-minute production-equivalent local capture recorded; production-canary authority remains false |
 | [`v1-river-spike`](v1-river-spike/README.md) | Record River, PgBouncer, Python enqueue, version, and licensing compatibility | Harness complete: direct PostgreSQL GO; session mode unverified; PollOnly-only and Python client NO-GO; N/N-1, load, interop, and crash evidence recorded |
+| [`v2-sync-dispatch-parity`](v2-sync-dispatch-parity/README.md) | Compare Python and Go sync-dispatch observations at one exported PostgreSQL snapshot | Local production-equivalent dataset matched; mutation and canary authority remain false |
 
 ## Evidence rules
 
@@ -22,8 +23,9 @@ database schema version.
 - Corrections may amend an existing artifact with an explanation. A changed
   measurement contract creates the next evidence-version directory.
 
-Phase 1 foundation work has a conditional GO with direct PostgreSQL queue
-control as a hard prerequisite, a session-mode endpoint that separately passes
-the same matrix, or a separately verified cancellation plane that closes the
-PollOnly blocker. The first production canary remains blocked until the v0
-production capture is populated and reviewed.
+Phase 1 foundation work is complete with direct PostgreSQL queue control as a
+hard prerequisite. A session-mode endpoint still requires the same matrix, and
+PollOnly cannot become the sole queue-control path without a separately
+verified cancellation plane. The first production canary remains blocked
+until observability gaps and promotion thresholds in the v0 capture are
+reviewed.

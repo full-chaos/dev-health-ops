@@ -2,13 +2,13 @@
   "schema_version": 2,
   "repository": "full-chaos/dev-health-ops",
   "generated_from": ".",
-  "row_count": 510,
+  "row_count": 511,
   "counts": {
     "artifact:browser-qa": 16,
     "artifact:configuration": 7,
     "artifact:external-gap": 1,
     "artifact:internal-program": 47,
-    "artifact:markdown-page": 226,
+    "artifact:markdown-page": 227,
     "artifact:prototype-asset": 5,
     "artifact:prototype-page": 169,
     "artifact:repository-entry-point": 2,
@@ -21,7 +21,7 @@
     "gap-unverified": 1,
     "prototype-wip": 175,
     "public-nav": 36,
-    "public-reference": 138,
+    "public-reference": 139,
     "supporting-artifact": 59
   },
   "rows": [
@@ -6789,7 +6789,8 @@
       ],
       "links_out": [
         "architecture/evidence/go-worker-migration/v0-celery-baseline/README.md",
-        "architecture/evidence/go-worker-migration/v1-river-spike/README.md"
+        "architecture/evidence/go-worker-migration/v1-river-spike/README.md",
+        "architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md"
       ],
       "notes": null
     },
@@ -6821,7 +6822,8 @@
         "architecture/evidence/go-worker-migration/v0-celery-baseline/capture.json",
         "architecture/evidence/go-worker-migration/v0-celery-baseline/capture.schema.json",
         "architecture/evidence/go-worker-migration/v0-celery-baseline/local-resource-snapshot.json",
-        "architecture/evidence/go-worker-migration/v0-celery-baseline/queries.promql"
+        "architecture/evidence/go-worker-migration/v0-celery-baseline/queries.promql",
+        "architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md"
       ],
       "notes": null
     },
@@ -6852,6 +6854,35 @@
         "architecture/evidence/go-worker-migration/v1-river-spike/compatibility-matrix.json",
         "architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json",
         "decisions/chaos-3034-river-compatibility.md"
+      ],
+      "notes": null
+    },
+    {
+      "source_repo": "full-chaos/dev-health-ops",
+      "source_path": "docs/architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md",
+      "artifact_type": "markdown-page",
+      "current_url": "https://docs.fullchaos.dev/architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README/",
+      "current_nav_location": [],
+      "content_type": "architecture",
+      "primary_audience": null,
+      "secondary_audiences": [],
+      "product_area": "architecture",
+      "owner": null,
+      "last_meaningful_review": null,
+      "generated": false,
+      "public_today": true,
+      "publication_classification": "public-reference",
+      "duplicate_group": null,
+      "known_accuracy_risk": null,
+      "known_usability_risk": null,
+      "build_dependencies": [],
+      "links_in": [
+        "architecture/evidence/go-worker-migration/README.md",
+        "architecture/evidence/go-worker-migration/v0-celery-baseline/README.md",
+        "ops/workers.md"
+      ],
+      "links_out": [
+        "architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/capture.json"
       ],
       "notes": null
     },
@@ -9138,6 +9169,7 @@
         "architecture/ai-reports-architecture.md",
         "architecture/data-pipeline.md",
         "architecture/dispatch-outbox.md",
+        "architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md",
         "architecture/go-worker-runtime-trd.md",
         "architecture/launchdarkly-sync-budgeting.md",
         "architecture/platform-sync-observability.md",

@@ -40,9 +40,27 @@ func (repository *Repository) ClaimDue(
 	limit int,
 	leaseDuration time.Duration,
 ) ([]Claim, error) {
+	return repository.claimDueExcept(ctx, now, limit, leaseDuration, nil)
+}
+
+// claimDueExcept atomically claims pending work except immutable known kinds
+// whose checked-in route is not executable. Unknown kinds remain eligible so
+// they cannot accumulate without bounded contract-failure evidence.
+func (repository *Repository) claimDueExcept(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+	leaseDuration time.Duration,
+	deferredKinds []string,
+) ([]Claim, error) {
 	if repository == nil || repository.pool == nil || now.IsZero() || limit < 1 || limit > 100 ||
-		leaseDuration < time.Second || leaseDuration > 15*time.Minute {
+		leaseDuration < time.Second || leaseDuration > 15*time.Minute || len(deferredKinds) > maxRelayPolicyKinds {
 		return nil, ErrInvalidConfiguration
+	}
+	if deferredKinds == nil {
+		// pgx encodes a nil slice as SQL NULL; ALL(NULL) is unknown and would
+		// suppress every candidate instead of applying an empty exclusion.
+		deferredKinds = []string{}
 	}
 	tx, err := repository.pool.Begin(ctx)
 	if err != nil {
@@ -57,6 +75,7 @@ func (repository *Repository) ClaimDue(
 				(status = 'pending' AND scheduled_at <= $1 AND next_attempt_at <= $1)
 				OR (status = 'claimed' AND claim_expires_at <= $1)
 			)
+			AND job_kind <> ALL($4::text[])
 			ORDER BY next_attempt_at, created_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT $2
@@ -72,7 +91,7 @@ func (repository *Repository) ClaimDue(
 			updated_at = $1
 		FROM candidates
 		WHERE outbox.id = candidates.id
-		RETURNING `+rowColumns, now.UTC(), limit, now.UTC().Add(leaseDuration))
+		RETURNING `+rowColumns, now.UTC(), limit, now.UTC().Add(leaseDuration), deferredKinds)
 	if err != nil {
 		return nil, ErrUnavailable
 	}

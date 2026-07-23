@@ -167,6 +167,27 @@ func (registry *Registry) Descriptor(kind string) (Descriptor, bool) {
 	return descriptor, ok
 }
 
+// Descriptors returns every registered policy in deterministic kind order.
+// The complete enumeration lets bounded infrastructure such as the outbox
+// relay distinguish known deferred routes from unknown rows that must still
+// be inspected and terminalized.
+func (registry *Registry) Descriptors() []Descriptor {
+	if registry == nil {
+		return nil
+	}
+	kinds := make([]string, 0, len(registry.byKind))
+	for kind := range registry.byKind {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	descriptors := make([]Descriptor, 0, len(kinds))
+	for _, kind := range kinds {
+		descriptor, _ := registry.Descriptor(kind)
+		descriptors = append(descriptors, descriptor)
+	}
+	return descriptors
+}
+
 // Profile returns sorted defensive copies of the profile's job policies.
 func (registry *Registry) Profile(profile string) []Descriptor {
 	if registry == nil {

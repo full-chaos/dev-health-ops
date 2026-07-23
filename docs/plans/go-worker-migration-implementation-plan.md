@@ -282,6 +282,26 @@ circular.
 
 ## 6. Phase 2 — first bounded jobs and orchestration infrastructure
 
+Current boundary: the route-safe generic `worker_job_outbox` slice is in
+place. Python now gates enqueue on a valid executable migration state/route
+pair, the Go relay leaves known Celery rows untouched while still terminalizing
+unknown rows, and the reconciler command composes the bounded loop with
+readiness and metrics. Startup is fail-closed until that loop succeeds once,
+and later persistence failures close readiness. Checked-in deployment profiles
+remain `coexistence_disabled` with zero replicas; both registered kinds still
+route to Celery, no producer calls the bridge, and no Go handler is compiled.
+The broader scheduler and sync-domain transport work in CHAOS-3039 therefore
+remains unported and no tandem parity is claimed.
+
+An opt-in live PostgreSQL test now proves the Python producer's outer rollback
+and dedupe/savepoint path. Before any generic kind is promoted from Celery,
+retain that proof in promotion validation, record evidence for the relay
+batch-size/claim-lease defaults, and exercise pending, claimed, delivered,
+running, and retryable work through the documented stop/drain/restore/restart
+rollback sequence. The generic bridge intentionally does not republish
+deferred rows to Celery; selectable Celery/River transport for the existing
+sync-domain outbox remains part of the work below.
+
 ### CHAOS-3039 — Implement Go scheduler and sync reconciler transport
 
 #### Work

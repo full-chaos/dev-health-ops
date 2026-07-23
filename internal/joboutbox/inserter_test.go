@@ -29,6 +29,7 @@ func testDescriptor() jobruntime.Descriptor {
 		Queue:             "heartbeat",
 		Priority:          2,
 		MaxAttempts:       1,
+		Route:             "river",
 	}
 }
 
@@ -120,6 +121,40 @@ func TestPrepareRowEmitsCanonicalArgsWithUniqueIdempotencyOnly(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "worker_outbox_id") {
 		t.Fatal("outbox metadata leaked into encoded_args")
+	}
+}
+
+func TestPrepareRowRejectsNonExecutableMigrationRoutes(t *testing.T) {
+	for _, route := range []string{"celery", "coexistence_disabled", ""} {
+		t.Run(route, func(t *testing.T) {
+			row := testRow(t)
+			descriptor := testDescriptor()
+			descriptor.Route = route
+			registry := staticRegistry{descriptors: map[string]jobruntime.Descriptor{row.JobKind: descriptor}}
+
+			_, _, err := prepareRow(registry, row)
+			if !errors.Is(err, ErrPolicyRejected) {
+				t.Fatalf("prepareRow() error = %v, want %v", err, ErrPolicyRejected)
+			}
+			if err.Error() != ErrPolicyRejected.Error() {
+				t.Fatalf("prepareRow() returned an unbounded policy error: %v", err)
+			}
+		})
+	}
+}
+
+func TestPrepareRowAcceptsExecutableMigrationRoutes(t *testing.T) {
+	for _, route := range []string{"shadow", "river_canary", "river"} {
+		t.Run(route, func(t *testing.T) {
+			row := testRow(t)
+			descriptor := testDescriptor()
+			descriptor.Route = route
+			registry := staticRegistry{descriptors: map[string]jobruntime.Descriptor{row.JobKind: descriptor}}
+
+			if _, _, err := prepareRow(registry, row); err != nil {
+				t.Fatalf("prepareRow() error = %v", err)
+			}
+		})
 	}
 }
 

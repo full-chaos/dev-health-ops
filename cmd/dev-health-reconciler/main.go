@@ -7,7 +7,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
-	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 )
 
 var reconcilerSpec = shell.Spec{
@@ -20,18 +19,14 @@ func main() {
 }
 
 func configureReconcilerDependencies(
-	_ context.Context,
-	_ config.Config,
+	ctx context.Context,
+	cfg config.Config,
 	registry *health.Registry,
 ) ([]lifecycle.Component, error) {
-	// Phase 1 has no reconciler loop or composed storage clients. Keep every
-	// dependency required by the control-process topology explicitly closed.
-	err := processreadiness.RegisterUnavailable(
+	return configureReconcilerDependenciesWithSources(
+		ctx,
+		cfg,
 		registry,
-		"domain_postgres",
-		"queue_postgres",
-		"reconciler_loop",
-		"river_schema",
+		productionReconcilerDependencySources,
 	)
-	return nil, err
 }

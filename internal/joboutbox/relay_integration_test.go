@@ -31,7 +31,10 @@ const (
 	outboxQueuePassword  = "outbox_queue_password"
 )
 
-type failingRiverClient struct{ err error }
+type failingRiverClient struct {
+	err          error
+	beforeReturn func()
+}
 
 func (client failingRiverClient) InsertTx(
 	context.Context,
@@ -39,6 +42,9 @@ func (client failingRiverClient) InsertTx(
 	river.JobArgs,
 	*river.InsertOpts,
 ) (*rivertype.JobInsertResult, error) {
+	if client.beforeReturn != nil {
+		client.beforeReturn()
+	}
 	return nil, client.err
 }
 
@@ -71,10 +77,19 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	queueURI := integrationRoleURI(t, instance.URI, outboxQueueRole, outboxQueuePassword)
 	queuePool := openIntegrationPool(t, ctx, queueURI)
 	defer queuePool.Close()
-	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
+	productionRegistry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, descriptor := range productionRegistry.Descriptors() {
+		if descriptor.Route != "celery" || descriptor.Executable() {
+			t.Fatalf("checked-in production route became executable: %#v", descriptor)
+		}
+	}
+	registry := integrationRouteRegistry(productionRegistry, map[string]string{
+		jobcontract.KindHeartbeat:        "river",
+		jobcontract.KindRetentionCleanup: "river",
+	})
 	repository, err := NewRepository(queuePool)
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +286,137 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		assertErrorEvidence(t, ctx, adminPool, "contract_rejected", "stored job contract was rejected")
 	})
 
+	t.Run("all-celery production policy defers known rows but terminalizes unknown rows", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		deferred := normalSeed(85, now)
+		seedOutbox(t, ctx, adminPool, deferred)
+		unknown := normalSeed(86, now)
+		unknown.Kind = "secret.unknown"
+		seedOutbox(t, ctx, adminPool, unknown)
+
+		productionInserter, err := NewRiverInserter(queuePool, "river", productionRegistry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		relay, err := NewRelay(repository, productionInserter, DefaultRelayConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := relay.Step(ctx, now, 10)
+		if err != nil || result.Claimed != 1 || result.Dead != 1 || result.Delivered != 0 {
+			t.Fatalf("Step() = %#v, %v", result, err)
+		}
+		assertOutboxStatus(t, ctx, adminPool, deferred.ID, statusPending, 0)
+		assertOutboxStatus(t, ctx, adminPool, unknown.ID, statusDead, 1)
+	})
+
+	t.Run("celery rollback never reclaims an expired River claim", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		deferred := normalSeed(96, now)
+		seedOutbox(t, ctx, adminPool, deferred)
+		claim := claimOne(t, ctx, repository, now, time.Second)
+
+		productionInserter, err := NewRiverInserter(queuePool, "river", productionRegistry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		relay, err := NewRelay(repository, productionInserter, DefaultRelayConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := relay.Step(ctx, now.Add(2*time.Second), 1)
+		if err != nil || result != (StepResult{}) {
+			t.Fatalf("Step() = %#v, %v", result, err)
+		}
+
+		var status, claimToken string
+		var attempts int
+		if err := adminPool.QueryRow(ctx, `
+			SELECT status, attempt_count, claim_token::text
+			FROM public.worker_job_outbox WHERE id=$1`, deferred.ID).
+			Scan(&status, &attempts, &claimToken); err != nil {
+			t.Fatal(err)
+		}
+		if status != statusClaimed || attempts != 1 || claimToken != claim.ClaimToken {
+			t.Fatalf("deferred expired claim changed: status=%s attempts=%d claim=%s", status, attempts, claimToken)
+		}
+	})
+
+	for routeIndex, route := range []string{"shadow", "river_canary", "river"} {
+		t.Run("relay claims executable "+route+" route", func(t *testing.T) {
+			resetOutboxTables(t, ctx, adminPool)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			seed := normalSeed(87+routeIndex, now)
+			seedOutbox(t, ctx, adminPool, seed)
+			routeRegistry := integrationRouteRegistry(productionRegistry, map[string]string{
+				jobcontract.KindHeartbeat: route,
+			})
+			routeInserter, err := NewRiverInserter(queuePool, "river", routeRegistry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			relay, err := NewRelay(repository, routeInserter, DefaultRelayConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := relay.Step(ctx, now, 1)
+			if err != nil || result.Claimed != 1 || result.Delivered != 1 {
+				t.Fatalf("Step() = %#v, %v", result, err)
+			}
+			assertOutboxStatus(t, ctx, adminPool, seed.ID, statusDelivered, 1)
+		})
+	}
+
+	t.Run("relay leaves known celery rows pending while executable and unknown rows converge", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		executable := normalSeed(82, now)
+		seedOutbox(t, ctx, adminPool, executable)
+		deferred := normalSeed(83, now)
+		deferred.Kind = jobcontract.KindRetentionCleanup
+		deferred.Queue = "retention"
+		deferred.Priority = 3
+		deferred.MaxAttempts = 3
+		seedOutbox(t, ctx, adminPool, deferred)
+		unknown := normalSeed(84, now)
+		unknown.Kind = "secret.unknown"
+		seedOutbox(t, ctx, adminPool, unknown)
+
+		mixedRegistry := integrationRouteRegistry(productionRegistry, map[string]string{
+			jobcontract.KindHeartbeat: "river",
+		})
+		mixedInserter, err := NewRiverInserter(queuePool, "river", mixedRegistry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		relay, err := NewRelay(repository, mixedInserter, DefaultRelayConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := relay.Step(ctx, now, 10)
+		if err != nil || result.Claimed != 2 || result.Delivered != 1 || result.Dead != 1 {
+			t.Fatalf("Step() = %#v, %v", result, err)
+		}
+
+		var status string
+		var attempts int
+		var claimToken, errorCode *string
+		if err := adminPool.QueryRow(ctx, `
+			SELECT status, attempt_count, claim_token::text, last_error_code
+			FROM public.worker_job_outbox WHERE id=$1`, deferred.ID).
+			Scan(&status, &attempts, &claimToken, &errorCode); err != nil {
+			t.Fatal(err)
+		}
+		if status != statusPending || attempts != 0 || claimToken != nil || errorCode != nil {
+			t.Fatalf("deferred celery row was mutated: status=%s attempts=%d claim=%v error=%v",
+				status, attempts, claimToken, errorCode)
+		}
+		assertOutboxStatus(t, ctx, adminPool, executable.ID, statusDelivered, 1)
+		assertOutboxStatus(t, ctx, adminPool, unknown.ID, statusDead, 1)
+	})
+
 	t.Run("driver error is never persisted or returned", func(t *testing.T) {
 		resetOutboxTables(t, ctx, adminPool)
 		now := time.Now().UTC().Truncate(time.Microsecond)
@@ -295,6 +441,28 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		}
 		if strings.Contains(stored, "secret") || strings.Contains(stored, "postgres://") {
 			t.Fatalf("stored error leaked driver value: %q", stored)
+		}
+	})
+
+	t.Run("failure evidence persistence outage is fatal", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		seedOutbox(t, ctx, adminPool, normalSeed(95, now))
+		stepCtx, cancelStep := context.WithCancel(ctx)
+		failingInserter := &RiverInserter{
+			client: failingRiverClient{
+				err:          errors.New("driver unavailable"),
+				beforeReturn: cancelStep,
+			},
+			registry: registry,
+		}
+		relay, err := NewRelay(repository, failingInserter, DefaultRelayConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := relay.Step(stepCtx, now, 1)
+		if !errors.Is(err, ErrUnavailable) || result.Claimed != 1 || result.LeaseLost != 0 || result.Retried != 0 {
+			t.Fatalf("Step() = %#v, %v", result, err)
 		}
 	})
 
@@ -429,6 +597,50 @@ func assertErrorEvidence(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 			t.Fatalf("error evidence = %q", value)
 		}
 	}
+}
+
+func assertOutboxStatus(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	id string,
+	wantStatus string,
+	wantAttempts int,
+) {
+	t.Helper()
+	var status string
+	var attempts int
+	if err := pool.QueryRow(ctx, `
+		SELECT status, attempt_count FROM public.worker_job_outbox WHERE id=$1`, id).
+		Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != wantStatus || attempts != wantAttempts {
+		t.Fatalf("outbox %s = status %s attempts %d, want %s/%d", id, status, attempts, wantStatus, wantAttempts)
+	}
+}
+
+func integrationRouteRegistry(
+	production *jobruntime.Registry,
+	routes map[string]string,
+) enumerableRegistry {
+	descriptors := production.Descriptors()
+	byKind := make(map[string]jobruntime.Descriptor, len(descriptors))
+	for index := range descriptors {
+		if route, ok := routes[descriptors[index].Kind]; ok {
+			descriptors[index].Route = route
+			switch route {
+			case "shadow":
+				descriptors[index].MigrationState = "shadow"
+			case "river_canary":
+				descriptors[index].MigrationState = "canary"
+			case "river":
+				descriptors[index].MigrationState = "go_default"
+			}
+		}
+		byKind[descriptors[index].Kind] = descriptors[index]
+	}
+	return enumerableRegistry{descriptors: descriptors, byKind: byKind}
 }
 
 func injectedFault() error { return errors.New("simulated process crash") }

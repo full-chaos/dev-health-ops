@@ -82,15 +82,29 @@ not yet have authoritative semantic rows; queue pause/resume and profile drain
 are available to an authorized operator. Encoded arguments, driver errors,
 DSNs, and tokens are absent from command output and audit records.
 
-The generic `worker_job_outbox` bridge is also a foundation, not an active
-route. Python's producer helper stages a versioned row inside the caller's
-existing domain transaction; the Go relay claims leases and performs the River
-insert plus delivered mark in one queue-control transaction. Its concurrent
-claimer, lease-expiry, insert/mark rollback, commit-before-ack, duplicate,
-redaction, and retention matrix runs against real PostgreSQL and River. No
-current domain producer calls the helper and no reconciler polling loop invokes
-the relay yet, so Celery ownership is unchanged until a later migration issue
-composes those seams.
+The generic `worker_job_outbox` bridge is now route-safe foundation rather than
+a dormant placeholder. Python's producer helper refuses to enqueue unless the
+checked-in migration state and route pair is executable (`shadow`,
+`river_canary`, or `river`), and the Go relay leaves known Celery-routed rows
+untouched before independently rechecking the route at River insertion.
+Unknown kinds still get claimed so contract failures can terminalize with
+bounded evidence, and the
+`dev-health-reconciler` command now composes the bounded immediate+poll loop
+with explicit packaged-registry readiness and low-cardinality metrics. Startup
+is fail-closed: the loop only opens readiness after one successful step, and
+persistence failures close it instead of being reported as harmless lease
+races.
+
+The checked-in deployment profile still keeps the topology disabled
+(`coexistence_disabled`, all replicas `0`), both registered kinds still route
+to Celery, no current domain producer calls the bridge, and no Go handler is
+compiled. Celery therefore remains the only production writer. Migration
+policy is loaded at process startup: before a future rollback changes the
+checked-in route, stop new production, drain or classify in-flight River work,
+restore Celery routing, and restart the reconciler. Deferred generic-outbox
+rows remain auditable; the bridge does not silently republish them to Celery.
+The separate sync-domain scheduler, lease repair, and selectable Celery/River
+transport remain unfinished CHAOS-3039 work.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target

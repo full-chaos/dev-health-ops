@@ -53,6 +53,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/worker/app/deploy/go-workers \
       /runtime/scheduler/usr/local/bin \
       /runtime/reconciler/usr/local/bin \
+      /runtime/reconciler/app/contracts/jobs \
       /runtime/stream-runner/usr/local/bin \
       /runtime/operator/usr/local/bin \
       /runtime/operator/app/contracts/jobs \
@@ -63,6 +64,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp /out/dev-health-reconciler /runtime/reconciler/usr/local/bin/dev-health-reconciler; \
+    cp -R /src/contracts/jobs/v1 /runtime/reconciler/app/contracts/jobs/v1; \
     cp /out/dev-health-stream-runner /runtime/stream-runner/usr/local/bin/dev-health-stream-runner; \
     cp /out/dev-health-workerctl /runtime/operator/usr/local/bin/dev-health-workerctl; \
     cp /out/worker-contractcheck /runtime/contractcheck/usr/local/bin/worker-contractcheck; \
@@ -101,6 +103,7 @@ ENTRYPOINT ["/usr/local/bin/dev-health-scheduler"]
 
 FROM runtime AS reconciler
 COPY --from=build --chown=65532:65532 /runtime/reconciler/ /
+WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dev-health-reconciler"]
 
 FROM runtime AS stream-runner

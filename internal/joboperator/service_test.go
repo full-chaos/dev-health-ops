@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
 
 func TestCancelRequiresAuthorizationDomainGuardAndDurableAudit(t *testing.T) {
@@ -206,6 +207,70 @@ func TestStatusRequiresAuthorizedReadScope(t *testing.T) {
 	assertCode(t, err, CodeUnauthorized)
 }
 
+func TestRouteControlsPreserveAuthorizationAndDurableAudit(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.routes.state = syncroute.RouteState{
+		Kind: "dispatch_sync_run", Transport: "celery", Generation: 2, Paused: true,
+	}
+	state, err := fixture.service.PauseRoute(
+		context.Background(), testPrincipal(), "dispatch_sync_run", "cutover", "corr-route-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Generation != 2 ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,route_pause,audit_succeeded" {
+		t.Fatalf("route pause state=%+v order=%v", state, fixture.order)
+	}
+	if fixture.auditor.event.Action != ActionPauseRoute ||
+		fixture.auditor.event.ResourceType != "sync_route" {
+		t.Fatalf("route audit=%+v", fixture.auditor.event)
+	}
+}
+
+func TestRouteResumeFailsClosedWithoutCapabilityAndAuditsFailure(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.routes.err = syncroute.ErrCapabilityMissing
+	_, err := fixture.service.ResumeRoute(
+		context.Background(), testPrincipal(), "dispatch_sync_run", "river",
+		"cutover", "corr-route-2", time.Second,
+	)
+	assertCode(t, err, CodePrecondition)
+	if fixture.auditor.status != AuditFailed ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,route_resume,audit_failed" {
+		t.Fatalf("route failure status=%s order=%v", fixture.auditor.status, fixture.order)
+	}
+}
+
+func TestRouteDriftIsAnOperatorPreconditionFailure(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.routes.err = syncroute.ErrDrift
+	_, err := fixture.service.PauseRoute(
+		context.Background(), testPrincipal(), "dispatch_sync_run", "cutover", "corr-route-drift",
+	)
+	assertCode(t, err, CodePrecondition)
+	if fixture.auditor.status != AuditFailed ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,route_pause,audit_failed" {
+		t.Fatalf("route drift status=%s order=%v", fixture.auditor.status, fixture.order)
+	}
+}
+
+func TestAmbiguousRouteCommitIsAuditedAsOutcomeUnknown(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.routes.err = syncroute.ErrMutationOutcomeUnknown
+	_, err := fixture.service.PauseRoute(
+		context.Background(), testPrincipal(), "dispatch_sync_run", "cutover", "corr-route-3",
+	)
+	assertCode(t, err, CodeOutcomeUnknown)
+	if fixture.auditor.status != AuditOutcomeUnknown {
+		t.Fatalf("route audit status=%s", fixture.auditor.status)
+	}
+}
+
 func TestQueueInspectionRequiresExactSanitizedProfileCoverage(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
@@ -286,6 +351,7 @@ type serviceFixture struct {
 	authorizer *fakeAuthorizer
 	guard      *fakeDomainGuard
 	auditor    *fakeAuditor
+	routes     *fakeRouteController
 	order      []string
 }
 
@@ -305,16 +371,41 @@ func newServiceFixtureWithRegistry(t *testing.T, registry RuntimeRegistry) *serv
 	fixture.authorizer = &fakeAuthorizer{order: &fixture.order}
 	fixture.guard = &fakeDomainGuard{order: &fixture.order}
 	fixture.auditor = &fakeAuditor{order: &fixture.order}
+	fixture.routes = &fakeRouteController{order: &fixture.order}
 	service, err := New(Dependencies{
 		Registry: registry, Backend: fixture.backend, Authorizer: fixture.authorizer,
 		DomainGuard: fixture.guard, Auditor: fixture.auditor,
-		Clock: func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) },
+		RouteController: fixture.routes,
+		Clock:           func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	fixture.service = service
 	return fixture
+}
+
+type fakeRouteController struct {
+	order *[]string
+	state syncroute.RouteState
+	err   error
+}
+
+func (controller *fakeRouteController) Inspect(context.Context, string) (syncroute.RouteState, error) {
+	*controller.order = append(*controller.order, "route_inspect")
+	return controller.state, controller.err
+}
+func (controller *fakeRouteController) Pause(context.Context, string) (syncroute.RouteState, error) {
+	*controller.order = append(*controller.order, "route_pause")
+	return controller.state, controller.err
+}
+func (controller *fakeRouteController) Drain(context.Context, string) (syncroute.RouteState, error) {
+	*controller.order = append(*controller.order, "route_drain")
+	return controller.state, controller.err
+}
+func (controller *fakeRouteController) Resume(context.Context, string, string, time.Duration) (syncroute.RouteState, error) {
+	*controller.order = append(*controller.order, "route_resume")
+	return controller.state, controller.err
 }
 
 type executableRegistry struct{ RuntimeRegistry }

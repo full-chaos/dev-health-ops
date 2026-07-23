@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
 
 type JobState string
@@ -32,12 +33,16 @@ const (
 type Action string
 
 const (
-	ActionInspect     Action = "jobs.inspect"
-	ActionCancel      Action = "jobs.cancel"
-	ActionRetry       Action = "jobs.retry"
-	ActionPauseQueue  Action = "queues.pause"
-	ActionResumeQueue Action = "queues.resume"
-	ActionDrain       Action = "workers.drain"
+	ActionInspect      Action = "jobs.inspect"
+	ActionCancel       Action = "jobs.cancel"
+	ActionRetry        Action = "jobs.retry"
+	ActionPauseQueue   Action = "queues.pause"
+	ActionResumeQueue  Action = "queues.resume"
+	ActionDrain        Action = "workers.drain"
+	ActionInspectRoute Action = "routes.inspect"
+	ActionPauseRoute   Action = "routes.pause"
+	ActionDrainRoute   Action = "routes.drain"
+	ActionResumeRoute  Action = "routes.resume"
 )
 
 // JobSummary is intentionally incapable of carrying encoded_args, exception
@@ -143,6 +148,13 @@ type Backend interface {
 	SupportsRunningCancellation() bool
 }
 
+type RouteController interface {
+	Inspect(context.Context, string) (syncroute.RouteState, error)
+	Pause(context.Context, string) (syncroute.RouteState, error)
+	Drain(context.Context, string) (syncroute.RouteState, error)
+	Resume(context.Context, string, string, time.Duration) (syncroute.RouteState, error)
+}
+
 type AuditEvent struct {
 	Principal     Principal
 	Action        Action
@@ -176,12 +188,13 @@ type Clock func() time.Time
 const auditCompletionTimeout = 5 * time.Second
 
 type Dependencies struct {
-	Registry    RuntimeRegistry
-	Backend     Backend
-	Authorizer  Authorizer
-	DomainGuard DomainGuard
-	Auditor     Auditor
-	Clock       Clock
+	Registry        RuntimeRegistry
+	Backend         Backend
+	Authorizer      Authorizer
+	DomainGuard     DomainGuard
+	Auditor         Auditor
+	Clock           Clock
+	RouteController RouteController
 }
 
 type Service struct {
@@ -191,6 +204,7 @@ type Service struct {
 	domainGuard DomainGuard
 	auditor     Auditor
 	clock       Clock
+	routes      RouteController
 }
 
 // RuntimeRegistry is the read-only subset of jobruntime.Registry needed by
@@ -205,7 +219,7 @@ type RuntimeRegistry interface {
 
 func New(dependencies Dependencies) (*Service, error) {
 	if dependencies.Registry == nil || dependencies.Backend == nil || dependencies.Authorizer == nil ||
-		dependencies.DomainGuard == nil || dependencies.Auditor == nil {
+		dependencies.DomainGuard == nil || dependencies.Auditor == nil || dependencies.RouteController == nil {
 		return nil, errors.New("complete operator dependencies are required")
 	}
 	clock := dependencies.Clock
@@ -219,7 +233,78 @@ func New(dependencies Dependencies) (*Service, error) {
 		domainGuard: dependencies.DomainGuard,
 		auditor:     dependencies.Auditor,
 		clock:       clock,
+		routes:      dependencies.RouteController,
 	}, nil
+}
+
+func (service *Service) InspectRoute(ctx context.Context, principal Principal, kind string) (syncroute.RouteState, error) {
+	if err := validatePrincipal(principal); err != nil || kind == "" {
+		return syncroute.RouteState{}, serviceError(CodeInvalid, err)
+	}
+	if err := service.authorize(ctx, principal, ActionInspectRoute, "sync_route", kind); err != nil {
+		return syncroute.RouteState{}, err
+	}
+	state, err := service.routes.Inspect(ctx, kind)
+	if err != nil {
+		return syncroute.RouteState{}, mapRouteError(err)
+	}
+	return state, nil
+}
+
+func (service *Service) PauseRoute(
+	ctx context.Context,
+	principal Principal,
+	kind, reasonCode, correlationID string,
+) (syncroute.RouteState, error) {
+	return service.routeMutation(ctx, principal, ActionPauseRoute, kind, reasonCode, correlationID,
+		func() (syncroute.RouteState, error) { return service.routes.Pause(ctx, kind) })
+}
+
+func (service *Service) DrainRoute(
+	ctx context.Context,
+	principal Principal,
+	kind, reasonCode, correlationID string,
+) (syncroute.RouteState, error) {
+	return service.routeMutation(ctx, principal, ActionDrainRoute, kind, reasonCode, correlationID,
+		func() (syncroute.RouteState, error) { return service.routes.Drain(ctx, kind) })
+}
+
+func (service *Service) ResumeRoute(
+	ctx context.Context,
+	principal Principal,
+	kind, transport, reasonCode, correlationID string,
+	quiescenceTimeout time.Duration,
+) (syncroute.RouteState, error) {
+	return service.routeMutation(ctx, principal, ActionResumeRoute, kind, reasonCode, correlationID,
+		func() (syncroute.RouteState, error) {
+			return service.routes.Resume(ctx, kind, transport, quiescenceTimeout)
+		})
+}
+
+func (service *Service) routeMutation(
+	ctx context.Context,
+	principal Principal,
+	action Action,
+	kind, reasonCode, correlationID string,
+	operation func() (syncroute.RouteState, error),
+) (syncroute.RouteState, error) {
+	if err := validateMutationInput(principal, reasonCode, correlationID); err != nil || kind == "" {
+		return syncroute.RouteState{}, serviceError(CodeInvalid, err)
+	}
+	if err := service.authorize(ctx, principal, action, "sync_route", kind); err != nil {
+		return syncroute.RouteState{}, err
+	}
+	mutation := Mutation{
+		Principal: principal, Action: action, ResourceType: "sync_route", ResourceID: kind,
+		ReasonCode: reasonCode, CorrelationID: correlationID,
+	}
+	var state syncroute.RouteState
+	err := service.mutate(ctx, mutation, func() error {
+		var operationErr error
+		state, operationErr = operation()
+		return operationErr
+	})
+	return state, err
 }
 
 type ErrorCode string
@@ -505,7 +590,7 @@ func (service *Service) mutate(ctx context.Context, mutation Mutation, operation
 	}
 	if err := operation(); err != nil {
 		status := AuditFailed
-		if errors.Is(err, ErrMutationOutcomeUnknown) {
+		if errors.Is(err, ErrMutationOutcomeUnknown) || errors.Is(err, syncroute.ErrMutationOutcomeUnknown) {
 			status = AuditOutcomeUnknown
 		}
 		completeErr := completeAudit(ctx, handle, status)
@@ -514,6 +599,15 @@ func (service *Service) mutate(ctx context.Context, mutation Mutation, operation
 		}
 		if completeErr != nil {
 			return serviceError(CodeAuditPending, errors.Join(err, completeErr))
+		}
+		if errors.Is(err, syncroute.ErrUnknownRoute) ||
+			errors.Is(err, syncroute.ErrRouteStateConflict) ||
+			errors.Is(err, syncroute.ErrLiveClaims) ||
+			errors.Is(err, syncroute.ErrCapabilityMissing) ||
+			errors.Is(err, syncroute.ErrQuiescenceMissing) ||
+			errors.Is(err, syncroute.ErrDrift) ||
+			errors.Is(err, syncroute.ErrInvalidConfiguration) {
+			return mapRouteError(err)
 		}
 		return mapBackendError(err)
 	}
@@ -651,6 +745,23 @@ func mapBackendError(err error) error {
 		return serviceError(CodeConflict, err)
 	}
 	return serviceError(CodeBackend, err)
+}
+
+func mapRouteError(err error) error {
+	switch {
+	case errors.Is(err, syncroute.ErrUnknownRoute):
+		return serviceError(CodeNotFound, err)
+	case errors.Is(err, syncroute.ErrRouteStateConflict), errors.Is(err, syncroute.ErrLiveClaims):
+		return serviceError(CodeConflict, err)
+	case errors.Is(err, syncroute.ErrCapabilityMissing), errors.Is(err, syncroute.ErrQuiescenceMissing):
+		return serviceError(CodePrecondition, err)
+	case errors.Is(err, syncroute.ErrDrift):
+		return serviceError(CodePrecondition, err)
+	case errors.Is(err, syncroute.ErrInvalidConfiguration):
+		return serviceError(CodeInvalid, err)
+	default:
+		return serviceError(CodeBackend, err)
+	}
 }
 
 func serviceError(code ErrorCode, cause error) error {

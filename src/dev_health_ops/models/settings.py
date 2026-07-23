@@ -18,12 +18,15 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -67,6 +70,12 @@ class JobRunStatus(int, Enum):
     SUCCESS = 2
     FAILED = 3
     CANCELLED = 4
+
+
+SCHEDULED_OCCURRENCE_RECONCILE_PENDING = "pending"
+SCHEDULED_OCCURRENCE_RECONCILE_RETRY = "retry"
+SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED = "completed"
+SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED = "quarantined"
 
 
 class Setting(Base):
@@ -637,6 +646,119 @@ class JobRun(Base):
         self.triggered_by = triggered_by
         self.status = status
         self.created_at = datetime.now(timezone.utc)
+
+
+class ScheduledSyncOccurrence(Base):
+    """Stable identity and authoritative plan links for one scheduled sync."""
+
+    __tablename__ = "scheduled_sync_occurrences"
+
+    occurrence_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    identity_version: Mapped[str] = mapped_column(Text, nullable=False)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    sync_config_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("sync_configurations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_job_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("scheduled_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    job_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("job_runs.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    sync_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("sync_runs.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    reconcile_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    reconcile_next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reconcile_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reconcile_error_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reconcile_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+        server_default=SCHEDULED_OCCURRENCE_RECONCILE_PENDING,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sync_config_id",
+            "scheduled_for",
+            name="uq_scheduled_sync_occurrence_config_time",
+        ),
+        CheckConstraint(
+            "(job_run_id IS NULL AND sync_run_id IS NULL) OR "
+            "(job_run_id IS NOT NULL AND sync_run_id IS NOT NULL)",
+            name="ck_scheduled_sync_occurrence_plan_links",
+        ),
+        CheckConstraint(
+            "reconcile_attempt_count >= 0",
+            name="ck_scheduled_sync_occurrence_reconcile_attempt_count",
+        ),
+        CheckConstraint(
+            "reconcile_status IN ('pending', 'retry', 'completed', 'quarantined')",
+            name="ck_scheduled_sync_occurrence_reconcile_status",
+        ),
+        CheckConstraint(
+            "reconcile_error_code IN ('identity_conflict', 'ineligible', "
+            "'planner_error', 'retry_exhausted') OR reconcile_error_code IS NULL",
+            name="ck_scheduled_sync_occurrence_reconcile_error_code",
+        ),
+        CheckConstraint(
+            "(reconcile_error_code IS NULL AND reconcile_error_at IS NULL) OR "
+            "(reconcile_error_code IS NOT NULL AND reconcile_error_at IS NOT NULL)",
+            name="ck_scheduled_sync_occurrence_reconcile_error_state",
+        ),
+        CheckConstraint(
+            "(reconcile_status = 'completed' AND job_run_id IS NOT NULL AND "
+            "sync_run_id IS NOT NULL) OR (reconcile_status <> 'completed' AND "
+            "job_run_id IS NULL AND sync_run_id IS NULL)",
+            name="ck_scheduled_sync_occurrence_reconcile_completed_state",
+        ),
+        CheckConstraint(
+            "reconcile_status <> 'quarantined' OR "
+            "(job_run_id IS NULL AND sync_run_id IS NULL AND "
+            "reconcile_error_code IS NOT NULL)",
+            name="ck_scheduled_sync_occurrence_reconcile_quarantined_state",
+        ),
+        Index(
+            "ix_scheduled_sync_occurrence_org_config_time",
+            "org_id",
+            "sync_config_id",
+            "scheduled_for",
+        ),
+        Index(
+            "ix_scheduled_sync_occurrence_reconcile_due",
+            "reconcile_status",
+            "reconcile_next_attempt_at",
+            "sync_config_id",
+            "scheduled_job_id",
+            "scheduled_for",
+            "org_id",
+            postgresql_where=text("reconcile_status IN ('pending', 'retry')"),
+        ),
+    )
 
 
 class SyncWatermark(Base):

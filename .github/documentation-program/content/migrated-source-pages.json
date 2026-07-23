@@ -7,5 +7,6 @@
   "contribute/architecture/river-compatibility.md": ".github/docs-legacy/decisions/chaos-3034-river-compatibility.md",
   "integrate/webhooks/pagerduty.md": ".github/docs-legacy/architecture/pagerduty-contract.md",
   "operate/configure/database-connection-pooling.md": ".github/docs-legacy/ops/database-connection-pooling.md",
-  "operate/run/workers-and-jobs.md": ".github/docs-legacy/ops/workers.md"
+  "operate/run/workers-and-jobs.md": ".github/docs-legacy/ops/workers.md",
+  "reference/cli/index.md": ".github/docs-legacy/ops/cli-reference.md"
 }

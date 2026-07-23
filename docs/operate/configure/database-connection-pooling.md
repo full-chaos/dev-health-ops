@@ -49,21 +49,29 @@ The River schema defaults to `river`; migration grants its
 queue role only the schema/table/sequence access needed by the runtime and does
 not grant the domain role or `PUBLIC` access. Separately, the domain role gets
 `USAGE` on `public`, DML on every semantic table, and sequence access. The
-producer-owned `worker_job_outbox` is the exception: the domain role receives
+producer-owned `worker_job_outbox` is the domain-role exception: the domain
+role receives
 only `SELECT` and `INSERT`, so it can deduplicate and enqueue but cannot forge
 relay state or delete committed dispatches. It gets no schema `CREATE`, no
 River access, and no access to `alembic_version`; the queue role gets no general
-semantic-table or sequence access. Its sole `public` exception is `SELECT`,
-`UPDATE`, and `DELETE` on `worker_job_outbox`, allowing the relay to claim and
-retire producer-created UUID rows in the same direct transaction that inserts
-River jobs. The queue role never receives outbox `INSERT`. Readiness checks
+semantic-table or sequence access. Its `public` allowlist is `SELECT`, `UPDATE`,
+and `DELETE` on `worker_job_outbox`; `SELECT` and `UPDATE` on
+`sync_dispatch_outbox`; and `SELECT` only on
+`sync_dispatch_transport_routes`. PostgreSQL row-locking clauses require
+mutation authority on the locked relation, so the reconciler locks only the
+outbox row and rechecks the SELECT-only route generation in its terminal write.
+A concurrent generation change therefore rolls back the claim, River
+`InsertTx`, and terminal mark atomically when it commits before the terminal
+write. A future route-mutation surface must separately serialize or quiesce the
+post-terminal, pre-commit window. The queue role never receives outbox
+`INSERT`, sync outbox `DELETE`, or route `INSERT`/`UPDATE`/`DELETE`. Readiness checks
 effective privileges and all role memberships, including
 `NOINHERIT` memberships that could be activated with `SET ROLE`. Runtime roles
 must have no role memberships at all. Neither role can gain database or schema
 `CREATE` or table-maintenance capabilities; the domain role cannot access
 River, Alembic metadata, or public functions or mutate relay-owned outbox
 state, and the queue role cannot access other semantic tables or public
-functions or insert outbox rows. These checks return stable health categories
+functions or exceed that allowlist. These checks return stable health categories
 only and never emit a DSN, grant detail, or database error.
 
 ### Provision the runtime roles first

@@ -1112,6 +1112,66 @@ def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
     assert post_sync_row.dispatched_route_generation == 1
 
 
+def test_reconciler_post_sync_publish_failure_stays_marked_and_is_not_retried(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=0)
+    running.status = SyncRunUnitStatus.SUCCESS.value
+    running.lease_owner = None
+    running.lease_expires_at = None
+    run.status = SyncRunStatus.SUCCESS.value
+    run.completed_units = 1
+    run.completed_at = datetime.now(timezone.utc)
+    db_session.add(
+        SyncRunPostDispatch(
+            org_id=run.org_id,
+            sync_run_id=run.id,
+            kind=OUTBOX_KIND_POST_SYNC,
+            dispatched_at=datetime.now(timezone.utc),
+        )
+    )
+    upsert_outbox_wakeup(
+        db_session,
+        sync_run_id=run.id,
+        kind=OUTBOX_KIND_POST_SYNC,
+        available_at=datetime.now(timezone.utc),
+    )
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    publish_attempts = []
+    monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", lambda **_: None)
+    monkeypatch.setattr(sync_units.finalize_sync_run, "apply_async", lambda **_: None)
+
+    def fail_post_sync_publish(**kwargs):
+        publish_attempts.append(kwargs)
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(
+        post_sync_dispatch,
+        "_dispatch_post_sync_tasks",
+        fail_post_sync_publish,
+    )
+
+    first = sync_reconciler.reconcile_sync_dispatch(limit=10)
+    second = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    post_sync_row = _outbox_row(db_session, run, OUTBOX_KIND_POST_SYNC)
+    assert first["relayed_post_sync"] == 0
+    assert first["publish_failures"] == 0
+    assert second["relayed_post_sync"] == 0
+    assert len(publish_attempts) == 1
+    assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
+    assert post_sync_row.claim_token is None
+    assert post_sync_row.claim_expires_at is None
+    assert post_sync_row.claim_transport is None
+    assert post_sync_row.claim_route_generation is None
+    assert post_sync_row.dispatched_transport == "celery"
+    assert post_sync_row.dispatched_route_generation == 1
+    assert post_sync_row.last_error is None
+
+
 def test_reconciler_materializes_missing_post_sync_outbox_for_ledger(
     db_session, monkeypatch
 ):

@@ -556,26 +556,50 @@ The scheduler repeats a bounded loop:
 
 Multiple scheduler replicas are safe. A singleton deployment is no longer a correctness requirement, although only one process may hold a global advisory lock if that mode is selected.
 
-The coordinator in step 6 is a distinct scheduled-configuration planner
-(`sync.plan_scheduled_config`), not `sync.dispatch_run`.
-`sync.dispatch_run` requires an existing `SyncRun`; it cannot turn a
-`SyncConfiguration` occurrence into the authoritative `JobRun`, `SyncRun`,
-units, and dispatch outbox. The planner coordinator must consume a stable
-occurrence identity idempotently and create that domain state in one
-transaction. Its implementation belongs with sync coordination in Phase 4.
-Until that handler and its route are present, Celery Beat plus
-`dispatch_scheduled_syncs` remains the only mutation owner. A Go scheduler may
-evaluate or failure-test occurrences before then, but it must not advance a
-production marker or claim schedule ownership.
+The coordinator in step 6 is a distinct scheduled-configuration planner, not
+`sync.dispatch_run`. `sync.dispatch_run` requires an existing `SyncRun`; it
+cannot turn a `SyncConfiguration` occurrence into the authoritative `JobRun`,
+`SyncRun`, units, and dispatch outbox.
 
-The current Phase 2 implementation stops before this mutation boundary.
-`internal/scheduler/sync` is an unregistered, read-only shadow: it performs one
+Migration `0050` adds `scheduled_sync_occurrences`, whose versioned identity is
+shared by Python and Go. The active Python scheduler now locks configuration
+then marker state and idempotently creates or reuses that occurrence while
+materializing its `JobRun`, `SyncRun`, units, reference-discovery ledger/outbox,
+and next marker in the same transaction. A failed planner or marker update
+therefore leaves no partial occurrence graph.
+
+The dormant Go coordinator only inserts or verifies the pending occurrence
+identity through the scheduler transaction. The active Python planner accepts
+and completes an existing pending row when its own Celery dispatch reaches the
+same occurrence, which makes concurrent/retried cross-language handoff
+idempotent. Migration `0051` adds a durable reconciliation lifecycle for rows
+that are not completed by that active path. A bounded Python consumer claims
+configuration, marker, and occurrence state in the canonical lock order,
+validates the versioned identity, persists retry backoff, and quarantines
+malformed or exhausted rows before continuing to later work. The task and its
+Beat entry both default off, no checked-in profile enables them, and no command
+constructs the Go coordinator. The public scheduler repository constructor
+embeds an opaque Celery/`coexistence_disabled` ownership policy, and its
+transaction kernel rejects mutation before opening a transaction. Constructing
+Go mutation authority requires a reviewed package-private source change. Until
+an activation review enables the consumer and supplies the remaining scheduler
+lifecycle composition, unsupported-cron policy parity, and coordinator policy
+parity, Celery Beat plus `dispatch_scheduled_syncs` remains the only mutation
+owner; a Go scheduler must not advance a production marker or claim schedule
+ownership. The dormant loop rolls back the entire locked window and keeps
+readiness closed when any candidate needs unsupported/invalid-cron fallback.
+
+The read-only comparison path in `internal/scheduler/sync` still performs one
 bounded schedule/configuration `SELECT` and evaluates a versioned candidate
-snapshot in memory. It has no advisory lock, row lock, occurrence claim,
-update, enqueue, or command wiring. Celery Beat and
-`dispatch_scheduled_syncs` therefore remain the sole production scheduler
-until the steps above and their duplicate-occurrence tests are implemented
-and approved.
+snapshot in memory. Beside it, an unregistered transaction kernel now locks a
+bounded due window with `FOR UPDATE ... SKIP LOCKED`, derives the shared
+config-and-occurrence identity, invokes an injected coordinator through the
+same PostgreSQL transaction, and advances `next_run_at` only after that
+coordinator reports a durable handoff. No scheduler command constructs or
+calls this kernel. The active Python path remains responsible for
+missing-marker creation, organization and entitlement policy, authoritative
+plan materialization, and catch-up behavior. Celery Beat and
+`dispatch_scheduled_syncs` therefore remain the sole production scheduler.
 
 ### 10.2 Simple periodic maintenance
 
@@ -663,20 +687,78 @@ from the old generation can still issue its broker call.
 
 The Go reconciler treats the checked-in transport registry and persisted route
 set as one readiness contract. Missing, extra, paused, malformed, or divergent
-routes close readiness. In this phase all routes remain Celery and no operator
-mutation surface is exposed. A future reviewed cutover must pause with a
-generation increment, wait for live claims to drain or expire, satisfy the
-post-sync quiescence barrier when applicable, deploy the matching
-handler/contract, and unpause the new transport with another generation
-increment. The future River relay must insert the River job and mark the sync
-outbox through one PostgreSQL transaction and therefore needs the corresponding
-semantic-table privileges on that transaction's pool.
+routes close readiness. The authenticated operator surface exposes
+`routes status`, `pause`, `drain`, and `resume` for one fixed kind at a time.
+Mutations require operate scope, bounded reason and correlation identifiers,
+durable audit intent, and generation compare-and-set. Pause and resume acquire
+the route row first, matching Python's producer order, then hold a
+`SHARE ROW EXCLUSIVE` outbox-table barrier and re-read both route state and live
+claims. This waits out Celery's route-plus-outbox transaction and the Go
+kernel's outbox-only terminal transaction without the lock-upgrade deadlock.
 
-For dispatch, finalize, and discovery rows, the reconciler inserts the River job and marks the outbox row dispatched in the same PostgreSQL transaction. The River job uses a deterministic unique insertion key derived from the outbox row and kind. An insert or mark failure rolls the transaction back and leaves the row eligible for reconciliation.
+A reviewed cutover must pause with a generation increment, wait for live claims
+to drain or expire, deploy the matching checked-in handler/contract and
+capability, then resume the new transport with another generation increment.
+The current runtime only ships a publisher-owned, in-process
+`GenerationTracker` local generation-drain API for the `post_sync`
+pre-publish window; `EnterLocalHandoff` and `WaitForLocalHandoffs` can close a
+generation and honor cancellation, but they are intentionally not a route or
+worker controller. River resume is still rejected. All checked-in routes remain
+Celery, so the available control is same-transport pause/drain/resume until
+that separately reviewed deployment exists.
 
-- `dispatch_sync_run`: at-least-once queue insertion; unit claims prevent duplicate provider work.
-- `finalize_sync_run`: at-least-once queue insertion; finalization ledger prevents duplicate finalization.
-- `post_sync`: mark-before-insert/at-most-once until CHAOS-2596 closes.
+The future River relay must insert the River job and mark the sync outbox
+through one PostgreSQL transaction and therefore needs the corresponding
+least-privilege queue-control pool: `SELECT` and `UPDATE` on the outbox and
+`SELECT` only on the route table. PostgreSQL row-locking clauses require
+mutation authority on every locked relation, so the River path locks only the
+outbox row. A route change committed before the terminal write fails its
+generation predicate and rolls the claim and River insert back atomically. The
+operator's outbox-table barrier now also waits through the post-terminal,
+pre-commit window before it changes the route generation.
+
+An unregistered sync-reconciler transaction kernel now implements the narrow
+transport boundary: it first commits a bounded set of River claims, then each
+at-least-once claim is delivered and terminally marked in its own fresh
+transaction. For the at-most-once `post_sync` kind the terminal mark is
+committed before the external handoff is invoked. Route generation and
+claim-token predicates fail closed at the terminal write. The checked-in
+contract currently contains no River route, so even explicit mutation mode
+returns without opening a write transaction.
+
+The reconciler command now reaches this package only through a shadow adapter
+whose kernel retains no transaction-begin function. The existing observer
+readiness and metrics contract is unchanged, and there is no environment
+toggle that can select mutation.
+
+A separate unregistered materializer reconstructs one bounded candidate window
+for each fixed wakeup kind in one domain transaction. Dispatch, finalize, and
+discovery reuse the current Python pending-skip, terminal-denial, and live-claim
+rules. Post-sync is insert-only: an existing row is never rearmed. The
+materializer does not inspect route ownership, claim an outbox row, or publish a
+transport job, so running its tests beside Celery does not create a second
+execution owner.
+
+This kernel is not the complete reconciler loop. A command-unwired
+expired-domain-lease repair step now preserves the eligible Linear-backfill
+retry matrix and serializes provider/org/cost-class mutations. A separate
+persisted failure recorder can rearm an already committed River claim with
+bounded Python-parity backoff. The queue-control trust boundary is proven with
+the real River `InsertTx` API and exact outbox/route privileges. The typed
+runtime package is intentionally all-or-nothing: its claim envelope validates
+the contract version, UUID shape, and generation, its publisher only inserts
+through the caller's transaction, and its generation tracker is a publisher-
+owned local generation-drain API for `post_sync`. Activation still needs an
+explicit materializer/transport loop and concrete River publishers and
+handlers registered as capabilities, authoritative domain-reference lookup,
+and a separately proven cross-process `post_sync` quiescer/controller plus
+external-handoff binding.
+The reconciler image packages `contracts/sync-dispatch/v1` so the registry is
+available at runtime; that packaging does not change route ownership.
+
+- `dispatch_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; unit claims prevent duplicate provider work.
+- `finalize_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; finalization ledger prevents duplicate finalization.
+- `post_sync`: mark-before-external-handoff/at-most-once, with the terminal mark committed before the external handoff begins, until CHAOS-2596 closes.
 - eligible Linear backfill expired leases: continue `RUNNING -> RETRYING` with current eligibility matrix.
 
 No second generic sync workflow is introduced in River.

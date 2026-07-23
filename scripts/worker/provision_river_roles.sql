@@ -76,8 +76,9 @@ SELECT format(
  WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
 \gexec
 
--- The queue role may atomically claim/delete only the durable relay outbox.
--- It never receives INSERT or general semantic-table/sequence privileges.
+-- The queue role may atomically relay the generic outbox and transition the
+-- sync-dispatch outbox while checking its read-only route fence. It
+-- never receives INSERT or general semantic-table/sequence privileges.
 GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"queue_role";
@@ -87,4 +88,16 @@ SELECT format(
          :'queue_role'
        )
  WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.sync_dispatch_outbox') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL
 \gexec

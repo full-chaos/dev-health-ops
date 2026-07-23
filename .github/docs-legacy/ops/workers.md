@@ -66,9 +66,9 @@ dev-hops service-credentials create \
 
 The plaintext token is printed once and is then supplied as
 `WORKER_OPERATOR_TOKEN` or its `_FILE` form. Read commands include `status`,
-`jobs list`, `jobs inspect`,
-`queues`, `streams status`, and `contracts`. During Phase 1, `streams status`
-reports the validated disabled deployment profiles and their Celery ownership;
+`jobs list`, `jobs inspect`, `queues`, `routes status`, `streams status`, and
+`contracts`. During Phase 1, `streams status` reports the validated disabled
+deployment profiles and their Celery ownership;
 live backlog and pending-entry state remains on the stream-runner metrics
 surface once a stream profile is composed. Mutations require both `--reason` and
 `--correlation-id`, verify an exact state transition, and persist a bounded
@@ -78,9 +78,10 @@ the resource before any retry. A confirmed mutation whose audit finalization
 is delayed returns `audit_pending` while retaining its durable `started`
 intent. Cancel/retry remain intentionally
 fail-closed for the two foundation kinds because their frozen domain links do
-not yet have authoritative semantic rows; queue pause/resume and profile drain
-are available to an authorized operator. Encoded arguments, driver errors,
-DSNs, and tokens are absent from command output and audit records.
+not yet have authoritative semantic rows; queue pause/resume, profile drain,
+and sync-route pause/drain/resume are available to an authorized operator.
+Encoded arguments, driver errors, DSNs, and tokens are absent from command
+output and audit records.
 
 The generic `worker_job_outbox` bridge is now route-safe foundation rather than
 a dormant placeholder. Python's producer helper refuses to enqueue unless the
@@ -94,6 +95,23 @@ with explicit packaged-registry readiness and low-cardinality metrics. Startup
 is fail-closed: the loop only opens readiness after one successful step, and
 persistence failures close it instead of being reported as harmless lease
 races.
+
+The typed `syncdispatchruntime` package is dormant and all-or-nothing. Its
+claim projection drops the claim token, its River args validate the exact
+contract/version/UUID/generation tuple, its publisher only calls `InsertTx`
+through the caller's transaction, and its `GenerationTracker` exposes a
+publisher-owned local generation-drain API for `post_sync`. It does not
+register routes or workers, and it is not a controller capability.
+
+The scheduler track is complete in code, but the checked-in ownership policy
+still keeps Celery as the production owner. The scheduler loop is
+package-private and fail-closed: `HandoffDueResult` treats unsupported or
+invalid cron as a whole-window activation boundary, rolls the locked window
+back with `ErrSchedulerFallbackRequired`, and performs no coordinator or
+marker writes for that window; readiness only flips after one successful
+handoff window. Celery remains the sole owner until policy parity is complete,
+so the checked-in scheduler state stays non-authoritative and avoids silent
+candidate starvation.
 
 The checked-in deployment profile still keeps the topology disabled
 (`coexistence_disabled`, all replicas `0`), both registered kinds still route
@@ -110,20 +128,49 @@ at generation 1. Each Python claim binds the route and generation. For
 dispatch, finalize, and discovery, the publish transaction locks both the
 outbox row and route row through publish and mark; success/failure writes must
 still match that active generation. `post_sync` preserves its existing
-mark-before-publish commit, so its route lock ends at that commit. A future
-route switch therefore needs a separate bounded post-sync quiescence proof in
-addition to draining live claims. Unknown, paused, and River-routed kinds are
-not claimable by Python. The Go reconciler checks the persisted four-row set
-against the checked-in contract and closes readiness on a pause, missing row,
-generation error, or route drift.
+mark-before-publish commit, so its route lock ends at that commit. Unknown,
+paused, and River-routed kinds are not claimable by Python. The Go reconciler
+checks the persisted four-row set against the checked-in contract and closes
+readiness on a pause, missing row, generation error, or route drift.
 
-This is a fail-closed selector foundation, not River activation. All persisted
-and checked-in routes remain Celery, deployment profiles remain
-`coexistence_disabled` with zero replicas, and no Go sync handler or River
-sync-domain claimant exists. Do not change a route to River: it would strand
-the wakeup. The mutation-capable sync-domain scheduler,
-organization/entitlement gates, lease repair, River insertion, and handlers
-remain unfinished CHAOS-3039 work.
+`dev-health-workerctl routes pause|drain|resume` provides the audited transition
+surface. Pause and resume lock the route row first, then hold an outbox-table
+barrier and re-read state and live claims, covering both Celery's
+route-plus-outbox transaction and Go's outbox-only terminal commit. Resume
+requires the target to equal the checked-in route. River requires an exact
+typed capability, and a transport-changing `post_sync` resume requires a
+separately proven cross-process quiescer/controller under the old transport
+boundary. The publisher-owned local generation-drain API honors cancellation
+inside one Go process, but it neither implements the route quiescer contract
+nor proves other Go or Celery publishers have drained. The shipped command
+registers no capabilities, so today it can
+pause, inspect/drain, and resume the same Celery route, including `post_sync`,
+but cannot activate River.
+
+Two dormant transaction kernels now sit behind that foundation. The scheduler
+kernel locks a bounded due window with `FOR UPDATE ... SKIP LOCKED`, invokes an
+injected coordinator through the same PostgreSQL transaction, and advances the
+schedule marker only after that durable handoff succeeds. Its public
+repository constructor embeds an opaque Celery/`coexistence_disabled`
+ownership policy, so `HandoffDue` rejects mutation before beginning a
+transaction; Go mutation authority requires a reviewed package-private source
+change. The dormant lifecycle loop exists, but its checked-in composition has
+no mutation repository or coordinator factory. An unsupported or invalid cron
+candidate rolls back the entire locked window with readiness closed, so Celery
+remains sole owner instead of allowing a healthy-but-starved Go window. The
+sync reconciler kernel first commits a bounded claim set, then
+delivers and terminally marks each at-least-once claim in its own fresh
+transaction, while `post_sync` is terminally marked and committed before the
+external handoff begins. Neither kernel is constructed by the scheduler or
+reconciler command.
+
+This remains a fail-closed selector foundation, not River activation. All
+persisted and checked-in routes remain Celery, deployment profiles remain
+`coexistence_disabled` with zero replicas, and no Go sync handler is compiled.
+Do not change a route to River: it would strand the wakeup. Activation still
+requires scheduler coordinator/policy composition, reconciler loop wiring,
+concrete River publishers, handlers, and capabilities, and a cross-process
+`post_sync` quiescer/controller plus external-handoff binding.
 
 For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`
 and run:
@@ -136,13 +183,26 @@ The command holds one exported read-only `REPEATABLE READ` snapshot across the
 Python and Go observations and emits only a safe match/mismatch report. It
 does not claim or publish work. See the
 [v2 parity evidence](../architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md).
+The `sync-parity` target in `docker/Dockerfile` packages the Go binary, Python
+observer, installed Python runtime, and checked-in sync-dispatch contract so
+the same comparison can run as an isolated container. The Go reconciler image
+also packages `contracts/sync-dispatch/v1`; packaging makes its registry
+loadable at startup but does not wire the dormant mutation kernel.
 
 The Go scheduler also remains blocked on the Phase 4
 `sync.plan_scheduled_config` coordinator. `sync.dispatch_run` starts from an
 existing `SyncRun` and cannot replace scheduled planning. Until the new
 coordinator consumes a stable occurrence identity and creates the scheduled
 domain plan transactionally, Celery Beat and `dispatch_scheduled_syncs` remain
-the sole schedule mutation owners.
+the sole schedule mutation owners by default. An operator may separately set
+`SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED=true` to let the bounded Celery
+consumer materialize pre-existing Go-authored identities; it does not own
+timing or activate the Go command loop. The default-off consumer now provides
+the authoritative Python planner path for a valid pending identity, while the
+dormant transaction kernel still needs organization existence, entitlement, and
+occurrence-claim parity, catch-up, and unsupported-cron policy parity. Its
+checked-in lifecycle composition has no mutation factory, and its ownership
+fence prevents the current command from mutating production markers.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target
@@ -277,6 +337,7 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS` | `60` | Backoff added to `available_at` when an eligible expired-lease unit is flipped to `RETRYING` before redispatch. |
 | `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | `60` | Delay used when redispatching sync-run work. |
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
+| `SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED` | `false` | Enables the bounded scheduled-occurrence consumer task and its Beat entry. Keep disabled until the Go occurrence producer and operational hand-off are ready. |
 | `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
 
 Provider budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not the provider's raw request or GraphQL cost counters. Jira emits separate route-family buckets for REST/JQL listing (`jira:search:jira_jql`), REST issue enrichment (`jira:rest_core:jira_issue_enrichment`), optional worklog fetching (`jira:rest_core:jira_worklogs` when `JIRA_FETCH_WORKLOGS=true`), and Atlassian GraphQL enrichment (`jira:graphql_cost:jira_gql_enrichment` when `ATLASSIAN_GQL_ENABLED=true`). LaunchDarkly feature-flag sync emits `launchdarkly:*` buckets for the `flags`, `audit_log`, and `code_refs` route families (see [LaunchDarkly sync budgeting](../architecture/launchdarkly-sync-budgeting.md)). Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
@@ -335,7 +396,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `execute_saved_report` | None | `reports` | Executes a SavedReport plan and persists markdown. Source: `report_task.py`. |
 | `dispatch_scheduled_reports` | None | `default` | Fans out scheduled report executions. Source: `report_scheduler.py`. |
 | ~~`run_backfill`~~ | `backfill run` | — | **Removed in CHAOS-2647.** The API backfill path now plans a backfill-mode `SyncRun` and fans out through `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; the standalone `backfill`-queue task and `sync_backfill.py` are deleted. |
-| `dispatch_scheduled_syncs` | None | `default` | Fans out organization sync configurations. Source: `sync_scheduler.py`. |
+| `dispatch_scheduled_syncs` | None | `scheduler` | Fans out organization sync configurations. Source: `sync_scheduler.py`. |
+| `consume_pending_scheduled_sync_occurrences` | None | `scheduler` | Default-off bounded materialization of Go-authored scheduled occurrences. Enabled only with `SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED=true`. Source: `sync_scheduler.py`. |
 | `dispatch_scheduled_metrics` | None | `default` | Fans out scheduled metrics. Source: `metrics_daily.py`. |
 | `monitor_queue_depths` | None | `monitoring` | Monitors queue depths. Source: `queue_monitor.py`. |
 ---
@@ -344,7 +406,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 
 | Schedule | Task | Interval | Queue |
 |----------|------|----------|-------|
-| `dispatch-scheduled-syncs` | `dispatch_scheduled_syncs` | Every 300 seconds (5 minutes) | `default` |
+| `dispatch-scheduled-syncs` | `dispatch_scheduled_syncs` | Every 300 seconds (5 minutes) | `scheduler` |
+| `consume-pending-scheduled-sync-occurrences` | `consume_pending_scheduled_sync_occurrences` | Every 300 seconds (5 minutes), only when enabled | `scheduler` |
 | `dispatch-scheduled-metrics` | `dispatch_scheduled_metrics` | Every 300 seconds (5 minutes) | `default` |
 | `run-complexity-daily` | `dispatch_complexity_job` | Daily at 00:45 UTC | `default` |
 | `run-daily-metrics` | `dispatch_daily_metrics_for_all_orgs` | Daily at 01:00 UTC | `default` |

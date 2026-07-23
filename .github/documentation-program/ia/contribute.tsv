@@ -7,10 +7,6 @@ con-arch	contribute	/contribute/architecture/	Understand architecture and bounda
 con-platform	con-arch	/contribute/architecture/platform/	Platform architecture	architecture	true	public	planned	false	
 con-storage	con-arch	/contribute/architecture/data-and-storage/	Data and storage boundaries	architecture	true	public	planned	false	
 con-contracts	con-arch	/contribute/architecture/contracts/	Stable contracts and source-of-truth rules	architecture	true	public	planned	false	
-con-go-runtime	con-arch	/contribute/architecture/go-worker-runtime/	Go worker runtime TRD	architecture	true	public	active	false	
-con-river-compat	con-arch	/contribute/architecture/river-compatibility/	River compatibility and enqueue boundary	decision	true	public	active	false	
-con-go-prd	con-arch	/contribute/architecture/go-worker-migration-prd/	Go worker migration PRD	product-requirements	true	public	active	false	
-con-go-plan	con-arch	/contribute/architecture/go-worker-migration-plan/	Go worker migration implementation plan	implementation-plan	true	public	active	false	
 con-dev	contribute	/contribute/development/	Develop and test	landing	true	public	planned	false	
 con-commands	con-dev	/contribute/development/commands/	Common development commands	task-guide	true	public	planned	false	
 con-tests	con-dev	/contribute/development/testing/	Testing layers and local validation	task-guide	true	public	planned	false	

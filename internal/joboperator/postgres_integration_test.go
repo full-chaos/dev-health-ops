@@ -17,6 +17,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -143,9 +145,22 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	routeRegistry, err := syncdispatchcontract.Load(filepath.Join("..", "..", "contracts", "sync-dispatch", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeCapabilities, err := syncroute.NewCapabilities(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeController, err := syncroute.NewController(domainPool, routeRegistry, routeCapabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
 	service, err := New(Dependencies{
 		Registry: registry, Backend: backend, Authorizer: authentication.Authorizer(),
 		DomainGuard: allowIntegrationDomainGuard{}, Auditor: auditor, Clock: func() time.Time { return now },
+		RouteController: routeController,
 	})
 	if err != nil {
 		t.Fatal(err)

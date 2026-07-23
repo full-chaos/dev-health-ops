@@ -25,6 +25,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -190,6 +192,18 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "deployment_contract_invalid")
 	}
+	routeRegistry, err := syncdispatchcontract.Load("contracts/sync-dispatch/v1")
+	if err != nil {
+		return nil, writeError(stderr, "contract_registry_invalid")
+	}
+	routeCapabilities, err := syncroute.NewCapabilities(nil)
+	if err != nil {
+		return nil, writeError(stderr, "contract_registry_invalid")
+	}
+	routeController, err := syncroute.NewController(pools.Domain, routeRegistry, routeCapabilities)
+	if err != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
 	streams := make([]streamProfileStatus, 0, 2)
 	for _, process := range manifest.Processes {
 		if process.Runtime != "stream" {
@@ -218,6 +232,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: backend, Authorizer: authentication.Authorizer(),
 		DomainGuard: guard, Auditor: auditor,
+		RouteController: routeController,
 	})
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
@@ -261,6 +276,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchDrain(ctx, runtime, args[1:], stdout, stderr)
 	case "contracts":
 		return dispatchContracts(ctx, runtime, args[1:], stdout, stderr)
+	case "routes":
+		return dispatchRoutes(ctx, runtime, args[1:], stdout, stderr)
 	case "streams":
 		if len(args) != 2 || args[1] != "status" {
 			return writeError(stderr, "invalid_request")
@@ -275,6 +292,60 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	if args[0] == "status" {
+		if len(args) != 2 {
+			return writeError(stderr, "invalid_request")
+		}
+		state, err := runtime.service.InspectRoute(ctx, runtime.principal, args[1])
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, state)
+	}
+	flags := quietFlags("routes " + args[0])
+	reason := flags.String("reason", "", "bounded reason code")
+	correlation := flags.String("correlation-id", "", "bounded correlation ID")
+	transport := flags.String("transport", "", "checked-in target transport")
+	quiescenceTimeout := flags.Duration("quiescence-timeout", 10*time.Second, "bounded external quiescence timeout")
+	if flags.Parse(args[1:]) != nil || flags.NArg() != 1 || *reason == "" || *correlation == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	kind := flags.Arg(0)
+	var (
+		state syncroute.RouteState
+		err   error
+	)
+	switch args[0] {
+	case "pause":
+		if *transport != "" {
+			return writeError(stderr, "invalid_request")
+		}
+		state, err = runtime.service.PauseRoute(ctx, runtime.principal, kind, *reason, *correlation)
+	case "drain":
+		if *transport != "" {
+			return writeError(stderr, "invalid_request")
+		}
+		state, err = runtime.service.DrainRoute(ctx, runtime.principal, kind, *reason, *correlation)
+	case "resume":
+		if *transport == "" {
+			return writeError(stderr, "invalid_request")
+		}
+		state, err = runtime.service.ResumeRoute(
+			ctx, runtime.principal, kind, *transport, *reason, *correlation, *quiescenceTimeout,
+		)
+	default:
+		return writeError(stderr, "invalid_request")
+	}
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, state)
 }
 
 func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {

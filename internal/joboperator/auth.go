@@ -135,7 +135,7 @@ func (authorizer *credentialAuthorizer) Authorize(_ context.Context, request Aut
 		return ErrAuthorization
 	}
 	required := ScopeWorkerOperate
-	if request.Action == ActionInspect {
+	if request.Action == ActionInspect || request.Action == ActionInspectRoute {
 		required = ScopeWorkerRead
 	}
 	if _, allowed := authorizer.scopes[required]; !allowed {

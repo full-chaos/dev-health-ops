@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
 
 type commandAuthorizer struct{ err error }
@@ -56,6 +58,24 @@ type commandAuditor struct{}
 
 func (commandAuditor) Begin(context.Context, joboperator.AuditEvent) (joboperator.AuditHandle, error) {
 	return nil, errors.New("unused")
+}
+
+type commandRouteController struct {
+	state syncroute.RouteState
+	err   error
+}
+
+func (controller commandRouteController) Inspect(context.Context, string) (syncroute.RouteState, error) {
+	return controller.state, controller.err
+}
+func (controller commandRouteController) Pause(context.Context, string) (syncroute.RouteState, error) {
+	return controller.state, controller.err
+}
+func (controller commandRouteController) Drain(context.Context, string) (syncroute.RouteState, error) {
+	return controller.state, controller.err
+}
+func (controller commandRouteController) Resume(context.Context, string, string, time.Duration) (syncroute.RouteState, error) {
+	return controller.state, controller.err
 }
 
 func TestDispatchStatusRequiresReadAuthorizationAndEmitsBoundedJSON(t *testing.T) {
@@ -115,6 +135,7 @@ func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRu
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: commandBackend{}, Authorizer: authorizer,
 		DomainGuard: commandDomainGuard{}, Auditor: commandAuditor{},
+		RouteController: commandRouteController{},
 	})
 	if err != nil {
 		t.Fatal(err)

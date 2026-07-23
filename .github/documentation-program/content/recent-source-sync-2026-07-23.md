@@ -21,7 +21,7 @@ Source changes:
 
 Public documentation impact:
 
-- add a supported PagerDuty administrator setup page;
+- add a supported PagerDuty administrator setup workflow under the approved incident-response source page;
 - explain organization-scoped OAuth, client-credentials fallback, exact callback path, read scopes, service discovery, repository mapping, preflight, initial backfill, disconnect, and rotation;
 - update provider troubleshooting and credential lifecycle guidance;
 - update environment and feature-availability reference;
@@ -102,7 +102,7 @@ Public documentation impact:
 
 | Source material | Prototype action | Publication boundary |
 | --- | --- | --- |
-| PagerDuty OAuth setup | Add and navigate an administrator guide | Current supported setup |
+| PagerDuty OAuth setup | Add and navigate an administrator guide under incident-response sources | Current supported setup |
 | PagerDuty backend/webhook contract | Summarize in admin, integration, operations, and reference pages | Exact backend details remain contributor/reference material |
 | JSM provider contract | Add an availability warning only | Withheld as a setup workflow until live proof exists |
 | Go worker TRD, PRD, plans, and evidence | Extract current runtime facts into operations and contributor docs | Planning history and benchmark evidence remain internal/source material |
@@ -115,16 +115,22 @@ Public documentation impact:
 The source review is applied to:
 
 - `/admin/data-sources/`
-- `/admin/data-sources/pagerduty/`
+- `/admin/data-sources/incident-response/`
 - `/admin/data-sources/credential-lifecycle/`
 - `/admin/sync-and-coverage/status-and-freshness/`
 - `/admin/troubleshooting/provider-connections/`
+- `/integrate/webhooks/configure/`
+- `/integrate/webhooks/verify-signatures/`
+- `/integrate/webhooks/retries-and-replay/`
 - `/operate/configure/environment-and-secrets/`
 - `/operate/configure/databases-and-storage/`
 - `/operate/configure/workers-and-schedules/`
 - `/operate/run/workers-and-jobs/`
 - `/operate/observe/health-checks/`
 - `/operate/observe/metrics-and-traces/`
+- `/operate/plan/capacity-and-sizing/`
+- `/operate/runbooks/provider-authentication-failure/`
+- `/operate/runbooks/worker-or-queue-failure/`
 - `/operate/install/production/`
 - `/reference/configuration/environment/`
 - `/reference/configuration/feature-flags/`
@@ -132,6 +138,7 @@ The source review is applied to:
 - `/contribute/start/repository-map/`
 - `/contribute/architecture/platform/`
 - `/contribute/architecture/data-and-storage/`
+- `/contribute/architecture/contracts/`
 - `/contribute/development/commands/`
 
 ## Explicitly withheld

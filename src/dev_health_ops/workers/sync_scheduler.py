@@ -360,7 +360,6 @@ def reconcile_pending_scheduled_sync_occurrences(
     claim_limit = min(limit, DEFAULT_PENDING_OCCURRENCE_RECONCILE_LIMIT)
     now = datetime.now(timezone.utc)
     due_occurrences = session.query(ScheduledSyncOccurrence.occurrence_id).filter(
-        ScheduledSyncOccurrence.org_id == SyncConfiguration.org_id,
         ScheduledSyncOccurrence.sync_config_id == SyncConfiguration.id,
         ScheduledSyncOccurrence.scheduled_job_id == ScheduledJob.id,
         ScheduledSyncOccurrence.job_run_id.is_(None),
@@ -416,7 +415,6 @@ def reconcile_pending_scheduled_sync_occurrences(
             candidates = (
                 session.query(ScheduledSyncOccurrence)
                 .filter(
-                    ScheduledSyncOccurrence.org_id == config.org_id,
                     ScheduledSyncOccurrence.sync_config_id == config.id,
                     ScheduledSyncOccurrence.scheduled_job_id == job.id,
                     ScheduledSyncOccurrence.job_run_id.is_(None),

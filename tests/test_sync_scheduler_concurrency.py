@@ -447,7 +447,7 @@ def test_postgres_occurrence_consumer_skips_locked_pair_and_poison_prefix(monkey
         poisoned_occurrence = ScheduledSyncOccurrence(
             occurrence_id="sha256:poisoned-postgres-prefix",
             identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
-            org_id=org_id,
+            org_id=f"{org_id}-mismatch",
             sync_config_id=later_config.id,
             scheduled_job_id=later_job.id,
             scheduled_for=now - 2 * HOUR,
@@ -467,6 +467,7 @@ def test_postgres_occurrence_consumer_skips_locked_pair_and_poison_prefix(monkey
         locked_config_id = locked_config.id
         later_config_id = later_config.id
         locked_job_id = locked_job.id
+        locked_occurrence_id = locked_occurrence.occurrence_id
         poisoned_occurrence_id = poisoned_occurrence.occurrence_id
         eligible_occurrence_id = eligible_occurrence.occurrence_id
 
@@ -494,9 +495,7 @@ def test_postgres_occurrence_consumer_skips_locked_pair_and_poison_prefix(monkey
         with _session_scope(session_factory) as verify:
             poisoned = verify.get(ScheduledSyncOccurrence, poisoned_occurrence_id)
             eligible = verify.get(ScheduledSyncOccurrence, eligible_occurrence_id)
-            locked = verify.get(
-                ScheduledSyncOccurrence, locked_occurrence.occurrence_id
-            )
+            locked = verify.get(ScheduledSyncOccurrence, locked_occurrence_id)
             assert poisoned is not None and poisoned.reconcile_status == "quarantined"
             assert eligible is not None and eligible.sync_run_id is not None
             assert locked is not None and locked.sync_run_id is None

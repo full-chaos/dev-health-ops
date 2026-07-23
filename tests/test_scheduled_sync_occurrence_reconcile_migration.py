@@ -77,10 +77,10 @@ def test_migration_0051_backfills_completed_links_and_is_reversible() -> None:
                     == [
                         "reconcile_status",
                         "reconcile_next_attempt_at",
-                        "org_id",
                         "sync_config_id",
                         "scheduled_job_id",
                         "scheduled_for",
+                        "org_id",
                     ]
                     for index in index_columns
                 )

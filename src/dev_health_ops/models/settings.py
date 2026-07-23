@@ -752,10 +752,10 @@ class ScheduledSyncOccurrence(Base):
             "ix_scheduled_sync_occurrence_reconcile_due",
             "reconcile_status",
             "reconcile_next_attempt_at",
-            "org_id",
             "sync_config_id",
             "scheduled_job_id",
             "scheduled_for",
+            "org_id",
             postgresql_where=text("reconcile_status IN ('pending', 'retry')"),
         ),
     )

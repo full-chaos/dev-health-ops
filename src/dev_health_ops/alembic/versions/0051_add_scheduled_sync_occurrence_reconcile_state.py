@@ -88,10 +88,10 @@ def upgrade() -> None:
             [
                 "reconcile_status",
                 "reconcile_next_attempt_at",
-                "org_id",
                 "sync_config_id",
                 "scheduled_job_id",
                 "scheduled_for",
+                "org_id",
             ],
             postgresql_where=sa.text("reconcile_status IN ('pending', 'retry')"),
         )

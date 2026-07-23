@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." >/dev/null 2>&1 && pwd -P)"
-OUTPUT="${REPO_ROOT}/docs/architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
+OUTPUT="${REPO_ROOT}/.github/docs-legacy/architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
 TEMP_RESULT=""
 
 cleanup() {

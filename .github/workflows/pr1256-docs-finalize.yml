@@ -1,0 +1,162 @@
+name: PR 1256 canonical documentation finalizer
+
+on:
+  pull_request_target:
+    types: [synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-1256-canonical-docs-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: >-
+      github.event.number == 1256 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/docs-content-style-remediation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the review branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/docs-content-style-remediation
+          fetch-depth: 0
+
+      - name: Merge current main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+          git merge --no-edit origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install documentation and validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-docs.txt
+          python -m pip install ruff pytest
+
+      - name: Apply canonical documentation finalization
+        run: python scripts/pr1256_finalize_docs.py
+
+      - name: Remove the one-time finalizer from the review branch
+        run: |
+          rm -f \
+            scripts/pr1256_finalize_docs.py \
+            .github/workflows/pr1256-docs-finalize.yml
+
+      - name: Format and lint changed Python
+        run: |
+          ruff format \
+            scripts/build_docs_cloudflare.py \
+            scripts/check_docs_links.py \
+            scripts/check_freshness_inventory.py \
+            scripts/check_investment_docs_drift.py \
+            scripts/docs_inventory_review.py \
+            scripts/docs_inventory_v2.py \
+            scripts/docs_publication.py \
+            scripts/gen_taxonomy_docs.py \
+            scripts/mkdocs_migrated_source_links.py \
+            scripts/validate_docs_v2_publication.py \
+            tests/docs/test_publication_manifest.py
+          ruff check \
+            scripts/build_docs_cloudflare.py \
+            scripts/check_docs_links.py \
+            scripts/check_freshness_inventory.py \
+            scripts/check_investment_docs_drift.py \
+            scripts/docs_inventory_review.py \
+            scripts/docs_inventory_v2.py \
+            scripts/docs_publication.py \
+            scripts/gen_taxonomy_docs.py \
+            scripts/mkdocs_migrated_source_links.py \
+            scripts/validate_docs_v2_publication.py \
+            tests/docs/test_publication_manifest.py
+
+      - name: Validate the canonical documentation
+        run: |
+          python scripts/validate_docs_v2_publication.py
+          python -m mkdocs build --strict --config-file mkdocs.yml
+          python scripts/check_built_site_links.py --site-dir .build/docs
+          python scripts/check_docs_candidate_search.py \
+            --site-dir .build/docs \
+            --queries .github/documentation-program/phase-10/search-acceptance.json
+          python scripts/check_docs_candidate_accessibility.py \
+            --site-dir .build/docs \
+            --css docs/stylesheets/extra.css
+          python scripts/check_docs_candidate_facts.py
+          python scripts/check_docs_links.py
+          python scripts/check_investment_docs_drift.py
+          python scripts/check_freshness_inventory.py
+          python scripts/docs_publication.py
+
+      - name: Validate the frozen inventory archive
+        run: |
+          mkdir -p .build
+          cp .github/documentation-program/inventory/documentation-inventory.json \
+            .build/documentation-inventory.json
+          python scripts/validate_docs_inventory_review.py \
+            --generated-json .build/documentation-inventory.json \
+            --inventory-dir .github/documentation-program/inventory \
+            --ia-dir .github/documentation-program/ia
+
+      - name: Run documentation unit tests
+        run: |
+          pytest -q \
+            tests/docs/test_publication_manifest.py \
+            tests/docs/test_docs_inventory_v2.py \
+            tests/docs/test_freshness_inventory.py
+
+      - name: Verify the migration boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d docs
+          test -d .github/docs-legacy
+          test -f mkdocs.yml
+          test ! -e docs-prototype
+          test ! -e mkdocs.prototype.yml
+
+          while IFS='=' read -r target source; do
+            cmp "docs/$target" "$source"
+          done < <(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          mapping = json.loads(
+              Path(
+                  '.github/documentation-program/content/migrated-source-pages.json'
+              ).read_text(encoding='utf-8')
+          )
+          for target, source in sorted(mapping.items()):
+              print(f"{target}={source}")
+          PY
+          )
+
+          stale=0
+          for root in Makefile mkdocs.yml wrangler.jsonc docs scripts tests docs-qa \
+            .github/workflows \
+            .github/documentation-program/content \
+            .github/documentation-program/phase-9 \
+            .github/documentation-program/phase-10 \
+            .github/documentation-program/phase-11; do
+            [[ -e "$root" ]] || continue
+            if grep -RInE 'docs-prototype|mkdocs\.prototype\.yml' "$root"; then
+              stale=1
+            fi
+          done
+          test "$stale" -eq 0
+          git diff --check
+
+      - name: Commit and push the finalized branch
+        run: |
+          git add -A
+          git commit -m 'docs: finish canonical migration and validation cleanup'
+          git push origin HEAD:agent/docs-content-style-remediation

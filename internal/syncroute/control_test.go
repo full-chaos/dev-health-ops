@@ -44,7 +44,7 @@ func TestResumeFailsBeforeTransactionWithoutMatchingRiverCapability(t *testing.T
 			Route: syncdispatchcontract.RouteRiver, RollbackRoute: syncdispatchcontract.RouteCelery,
 		},
 		syncdispatchcontract.KindPostSync: {
-			Kind: syncdispatchcontract.KindPostSync, Delivery: syncdispatchcontract.DeliveryAtMostOnceMarkBefore,
+			Kind: syncdispatchcontract.KindPostSync, Delivery: syncdispatchcontract.DeliveryAtLeastOnce,
 			Route: syncdispatchcontract.RouteRiver, RollbackRoute: syncdispatchcontract.RouteCelery,
 		},
 	}

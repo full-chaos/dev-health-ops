@@ -60,7 +60,7 @@ func TestRouteControlPostgresConcurrencyDrainAndRollback(t *testing.T) {
 			Route: syncdispatchcontract.RouteCelery, RollbackRoute: syncdispatchcontract.RouteCelery,
 		},
 		syncdispatchcontract.KindPostSync: {
-			Kind: syncdispatchcontract.KindPostSync, Delivery: syncdispatchcontract.DeliveryAtMostOnceMarkBefore,
+			Kind: syncdispatchcontract.KindPostSync, Delivery: syncdispatchcontract.DeliveryAtLeastOnce,
 			Route: syncdispatchcontract.RouteCelery, RollbackRoute: syncdispatchcontract.RouteCelery,
 		},
 		syncdispatchcontract.KindReferenceDiscovery: {

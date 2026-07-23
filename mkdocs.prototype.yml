@@ -101,7 +101,7 @@ nav:
           - GitHub: admin/data-sources/github.md
           - GitLab: admin/data-sources/gitlab.md
           - Jira Service Management: admin/data-sources/jira-atlassian.md
-          - Incident-response sources: admin/data-sources/incident-response.md
+          - Incident response / PagerDuty: admin/data-sources/incident-response.md
           - Credential lifecycle: admin/data-sources/credential-lifecycle.md
       - Sync and coverage:
           - admin/sync-and-coverage/index.md
@@ -131,6 +131,7 @@ nav:
           - operate/configure/index.md
           - Environment and secrets: operate/configure/environment-and-secrets.md
           - Databases and storage: operate/configure/databases-and-storage.md
+          - Database connection pooling: operate/configure/database-connection-pooling.md
           - Network and TLS: operate/configure/network-and-tls.md
           - Workers and schedules: operate/configure/workers-and-schedules.md
           - External services: operate/configure/external-services.md
@@ -181,6 +182,7 @@ nav:
       - Webhooks:
           - integrate/webhooks/index.md
           - Configure: integrate/webhooks/configure.md
+          - PagerDuty V3 contract: integrate/webhooks/pagerduty.md
           - Verify signatures: integrate/webhooks/verify-signatures.md
           - Retries and replay: integrate/webhooks/retries-and-replay.md
       - Build an integration:
@@ -239,6 +241,10 @@ nav:
           - Platform: contribute/architecture/platform.md
           - Data and storage: contribute/architecture/data-and-storage.md
           - Stable contracts: contribute/architecture/contracts.md
+          - Go worker runtime TRD: contribute/architecture/go-worker-runtime.md
+          - River compatibility ADR: contribute/architecture/river-compatibility.md
+          - Go worker migration PRD: contribute/architecture/go-worker-migration-prd.md
+          - Go worker migration plan: contribute/architecture/go-worker-migration-plan.md
       - Develop and test:
           - contribute/development/index.md
           - Commands: contribute/development/commands.md

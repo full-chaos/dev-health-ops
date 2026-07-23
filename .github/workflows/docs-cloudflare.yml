@@ -17,6 +17,8 @@ on:
       - 'scripts/prepare_docs_cloudflare.py'
       - 'scripts/read_wrangler_output.py'
       - 'scripts/check_docs_cloudflare_host.py'
+      - 'scripts/mkdocs_migrated_source_links.py'
+      - '.github/documentation-program/content/migrated-source-pages.json'
       - '.github/documentation-program/phase-9/**'
       - '.github/documentation-program/phase-10/**'
       - '.github/documentation-program/phase-11/**'
@@ -64,15 +66,25 @@ jobs:
         run: pip install -r requirements-docs.txt
 
       - name: Build and prepare validated preview assets
-        run: python scripts/build_docs_cloudflare.py --mode preview --full-check
+        run: |
+          mkdir -p .build
+          set -o pipefail
+          python scripts/build_docs_cloudflare.py --mode preview --full-check \
+            2>&1 | tee .build/docs-cloudflare-build.log
 
-      - name: Upload build evidence
+      - name: Upload build evidence and diagnostics
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docs-cloudflare-preview-${{ github.sha }}
-          path: .build/docs-cloudflare
+          path: |
+            .build/docs-cloudflare/**
+            .build/docs-cloudflare-build.log
+            .build/docs-*.log
+            .build/docs-*.tsv
+            .build/docs-*.md
           include-hidden-files: true
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Check Cloudflare preview credentials

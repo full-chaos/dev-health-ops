@@ -255,3 +255,27 @@ async def test_metric_series_argmax_dedups_append_only_repo_metrics(
     normalized = " ".join(captured["query"].split())
     assert "argMax(total_loc_touched, computed_at)" in normalized
     assert "GROUP BY day, repo_id" in normalized
+
+
+@pytest.mark.asyncio
+async def test_weighted_pr_rework_ratio_dedups_ratio_and_weight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture(monkeypatch, metrics)
+    await metrics.fetch_metric_value(
+        cast(BaseMetricsSink, object()),
+        table="repo_metrics_daily",
+        column="pr_rework_ratio",
+        start_day=date(2026, 5, 1),
+        end_day=date(2026, 5, 2),
+        scope_filter=" AND repo_id IN %(repo_ids)s",
+        scope_params={"repo_ids": ["r1"]},
+        aggregator="avg",
+        org_id="org-a",
+    )
+    normalized = " ".join(captured["query"].split())
+    assert "argMax(pr_rework_ratio, computed_at) AS pr_rework_ratio" in normalized
+    assert "argMax(prs_merged, computed_at) AS prs_merged" in normalized
+    assert (
+        "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)" in normalized
+    )

@@ -69,10 +69,20 @@ def _metric_from_clause(
     if natural_key is None:
         return table
     key_columns = ",\n                ".join(natural_key)
+    value_columns = [column]
+    if table == "repo_metrics_daily" and column == "pr_rework_ratio":
+        # The weighted aggregate below also consumes prs_merged. Both values
+        # must come from the same latest daily generation; selecting only the
+        # ratio here leaves the outer expression with an unknown identifier.
+        value_columns.append("prs_merged")
+    value_projections = ",\n                ".join(
+        f"argMax({value_column}, computed_at) AS {value_column}"
+        for value_column in value_columns
+    )
     return f"""(
             SELECT
                 {key_columns},
-                argMax({column}, computed_at) AS {column}
+                {value_projections}
             FROM {table}
             WHERE day >= %({start_param})s AND day < %({end_param})s
             {scope_filter}

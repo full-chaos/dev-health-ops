@@ -1,0 +1,142 @@
+name: PR 1256 canonical documentation migration
+
+on:
+  pull_request_target:
+    types: [synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-1256-canonical-docs-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: >-
+      github.event.number == 1256 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/docs-content-style-remediation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the review branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/docs-content-style-remediation
+          fetch-depth: 0
+
+      - name: Merge main and perform the literal documentation promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+
+          work="$(mktemp -d)"
+          cp -a docs "$work/canonical-docs"
+          cp mkdocs.yml "$work/canonical-mkdocs.yml"
+          mkdir -p "$work/main"
+          git archive origin/main docs | tar -x -C "$work/main"
+          git show origin/main:mkdocs.yml > "$work/main-mkdocs.yml"
+
+          set +e
+          git merge --no-commit --no-ff origin/main
+          merge_status=$?
+          set -e
+
+          if [[ $merge_status -ne 0 ]]; then
+            while IFS= read -r path; do
+              [[ -n "$path" ]] || continue
+              case "$path" in
+                docs/*|docs-prototype/*|.github/docs-legacy/*|mkdocs.yml|mkdocs.prototype.yml|Makefile|wrangler.jsonc|requirements-docs.txt|.gitignore|.github/documentation-program/*|.github/workflows/docs-*|scripts/build_docs_cloudflare.py|scripts/mkdocs_migrated_source_links.py|scripts/validate_docs_v2_publication.py)
+                  side=ours
+                  ;;
+                *)
+                  side=theirs
+                  ;;
+              esac
+
+              if git checkout "--${side}" -- "$path" 2>/dev/null; then
+                git add "$path"
+              else
+                git rm -f --ignore-unmatch "$path"
+              fi
+            done < <(git diff --name-only --diff-filter=U)
+          fi
+
+          unresolved="$(git diff --name-only --diff-filter=U)"
+          if [[ -n "$unresolved" ]]; then
+            echo 'Unresolved merge conflicts remain:'
+            printf '%s\n' "$unresolved"
+            exit 1
+          fi
+
+          rm -rf docs docs-prototype .github/docs-legacy
+          cp -a "$work/canonical-docs" docs
+          mkdir -p .github/docs-legacy
+          cp -a "$work/main/docs/." .github/docs-legacy/
+          cp "$work/main-mkdocs.yml" .github/docs-legacy/mkdocs.yml
+          cp "$work/canonical-mkdocs.yml" mkdocs.yml
+          rm -f mkdocs.prototype.yml
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import shutil
+          from pathlib import Path
+
+          root = Path.cwd()
+          mapping = {
+              "admin/data-sources/incident-response.md": ".github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md",
+              "admin/data-sources/jira-atlassian.md": ".github/docs-legacy/providers/jira-service-management.md",
+              "contribute/architecture/go-worker-migration-plan.md": ".github/docs-legacy/plans/go-worker-migration-implementation-plan.md",
+              "contribute/architecture/go-worker-migration-prd.md": ".github/docs-legacy/product/go-worker-migration-prd.md",
+              "contribute/architecture/go-worker-runtime.md": ".github/docs-legacy/architecture/go-worker-runtime-trd.md",
+              "contribute/architecture/river-compatibility.md": ".github/docs-legacy/decisions/chaos-3034-river-compatibility.md",
+              "integrate/webhooks/pagerduty.md": ".github/docs-legacy/architecture/pagerduty-contract.md",
+              "operate/configure/database-connection-pooling.md": ".github/docs-legacy/ops/database-connection-pooling.md",
+              "operate/run/workers-and-jobs.md": ".github/docs-legacy/ops/workers.md",
+              "reference/cli/index.md": ".github/docs-legacy/ops/cli-reference.md",
+          }
+
+          mapping_path = (
+              root
+              / ".github"
+              / "documentation-program"
+              / "content"
+              / "migrated-source-pages.json"
+          )
+          mapping_path.write_text(
+              json.dumps(mapping, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          for target, source in mapping.items():
+              source_path = root / source
+              target_path = root / "docs" / target
+              if not source_path.is_file():
+                  raise FileNotFoundError(source)
+              target_path.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source_path, target_path)
+          PY
+
+          rm -f \
+            .github/workflows/finish-canonical-docs.yml \
+            .github/workflows/canonical-docs-sync.yml \
+            .github/workflows/promote-docs-canonical.yml \
+            .github/workflows/run-docs-promotion.yml \
+            .github/workflows/ruff-format-probe.yml \
+            .github/workflows/pr1256-canonical-migration.yml
+
+          test -d docs
+          test -d .github/docs-legacy
+          test ! -e docs-prototype
+          test -f mkdocs.yml
+          test ! -e mkdocs.prototype.yml
+
+          git add -A
+          git commit -m 'docs: merge main and complete canonical directory migration'
+          git push origin HEAD:agent/docs-content-style-remediation

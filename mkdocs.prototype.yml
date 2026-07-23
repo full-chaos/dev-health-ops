@@ -256,6 +256,9 @@ nav:
           - Write and review: contribute/documentation/write-and-review.md
           - Preview and validate: contribute/documentation/preview-and-validate.md
 
+hooks:
+  - scripts/mkdocs_migrated_source_links.py
+
 plugins:
   - search
 

@@ -361,6 +361,13 @@ func validateProcess(process Process) error {
 			process.QueueControlMaxConnections != 0 || !process.RequiresValkey || len(process.QueueWorkers) != 0 {
 			return errors.New("stream runtime wiring is invalid")
 		}
+		// External ingest intentionally has one consumer identity and one
+		// processing lane until a separate partition/reclaim design proves
+		// horizontal safety. Keep this fail-closed in the checked-in contract;
+		// a duplicate deployment must be rejected before readiness can open.
+		if process.Name == "stream-external" && process.MaxReplicas != 1 {
+			return errors.New("external stream runtime must be a singleton")
+		}
 	default:
 		return errors.New("runtime is invalid")
 	}

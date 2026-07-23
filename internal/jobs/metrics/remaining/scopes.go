@@ -61,14 +61,22 @@ type membershipScope struct {
 	RepoIDs []string `json:"repo_ids,omitempty"`
 }
 type extraMetricsScope struct {
-	Version      int    `json:"version"`
-	Day          string `json:"day"`
-	BackfillDays int    `json:"backfill_days"`
+	Version      int     `json:"version"`
+	Day          string  `json:"day"`
+	BackfillDays int     `json:"backfill_days"`
+	RepoID       *string `json:"repo_id,omitempty"`
+	RepoName     *string `json:"repo_name,omitempty"`
+	Sink         string  `json:"sink"`
+	Provider     string  `json:"provider"`
 }
 type teamMetricsScope struct {
-	Version      int    `json:"version"`
-	Day          string `json:"day"`
-	BackfillDays int    `json:"backfill_days"`
+	Version      int     `json:"version"`
+	Day          string  `json:"day"`
+	BackfillDays int     `json:"backfill_days"`
+	RepoID       *string `json:"repo_id,omitempty"`
+	RepoName     *string `json:"repo_name,omitempty"`
+	Sink         string  `json:"sink"`
+	Provider     string  `json:"provider"`
 }
 
 func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, error) {
@@ -132,7 +140,8 @@ func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, e
 		if err := strictScope(raw, &value); err != nil {
 			return nil, err
 		}
-		if value.Version != ScopeVersion || !validDate(value.Day) || value.BackfillDays < 1 || value.BackfillDays > 30 {
+		if value.Version != ScopeVersion || !validDate(value.Day) || value.BackfillDays < 1 || value.BackfillDays > 30 ||
+			!optionalUUID(value.RepoID) || !boundedOptional(value.RepoName, 256) || !validSink(value.Sink) || !validProvider(value.Provider) {
 			return nil, errors.New("invalid extra metrics scope")
 		}
 		return json.Marshal(value)
@@ -141,7 +150,8 @@ func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, e
 		if err := strictScope(raw, &value); err != nil {
 			return nil, err
 		}
-		if value.Version != ScopeVersion || !validDate(value.Day) || value.BackfillDays < 1 || value.BackfillDays > 30 {
+		if value.Version != ScopeVersion || !validDate(value.Day) || value.BackfillDays < 1 || value.BackfillDays > 30 ||
+			!optionalUUID(value.RepoID) || !boundedOptional(value.RepoName, 256) || !validSink(value.Sink) || !validProvider(value.Provider) {
 			return nil, errors.New("invalid team metrics scope")
 		}
 		return json.Marshal(value)
@@ -167,8 +177,8 @@ func optionalUUID(value *string) bool {
 	if value == nil {
 		return true
 	}
-	_, err := uuid.Parse(*value)
-	return err == nil
+	parsed, err := uuid.Parse(*value)
+	return err == nil && parsed.String() == *value
 }
 func optionalPositive(value *int) bool { return value == nil || (*value > 0 && *value <= 1000000) }
 func boundedOptional(value *string, max int) bool {
@@ -186,10 +196,27 @@ func boundedStrings(values []string, maxCount, maxLength int) bool {
 	return true
 }
 func allUUID(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if _, err := uuid.Parse(value); err != nil {
+		parsed, err := uuid.Parse(value)
+		if err != nil || parsed.String() != value {
 			return false
 		}
+		if _, duplicate := seen[value]; duplicate {
+			return false
+		}
+		seen[value] = struct{}{}
 	}
 	return true
+}
+
+func validSink(value string) bool { return value == "auto" || value == "clickhouse" }
+
+func validProvider(value string) bool {
+	switch value {
+	case "auto", "all", "jira", "github", "gitlab", "none":
+		return true
+	default:
+		return false
+	}
 }

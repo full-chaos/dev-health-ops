@@ -109,7 +109,9 @@ the schedule repository performs one limited `SELECT`, and neither package
 locks, claims, updates, publishes, or registers a production loop. The
 schedule result is scoped to schedule/marker timing and does not represent
 organization or feature-entitlement approval. Nondeterministic Croniter `R`
-expressions are reported as unsupported rather than reproduced. The
+expressions and other valid forms outside the versioned deterministic grammar
+are reported as unsupported rather than guessed. Unsupported rows are never
+timing-eligible. The
 mutation-capable sync-domain scheduler, organization/entitlement gates, lease
 repair, and selectable Celery/River transport remain unfinished CHAOS-3039
 work.

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const maximumCronSearchMinutes = 5 * 366 * 24 * 60
+const maximumCronSearchMinutes = 50 * 366 * 24 * 60
 
 type cronSpec struct {
 	minute  field
@@ -40,10 +40,10 @@ type dayOfWeekField struct {
 	clauses []dayOfWeekClause
 }
 
-// NextOccurrence implements the five-field, local-wall-clock portion of the
-// croniter contract used by Python. It intentionally accepts only five fields:
-// the shadow's input boundary is narrower than croniter's optional sixth and
-// seventh fields, whose interpretation differs across cron libraries.
+// NextOccurrence implements the versioned deterministic five-field,
+// local-wall-clock subset of the Croniter contract used by Python. Random R
+// expressions, mixed auxiliary W/nth/last DOM-DOW expressions, and optional
+// sixth/seventh fields are outside this shadow-comparison boundary.
 func NextOccurrence(expression string, base time.Time, timezoneName string) (time.Time, bool, error) {
 	return nextOccurrenceContext(context.Background(), expression, base, timezoneName)
 }
@@ -103,9 +103,17 @@ func scheduleLocation(name string) (*time.Location, bool) {
 func parseCron(expression string) (cronSpec, error) {
 	parts := strings.Fields(expression)
 	if len(parts) != 5 {
+		if len(parts) == 6 || len(parts) == 7 ||
+			len(parts) == 1 && strings.HasPrefix(strings.ToLower(parts[0]), "@") {
+			return cronSpec{}, ErrUnsupportedCron
+		}
 		return cronSpec{}, fmt.Errorf("cron expression must have exactly five fields")
 	}
-	if hasRandomCronField(parts) {
+	random, err := hasRandomCronField(parts)
+	if err != nil {
+		return cronSpec{}, err
+	}
+	if random {
 		return cronSpec{}, ErrUnsupportedRandomCron
 	}
 	minute, err := parseField(parts[0], 0, 59, nil)
@@ -128,20 +136,44 @@ func parseCron(expression string) (cronSpec, error) {
 	if err != nil {
 		return cronSpec{}, err
 	}
+	// Croniter retains auxiliary W/nth/last state while internally evaluating
+	// DOM/DOW union branches. Mixed restricted fields therefore have surprising
+	// conjunction and search-failure behavior. Keep them outside this
+	// deterministic subset instead of returning a false timing decision.
+	if day.nearestWeekday != 0 && !weekDay.wildcard ||
+		len(weekDay.clauses) > 0 && !day.wildcard {
+		return cronSpec{}, ErrUnsupportedCron
+	}
 	return cronSpec{minute: minute, hour: hour, day: day, month: month, weekDay: weekDay}, nil
 }
 
-func hasRandomCronField(parts []string) bool {
-	for _, part := range parts {
-		for _, term := range strings.Split(strings.ToLower(part), ",") {
-			base := strings.SplitN(term, "/", 2)[0]
-			if base == "r" ||
-				(strings.HasPrefix(base, "r(") && strings.HasSuffix(base, ")")) {
-				return true
+func hasRandomCronField(parts []string) (bool, error) {
+	ranges := [][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 7}}
+	for fieldIndex, part := range parts {
+		base, _, _, err := parseStep(strings.ToLower(part))
+		if err != nil {
+			continue
+		}
+		if base == "r" {
+			return true, nil
+		}
+		if !strings.HasPrefix(base, "r(") || !strings.HasSuffix(base, ")") {
+			continue
+		}
+		bounds := strings.Split(strings.TrimSuffix(strings.TrimPrefix(base, "r("), ")"), "-")
+		if len(bounds) != 2 {
+			continue
+		}
+		start, startErr := strconv.Atoi(bounds[0])
+		end, endErr := strconv.Atoi(bounds[1])
+		if startErr == nil && endErr == nil && start >= 0 && start < end {
+			if end < ranges[fieldIndex][0] || start > ranges[fieldIndex][1] {
+				return false, fmt.Errorf("random cron range is outside field bounds")
 			}
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 var monthNames = map[string]int{
@@ -181,9 +213,9 @@ func parseField(raw string, minimum, maximum int, aliases map[string]int) (field
 			// singleton. For example 5/15 means 5,20,35,50.
 			end = maximum
 		}
-		values := rangeValues(start, end, minimum, maximum)
-		for index := 0; index < len(values); index += step {
-			result.values[values[index]] = struct{}{}
+		rangeSyntax := base == "*" || strings.Contains(base, "-") || hasStep
+		for _, value := range rangeValues(start, end, minimum, maximum, step, rangeSyntax) {
+			result.values[value] = struct{}{}
 		}
 	}
 	return result, nil
@@ -195,11 +227,15 @@ func parseDayOfMonthField(raw string) (dayOfMonthField, error) {
 		wildcard, _ := parseField("*", 1, 31, nil)
 		return dayOfMonthField{field: wildcard}, nil
 	}
-	if strings.HasSuffix(normalized, "w") {
+	if strings.HasSuffix(normalized, "w") || strings.HasPrefix(normalized, "w") {
 		if strings.ContainsAny(normalized, ",-/") || normalized == "lw" {
 			return dayOfMonthField{}, fmt.Errorf("nearest weekday requires one day value")
 		}
-		value, err := parseValue(strings.TrimSuffix(normalized, "w"), 1, 31, nil)
+		dayValue := strings.TrimSuffix(normalized, "w")
+		if strings.HasPrefix(normalized, "w") {
+			dayValue = strings.TrimPrefix(normalized, "w")
+		}
+		value, err := parseValue(dayValue, 1, 31, nil)
 		if err != nil {
 			return dayOfMonthField{}, err
 		}
@@ -229,8 +265,7 @@ func parseDayOfMonthField(raw string) (dayOfMonthField, error) {
 func parseDayOfWeekField(raw string) (dayOfWeekField, error) {
 	normalized := strings.ToLower(raw)
 	if normalized == "?" {
-		wildcard, _ := parseField("*", 0, 7, weekDayNames)
-		normalizeSunday(&wildcard)
+		wildcard, _ := parseDayOfWeekOrdinaryField("*")
 		return dayOfWeekField{field: wildcard}, nil
 	}
 	if strings.Contains(normalized, "?") {
@@ -254,7 +289,10 @@ func parseDayOfWeekField(raw string) (dayOfWeekField, error) {
 			result.clauses = append(result.clauses, dayOfWeekClause{weekday: value, last: true})
 		case strings.Contains(term, "#"):
 			parts := strings.Split(term, "#")
-			if len(parts) != 2 || strings.ContainsAny(parts[0], "-/") {
+			if len(parts) == 2 && strings.ContainsAny(parts[0], "-/") {
+				return dayOfWeekField{}, ErrUnsupportedCron
+			}
+			if len(parts) != 2 {
 				return dayOfWeekField{}, fmt.Errorf("nth weekday requires one weekday value")
 			}
 			weekday, err := parseValue(parts[0], 0, 7, weekDayNames)
@@ -275,10 +313,15 @@ func parseDayOfWeekField(raw string) (dayOfWeekField, error) {
 	}
 	if len(result.clauses) > 0 {
 		for _, term := range ordinaryTerms {
-			// Croniter ignores a plain wildcard alongside nth/last clauses,
-			// but rejects all ordinary literal/range/step mixtures.
-			if term != "*" {
-				return dayOfWeekField{}, fmt.Errorf("weekday literals cannot be mixed with nth or last clauses")
+			ordinary, err := parseDayOfWeekOrdinaryField(term)
+			if err != nil {
+				return dayOfWeekField{}, err
+			}
+			// Croniter permits ordinary terms alongside nth/last clauses only
+			// when each term independently expands to the complete seven-day
+			// cycle. A redundant partial term such as "*,5,1#1" is rejected.
+			if len(ordinary.values) != 7 {
+				return dayOfWeekField{}, ErrUnsupportedCron
 			}
 		}
 		return result, nil
@@ -296,49 +339,59 @@ func parseDayOfWeekOrdinaryField(raw string) (field, error) {
 		if term == "" {
 			return field{}, fmt.Errorf("cron field has an empty list term")
 		}
+		// Croniter preserves a literal "*" as wildcard syntax even when it is
+		// accompanied by redundant list terms. A full numeric expansion such
+		// as "*/1,5" remains restricted for DOM/DOW union semantics.
+		if term == "*" {
+			result.wildcard = true
+		}
 		base, step, hasStep, err := parseStep(term)
 		if err != nil {
 			return field{}, err
 		}
-		start, end, err := parseRange(base, 0, 7, weekDayNames)
+		start, end, err := parseDayOfWeekRange(base)
 		if err != nil {
 			return field{}, err
 		}
 		if !hasStep {
 			step = 1
 		} else if base != "*" && !strings.Contains(base, "-") {
-			end = 7
+			end = 6
 		}
-		values := canonicalWeekdayRange(start, end)
-		for index := 0; index < len(values); index += step {
-			result.values[values[index]] = struct{}{}
+		rangeSyntax := base == "*" || strings.Contains(base, "-") || hasStep
+		for _, value := range rangeValues(start, end, 0, 6, step, rangeSyntax) {
+			result.values[value] = struct{}{}
 		}
 	}
 	return result, nil
 }
 
-func canonicalWeekdayRange(start, end int) []int {
-	raw := rangeValues(start, end, 0, 7)
-	result := make([]int, 0, len(raw))
-	seen := make(map[int]struct{}, 7)
-	for _, value := range raw {
-		if value == 7 {
-			value = 0
-		}
-		if _, duplicate := seen[value]; duplicate {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
+func parseDayOfWeekRange(raw string) (int, int, error) {
+	if raw == "*" {
+		return 0, 6, nil
 	}
-	return result
-}
-
-func normalizeSunday(parsed *field) {
-	if _, sunday := parsed.values[7]; sunday {
-		delete(parsed.values, 7)
-		parsed.values[0] = struct{}{}
+	parts := strings.Split(raw, "-")
+	if len(parts) < 1 || len(parts) > 2 {
+		return 0, 0, fmt.Errorf("invalid cron range %q", raw)
 	}
+	start, err := parseValue(parts[0], 0, 7, weekDayNames)
+	if err != nil {
+		return 0, 0, err
+	}
+	end := start
+	if len(parts) == 2 {
+		end, err = parseValue(parts[1], 0, 7, weekDayNames)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid cron range %q", raw)
+		}
+	}
+	if start == 7 {
+		start = 0
+	}
+	if end == 7 {
+		end = 0
+	}
+	return start, end, nil
 }
 
 func parseStep(term string) (string, int, bool, error) {
@@ -379,19 +432,40 @@ func parseRange(raw string, minimum, maximum int, aliases map[string]int) (int, 
 	return start, end, nil
 }
 
-func rangeValues(start, end, minimum, maximum int) []int {
-	if start <= end {
-		result := make([]int, 0, end-start+1)
-		for value := start; value <= end; value++ {
+func rangeValues(start, end, minimum, maximum, step int, fullCycleOnEqual bool) []int {
+	if start < end {
+		result := make([]int, 0, (end-start)/step+1)
+		for value := start; value <= end; value += step {
 			result = append(result, value)
 		}
 		return result
 	}
-	result := make([]int, 0, maximum-start+1+end-minimum+1)
-	for value := start; value <= maximum; value++ {
+	if start == end {
+		if !fullCycleOnEqual {
+			return []int{start}
+		}
+		result := make([]int, 0, (maximum-minimum)/step+1)
+		for value := minimum; value <= maximum; value += step {
+			result = append(result, value)
+		}
+		return result
+	}
+
+	result := make([]int, 0, maximum-minimum+1)
+	for value := start; value <= maximum; value += step {
 		result = append(result, value)
 	}
-	for value := minimum; value <= end; value++ {
+	toSkip := 0
+	if len(result) > 0 {
+		last := result[len(result)-1]
+		alreadySkipped := maximum - last
+		currentPosition := last - minimum
+		fieldLength := maximum - minimum + 1
+		if currentPosition+step > fieldLength && alreadySkipped < step {
+			toSkip = step - alreadySkipped
+		}
+	}
+	for value := minimum + toSkip; value <= end; value += step {
 		result = append(result, value)
 	}
 	return result

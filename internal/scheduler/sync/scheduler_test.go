@@ -34,14 +34,21 @@ func TestNextOccurrencePythonGoldenVectors(t *testing.T) {
 		{"fall fold zero", "30 1 * * *", "America/Los_Angeles", at("2026-11-01T06:00:00Z"), at("2026-11-01T08:30:00Z"), false},
 		{"spring gap", "30 2 * * *", "America/Los_Angeles", at("2026-03-08T09:00:00Z"), at("2026-03-08T10:30:00Z"), false},
 		{"day-of-month weekday or", "0 0 13 * 5", "UTC", at("2026-02-12T12:00:00Z"), at("2026-02-13T00:00:00Z"), false},
+		{"literal weekday wildcard list", "0 0 1 * *,5", "UTC", at("2026-01-02T00:00:00Z"), at("2026-02-01T00:00:00Z"), false},
+		{"last-day ordinary weekday remains or", "0 0 L * MON", "UTC", at("2026-01-01T00:00:00Z"), at("2026-01-05T00:00:00Z"), false},
 		{"sunday seven", "0 0 * * 7", "UTC", at("2026-01-02T12:00:00Z"), at("2026-01-04T00:00:00Z"), false},
 		{"leap day", "0 0 29 2 *", "UTC", at("2026-03-01T12:00:00Z"), at("2028-02-29T00:00:00Z"), false},
+		{"century leap gap", "0 0 29 2 *", "UTC", at("2096-03-01T00:00:00Z"), at("2104-02-29T00:00:00Z"), false},
 		{"value step expands through maximum", "5/15 * * * *", "UTC", at("2026-01-01T00:05:00Z"), at("2026-01-01T00:20:00Z"), false},
+		{"equal range is full cycle", "5-5 * * * *", "UTC", at("2026-01-01T00:05:00Z"), at("2026-01-01T00:06:00Z"), false},
+		{"equal stepped range starts at field minimum", "5-5/10 * * * *", "UTC", at("2026-01-01T00:05:00Z"), at("2026-01-01T00:10:00Z"), false},
 		{"last day of month", "0 0 L * *", "UTC", at("2026-01-10T00:00:00Z"), at("2026-01-31T00:00:00Z"), false},
 		{"last day mixed after literal", "0 0 1,L * *", "UTC", at("2026-01-02T00:00:00Z"), at("2026-01-31T00:00:00Z"), false},
 		{"literal after last day", "0 0 1,L * *", "UTC", at("2026-01-31T00:00:00Z"), at("2026-02-01T00:00:00Z"), false},
 		{"last day mixed before literal", "0 0 L,15 * *", "UTC", at("2026-01-15T00:00:00Z"), at("2026-01-31T00:00:00Z"), false},
 		{"nearest weekday", "0 0 15W * *", "UTC", at("2026-02-01T00:00:00Z"), at("2026-02-16T00:00:00Z"), false},
+		{"prefix nearest weekday", "0 0 W15 * *", "UTC", at("2026-02-01T00:00:00Z"), at("2026-02-16T00:00:00Z"), false},
+		{"prefix nearest weekday clamps", "0 0 W31 * *", "UTC", at("2026-02-01T00:00:00Z"), at("2026-02-27T00:00:00Z"), false},
 		{"nearest weekday clamped", "0 0 31W * *", "UTC", at("2026-04-01T00:00:00Z"), at("2026-04-30T00:00:00Z"), false},
 		{"nth named weekday", "0 0 * * MON#1", "UTC", at("2026-01-10T00:00:00Z"), at("2026-02-02T00:00:00Z"), false},
 		{"fifth numeric weekday", "0 0 * * 5#5", "UTC", at("2026-01-01T00:00:00Z"), at("2026-01-30T00:00:00Z"), false},
@@ -51,11 +58,16 @@ func TestNextOccurrencePythonGoldenVectors(t *testing.T) {
 		{"multiple nth weekdays", "0 0 * * MON#1,FRI#2", "UTC", at("2026-01-05T00:00:00Z"), at("2026-01-09T00:00:00Z"), false},
 		{"multiple last weekdays", "0 0 * * L1,L5", "UTC", at("2026-01-26T00:00:00Z"), at("2026-01-30T00:00:00Z"), false},
 		{"mixed last and nth weekdays", "0 0 * * L1,5#2", "UTC", at("2026-01-09T00:00:00Z"), at("2026-01-26T00:00:00Z"), false},
+		{"full-cycle literal with nth weekday", "0 0 * * 0-6,1#1", "UTC", at("2026-01-01T00:00:00Z"), at("2026-01-05T00:00:00Z"), false},
+		{"full-cycle step with nth weekday", "0 0 * * */1,1#1", "UTC", at("2026-01-01T00:00:00Z"), at("2026-01-05T00:00:00Z"), false},
 		{"question-mark wildcards", "0 0 ? * ?", "UTC", at("2026-01-01T00:00:00Z"), at("2026-01-02T00:00:00Z"), false},
 		{"wrapped month range", "0 0 * NOV-FEB *", "UTC", at("2026-03-01T00:00:00Z"), at("2026-11-01T00:00:00Z"), false},
+		{"wrapped month step carries phase", "0 0 * NOV-FEB/3 *", "UTC", at("2026-01-01T00:00:00Z"), at("2026-11-01T00:00:00Z"), false},
 		{"wrapped weekday range", "0 0 * * FRI-MON", "UTC", at("2026-01-05T00:00:00Z"), at("2026-01-09T00:00:00Z"), false},
 		{"wrapped named weekday step dedupes sunday", "0 0 * * FRI-MON/2", "UTC", at("2026-01-04T00:00:00Z"), at("2026-01-09T00:00:00Z"), false},
 		{"wrapped numeric weekday step dedupes sunday", "0 0 * * 6-0/2", "UTC", at("2026-01-03T00:00:00Z"), at("2026-01-10T00:00:00Z"), false},
+		{"wrapped numeric weekday step carries phase", "0 0 * * 6-1/2", "UTC", at("2026-01-03T00:00:00Z"), at("2026-01-10T00:00:00Z"), false},
+		{"sunday value step aliases before expansion", "0 0 * * 7/2", "UTC", at("2026-01-04T00:00:00Z"), at("2026-01-06T00:00:00Z"), false},
 		{"named month step", "0 0 * JAN/2 *", "UTC", at("2026-02-01T00:00:00Z"), at("2026-03-01T00:00:00Z"), false},
 		{"named weekday step", "0 0 * * MON/2", "UTC", at("2026-01-05T00:00:00Z"), at("2026-01-07T00:00:00Z"), false},
 	} {
@@ -117,20 +129,59 @@ func TestRandomCronIsExplicitlyUnsupported(t *testing.T) {
 				CreatedAt:    at("2026-01-01T00:00:00Z"),
 			}, at("2026-01-02T00:00:00Z"))
 			if got.Decision != DecisionUnsupportedCron || got.TimingEligible ||
-				got.CronGrammar != CronGrammarVersion {
+				got.CronGrammarVersion != CronGrammarVersion {
 				t.Fatalf("Evaluate(%q) = %#v", expression, got)
 			}
 		})
 	}
 
-	got := Evaluate(Candidate{
-		ConfigID:     "hashed",
-		Active:       true,
-		ScheduleCron: "H * * * *",
-		CreatedAt:    at("2026-01-01T00:00:00Z"),
-	}, at("2026-01-02T00:00:00Z"))
-	if got.Decision != DecisionInvalidCron {
-		t.Fatalf("hashed cron classification = %#v", got)
+	for _, expression := range []string{
+		"H * * * *",
+		"R/0 * * * *",
+		"R(20-10) * * * *",
+		"R,5 * * * *",
+		"R(60-70) * * * *",
+		"0 R(24-25) * * *",
+	} {
+		got := Evaluate(Candidate{
+			ConfigID:     "invalid",
+			Active:       true,
+			ScheduleCron: expression,
+			CreatedAt:    at("2026-01-01T00:00:00Z"),
+		}, at("2026-01-02T00:00:00Z"))
+		if got.Decision != DecisionInvalidCron {
+			t.Fatalf("invalid cron %q classification = %#v", expression, got)
+		}
+	}
+}
+
+func TestMixedSpecialCronIsExplicitlyUnsupported(t *testing.T) {
+	for _, expression := range []string{
+		"0 0 15W * MON",
+		"0 0 10 * MON#1",
+		"0 0 1 * MON#1",
+		"0 0 L * L1",
+		"0 0 15W * L1",
+		"0 0 * * MON-FRI#2",
+		"0 0 * * *,5,1#1",
+		"0 0 * * * 0",
+		"0 0 * * * 0 2026",
+		"@daily",
+	} {
+		t.Run(expression, func(t *testing.T) {
+			if _, _, err := NextOccurrence(expression, at("2026-01-01T00:00:00Z"), "UTC"); !errors.Is(err, ErrUnsupportedCron) {
+				t.Fatalf("NextOccurrence(%q) err=%v", expression, err)
+			}
+			got := Evaluate(Candidate{
+				ConfigID:     "mixed-special",
+				Active:       true,
+				ScheduleCron: expression,
+				CreatedAt:    at("2026-01-01T00:00:00Z"),
+			}, at("2026-01-02T00:00:00Z"))
+			if got.Decision != DecisionUnsupportedCron || got.TimingEligible {
+				t.Fatalf("Evaluate(%q) = %#v", expression, got)
+			}
+		})
 	}
 }
 
@@ -163,8 +214,8 @@ func TestEvaluateDueManualAndRunningMarkers(t *testing.T) {
 			if got.EligibilityScope != ScheduleMarkerEvaluationScope {
 				t.Fatalf("eligibility scope = %q", got.EligibilityScope)
 			}
-			if got.CronGrammar != CronGrammarVersion {
-				t.Fatalf("cron grammar = %q", got.CronGrammar)
+			if got.CronGrammarVersion != CronGrammarVersion {
+				t.Fatalf("cron grammar = %q", got.CronGrammarVersion)
 			}
 		})
 	}
@@ -213,11 +264,11 @@ func TestSnapshotSortsBoundsAndDigestsDeterministically(t *testing.T) {
 	}
 	if snapshot.DigestVersion != TimingDigestVersion || snapshot.EvaluationVersion != EvaluationVersion ||
 		snapshot.EligibilityScope != ScheduleMarkerEvaluationScope ||
-		snapshot.CronGrammar != CronGrammarVersion ||
+		snapshot.CronGrammarVersion != CronGrammarVersion ||
 		!strings.HasPrefix(snapshot.CandidateDigest, "sha256:") || len(snapshot.CandidateDigest) != len("sha256:")+64 {
 		t.Fatalf("snapshot digest = %#v", snapshot)
 	}
-	if snapshot.CandidateDigest != "sha256:83f190e6252b829ece384aff328d489a1d09883d5c171348bdc280b39ba1c191" {
+	if snapshot.CandidateDigest != "sha256:02fafd6dd76a45d41ef0fa24dba521ce0ff003b8f0f3a3e5a512b19ce9435360" {
 		t.Fatalf("candidate digest = %s", snapshot.CandidateDigest)
 	}
 	again, err := BuildSnapshot(observed, 2, []Candidate{candidates[2], candidates[0], candidates[1]})

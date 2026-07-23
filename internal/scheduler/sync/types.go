@@ -5,6 +5,7 @@ package sync
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -48,10 +49,15 @@ const (
 	DecisionUnsupportedCron Decision = "unsupported_cron"
 )
 
+// ErrUnsupportedCron identifies syntax intentionally routed outside the
+// versioned deterministic subset. It does not assert that Croniter would
+// otherwise accept the expression.
+var ErrUnsupportedCron = errors.New("cron syntax is unsupported for deterministic comparison")
+
 // ErrUnsupportedRandomCron identifies Croniter's random R syntax. Recreating
 // Croniter selects a new value, so cross-runtime shadow comparison cannot
 // evaluate this syntax deterministically.
-var ErrUnsupportedRandomCron = errors.New("random R cron syntax is unsupported for deterministic comparison")
+var ErrUnsupportedRandomCron = fmt.Errorf("%w: random R expression", ErrUnsupportedCron)
 
 // Candidate is the minimal scheduler state read from the legacy semantic
 // tables. It contains no execution handle and is safe to evaluate repeatedly.
@@ -80,18 +86,18 @@ type Job struct {
 // timing eligibility. TimingEligible never means dispatch eligible: the
 // dormant shadow intentionally omits organization and feature-service gates.
 type Evaluation struct {
-	ConfigID         string
-	Base             time.Time
-	NextOccurrence   *time.Time
-	ObservedAt       time.Time
-	Due              bool
-	TimingEligible   bool
-	Decision         Decision
-	RunningMarker    RunningMarkerState
-	Timezone         string
-	TimezoneFallback bool
-	EligibilityScope string
-	CronGrammar      string
+	ConfigID           string
+	Base               time.Time
+	NextOccurrence     *time.Time
+	ObservedAt         time.Time
+	Due                bool
+	TimingEligible     bool
+	Decision           Decision
+	RunningMarker      RunningMarkerState
+	Timezone           string
+	TimezoneFallback   bool
+	EligibilityScope   string
+	CronGrammarVersion string
 }
 
 type EvaluatedCandidate struct {
@@ -103,13 +109,13 @@ type EvaluatedCandidate struct {
 // remain in-memory comparison material and are represented only by the digest
 // in any later telemetry surface.
 type Snapshot struct {
-	ObservedAt        time.Time
-	Limit             int
-	Truncated         bool
-	Candidates        []EvaluatedCandidate
-	DigestVersion     string
-	EvaluationVersion string
-	EligibilityScope  string
-	CronGrammar       string
-	CandidateDigest   string
+	ObservedAt         time.Time
+	Limit              int
+	Truncated          bool
+	Candidates         []EvaluatedCandidate
+	DigestVersion      string
+	EvaluationVersion  string
+	EligibilityScope   string
+	CronGrammarVersion string
+	CandidateDigest    string
 }

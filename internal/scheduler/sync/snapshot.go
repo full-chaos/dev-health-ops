@@ -50,14 +50,14 @@ func buildSnapshotContext(
 	}
 	observedAt = observedAt.UTC()
 	result := Snapshot{
-		ObservedAt:        observedAt,
-		Limit:             limit,
-		Truncated:         truncated,
-		DigestVersion:     TimingDigestVersion,
-		EvaluationVersion: EvaluationVersion,
-		EligibilityScope:  ScheduleMarkerEvaluationScope,
-		CronGrammar:       CronGrammarVersion,
-		Candidates:        make([]EvaluatedCandidate, 0, len(ordered)),
+		ObservedAt:         observedAt,
+		Limit:              limit,
+		Truncated:          truncated,
+		DigestVersion:      TimingDigestVersion,
+		EvaluationVersion:  EvaluationVersion,
+		EligibilityScope:   ScheduleMarkerEvaluationScope,
+		CronGrammarVersion: CronGrammarVersion,
+		Candidates:         make([]EvaluatedCandidate, 0, len(ordered)),
 	}
 	for _, candidate := range ordered {
 		if err := ctx.Err(); err != nil {
@@ -83,7 +83,7 @@ func candidateDigest(snapshot Snapshot) string {
 	writeDigestField(hasher, "digest_version", snapshot.DigestVersion)
 	writeDigestField(hasher, "evaluation_version", snapshot.EvaluationVersion)
 	writeDigestField(hasher, "eligibility_scope", snapshot.EligibilityScope)
-	writeDigestField(hasher, "cron_grammar", snapshot.CronGrammar)
+	writeDigestField(hasher, "cron_grammar_version", snapshot.CronGrammarVersion)
 	writeDigestField(hasher, "observed_at", canonicalTime(snapshot.ObservedAt))
 	writeDigestField(hasher, "limit", strconv.Itoa(snapshot.Limit))
 	writeDigestField(hasher, "truncated", strconv.FormatBool(snapshot.Truncated))

@@ -25,6 +25,7 @@ from .models import (
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
     KIND_SYNC_PROVIDER_UNIT,
+    KIND_TEAM_AUTOIMPORT,
     KIND_WEBHOOK_DELIVERY,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
@@ -48,6 +49,7 @@ from .models import (
     RemainingTeamMetricsPayload,
     RetentionCleanupPayload,
     ScheduledReportExecutionPayload,
+    TeamAutoimportPayload,
     WebhookDeliveryPayload,
 )
 from .registry import (
@@ -82,6 +84,7 @@ __all__ = [
     "KIND_REPORT_EXECUTE_SCHEDULED",
     "KIND_RETENTION_CLEANUP",
     "KIND_SYNC_PROVIDER_UNIT",
+    "KIND_TEAM_AUTOIMPORT",
     "KIND_WEBHOOK_DELIVERY",
     "MAX_ENVELOPE_BYTES",
     "RETENTION_WORKER_TERMINAL",
@@ -111,6 +114,7 @@ __all__ = [
     "Registry",
     "RetentionCleanupPayload",
     "ScheduledReportExecutionPayload",
+    "TeamAutoimportPayload",
     "WebhookDeliveryPayload",
     "build_envelope",
     "capabilities_for_profile",

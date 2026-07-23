@@ -134,6 +134,16 @@
       "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery", "kill_window", "provider_parity"]
     },
     {
+      "kind": "sync.team_autoimport",
+      "state": "go_default",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["sync"],
+      "route": "river",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
+    },
+    {
       "kind": "system.heartbeat",
       "state": "go_implemented",
       "producer_version": 1,

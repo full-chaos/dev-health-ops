@@ -4,10 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/riverqueue/river"
 )
 
-type recordingBridge struct{ calls []string }
+type recordingBridge struct {
+	calls         []string
+	teamReference DomainReference
+}
 
 func (bridge *recordingBridge) Dispatch(_ context.Context, _ DispatchSyncRunArgs) error {
 	bridge.calls = append(bridge.calls, "dispatch")
@@ -29,7 +33,11 @@ func (bridge *recordingBridge) Discover(_ context.Context, _ ReferenceDiscoveryA
 	return nil
 }
 
-func (bridge *recordingBridge) TeamAutoImport(context.Context, DomainReference) error { return nil }
+func (bridge *recordingBridge) TeamAutoImport(_ context.Context, reference DomainReference) error {
+	bridge.calls = append(bridge.calls, "team_autoimport")
+	bridge.teamReference = reference
+	return nil
+}
 
 func TestCoordinatorWorkersCallTheirDirectBridgeSeams(t *testing.T) {
 	t.Parallel()
@@ -47,8 +55,22 @@ func TestCoordinatorWorkersCallTheirDirectBridgeSeams(t *testing.T) {
 	if err := (&referenceDiscoveryWorker{bridge: bridge}).Work(context.Background(), &river.Job[ReferenceDiscoveryArgs]{Args: ReferenceDiscoveryArgs{TransportArgs: base}}); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(bridge.calls), 4; got != want || bridge.calls[0] != "dispatch" || bridge.calls[1] != "finalize" || bridge.calls[2] != "post_sync" || bridge.calls[3] != "discover" {
+	teamArgs := TeamAutoimportJobArgs{
+		Version:       ContractVersionV1,
+		OrgID:         testOrg,
+		CorrelationID: "post-sync-" + testRun,
+		Idempotency:   "post-sync:" + testRun + ":team_autoimport",
+		Domain:        jobcontract.DomainLink{Type: "sync_run", ID: testRun},
+		Payload:       jobcontract.TeamAutoimportPayload{SyncRunID: testRun},
+	}
+	if err := (&teamAutoimportWorker{bridge: bridge}).Work(context.Background(), &river.Job[TeamAutoimportJobArgs]{Args: teamArgs}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(bridge.calls), 5; got != want || bridge.calls[0] != "dispatch" || bridge.calls[1] != "finalize" || bridge.calls[2] != "post_sync" || bridge.calls[3] != "discover" || bridge.calls[4] != "team_autoimport" {
 		t.Fatalf("bridge calls=%#v", bridge.calls)
+	}
+	if bridge.teamReference != (DomainReference{OrganizationID: testOrg, SyncRunID: testRun}) {
+		t.Fatalf("team reference=%#v", bridge.teamReference)
 	}
 }
 
@@ -59,5 +81,8 @@ func TestCoordinatorWorkersFailClosedWithoutBridgeOrJob(t *testing.T) {
 	}
 	if err := (&postSyncWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
 		t.Fatalf("post-sync worker error=%v", err)
+	}
+	if err := (&teamAutoimportWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
+		t.Fatalf("team autoimport worker error=%v", err)
 	}
 }

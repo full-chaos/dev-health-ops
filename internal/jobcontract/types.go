@@ -24,6 +24,7 @@ const (
 	KindDailyMetricsDispatch     = "metrics.daily_dispatch"
 	KindDailyMetricsPartition    = "metrics.daily_partition"
 	KindDailyMetricsFinalize     = "metrics.daily_finalize"
+	KindTeamAutoimport           = "sync.team_autoimport"
 	KindRemainingCapacity        = "metrics.remaining.capacity"
 	KindRemainingComplexity      = "metrics.remaining.complexity"
 	KindRemainingDORA            = "metrics.remaining.dora"
@@ -121,6 +122,12 @@ type DailyMetricsPartitionPayload struct {
 // identity. The finalizer reloads completion counts and generation state.
 type DailyMetricsFinalizePayload struct {
 	RunID string `json:"run_id"`
+}
+
+// TeamAutoimportPayload carries only the authoritative successful SyncRun.
+// Credentials, provider configuration, and imported rows stay server-side.
+type TeamAutoimportPayload struct {
+	SyncRunID string `json:"sync_run_id"`
 }
 
 // The P5 contracts deliberately carry only durable identities. Prompts,
@@ -240,6 +247,13 @@ var definitions = map[string]contractDefinition{
 		CurrentVersion:    ContractVersionV1,
 		SupportedVersions: []int{ContractVersionV1},
 		DomainLink:        "daily_metrics_run",
+		OrganizationScope: "tenant",
+	},
+	KindTeamAutoimport: {
+		Kind:              KindTeamAutoimport,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "sync_run",
 		OrganizationScope: "tenant",
 	},
 	KindWorkGraphBuild:           {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
@@ -374,6 +388,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindTeamAutoimport:
+		var value TeamAutoimportPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	case KindWorkGraphBuild:
 		var value WorkGraphBuildPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
@@ -477,6 +500,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindDailyMetricsPartition
 	case DailyMetricsFinalizePayload:
 		kind = KindDailyMetricsFinalize
+	case TeamAutoimportPayload:
+		kind = KindTeamAutoimport
 	case WorkGraphBuildPayload:
 		kind = KindWorkGraphBuild
 	case InvestmentMaterializePayload:
@@ -626,6 +651,10 @@ func (payload DailyMetricsFinalizePayload) validate() error {
 		return errors.New("run_id must be a lowercase UUID")
 	}
 	return nil
+}
+
+func (payload TeamAutoimportPayload) validate() error {
+	return validateUUID("sync_run_id", payload.SyncRunID)
 }
 
 func (payload WorkGraphBuildPayload) validate() error {

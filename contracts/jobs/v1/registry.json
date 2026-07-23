@@ -328,6 +328,35 @@
       }
     },
     {
+      "kind": "sync.team_autoimport",
+      "current_version": 1,
+      "supported_versions": [1],
+      "profile": "sync",
+      "queue": "sync",
+      "handler_owner": "internal/jobs/sync",
+      "execution_mode": "command",
+      "priority": 2,
+      "timeout_seconds": 900,
+      "max_attempts": 3,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "authoritative_sync_run",
+      "delivery": "guarded_at_least_once",
+      "idempotency": "sync_run",
+      "concurrency": {
+        "scope": "organization",
+        "limit": 1
+      },
+      "sensitive_fields": [],
+      "domain_link": "sync_run",
+      "organization_scope": "tenant",
+      "schema_versions": {
+        "1": "schemas/sync.team_autoimport.v1.schema.json"
+      },
+      "fixtures": {
+        "1": ["examples/sync.team_autoimport.v1.json"]
+      }
+    },
+    {
       "kind": "system.heartbeat",
       "current_version": 1,
       "supported_versions": [1],

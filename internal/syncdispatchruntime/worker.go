@@ -21,7 +21,8 @@ func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge) error {
 	if river.AddWorkerSafely(workers, &dispatchWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &finalizeWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &postSyncWorker{bridge: bridge}) != nil ||
-		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil {
+		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil ||
+		river.AddWorkerSafely(workers, &teamAutoimportWorker{bridge: bridge}) != nil {
 		return ErrWorkerRegistration
 	}
 	return nil
@@ -76,6 +77,24 @@ func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncA
 type referenceDiscoveryWorker struct {
 	river.WorkerDefaults[ReferenceDiscoveryArgs]
 	bridge CoordinatorBridge
+}
+
+type teamAutoimportWorker struct {
+	river.WorkerDefaults[TeamAutoimportJobArgs]
+	bridge CoordinatorBridge
+}
+
+func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[TeamAutoimportJobArgs]) error {
+	if worker == nil || worker.bridge == nil || job == nil {
+		return ErrWorkerRegistration
+	}
+	if err := job.Args.valid(); err != nil {
+		return err
+	}
+	return worker.bridge.TeamAutoImport(ctx, DomainReference{
+		OrganizationID: job.Args.OrgID,
+		SyncRunID:      job.Args.Payload.SyncRunID,
+	})
 }
 
 func (worker *referenceDiscoveryWorker) Work(ctx context.Context, job *river.Job[ReferenceDiscoveryArgs]) error {

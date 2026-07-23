@@ -442,6 +442,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindDailyMetricsDispatch:     {"run_id"},
 		KindDailyMetricsPartition:    {"partition_id"},
 		KindDailyMetricsFinalize:     {"run_id"},
+		KindTeamAutoimport:           {"sync_run_id"},
 		KindRemainingCapacity:        {"partition_id"},
 		KindRemainingComplexity:      {"partition_id"},
 		KindRemainingDORA:            {"partition_id"},
@@ -473,6 +474,9 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindDailyMetricsPartition {
 		return validateUUIDProperty(properties["partition_id"])
+	}
+	if kind == KindTeamAutoimport {
+		return validateUUIDProperty(properties["sync_run_id"])
 	}
 	if kind == KindInvestmentChunk {
 		return validateUUIDProperty(properties["chunk_id"])

@@ -15,6 +15,7 @@ KIND_REPORT_EXECUTE_SCHEDULED = "report.execute_scheduled"
 KIND_DAILY_METRICS_DISPATCH = "metrics.daily_dispatch"
 KIND_DAILY_METRICS_PARTITION = "metrics.daily_partition"
 KIND_DAILY_METRICS_FINALIZE = "metrics.daily_finalize"
+KIND_TEAM_AUTOIMPORT = "sync.team_autoimport"
 KIND_WORK_GRAPH_BUILD = "workgraph.build"
 KIND_INVESTMENT_MATERIALIZE = "investment.materialize"
 KIND_INVESTMENT_DISPATCH = "investment.dispatch"
@@ -138,6 +139,17 @@ class DailyMetricsFinalizePayload:
     DOMAIN_TYPE: ClassVar[str] = "daily_metrics_run"
 
     run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class TeamAutoimportPayload:
+    """Reference to the successful SyncRun that owns the import inputs."""
+
+    KIND: ClassVar[str] = KIND_TEAM_AUTOIMPORT
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "sync_run"
+
+    sync_run_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +287,7 @@ JobPayload: TypeAlias = (
     | DailyMetricsDispatchPayload
     | DailyMetricsPartitionPayload
     | DailyMetricsFinalizePayload
+    | TeamAutoimportPayload
     | WorkGraphBuildPayload
     | InvestmentMaterializePayload
     | InvestmentDispatchPayload

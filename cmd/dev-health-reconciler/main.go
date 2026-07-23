@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -10,23 +11,25 @@ import (
 )
 
 var reconcilerSpec = shell.Spec{
-	Service:               "dev-health-reconciler",
-	ConfigureDependencies: configureReconcilerDependencies,
+	Service:                         "dev-health-reconciler",
+	ConfigureDependenciesWithLogger: configureReconcilerDependenciesWithLogger,
 }
 
 func main() {
 	shell.Main(reconcilerSpec)
 }
 
-func configureReconcilerDependencies(
+func configureReconcilerDependenciesWithLogger(
 	ctx context.Context,
 	cfg config.Config,
 	registry *health.Registry,
+	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
-	return configureReconcilerDependenciesWithSources(
+	return configureReconcilerDependenciesWithSourcesAndLogger(
 		ctx,
 		cfg,
 		registry,
+		logger,
 		productionReconcilerDependencySources,
 	)
 }

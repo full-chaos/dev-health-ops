@@ -25,11 +25,12 @@ tolerated because consumers are idempotent by contract.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypedDict
 
 from sqlalchemy import and_, case, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +39,11 @@ from sqlalchemy.orm import Session
 from dev_health_ops.models import (
     SyncDispatchOutbox,
     SyncRun,
+)
+from dev_health_ops.sync.dispatch_routes import (
+    DispatchRouteContractError,
+    TransportRoute,
+    load_transport_routes,
 )
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
@@ -52,6 +58,18 @@ OUTBOX_STATUS_DISPATCHED = "dispatched"
 _MAX_ERROR_LENGTH = 2000
 _TERMINAL_DENIAL_ERROR = "feature_disabled"
 
+SYNC_DISPATCH_PARITY_EVENT = "sync_dispatch_parity_observation"
+SYNC_DISPATCH_PARITY_PREDICATE_VERSION = "sync_dispatch_due_v1"
+SYNC_DISPATCH_PARITY_DIGEST_VERSION = "sync_dispatch_candidate_digest_v1"
+_SYNC_DISPATCH_PARITY_MIN_LIMIT = 1
+_SYNC_DISPATCH_PARITY_MAX_LIMIT = 100
+_SYNC_DISPATCH_PARITY_DELIVERY = {
+    OUTBOX_KIND_DISPATCH: "at_least_once",
+    OUTBOX_KIND_FINALIZE: "at_least_once",
+    OUTBOX_KIND_POST_SYNC: "at_most_once_mark_before",
+    OUTBOX_KIND_DISCOVERY: "at_least_once",
+}
+
 
 @dataclass(frozen=True)
 class ClaimedOutboxRow:
@@ -62,6 +80,21 @@ class ClaimedOutboxRow:
     attempts: int
     available_at: datetime
     claim_token: str
+
+
+class SyncDispatchParityObservationUnavailable(RuntimeError):
+    """A bounded reason why the optional read-only parity capture is unavailable."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class _ParityKindRecord(TypedDict):
+    kind: str
+    route: str
+    due_pending: int
+    expired_claims: int
 
 
 def backoff_seconds(attempts: int) -> int:
@@ -267,6 +300,164 @@ def _terminal_denial_condition(table: Any) -> Any:
         table.c.status == OUTBOX_STATUS_DISPATCHED,
         table.c.last_error == _TERMINAL_DENIAL_ERROR,
     )
+
+
+def observe_due_outbox_rows(
+    session: Session,
+    *,
+    now: datetime,
+    limit: int,
+) -> dict[str, Any]:
+    """Build one bounded, read-only parity record in Python claim order.
+
+    The record intentionally contains aggregates and a digest only. It never
+    exposes candidate identifiers, tenant data, claim tokens, or payloads.
+    """
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not (
+            _SYNC_DISPATCH_PARITY_MIN_LIMIT <= limit <= _SYNC_DISPATCH_PARITY_MAX_LIMIT
+        )
+    ):
+        raise SyncDispatchParityObservationUnavailable("invalid_limit")
+
+    observed_at = _as_aware(now)
+    routes = _validated_parity_routes()
+    try:
+        rows = list(
+            session.execute(
+                select(
+                    SyncDispatchOutbox.id,
+                    SyncDispatchOutbox.kind,
+                    SyncDispatchOutbox.claim_expires_at,
+                )
+                .where(
+                    SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
+                    SyncDispatchOutbox.available_at <= observed_at,
+                    or_(
+                        SyncDispatchOutbox.claim_expires_at.is_(None),
+                        SyncDispatchOutbox.claim_expires_at <= observed_at,
+                    ),
+                )
+                .order_by(SyncDispatchOutbox.available_at, SyncDispatchOutbox.id)
+                .limit(limit + 1)
+            ).all()
+        )
+    except Exception as error:
+        raise SyncDispatchParityObservationUnavailable("query_unavailable") from error
+
+    if len(rows) > limit + 1:
+        raise SyncDispatchParityObservationUnavailable("query_unavailable")
+    sampled_rows = rows[:limit]
+    truncated = len(rows) > limit
+    kinds: dict[str, _ParityKindRecord] = {
+        kind: {
+            "kind": kind,
+            "route": route.route,
+            "due_pending": 0,
+            "expired_claims": 0,
+        }
+        for kind, route in routes.items()
+    }
+    hasher = hashlib.sha256()
+    _write_parity_digest_field(
+        hasher, "digest_version", SYNC_DISPATCH_PARITY_DIGEST_VERSION
+    )
+    _write_parity_digest_field(
+        hasher, "predicate_version", SYNC_DISPATCH_PARITY_PREDICATE_VERSION
+    )
+    _write_parity_digest_field(
+        hasher, "observed_at", _canonical_parity_observed_at(observed_at)
+    )
+    _write_parity_digest_field(hasher, "limit", str(limit))
+
+    unknown_kind_count = 0
+    celery_due_pending = 0
+    river_due_pending = 0
+    for row_id, kind, claim_expires_at in sampled_rows:
+        candidate_id = _canonical_parity_candidate_id(row_id)
+        if claim_expires_at is not None and _as_aware(claim_expires_at) > observed_at:
+            raise SyncDispatchParityObservationUnavailable("query_unavailable")
+        _write_parity_digest_field(hasher, "candidate_kind", kind)
+        _write_parity_digest_field(hasher, "candidate_id", candidate_id)
+        kind_record = kinds.get(kind)
+        if kind_record is None:
+            unknown_kind_count += 1
+            continue
+        kind_record["due_pending"] += 1
+        if claim_expires_at is not None:
+            kind_record["expired_claims"] += 1
+        if kind_record["route"] == "celery":
+            celery_due_pending += 1
+        elif kind_record["route"] == "river":
+            river_due_pending += 1
+        else:
+            raise SyncDispatchParityObservationUnavailable("route_unavailable")
+
+    sampled_candidates = len(sampled_rows)
+    if (
+        celery_due_pending + river_due_pending + unknown_kind_count
+        != sampled_candidates
+    ):
+        raise SyncDispatchParityObservationUnavailable("query_unavailable")
+    return {
+        "event": SYNC_DISPATCH_PARITY_EVENT,
+        "runtime": "celery",
+        "observed_at": _canonical_parity_observed_at(observed_at),
+        "limit": limit,
+        "predicate_version": SYNC_DISPATCH_PARITY_PREDICATE_VERSION,
+        "digest_version": SYNC_DISPATCH_PARITY_DIGEST_VERSION,
+        "candidate_digest": f"sha256:{hasher.hexdigest()}",
+        "sampled_candidates": sampled_candidates,
+        "truncated": truncated,
+        "unknown_kind_count": unknown_kind_count,
+        "celery_due_pending": celery_due_pending,
+        "river_due_pending": river_due_pending,
+        "kinds": [kinds[kind] for kind in sorted(kinds)],
+    }
+
+
+def _validated_parity_routes() -> dict[str, TransportRoute]:
+    try:
+        loaded = load_transport_routes()
+        routes = {kind: loaded.by_kind(kind) for kind in _SYNC_DISPATCH_PARITY_DELIVERY}
+    except DispatchRouteContractError as error:
+        raise SyncDispatchParityObservationUnavailable("route_unavailable") from error
+    for kind, expected_delivery in _SYNC_DISPATCH_PARITY_DELIVERY.items():
+        route = routes.get(kind)
+        if (
+            route is None
+            or route.delivery != expected_delivery
+            or route.rollback_route != "celery"
+            or route.route not in {"celery", "river"}
+        ):
+            raise SyncDispatchParityObservationUnavailable("route_unavailable")
+    return routes
+
+
+def _canonical_parity_candidate_id(value: object) -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise SyncDispatchParityObservationUnavailable("query_unavailable") from error
+
+
+def _canonical_parity_observed_at(value: datetime) -> str:
+    value = _as_aware(value)
+    return value.strftime("%Y-%m-%dT%H:%M:%S") + f".{value.microsecond:06d}000Z"
+
+
+def _write_parity_digest_field(hasher: Any, name: str, value: str) -> None:
+    name_bytes = name.encode("utf-8")
+    value_bytes = value.encode("utf-8")
+    hasher.update(str(len(name_bytes)).encode("ascii"))
+    hasher.update(b":")
+    hasher.update(name_bytes)
+    hasher.update(str(len(value_bytes)).encode("ascii"))
+    hasher.update(b":")
+    hasher.update(value_bytes)
+    hasher.update(b"\n")
 
 
 def claim_due_outbox_rows(

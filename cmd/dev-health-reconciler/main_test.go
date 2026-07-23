@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"slices"
@@ -20,14 +21,19 @@ func TestReconcilerSpecConfiguresFailClosedDependencies(t *testing.T) {
 	if reconcilerSpec.Service != "dev-health-reconciler" {
 		t.Fatalf("service = %q", reconcilerSpec.Service)
 	}
-	if reconcilerSpec.ConfigureDependencies == nil {
-		t.Fatal("reconciler dependency configuration is not wired")
+	if reconcilerSpec.ConfigureDependenciesWithLogger == nil || reconcilerSpec.ConfigureDependencies != nil {
+		t.Fatal("reconciler logger-aware dependency configuration is not exclusively wired")
 	}
 
 	registry := health.NewRegistry(100 * time.Millisecond)
-	components, err := configureReconcilerDependencies(context.Background(), config.Config{}, registry)
+	components, err := configureReconcilerDependenciesWithLogger(
+		context.Background(),
+		config.Config{},
+		registry,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	)
 	if err != nil {
-		t.Fatalf("configureReconcilerDependencies() error = %v", err)
+		t.Fatalf("configureReconcilerDependenciesWithLogger() error = %v", err)
 	}
 	if len(components) != 0 {
 		t.Fatalf("components = %d, want no runtime pools without database configuration", len(components))
@@ -36,7 +42,7 @@ func TestReconcilerSpecConfiguresFailClosedDependencies(t *testing.T) {
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	want := []string{"domain_postgres", "job_registry", "queue_postgres", "reconciler_loop", "river_schema"}
+	want := []string{"domain_postgres", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	status := registry.Readiness(context.Background())
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)

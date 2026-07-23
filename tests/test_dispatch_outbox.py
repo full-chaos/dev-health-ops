@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
@@ -22,12 +22,17 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
     OUTBOX_STATUS_DISPATCHED,
     OUTBOX_STATUS_PENDING,
+    SYNC_DISPATCH_PARITY_DIGEST_VERSION,
+    SYNC_DISPATCH_PARITY_EVENT,
+    SYNC_DISPATCH_PARITY_PREDICATE_VERSION,
     ClaimedOutboxRow,
+    SyncDispatchParityObservationUnavailable,
     backoff_seconds,
     claim_due_outbox_rows,
     lock_outbox_claim_for_publish,
     mark_outbox_dispatched,
     mark_outbox_publish_failed,
+    observe_due_outbox_rows,
     upsert_outbox_wakeup,
 )
 
@@ -93,6 +98,142 @@ def _aware(value):
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def test_observe_due_outbox_rows_matches_claim_window_and_go_digest(db_session):
+    now = datetime(2026, 7, 22, 12, 0, 0, tzinfo=timezone.utc)
+    dispatch = _seed_outbox(
+        db_session,
+        available_at=now - timedelta(seconds=3),
+        kind=OUTBOX_KIND_DISPATCH,
+    )
+    post_sync = _seed_outbox(
+        db_session,
+        available_at=now - timedelta(seconds=2),
+        kind="post_sync",
+    )
+    finalize = _seed_outbox(
+        db_session,
+        available_at=now - timedelta(seconds=1),
+        kind=OUTBOX_KIND_FINALIZE,
+    )
+    live_claim = _seed_outbox(
+        db_session,
+        available_at=now - timedelta(seconds=4),
+        kind="reference_discovery",
+    )
+    dispatch.id = uuid.UUID("00000000-0000-4000-8000-000000000001")
+    post_sync.id = uuid.UUID("00000000-0000-4000-8000-000000000002")
+    finalize.id = uuid.UUID("00000000-0000-4000-8000-000000000003")
+    live_claim.id = uuid.UUID("00000000-0000-4000-8000-000000000004")
+    dispatch.claim_expires_at = now - timedelta(seconds=1)
+    live_claim.claim_expires_at = now + timedelta(seconds=1)
+    db_session.flush()
+
+    statements: list[str] = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        record = observe_due_outbox_rows(db_session, now=now, limit=2)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert record == {
+        "event": SYNC_DISPATCH_PARITY_EVENT,
+        "runtime": "celery",
+        "observed_at": "2026-07-22T12:00:00.000000000Z",
+        "limit": 2,
+        "predicate_version": SYNC_DISPATCH_PARITY_PREDICATE_VERSION,
+        "digest_version": SYNC_DISPATCH_PARITY_DIGEST_VERSION,
+        "candidate_digest": (
+            "sha256:470a95b9d29c43636664b00b6beb7f192c18b523e41802b7a785cd463eb42218"
+        ),
+        "sampled_candidates": 2,
+        "truncated": True,
+        "unknown_kind_count": 0,
+        "celery_due_pending": 2,
+        "river_due_pending": 0,
+        "kinds": [
+            {
+                "kind": "dispatch_sync_run",
+                "route": "celery",
+                "due_pending": 1,
+                "expired_claims": 1,
+            },
+            {
+                "kind": "finalize_sync_run",
+                "route": "celery",
+                "due_pending": 0,
+                "expired_claims": 0,
+            },
+            {
+                "kind": "post_sync",
+                "route": "celery",
+                "due_pending": 1,
+                "expired_claims": 0,
+            },
+            {
+                "kind": "reference_discovery",
+                "route": "celery",
+                "due_pending": 0,
+                "expired_claims": 0,
+            },
+        ],
+    }
+    observed_sql = "\n".join(statements).upper()
+    for fragment in (
+        "SELECT",
+        "STATUS =",
+        "AVAILABLE_AT <=",
+        "CLAIM_EXPIRES_AT IS NULL",
+        "ORDER BY",
+        "AVAILABLE_AT, SYNC_DISPATCH_OUTBOX.ID",
+        "LIMIT",
+    ):
+        assert fragment in observed_sql
+    assert not any(
+        statement.lstrip().upper().startswith("UPDATE") for statement in statements
+    )
+    assert dispatch.claim_token is None
+    assert post_sync.claim_token is None
+    assert finalize.claim_token is None
+    assert live_claim.claim_token is None
+
+
+def test_observe_due_outbox_rows_bounds_redacts_and_counts_unknown_kind(db_session):
+    now = datetime(2026, 7, 22, 12, 0, 0, 123456, tzinfo=timezone.utc)
+    unknown = _seed_outbox(
+        db_session,
+        available_at=now - timedelta(seconds=2),
+        kind="future_contract_kind",
+    )
+    known = _seed_outbox(
+        db_session,
+        available_at=now - timedelta(seconds=1),
+        kind=OUTBOX_KIND_DISPATCH,
+    )
+    record = observe_due_outbox_rows(db_session, now=now, limit=1)
+
+    assert record["observed_at"] == "2026-07-22T12:00:00.123456000Z"
+    assert record["unknown_kind_count"] == 1
+    assert record["celery_due_pending"] == 0
+    rendered = repr(record)
+    for forbidden in (
+        str(unknown.id),
+        str(known.id),
+        unknown.org_id,
+        str(unknown.sync_run_id),
+    ):
+        assert forbidden not in rendered
+    for limit in (0, 101, True):
+        with pytest.raises(
+            SyncDispatchParityObservationUnavailable, match="invalid_limit"
+        ):
+            observe_due_outbox_rows(db_session, now=now, limit=limit)
 
 
 def test_upsert_insert_creates_pending_row(db_session):

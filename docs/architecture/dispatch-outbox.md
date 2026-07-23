@@ -185,11 +185,25 @@ selected per kind so a later migration can preserve the existing Celery
 rollback path without treating queue state as product state.
 
 The checked-in Phase 2 foundation remains deliberately inactive: every
-`route` and `rollback_route` is `celery`, the Go loader is not connected to
-claiming or publishing, and the existing Celery reconciler remains the only
-mutation owner. Changing the artifact alone therefore cannot activate a Go
-transport. Runtime ownership, shadow comparison, and promotion gates are
-separate later slices.
+`route` and `rollback_route` is `celery`, and the existing Celery reconciler
+remains the only mutation owner. The dormant Go reconciler loads the contract
+and observes only the first bounded due-row window in the same
+`(available_at, id)` claim order. It never locks, claims, updates, or publishes
+an outbox row. Its readiness and fixed-cardinality metrics fail closed on
+contract drift, database errors, or an unknown kind inside the sampled window.
+Both runtimes emit a redacted `sync_dispatch_parity_observation`: Celery
+immediately before its claim and Go initially and at most once per minute.
+The event carries the UTC cutoff, bounded limit, predicate and digest versions,
+aggregate counts, and a SHA-256 digest over the ordered candidate identities;
+it never carries the identities themselves, tenant data, claim tokens, or
+payloads. Capture failure is telemetry-only and cannot prevent the existing
+Celery claim path. Changing the artifact alone therefore cannot activate a Go
+transport.
+
+Matching digests prove parity only when the two observations use the same
+cutoff and limit against a quiescent or otherwise correlated dataset.
+Independent live timestamps are operational evidence, not a promotion gate.
+Promotion still requires separately reviewed tandem evidence.
 
 ### At-Most-Once post_sync Semantics
 

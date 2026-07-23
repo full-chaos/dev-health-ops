@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models import (
@@ -59,6 +62,175 @@ def _patch_db_session(monkeypatch, session):
     monkeypatch.setattr(
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(session)
     )
+
+
+def test_reconciler_emits_parity_observation_before_claim(
+    db_session, monkeypatch, caplog
+):
+    from dev_health_ops.sync import dispatch_outbox
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=1)
+    db_session.delete(running)
+    run.total_units = 1
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    order = []
+    original_observe = dispatch_outbox.observe_due_outbox_rows
+    original_claim = dispatch_outbox.claim_due_outbox_rows
+
+    def observe(*args, **kwargs):
+        order.append("observe")
+        return original_observe(*args, **kwargs)
+
+    def claim(*args, **kwargs):
+        order.append("claim")
+        return original_claim(*args, **kwargs)
+
+    monkeypatch.setattr(dispatch_outbox, "observe_due_outbox_rows", observe)
+    monkeypatch.setattr(dispatch_outbox, "claim_due_outbox_rows", claim)
+    caplog.set_level(logging.INFO, logger="dev_health_ops.workers.sync_reconciler")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert result["relayed_dispatch"] == 1
+    assert dispatches == [((str(run.id),), "sync")]
+    assert order.index("observe") < order.index("claim")
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "sync_dispatch_parity_observation"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.event == "sync_dispatch_parity_observation"
+    assert record.runtime == "celery"
+    assert record.limit == 10
+    assert record.candidate_digest.startswith("sha256:")
+    assert record.observed_at.endswith("000Z")
+    captured = f"{record.message} {record.__dict__}"
+    for forbidden in (str(run.id), run.org_id, "claim_token", "payload"):
+        assert forbidden not in captured
+
+
+def test_reconciler_parity_capture_failure_logs_and_does_not_change_claims(
+    db_session, monkeypatch, caplog
+):
+    from dev_health_ops.sync import dispatch_outbox
+    from dev_health_ops.sync.dispatch_outbox import (
+        SyncDispatchParityObservationUnavailable,
+    )
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=1)
+    db_session.delete(running)
+    run.total_units = 1
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        dispatch_outbox,
+        "observe_due_outbox_rows",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            SyncDispatchParityObservationUnavailable("query_unavailable")
+        ),
+    )
+    caplog.set_level(logging.INFO, logger="dev_health_ops.workers.sync_reconciler")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert result["relayed_dispatch"] == 1
+    assert dispatches == [((str(run.id),), "sync")]
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "sync_dispatch_parity_observation"
+    )
+    assert record.capture_status == "unavailable"
+    assert record.reason == "query_unavailable"
+
+
+def test_reconciler_logs_unavailable_parity_capture_for_limit_above_bound(
+    db_session, monkeypatch, caplog
+):
+    from dev_health_ops.workers import sync_reconciler
+
+    _patch_db_session(monkeypatch, db_session)
+    caplog.set_level(logging.INFO, logger="dev_health_ops.workers.sync_reconciler")
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=101)
+
+    assert result["relayed_dispatch"] == 0
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "sync_dispatch_parity_observation"
+    )
+    assert record.capture_status == "unavailable"
+    assert record.reason == "invalid_limit"
+
+
+def test_reconciler_parity_logging_failure_does_not_change_claims(
+    db_session, monkeypatch
+):
+    from dev_health_ops.workers import sync_reconciler, sync_units
+
+    run, running, _planned = _seed_run(db_session, planned_units=1)
+    db_session.delete(running)
+    run.total_units = 1
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    dispatches = []
+    monkeypatch.setattr(
+        sync_units.dispatch_sync_run,
+        "apply_async",
+        lambda args=None, queue=None: dispatches.append((args, queue)),
+    )
+    monkeypatch.setattr(
+        sync_reconciler.logger,
+        "info",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("blocked telemetry sink")
+        ),
+    )
+
+    result = sync_reconciler.reconcile_sync_dispatch(limit=10)
+
+    assert result["relayed_dispatch"] == 1
+    assert dispatches == [((str(run.id),), "sync")]
+
+
+@pytest.mark.skipif(
+    not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
+    reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
+)
+def test_parity_capture_recovery_clears_real_postgres_statement_failure():
+    from dev_health_ops.workers.sync_reconciler import (
+        _recover_sync_dispatch_parity_capture_transaction,
+    )
+
+    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    try:
+        with Session(engine) as session:
+            with pytest.raises(DBAPIError):
+                session.execute(text("SELECT 1 / 0"))
+
+            _recover_sync_dispatch_parity_capture_transaction(session)
+
+            assert session.execute(text("SELECT 1")).scalar_one() == 1
+    finally:
+        engine.dispose()
 
 
 def _seed_run(

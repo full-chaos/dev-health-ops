@@ -296,10 +296,17 @@ remains unported and no tandem parity is claimed.
 The first sync-domain transport dependency is now frozen independently of
 runtime activation. `contracts/sync-dispatch/v1/transport-routes.json`
 enumerates the four existing wakeup kinds and preserves their current delivery
-semantics. Strict Python and Go loaders consume the same artifact, but neither
-loader participates in claims or publication. Every checked-in route and
-rollback route remains Celery, so the Celery reconciler is still the only
-mutation owner and this slice does not yet establish tandem parity.
+semantics. Strict Python and Go loaders consume the same artifact. The dormant
+Go reconciler also runs a bounded, read-only observer over the first due-row
+window in Python claim order and closes readiness on contract or database
+drift. Celery records the same versioned, redacted digest immediately before
+claiming; Go records its initial observation and then at most one per minute.
+It does not lock, claim, update, or publish, and capture failure does not alter
+Celery behavior. Every checked-in route and rollback route remains Celery, so
+the Celery reconciler is still the only mutation owner. The observer supplies
+an autonomous comparison surface, but observations with different cutoffs are
+operational evidence rather than tandem proof. This slice does not authorize
+promotion.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,

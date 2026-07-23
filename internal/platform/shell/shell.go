@@ -28,11 +28,22 @@ type ConfigureDependencies func(
 	*health.Registry,
 ) ([]lifecycle.Component, error)
 
+// ConfigureDependenciesWithLogger is the optional logger-aware variant of
+// ConfigureDependencies. The logger is the shell-owned JSON logger for this
+// process; commands must not replace it with a separate handler or sink.
+type ConfigureDependenciesWithLogger func(
+	context.Context,
+	config.Config,
+	*health.Registry,
+	*slog.Logger,
+) ([]lifecycle.Component, error)
+
 type Spec struct {
-	Service               string
-	Profiles              []string
-	DefaultProfile        string
-	ConfigureDependencies ConfigureDependencies
+	Service                         string
+	Profiles                        []string
+	DefaultProfile                  string
+	ConfigureDependencies           ConfigureDependencies
+	ConfigureDependenciesWithLogger ConfigureDependenciesWithLogger
 }
 
 type IO struct {
@@ -123,8 +134,25 @@ func Execute(
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()
 	components := []lifecycle.Component{operatorHTTP}
-	if spec.ConfigureDependencies != nil {
-		configured, configureErr := spec.ConfigureDependencies(ctx, cfg, registry)
+	if spec.ConfigureDependencies != nil && spec.ConfigureDependenciesWithLogger != nil {
+		logger.ErrorContext(
+			ctx,
+			"configure runtime dependencies",
+			"error_category",
+			"ambiguous_dependency_configuration",
+		)
+		return 1
+	}
+	if spec.ConfigureDependencies != nil || spec.ConfigureDependenciesWithLogger != nil {
+		var configured []lifecycle.Component
+		var configureErr error
+		if spec.ConfigureDependenciesWithLogger != nil {
+			configured, configureErr = spec.ConfigureDependenciesWithLogger(
+				ctx, cfg, registry, logger,
+			)
+		} else {
+			configured, configureErr = spec.ConfigureDependencies(ctx, cfg, registry)
+		}
 		if configureErr != nil {
 			// Dependency adapters return operational detail to their caller, but the
 			// shell never assumes an arbitrary error is free of DSNs or secrets.

@@ -31,6 +31,20 @@ _WORKER_LOST_RETRY_EXHAUSTED_CATEGORY = "worker_lost_retry_exhausted"
 _DEFAULT_RATE_LIMIT_OBSERVATION_RETENTION_DAYS = 14
 
 
+def _emit_sync_dispatch_parity_observation(payload: dict[str, Any]) -> None:
+    """Keep optional parity telemetry from owning the Celery claim path."""
+    try:
+        logger.info("sync_dispatch_parity_observation", extra=payload)
+    except Exception:  # noqa: BLE001 - logging must never gate durable dispatch
+        return
+
+
+def _recover_sync_dispatch_parity_capture_transaction(session: Any) -> None:
+    """Restore a session after an optional observation statement fails."""
+    session.rollback()
+    session.expire_all()
+
+
 def _rate_limit_observation_retention_days() -> int:
     try:
         days = int(
@@ -120,10 +134,12 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         OUTBOX_KIND_DISPATCH,
         OUTBOX_KIND_FINALIZE,
         OUTBOX_KIND_POST_SYNC,
+        SyncDispatchParityObservationUnavailable,
         claim_due_outbox_rows,
         lock_outbox_claim_for_publish,
         mark_outbox_dispatched,
         mark_outbox_publish_failed,
+        observe_due_outbox_rows,
         upsert_outbox_wakeup,
     )
     from dev_health_ops.workers.post_sync_dispatch import (
@@ -341,7 +357,35 @@ def reconcile_sync_dispatch(limit: int = 100) -> dict[str, Any]:
         session.commit()
         session.expire_all()
 
-        claimed_rows = claim_due_outbox_rows(session, now=now, limit=max(1, int(limit)))
+        claim_limit = max(1, int(limit))
+        try:
+            parity_observation = observe_due_outbox_rows(
+                session, now=now, limit=claim_limit
+            )
+        except SyncDispatchParityObservationUnavailable as error:
+            _recover_sync_dispatch_parity_capture_transaction(session)
+            _emit_sync_dispatch_parity_observation(
+                {
+                    "event": "sync_dispatch_parity_observation",
+                    "runtime": "celery",
+                    "capture_status": "unavailable",
+                    "reason": error.reason,
+                }
+            )
+        except Exception:
+            _recover_sync_dispatch_parity_capture_transaction(session)
+            _emit_sync_dispatch_parity_observation(
+                {
+                    "event": "sync_dispatch_parity_observation",
+                    "runtime": "celery",
+                    "capture_status": "unavailable",
+                    "reason": "capture_unavailable",
+                }
+            )
+        else:
+            _emit_sync_dispatch_parity_observation(parity_observation)
+
+        claimed_rows = claim_due_outbox_rows(session, now=now, limit=claim_limit)
         session.commit()
         session.expire_all()
         for row in claimed_rows:

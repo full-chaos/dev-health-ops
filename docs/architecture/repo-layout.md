@@ -71,6 +71,7 @@ internal/
 ├── joboutbox/                # Transactional Python-to-River relay
 ├── joboperator/              # Payload-redacted operator policy and storage
 ├── syncdispatchcontract/     # Cross-language sync-outbox route policy
+├── syncreconciler/           # Read-only bounded sync-outbox observer
 └── testsupport/containers/   # Isolated pinned dependency harness
 contracts/jobs/v1/            # Schemas, registry, examples, and migration state
 contracts/sync-dispatch/v1/   # Sync-outbox delivery and transport routes

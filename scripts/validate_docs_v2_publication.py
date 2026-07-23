@@ -20,7 +20,11 @@ CONFIG_PATH = ROOT / "mkdocs.prototype.yml"
 PHASE9 = ROOT / ".github" / "documentation-program" / "phase-9"
 IA_DIR = ROOT / ".github" / "documentation-program" / "ia"
 MIGRATED_SOURCE_MAP_PATH = (
-    ROOT / ".github" / "documentation-program" / "content" / "migrated-source-pages.json"
+    ROOT
+    / ".github"
+    / "documentation-program"
+    / "content"
+    / "migrated-source-pages.json"
 )
 BUILD = ROOT / ".build"
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")

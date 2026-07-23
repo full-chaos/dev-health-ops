@@ -177,7 +177,7 @@ after other terminal outcomes without reopening feature-denied work.
 
 ### Transport Route Contract
 
-[`contracts/sync-dispatch/v1/transport-routes.json`](../../contracts/sync-dispatch/v1/transport-routes.json)
+[`contracts/sync-dispatch/v1/transport-routes.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/sync-dispatch/v1/transport-routes.json)
 is the language-neutral route and delivery contract for these four outbox
 kinds. Python and Go validate the same bounded artifact and reject missing,
 duplicate, reordered, or semantically mismatched entries. The route is

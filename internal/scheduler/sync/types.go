@@ -3,7 +3,10 @@
 // starts a scheduler loop.
 package sync
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 const (
 	// TimingDigestVersion identifies the fixed schedule/marker-only candidate
@@ -11,6 +14,10 @@ const (
 	TimingDigestVersion = "sync_scheduler_timing_digest_v1"
 	// EvaluationVersion identifies the Python-compatible timing rules.
 	EvaluationVersion = "sync_scheduler_timing_evaluation_v1"
+	// CronGrammarVersion identifies the deterministic five-field Croniter
+	// subset. Random R expressions and optional sixth/seventh fields are
+	// explicitly outside this grammar.
+	CronGrammarVersion = "croniter_five_field_deterministic_v1"
 	// ScheduleMarkerEvaluationScope makes explicit that organization existence,
 	// feature entitlement, and all other dispatch gates are out of scope.
 	ScheduleMarkerEvaluationScope = "schedule_and_marker_only"
@@ -38,7 +45,13 @@ const (
 	DecisionNotDue       Decision = "not_due"
 	DecisionNextRunGate  Decision = "next_run_gate"
 	DecisionInvalidCron  Decision = "invalid_cron"
+	DecisionUnsupportedCron Decision = "unsupported_cron"
 )
+
+// ErrUnsupportedRandomCron identifies Croniter's random R syntax. Recreating
+// Croniter selects a new value, so cross-runtime shadow comparison cannot
+// evaluate this syntax deterministically.
+var ErrUnsupportedRandomCron = errors.New("random R cron syntax is unsupported for deterministic comparison")
 
 // Candidate is the minimal scheduler state read from the legacy semantic
 // tables. It contains no execution handle and is safe to evaluate repeatedly.
@@ -78,6 +91,7 @@ type Evaluation struct {
 	Timezone         string
 	TimezoneFallback bool
 	EligibilityScope string
+	CronGrammar      string
 }
 
 type EvaluatedCandidate struct {
@@ -96,5 +110,6 @@ type Snapshot struct {
 	DigestVersion     string
 	EvaluationVersion string
 	EligibilityScope  string
+	CronGrammar       string
 	CandidateDigest   string
 }

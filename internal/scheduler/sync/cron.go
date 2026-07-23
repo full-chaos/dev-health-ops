@@ -29,11 +29,15 @@ type dayOfMonthField struct {
 	nearestWeekday int
 }
 
+type dayOfWeekClause struct {
+	weekday int
+	nth     int
+	last    bool
+}
+
 type dayOfWeekField struct {
 	field
-	nthWeekday  int
-	nth         int
-	lastWeekday int
+	clauses []dayOfWeekClause
 }
 
 // NextOccurrence implements the five-field, local-wall-clock portion of the
@@ -101,6 +105,9 @@ func parseCron(expression string) (cronSpec, error) {
 	if len(parts) != 5 {
 		return cronSpec{}, fmt.Errorf("cron expression must have exactly five fields")
 	}
+	if hasRandomCronField(parts) {
+		return cronSpec{}, ErrUnsupportedRandomCron
+	}
 	minute, err := parseField(parts[0], 0, 59, nil)
 	if err != nil {
 		return cronSpec{}, err
@@ -122,6 +129,19 @@ func parseCron(expression string) (cronSpec, error) {
 		return cronSpec{}, err
 	}
 	return cronSpec{minute: minute, hour: hour, day: day, month: month, weekDay: weekDay}, nil
+}
+
+func hasRandomCronField(parts []string) bool {
+	for _, part := range parts {
+		for _, term := range strings.Split(strings.ToLower(part), ",") {
+			base := strings.SplitN(term, "/", 2)[0]
+			if base == "r" ||
+				(strings.HasPrefix(base, "r(") && strings.HasSuffix(base, ")")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var monthNames = map[string]int{
@@ -175,9 +195,6 @@ func parseDayOfMonthField(raw string) (dayOfMonthField, error) {
 		wildcard, _ := parseField("*", 1, 31, nil)
 		return dayOfMonthField{field: wildcard}, nil
 	}
-	if normalized == "l" {
-		return dayOfMonthField{field: field{values: make(map[int]struct{})}, last: true}, nil
-	}
 	if strings.HasSuffix(normalized, "w") {
 		if strings.ContainsAny(normalized, ",-/") || normalized == "lw" {
 			return dayOfMonthField{}, fmt.Errorf("nearest weekday requires one day value")
@@ -191,8 +208,22 @@ func parseDayOfMonthField(raw string) (dayOfMonthField, error) {
 			nearestWeekday: value,
 		}, nil
 	}
-	parsed, err := parseField(normalized, 1, 31, nil)
-	return dayOfMonthField{field: parsed}, err
+	result := dayOfMonthField{field: field{values: make(map[int]struct{})}}
+	for _, term := range strings.Split(normalized, ",") {
+		if term == "l" {
+			result.last = true
+			continue
+		}
+		parsed, err := parseField(term, 1, 31, nil)
+		if err != nil {
+			return dayOfMonthField{}, err
+		}
+		result.wildcard = result.wildcard || parsed.wildcard
+		for value := range parsed.values {
+			result.values[value] = struct{}{}
+		}
+	}
+	return result, nil
 }
 
 func parseDayOfWeekField(raw string) (dayOfWeekField, error) {
@@ -202,50 +233,105 @@ func parseDayOfWeekField(raw string) (dayOfWeekField, error) {
 		normalizeSunday(&wildcard)
 		return dayOfWeekField{field: wildcard}, nil
 	}
-	if strings.HasPrefix(normalized, "l") && len(normalized) > 1 {
-		if strings.ContainsAny(normalized[1:], ",-/#") {
-			return dayOfWeekField{}, fmt.Errorf("last weekday requires one weekday value")
-		}
-		value, err := strconv.Atoi(normalized[1:])
-		if err != nil || value < 0 || value > 7 {
-			return dayOfWeekField{}, fmt.Errorf("invalid last weekday %q", raw)
-		}
-		if value == 7 {
-			value = 0
-		}
-		return dayOfWeekField{
-			field:       field{values: make(map[int]struct{})},
-			lastWeekday: value + 1,
-		}, nil
+	if strings.Contains(normalized, "?") {
+		return dayOfWeekField{}, fmt.Errorf("question mark cannot be combined with other weekday terms")
 	}
-	if strings.Contains(normalized, "#") {
-		parts := strings.Split(normalized, "#")
-		if len(parts) != 2 || strings.ContainsAny(parts[0], ",-/") {
-			return dayOfWeekField{}, fmt.Errorf("nth weekday requires one weekday value")
+	result := dayOfWeekField{field: field{values: make(map[int]struct{})}}
+	var ordinaryTerms []string
+	for _, term := range strings.Split(normalized, ",") {
+		switch {
+		case strings.HasPrefix(term, "l") && len(term) > 1:
+			if strings.ContainsAny(term[1:], "-/#") {
+				return dayOfWeekField{}, fmt.Errorf("last weekday requires one weekday value")
+			}
+			value, err := strconv.Atoi(term[1:])
+			if err != nil || value < 0 || value > 7 {
+				return dayOfWeekField{}, fmt.Errorf("invalid last weekday %q", term)
+			}
+			if value == 7 {
+				value = 0
+			}
+			result.clauses = append(result.clauses, dayOfWeekClause{weekday: value, last: true})
+		case strings.Contains(term, "#"):
+			parts := strings.Split(term, "#")
+			if len(parts) != 2 || strings.ContainsAny(parts[0], "-/") {
+				return dayOfWeekField{}, fmt.Errorf("nth weekday requires one weekday value")
+			}
+			weekday, err := parseValue(parts[0], 0, 7, weekDayNames)
+			if err != nil {
+				return dayOfWeekField{}, err
+			}
+			nth, err := strconv.Atoi(parts[1])
+			if err != nil || nth < 1 || nth > 5 {
+				return dayOfWeekField{}, fmt.Errorf("invalid nth weekday %q", term)
+			}
+			if weekday == 7 {
+				weekday = 0
+			}
+			result.clauses = append(result.clauses, dayOfWeekClause{weekday: weekday, nth: nth})
+		default:
+			ordinaryTerms = append(ordinaryTerms, term)
 		}
-		weekday, err := parseValue(parts[0], 0, 7, weekDayNames)
-		if err != nil {
-			return dayOfWeekField{}, err
-		}
-		nth, err := strconv.Atoi(parts[1])
-		if err != nil || nth < 1 || nth > 5 {
-			return dayOfWeekField{}, fmt.Errorf("invalid nth weekday %q", raw)
-		}
-		if weekday == 7 {
-			weekday = 0
-		}
-		return dayOfWeekField{
-			field:      field{values: make(map[int]struct{})},
-			nthWeekday: weekday + 1,
-			nth:        nth,
-		}, nil
 	}
-	parsed, err := parseField(normalized, 0, 7, weekDayNames)
+	if len(result.clauses) > 0 {
+		for _, term := range ordinaryTerms {
+			// Croniter ignores a plain wildcard alongside nth/last clauses,
+			// but rejects all ordinary literal/range/step mixtures.
+			if term != "*" {
+				return dayOfWeekField{}, fmt.Errorf("weekday literals cannot be mixed with nth or last clauses")
+			}
+		}
+		return result, nil
+	}
+	parsed, err := parseDayOfWeekOrdinaryField(normalized)
 	if err != nil {
 		return dayOfWeekField{}, err
 	}
-	normalizeSunday(&parsed)
 	return dayOfWeekField{field: parsed}, nil
+}
+
+func parseDayOfWeekOrdinaryField(raw string) (field, error) {
+	result := field{values: make(map[int]struct{}), wildcard: raw == "*"}
+	for _, term := range strings.Split(raw, ",") {
+		if term == "" {
+			return field{}, fmt.Errorf("cron field has an empty list term")
+		}
+		base, step, hasStep, err := parseStep(term)
+		if err != nil {
+			return field{}, err
+		}
+		start, end, err := parseRange(base, 0, 7, weekDayNames)
+		if err != nil {
+			return field{}, err
+		}
+		if !hasStep {
+			step = 1
+		} else if base != "*" && !strings.Contains(base, "-") {
+			end = 7
+		}
+		values := canonicalWeekdayRange(start, end)
+		for index := 0; index < len(values); index += step {
+			result.values[values[index]] = struct{}{}
+		}
+	}
+	return result, nil
+}
+
+func canonicalWeekdayRange(start, end int) []int {
+	raw := rangeValues(start, end, 0, 7)
+	result := make([]int, 0, len(raw))
+	seen := make(map[int]struct{}, 7)
+	for _, value := range raw {
+		if value == 7 {
+			value = 0
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func normalizeSunday(parsed *field) {
@@ -346,26 +432,33 @@ func (spec cronSpec) matches(wall time.Time) bool {
 }
 
 func (field dayOfMonthField) matches(wall time.Time) bool {
-	switch {
-	case field.last:
-		return wall.Day() == daysInMonth(wall.Year(), wall.Month())
-	case field.nearestWeekday != 0:
-		return wall.Day() == nearestWeekday(wall.Year(), wall.Month(), field.nearestWeekday)
-	default:
-		return contains(field.field, wall.Day())
+	if contains(field.field, wall.Day()) {
+		return true
 	}
+	if field.last && wall.Day() == daysInMonth(wall.Year(), wall.Month()) {
+		return true
+	}
+	return field.nearestWeekday != 0 &&
+		wall.Day() == nearestWeekday(wall.Year(), wall.Month(), field.nearestWeekday)
 }
 
 func (field dayOfWeekField) matches(wall time.Time) bool {
 	weekday := int(wall.Weekday())
-	switch {
-	case field.nth != 0:
-		return weekday == field.nthWeekday-1 && (wall.Day()-1)/7+1 == field.nth
-	case field.lastWeekday != 0:
-		return weekday == field.lastWeekday-1 && wall.AddDate(0, 0, 7).Month() != wall.Month()
-	default:
-		return contains(field.field, weekday)
+	if contains(field.field, weekday) {
+		return true
 	}
+	for _, clause := range field.clauses {
+		if weekday != clause.weekday {
+			continue
+		}
+		if clause.last && wall.AddDate(0, 0, 7).Month() != wall.Month() {
+			return true
+		}
+		if clause.nth != 0 && (wall.Day()-1)/7+1 == clause.nth {
+			return true
+		}
+	}
+	return false
 }
 
 func daysInMonth(year int, month time.Month) int {

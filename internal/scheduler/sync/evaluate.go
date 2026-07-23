@@ -31,6 +31,7 @@ func evaluateContext(ctx context.Context, candidate Candidate, observedAt time.T
 		RunningMarker:    RunningNotSet,
 		Timezone:         "UTC",
 		EligibilityScope: ScheduleMarkerEvaluationScope,
+		CronGrammar:      CronGrammarVersion,
 	}
 	if !candidate.Active {
 		result.Decision = DecisionInactive
@@ -80,6 +81,10 @@ func evaluateContext(ctx context.Context, candidate Candidate, observedAt time.T
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return result, err
+		}
+		if errors.Is(err, ErrUnsupportedRandomCron) {
+			result.Decision = DecisionUnsupportedCron
+			return result, nil
 		}
 		result.Decision = DecisionInvalidCron
 		return result, nil

@@ -315,12 +315,15 @@ snapshot, then evaluates occurrence, manual-only, active-job,
 `is_running`-staleness, and `next_run_at` gates without a transaction, row
 lock, advisory lock, update, enqueue, or process-loop registration. Its
 versioned digest retains candidate identities only in memory. The evaluator
-matches the production five-field Croniter surface, including timezone and
-DST behavior; optional Croniter seconds/year fields remain explicitly outside
-this shadow version. Organization existence, entitlement, occurrence
-claiming, and the dispatch transaction are still Celery-owned work below.
-Nothing imports this package from a command or deployment profile, so its
-presence is comparison infrastructure rather than activation.
+matches the deterministic production five-field Croniter surface, including
+timezone and DST behavior. Croniter's random `R` form is reported as
+unsupported rather than imitated, and optional seconds/year fields remain
+explicitly outside this shadow version. Results and their digest are labeled
+`schedule_and_marker_only`; they are not full dispatch eligibility because
+organization existence, entitlement, occurrence claiming, and the dispatch
+transaction are still Celery-owned work below. Nothing imports this package
+from a command or deployment profile, so its presence is comparison
+infrastructure rather than activation.
 
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,

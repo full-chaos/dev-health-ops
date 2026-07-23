@@ -5,7 +5,7 @@ VERSION_ID ?=
 DOCS_REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 DOCS_TAG := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
-.PHONY: docs\:check docs\:check-drift docs\:check-links docs\:generate-taxonomy docs\:build docs\:check-built-site docs\:check-external-links docs\:check-freshness docs\:check-code-prerequisites docs\:serve docs\:check-v2 docs\:build-preview docs\:preview docs\:version docs\:upload-preview docs\:deploy docs\:rollback docs\:versions docs\:deployments docs\:v2-serve docs\:v2-check docs\:cloudflare-preview docs\:cloudflare-dev docs\:cloudflare-version docs\:cloudflare-deploy install test\:unit test\:integration test\:e2e test\:live-e2e test\:ci
+.PHONY: docs\:check docs\:check-drift docs\:check-links docs\:generate-taxonomy docs\:build docs\:check-built-site docs\:check-external-links docs\:check-freshness docs\:check-code-prerequisites docs\:serve docs\:check-v2 docs\:build-preview docs\:preview docs\:version docs\:upload-preview docs\:deploy docs\:rollback docs\:versions docs\:deployments docs\:v2-serve docs\:v2-check docs\:cloudflare-preview docs\:cloudflare-dev docs\:cloudflare-version docs\:cloudflare-deploy go\:fmt go\:vet go\:test go\:race go\:build go\:contract go\:integration go\:container-smoke go\:container-reproducible go\:container go\:verify go\:check-fast go\:check install test\:unit test\:integration test\:e2e test\:live-e2e test\:ci
 
 docs\:generate-taxonomy:
 	$(PYTHON) scripts/gen_taxonomy_docs.py
@@ -120,6 +120,48 @@ docs\:cloudflare-dev: docs\:preview
 docs\:cloudflare-version: docs\:version
 
 docs\:cloudflare-deploy: docs\:deploy
+
+# Go worker foundation validation. These wrap the checked-in CI contracts.
+go\:fmt:
+	@./ci/check_go.sh fmt
+
+go\:vet:
+	@./ci/check_go.sh vet
+
+go\:test:
+	@./ci/check_go.sh test
+
+go\:race:
+	@./ci/check_go.sh race
+
+go\:build:
+	@./ci/check_go.sh build
+
+go\:contract:
+	@./ci/check_go.sh contract
+
+go\:integration:
+	@./ci/check_go.sh integration
+
+go\:container-smoke:
+	@./ci/check_go_containers.sh smoke
+
+go\:container-reproducible:
+	@./ci/check_go_containers.sh reproducible
+
+go\:container:
+	@./ci/check_go_containers.sh all
+
+go\:verify:
+	@./ci/check_go.sh all
+	@./ci/check_go.sh integration
+	@./ci/check_go_containers.sh all
+
+go\:check-fast:
+	@./ci/check_go.sh fast
+
+go\:check:
+	@./ci/check_go.sh all
 
 test\:unit:
 	@./ci/run_tests.sh unit

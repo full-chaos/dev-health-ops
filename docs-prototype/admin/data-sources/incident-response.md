@@ -1,80 +1,81 @@
----
-page_id: admin-incidents
-summary: Connect supported incident-response sources, register PagerDuty OAuth, discover services, map operational scope, and verify canonical incident synchronization.
-content_type: task-guide
-owner: platform-product
-source_of_truth:
-  - docs/user-guide/pagerduty-oauth-app-setup.md
-  - docs/architecture/pagerduty-contract.md
-  - docs/providers/jira-service-management.md
-  - current incident-source admin, credential, service-discovery, webhook, and sync implementation
-applicability: current
-lifecycle: active
----
+# PagerDuty OAuth app setup
 
-# Connect incident-response sources
+This guide registers the PagerDuty OAuth 2.0 app used by Dev Health's
+organization-scoped, read-only PagerDuty integration.
 
-Incident-response integrations bring operational events, services, schedules, responders, and incident evidence into the canonical Dev Health operational model. A source is not ready merely because authentication succeeded: the administrator must verify provider identity, dataset permission, service discovery, product mappings, and a bounded synchronization.
-{: .fc-page-lede }
+A Dev Health organization admin connects PagerDuty once for the organization.
+Other Dev Health users do not complete separate PagerDuty consent flows; they use
+the operational data synced into their Dev Health organization. The PagerDuty
+identity that grants consent must be able to see every service, team, schedule,
+and incident that Dev Health should ingest.
 
-## Current availability
+> Replace `YOUR_HOST` with the public host that serves Dev Health Web. The OAuth
+> callback is a browser route on the web application, not the ops API callback
+> endpoint.
 
-| Source | Status | Supported boundary |
+## Choose a connection mode
+
+| Deployment | Recommended mode | Behavior |
 | --- | --- | --- |
-| PagerDuty REST and Webhooks V3 | Current | Read-only organization-scoped synchronization plus verified signed event delivery |
-| Jira Service Management incidents | Not release-ready | Code and unit contracts exist, but live tenant proof and release readiness remain blocked |
-| JSM Ops Alerts or standalone Opsgenie | Not supported by this incident slice | Alerts are separate capabilities and are never inferred into incidents |
+| Hosted or interactive self-hosted Dev Health | Authorization code with PKCE | A Dev Health admin authorizes the registered app once for each Dev Health organization. Dev Health stores and refreshes the organization-scoped OAuth credential. |
+| Private automation without interactive consent | Client credentials | Register a private scoped PagerDuty app and enter its client ID, client secret, account subdomain, and region in Dev Health. |
+| Compatibility only | REST API token | Use the explicit API-token fallback only when OAuth is unavailable. |
 
-Do not infer a canonical incident from ordinary Jira issues, alert-like labels, timestamps, text similarity, or write-only associations.
+PagerDuty app visibility does not determine whether browser authorization is
+available. A private Scoped OAuth app may use PKCE user authorization within the
+PagerDuty account that created it, or use client credentials without interactive
+consent. Publishing is only relevant when distributing an eligible app to other
+PagerDuty accounts.
 
-## PagerDuty connection model
+The rest of this guide covers the recommended authorization-code flow.
 
-A Dev Health organization administrator connects PagerDuty once for the organization. Other users consume the synchronized operational data; they do not complete individual consent flows.
+## 1. Register the app in PagerDuty
 
-The consenting PagerDuty identity must be able to see every service, team, schedule, responder, and incident Dev Health should ingest.
+You need PagerDuty Account Owner or Global Admin access to register a scoped OAuth
+app.
 
-### Choose authentication
-
-| Mode | Use it when | Behavior |
-| --- | --- | --- |
-| Authorization code with PKCE | Hosted or interactive self-hosted Dev Health | An organization admin authorizes the registered app once. Dev Health stores and refreshes the organization-scoped OAuth credential. |
-| Client credentials | Private automation without interactive consent | Dev Health validates a private scoped app with client ID, client secret, subdomain, and region. |
-| REST API token | OAuth is unavailable | Explicit compatibility fallback; still requires live validation. |
-
-## Register a PagerDuty OAuth app
-
-You need PagerDuty Account Owner or Global Admin access.
-
-1. Open **Integrations → Developer Tools → App Registration** in PagerDuty.
-2. Create an environment-specific app, such as `Dev Health Production`.
-3. Enable **OAuth 2.0** and choose **Scoped OAuth**.
-4. Register the exact browser callback:
+1. In PagerDuty, open **Integrations → Developer Tools → App Registration**.
+2. Select **New App**.
+3. Enter a name such as `Dev Health` and a description such as
+   `Read-only operational data sync for Dev Health`.
+4. Enable **OAuth 2.0**, then continue to the OAuth configuration step.
+5. Select **Scoped OAuth**.
+6. Add the redirect URL for the environment:
 
    ```text
    https://YOUR_HOST/org/admin/integrations/pagerduty/callback
    ```
 
-   This is a Dev Health Web route. Do not register the ops API route as the browser callback.
+   The value must exactly match `PAGER_DUTY_REDIRECT_URI` in the ops runtime.
+   Do not register `/api/v1/admin/integrations/pagerduty/callback` as the browser
+   redirect. Dev Health Web receives the browser redirect, removes the OAuth
+   parameters from browser history, and sends the authenticated callback request
+   to the ops API.
 
-5. Grant read access for the synchronized resources:
+7. Grant **Read Access** for the resources below. Dev Health does not request
+   write scopes in the current PagerDuty integration.
 
-| Resource | Scope | Dev Health datasets |
+| PagerDuty resource | OAuth scope | Dev Health datasets |
 | --- | --- | --- |
 | Incidents | `incidents.read` | Incidents, alerts, timeline entries, and notes |
-| Services and business services | `services.read` | Service discovery and mapping |
-| Escalation policies | `escalation_policies.read` | Escalation context |
-| Schedules | `schedules.read` | Schedule context |
+| Services | `services.read` | Services and business services |
+| Escalation policies | `escalation_policies.read` | Escalation policies |
+| Schedules | `schedules.read` | Schedules |
 | On-calls | `oncalls.read` | On-call assignments |
-| Users | `users.read` | Responder identity |
-| Teams | `teams.read` | Team context |
+| Users | `users.read` | Users and responder identity |
+| Teams | `teams.read` | Teams |
 
-6. Register the app and store the client ID and client secret in the environment's secret manager.
+8. Register the app.
+9. Copy or download the **Client ID** and **Client Secret** immediately and store
+   them in your secret manager. PagerDuty may not display the client secret again.
 
-Use separate apps per environment when separate blast radius and rate-limit accounting are important.
+For a lower blast radius and separate rate-limit accounting, register a distinct
+private app for each environment, such as production and staging.
 
-## Configure the Dev Health runtime
+## 2. Configure the Dev Health ops runtime
 
-The API and every worker that can synchronize PagerDuty need the same app values:
+Set the OAuth app credentials on the ops API and every sync worker that can run
+PagerDuty jobs:
 
 ```dotenv
 PAGER_DUTY_CLIENT_ID="<pagerduty-client-id>"
@@ -82,104 +83,140 @@ PAGER_DUTY_SECRET="<pagerduty-client-secret>"
 PAGER_DUTY_REDIRECT_URI="https://YOUR_HOST/org/admin/integrations/pagerduty/callback"
 ```
 
-OAuth state and encrypted credentials are stored in PostgreSQL. API and workers also need the same stable encryption key:
+The same values must be available to the API and workers. The API uses them to
+start and complete authorization; workers use them to refresh short-lived access
+tokens during sync.
+
+Also configure a stable PostgreSQL connection and encryption key:
 
 ```dotenv
 POSTGRES_URI="postgresql+asyncpg://..."
 SETTINGS_ENCRYPTION_KEY="<stable-production-encryption-key>"
 ```
 
-Apply PostgreSQL migrations before connecting PagerDuty:
+OAuth state, encrypted tokens, expiration metadata, granted scopes, and account
+metadata are stored in PostgreSQL. Keep `SETTINGS_ENCRYPTION_KEY` stable across
+restarts and identical anywhere encrypted credentials are read.
+
+Apply the PostgreSQL migrations before connecting PagerDuty:
 
 ```bash
 dev-hops migrate postgres upgrade
 ```
 
-Restart or roll out API and workers after changing the app secrets. Never expose `PAGER_DUTY_SECRET` through browser-visible configuration.
+Then restart or roll out the ops API and workers so they receive the new secrets.
+Do not expose `PAGER_DUTY_SECRET` through browser-visible environment variables.
 
-## Authorize the organization
+## 3. Connect PagerDuty once for the organization
 
-1. Sign in to Dev Health as an organization administrator.
+1. Sign in to Dev Health as an organization admin.
 2. Open **Admin → Integrations → PagerDuty**.
-3. Choose **OAuth authorization**.
-4. Review and authorize the read-only scopes.
-5. Return to the PagerDuty integration page after the callback completes.
-6. Load connection status and run permission preflight for every selected dataset.
+3. Select **OAuth authorization**.
+4. In PagerDuty, review the read-only permissions and authorize the app.
+5. After Dev Health reports that the connection is complete, return to the
+   PagerDuty integration page and load its status.
+6. Run permission preflight for every selected dataset.
 
-A healthy connection identifies the intended account, region, authentication mode, and granted scopes. A completed OAuth exchange with missing dataset permission is not a ready connection.
+The callback stores an encrypted access token, refresh token when provided,
+expiration, granted scopes, account identity, region, and subdomain. The normal
+integration descriptor remains tokenless.
 
-## Discover and map services
+## 4. Validate the shared connection
 
-After permission preflight:
+A healthy OAuth connection reports:
 
-1. Discover services visible to the authorized identity.
-2. Select services that belong in this Dev Health organization.
-3. Map each selected service to repositories or teams where that association is known.
-4. Review selected incident and operational datasets.
-5. Save the synchronization configuration.
-6. Run a bounded initial backfill and monitor it before widening the window.
+```json
+{
+  "connected": true,
+  "credential_name": "default",
+  "auth_mode": "oauth",
+  "region": "us",
+  "subdomain": "acme",
+  "granted_scopes": [
+    "incidents.read",
+    "services.read"
+  ],
+  "has_refresh_token": true
+}
+```
 
-The canonical PagerDuty target includes services, business services, escalation policies, schedules, on-calls, users, teams, incidents, incident alerts, incident log entries, and incident notes. Child incident datasets depend on the parent incident dataset.
+The exact `granted_scopes` list depends on the selected datasets. Preflight should
+mark every selected dataset as granted. If a dataset is missing permission, update
+the PagerDuty app's read access and reconnect so PagerDuty issues a token with the
+new scope set.
 
-## PagerDuty Webhooks V3
+After preflight succeeds, discover PagerDuty services, map them to one or more Dev
+Health repositories, configure the sync, and start the initial backfill.
 
-Webhooks are separate from OAuth. OAuth authorizes REST reads; Webhooks V3 delivers supported incident and service events to a persisted opaque binding route.
+## Local testing
 
-The current receiver:
+Authorization-code redirects can use localhost because PagerDuty redirects the
+browser running on your machine:
 
-- verifies HMAC-SHA256 over the exact raw request body;
-- accepts multiple `v1=` signatures during rotation;
-- recognizes `pagey.ping` as a health event with no canonical write;
-- fails closed for unknown events;
-- deduplicates identical event replay durably;
-- reports same-identity/different-body reuse as a conflict;
-- resolves organization, source, credential, and signing authority from the persisted binding rather than payload fields.
+```text
+http://localhost:3000/org/admin/integrations/pagerduty/callback
+```
 
-Webhook delivery requires a publicly reachable HTTPS endpoint. A localhost OAuth callback does not make localhost a valid provider webhook destination.
+Register that exact redirect URL in the PagerDuty app and set:
 
-## Verify the source
+```dotenv
+PAGER_DUTY_REDIRECT_URI="http://localhost:3000/org/admin/integrations/pagerduty/callback"
+```
 
-Before marking the source ready:
-
-- connection status reports the intended account, region, mode, and scopes;
-- permission preflight passes for every selected dataset;
-- service discovery returns expected services;
-- mappings reflect the intended Dev Health scope;
-- one bounded backfill completes;
-- latest successful synchronization advances;
-- a known incident is visible in the supported product surface;
-- when webhooks are enabled, the replacement binding passes the provider health event before activation.
+PagerDuty webhooks are separate from the OAuth callback and require a publicly
+reachable HTTPS endpoint when webhook mode is enabled.
 
 ## Troubleshooting
 
-### App configuration is missing
+### `PAGER_DUTY_CLIENT_ID is not configured`
 
-Confirm client ID, client secret, and redirect URI are present on the API. Workers also need client ID and secret for token refresh.
+The ops API did not receive the registered app configuration. Set
+`PAGER_DUTY_CLIENT_ID`, `PAGER_DUTY_SECRET`, and `PAGER_DUTY_REDIRECT_URI`, then
+restart the API.
 
-### Redirect mismatch
+### Redirect URI mismatch
 
-PagerDuty registration and `PAGER_DUTY_REDIRECT_URI` must match exactly. The expected path is:
+Confirm that PagerDuty App Registration and `PAGER_DUTY_REDIRECT_URI` use the
+same scheme, host, port, path, and trailing-slash behavior. The expected path is:
 
 ```text
 /org/admin/integrations/pagerduty/callback
 ```
 
-Start authorization again after correcting the value; OAuth state is short-lived and one-time.
+### Invalid or expired OAuth state
 
-### Missing scopes or services
+Start the connection again from Dev Health. Authorization state is short-lived,
+one-time, and bound to the Dev Health organization. Reusing a callback or opening
+an old callback URL is rejected.
 
-Update PagerDuty read access or reconnect with an identity that can see the expected services, teams, schedules, and incidents. Then rerun preflight and discovery.
+### Missing required scopes
 
-### Refresh fails later
+Dev Health rejects a completed authorization that lacks a scope required by the
+selected datasets and attempts to revoke the issued token. Add the missing read
+access in PagerDuty, then reconnect.
 
-Verify API and workers share the same client ID, client secret, and `SETTINGS_ENCRYPTION_KEY`. If the app secret or grant was revoked, disconnect and reconnect.
+### Partial data or no accessible services
 
-### Webhook verification fails
+Check the account subdomain and region first. Then confirm that the PagerDuty user
+who granted consent can access the required teams, services, schedules, and
+incidents. Reconnect with an appropriately authorized PagerDuty identity when
+necessary.
 
-Verify the active binding route and provider subscription identity, preserve the exact raw request body for signature validation, allow multiple `v1=` signatures during rotation, and create/verify a replacement before revoking the old binding.
+### Sync works initially but refresh later fails
+
+Confirm that every worker has the same `PAGER_DUTY_CLIENT_ID` and
+`PAGER_DUTY_SECRET` as the API, and that `SETTINGS_ENCRYPTION_KEY` has not changed.
+If the PagerDuty client secret or grant was revoked, disconnect and reconnect the
+integration.
 
 ## Disconnect and rotate
 
-Disconnecting removes active local authority and attempts remote revocation while preserving non-secret historical evidence. Rotation is additive: create and verify the replacement, switch synchronization or webhook delivery, then revoke the superseded credential or binding.
+Disconnecting the PagerDuty integration removes the local OAuth binding, clears
+the active credential descriptor, and attempts to revoke the remote token. To
+rotate the PagerDuty app's client secret, update the API and workers together,
+roll them out, then reconnect any authorization-code bindings that PagerDuty has
+invalidated.
 
-Continue with [Check synchronization status and freshness](../sync-and-coverage/status-and-freshness.md) and [Rotate or revoke provider credentials](credential-lifecycle.md).
+See PagerDuty's official [Apps documentation](https://support.pagerduty.com/main/docs/apps)
+and [Scoped OAuth overview](https://www.pagerduty.com/blog/insights/build-sophisticated-apps-for-your-pagerduty-environment-using-oauth-2-0-and-api-scopes/)
+for the provider-side concepts behind app registration and consent.

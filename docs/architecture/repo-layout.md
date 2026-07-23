@@ -70,13 +70,15 @@ internal/
 ├── jobcontract/              # Go job-envelope and compatibility types
 ├── joboutbox/                # Transactional Python-to-River relay
 ├── joboperator/              # Payload-redacted operator policy and storage
+├── syncdispatchcontract/     # Cross-language sync-outbox route policy
 └── testsupport/containers/   # Isolated pinned dependency harness
 contracts/jobs/v1/            # Schemas, registry, examples, and migration state
+contracts/sync-dispatch/v1/   # Sync-outbox delivery and transport routes
 ```
 
-These roots are Phase 1 foundations. The command shells do not imply a
-production job handler, River route, or canary approval. Detailed runtime
-topology and migration gates live in the
+These roots are migration foundations. The command shells and route-contract
+loaders do not imply a production job handler, River route, or canary
+approval. Detailed runtime topology and migration gates live in the
 [Go worker runtime TRD](go-worker-runtime-trd.md) and
 [migration PRD](../product/go-worker-migration-prd.md).
 

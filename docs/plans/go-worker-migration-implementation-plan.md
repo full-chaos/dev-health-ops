@@ -293,6 +293,14 @@ route to Celery, no producer calls the bridge, and no Go handler is compiled.
 The broader scheduler and sync-domain transport work in CHAOS-3039 therefore
 remains unported and no tandem parity is claimed.
 
+The first sync-domain transport dependency is now frozen independently of
+runtime activation. `contracts/sync-dispatch/v1/transport-routes.json`
+enumerates the four existing wakeup kinds and preserves their current delivery
+semantics. Strict Python and Go loaders consume the same artifact, but neither
+loader participates in claims or publication. Every checked-in route and
+rollback route remains Celery, so the Celery reconciler is still the only
+mutation owner and this slice does not yet establish tandem parity.
+
 An opt-in live PostgreSQL test now proves the Python producer's outer rollback
 and dedupe/savepoint path. Before any generic kind is promoted from Celery,
 retain that proof in promotion validation, record evidence for the relay

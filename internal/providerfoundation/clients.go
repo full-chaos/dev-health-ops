@@ -39,7 +39,15 @@ func NewGitHubClient(credential Credential, doer HTTPDoer, retry RetryPolicy, le
 	}
 	base := credentialBaseURL(credential, githubAPIBase)
 	if token, ok := credential.Secret("token"); ok && token.Configured() {
-		return NewHTTPClient("github", base, doer, TokenAuth("Authorization", "Bearer ", token), retry, lease)
+		auth := func(request *http.Request) error {
+			if err := TokenAuth("Authorization", "token ", token)(request); err != nil {
+				return err
+			}
+			request.Header.Set("Accept", "application/vnd.github+json")
+			request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+			return nil
+		}
+		return NewHTTPClient("github", base, doer, auth, retry, lease)
 	}
 	auth, err := NewGitHubAppAuth(credential, base, doer)
 	if err != nil {

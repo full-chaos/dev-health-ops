@@ -25,6 +25,22 @@ func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 		want       string
 	}{
 		{
+			name:       "github personal access token",
+			credential: testCredential("github", map[string]string{"token": "github-token"}),
+			newClient:  NewGitHubClient,
+			path:       "/repos/acme/api",
+			header:     "Authorization",
+			want:       "token github-token",
+		},
+		{
+			name:       "gitlab private token",
+			credential: testCredential("gitlab", map[string]string{"token": "gitlab-token"}),
+			newClient:  NewGitLabClient,
+			path:       "/api/v4/projects/1",
+			header:     "PRIVATE-TOKEN",
+			want:       "gitlab-token",
+		},
+		{
 			name:       "linear",
 			credential: testCredential("linear", map[string]string{"api_key": "linear-key"}),
 			newClient:  NewLinearClient,
@@ -73,6 +89,12 @@ func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 			defer response.Body.Close()
 			if got := doer.header.Get(test.header); got != test.want {
 				t.Fatalf("%s=%q, want %q", test.header, got, test.want)
+			}
+			if test.credential.Provider == "github" {
+				if doer.header.Get("Accept") != "application/vnd.github+json" ||
+					doer.header.Get("X-GitHub-Api-Version") != "2022-11-28" {
+					t.Fatalf("GitHub version headers=%v", doer.header)
+				}
 			}
 			if test.credential.Provider == "pagerduty" && doer.header.Get("Accept") != pagerDutyAccept {
 				t.Fatalf("PagerDuty Accept=%q", doer.header.Get("Accept"))

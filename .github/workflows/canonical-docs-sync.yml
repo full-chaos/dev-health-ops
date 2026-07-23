@@ -1,0 +1,179 @@
+name: Finalize canonical documentation migration
+
+on:
+  push:
+    branches:
+      - agent/docs-content-style-remediation
+    paths:
+      - '.github/workflows/canonical-docs-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the documentation branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/docs-content-style-remediation
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Preserve legacy docs, promote canonical docs, and sync current source pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+
+          work="$(mktemp -d)"
+          cp -a docs "$work/canonical-docs"
+          if [[ -f mkdocs.prototype.yml ]]; then
+            cp mkdocs.prototype.yml "$work/canonical-mkdocs.yml"
+          else
+            cp mkdocs.yml "$work/canonical-mkdocs.yml"
+          fi
+
+          mkdir -p "$work/main"
+          git archive origin/main docs | tar -x -C "$work/main"
+          git show origin/main:mkdocs.yml > "$work/legacy-mkdocs.yml"
+
+          set +e
+          git merge --no-commit --no-ff origin/main
+          merge_status=$?
+          set -e
+
+          if [[ $merge_status -ne 0 ]]; then
+            while IFS= read -r path; do
+              [[ -n "$path" ]] || continue
+              git checkout --ours -- "$path"
+              git add "$path"
+            done < <(git diff --name-only --diff-filter=U)
+          fi
+
+          rm -rf docs
+          cp -a "$work/canonical-docs" docs
+
+          rm -rf .github/docs-legacy
+          mkdir -p .github/docs-legacy
+          cp -a "$work/main/docs/." .github/docs-legacy/
+          cp "$work/legacy-mkdocs.yml" .github/docs-legacy/mkdocs.yml
+
+          cp "$work/canonical-mkdocs.yml" mkdocs.yml
+          rm -f mkdocs.prototype.yml
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import shutil
+          from pathlib import Path
+
+          root = Path.cwd()
+          excluded_roots = {
+              root / ".git",
+              root / ".github" / "docs-legacy",
+          }
+          binary_suffixes = {
+              ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip",
+              ".gz", ".pdf", ".woff", ".woff2", ".ttf", ".eot",
+          }
+
+          replacements = (
+              (".build/docs-prototype", ".build/docs"),
+              ("mkdocs.prototype.yml", "mkdocs.yml"),
+              ("docs-prototype", "docs"),
+          )
+
+          for path in root.rglob("*"):
+              if not path.is_file() or path.suffix.lower() in binary_suffixes:
+                  continue
+              if any(path == excluded or excluded in path.parents for excluded in excluded_roots):
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+              updated = text
+              for old, new in replacements:
+                  updated = updated.replace(old, new)
+              if updated != text:
+                  path.write_text(updated, encoding="utf-8")
+
+          mapping_path = (
+              root
+              / ".github"
+              / "documentation-program"
+              / "content"
+              / "migrated-source-pages.json"
+          )
+          mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+          normalized: dict[str, str] = {}
+          for target, source in mapping.items():
+              source_path = str(source)
+              if source_path.startswith("docs/"):
+                  source_path = f".github/docs-legacy/{source_path[len('docs/'):]}"
+              normalized[str(target)] = source_path
+
+          mapping_path.write_text(
+              json.dumps(normalized, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          for target, source in normalized.items():
+              source_file = root / source
+              target_file = root / "docs" / target
+              if not source_file.is_file():
+                  raise FileNotFoundError(f"Current source documentation is missing: {source}")
+              target_file.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source_file, target_file)
+          PY
+
+          rm -f \
+            .github/workflows/canonical-docs-sync.yml \
+            .github/workflows/ruff-format-probe.yml \
+            .github/workflows/promote-docs-canonical.yml \
+            .github/workflows/run-docs-promotion.yml
+
+          python -m pip install --upgrade pip
+          pip install ruff
+          pip install -r requirements-docs.txt
+
+          ruff format \
+            scripts/build_docs_cloudflare.py \
+            scripts/mkdocs_migrated_source_links.py \
+            scripts/validate_docs_v2_publication.py
+          ruff check \
+            scripts/build_docs_cloudflare.py \
+            scripts/mkdocs_migrated_source_links.py \
+            scripts/validate_docs_v2_publication.py
+
+          python scripts/validate_docs_v2_publication.py
+          python -m mkdocs build --strict --config-file mkdocs.yml
+          python scripts/check_built_site_links.py --site-dir .build/docs
+          python scripts/check_docs_candidate_search.py \
+            --site-dir .build/docs \
+            --queries .github/documentation-program/phase-10/search-acceptance.json
+          python scripts/check_docs_candidate_accessibility.py \
+            --site-dir .build/docs \
+            --css docs/stylesheets/extra.css
+          python scripts/check_docs_candidate_facts.py
+
+          test -d docs
+          test -d .github/docs-legacy
+          test -f mkdocs.yml
+          test ! -e docs-prototype
+          test ! -e mkdocs.prototype.yml
+
+          git add -A
+          git commit -m 'docs: promote canonical docs and sync current source documentation'
+          git push origin HEAD:agent/docs-content-style-remediation

@@ -233,8 +233,8 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 func TestHeavyHandlersAdvertiseDormantCompiledCapability(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	handlers := compiledWorkerHandlers("heavy")
-	if len(handlers) != 5 {
-		t.Fatalf("heavy handlers = %d, want 5", len(handlers))
+	if len(handlers) != len(compiledHeavyHandlerKinds) {
+		t.Fatalf("heavy handlers = %d, want %d", len(handlers), len(compiledHeavyHandlerKinds))
 	}
 	kinds := make(map[string]struct{}, len(handlers))
 	for _, handler := range handlers {
@@ -247,6 +247,28 @@ func TestHeavyHandlersAdvertiseDormantCompiledCapability(t *testing.T) {
 	}
 	if len(kinds) != len(handlers) {
 		t.Fatalf("heavy kinds are not independently compiled: %#v", handlers)
+	}
+}
+
+func TestHeavyHandlersIgnoreUnrelatedFrozenContracts(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	root := frozenHeavyContractRoot(t)
+	registry, err := jobruntime.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(registry.Profile("heavy")); got <= len(compiledHeavyHandlerKinds) {
+		t.Fatalf("fixture has %d heavy descriptors, want more than %d", got, len(compiledHeavyHandlerKinds))
+	}
+
+	handlers := compiledWorkerHandlersFromRoot("heavy", root)
+	if len(handlers) != len(compiledHeavyHandlerKinds) {
+		t.Fatalf("compiled heavy handlers = %d, want %d: %#v", len(handlers), len(compiledHeavyHandlerKinds), handlers)
+	}
+	for index, handler := range handlers {
+		if handler.Kind != compiledHeavyHandlerKinds[index] {
+			t.Fatalf("compiled handler %d = %q, want %q", index, handler.Kind, compiledHeavyHandlerKinds[index])
+		}
 	}
 }
 
@@ -627,6 +649,66 @@ func executableHeavyRegistry(
 		t.Fatal(err)
 	}
 	return registry, root
+}
+
+func frozenHeavyContractRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "v1")
+	if err := os.CopyFS(root, os.DirFS(defaultContractRoot)); err != nil {
+		t.Fatal(err)
+	}
+	compiled := make(map[string]struct{}, len(compiledHeavyHandlerKinds))
+	for _, kind := range compiledHeavyHandlerKinds {
+		compiled[kind] = struct{}{}
+	}
+
+	registryPath := filepath.Join(root, "registry.json")
+	registryData, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contracts jobcontract.Registry
+	if err := json.Unmarshal(registryData, &contracts); err != nil {
+		t.Fatal(err)
+	}
+	for index := range contracts.Jobs {
+		if _, ok := compiled[contracts.Jobs[index].Kind]; !ok {
+			contracts.Jobs[index].Profile = "heavy"
+		}
+	}
+	registryData, err = json.Marshal(contracts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registryPath, registryData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	migrationPath := filepath.Join(root, "migration-state.json")
+	migrationData, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migration jobcontract.MigrationState
+	if err := json.Unmarshal(migrationData, &migration); err != nil {
+		t.Fatal(err)
+	}
+	for index := range migration.Jobs {
+		if _, ok := compiled[migration.Jobs[index].Kind]; !ok {
+			migration.Jobs[index].State = "contract_frozen"
+			migration.Jobs[index].Route = "celery"
+			migration.Jobs[index].RollbackRoute = "celery"
+			migration.Jobs[index].RequiredProfiles = []string{"heavy"}
+		}
+	}
+	migrationData, err = json.Marshal(migration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(migrationPath, migrationData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func selectSpecs(

@@ -149,28 +149,34 @@ func defaultRiverClientID() string {
 // Report and daily-metrics adapters are complete for the disabled heavy
 // profile, but their checked-in routes remain Celery and cannot fetch work.
 func compiledWorkerHandlers(profile string) []jobruntime.HandlerSpec {
+	return compiledWorkerHandlersFromRoot(profile, defaultContractRoot)
+}
+
+var compiledHeavyHandlerKinds = []string{
+	jobcontract.KindDailyMetricsDispatch,
+	jobcontract.KindDailyMetricsFinalize,
+	jobcontract.KindDailyMetricsPartition,
+	jobcontract.KindReportExecuteOnDemand,
+	jobcontract.KindReportExecuteScheduled,
+}
+
+func compiledWorkerHandlersFromRoot(profile, contractRoot string) []jobruntime.HandlerSpec {
 	if profile != "heavy" {
 		return nil
 	}
-	registry, err := jobruntime.Load(defaultContractRoot)
+	registry, err := jobruntime.Load(contractRoot)
 	if err != nil {
 		return nil
 	}
-	handlers := make([]jobruntime.HandlerSpec, 0, 2)
-	for _, handler := range registry.Profile(profile) {
-		switch handler.Kind {
-		case "report.execute_on_demand", "report.execute_scheduled":
-		default:
-			continue
-		}
-		if handler.MigrationState != "go_implemented" || handler.Route != "celery" ||
+	handlers := make([]jobruntime.HandlerSpec, 0, len(compiledHeavyHandlerKinds))
+	for _, kind := range compiledHeavyHandlerKinds {
+		handler, ok := registry.Descriptor(kind)
+		if !ok || handler.Profile != profile ||
+			handler.MigrationState != "go_implemented" || handler.Route != "celery" ||
 			handler.RollbackRoute != "celery" {
 			return nil
 		}
 		handlers = append(handlers, handler)
-	}
-	if len(handlers) != 2 {
-		return nil
 	}
 	return handlers
 }

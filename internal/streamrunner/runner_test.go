@@ -19,6 +19,7 @@ type fakeTransport struct {
 	claimed     []Message
 	acked       []string
 	quarantined []string
+	events      []string
 	discovered  []string
 	ensured     []string
 	readStreams [][]string
@@ -84,6 +85,7 @@ func (f *fakeTransport) Ack(_ context.Context, _ string, _ string, id string) er
 		f.ackErr = nil
 		return err
 	}
+	f.events = append(f.events, "ack")
 	f.acked = append(f.acked, id)
 	for index := range f.pending {
 		if f.pending[index].MessageID == id {
@@ -96,6 +98,7 @@ func (f *fakeTransport) Ack(_ context.Context, _ string, _ string, id string) er
 func (f *fakeTransport) Quarantine(_ context.Context, message Message, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.events = append(f.events, "quarantine")
 	f.quarantined = append(f.quarantined, message.ID+":"+reason)
 	return nil
 }
@@ -110,6 +113,24 @@ func (f *fakeTransport) Close() { f.mu.Lock(); defer f.mu.Unlock(); f.closed = t
 type handlerFunc func(context.Context, Message) error
 
 func (h handlerFunc) Handle(ctx context.Context, message Message) error { return h(ctx, message) }
+
+type finalizingHandler struct {
+	transport *fakeTransport
+	finalErr  error
+	finalized []Message
+}
+
+func (h *finalizingHandler) Handle(context.Context, Message) error {
+	return &PermanentError{Reason: "schema_invalid"}
+}
+
+func (h *finalizingHandler) FinalizePermanent(_ context.Context, message Message, _ string) error {
+	h.transport.mu.Lock()
+	defer h.transport.mu.Unlock()
+	h.transport.events = append(h.transport.events, "finalize")
+	h.finalized = append(h.finalized, message)
+	return h.finalErr
+}
 
 func testConfig() Config {
 	return Config{Name: "stream_test", Streams: []string{"test:stream"}, ConsumerGroup: "group", ConsumerName: "consumer", BatchSize: 4, Block: 10 * time.Millisecond, ReclaimEvery: 10 * time.Millisecond, ReclaimIdle: 10 * time.Millisecond, MaxDeliveries: 3, ShutdownDrain: 100 * time.Millisecond}
@@ -305,6 +326,56 @@ func TestRunnerQuarantinesPoisonOnlyAfterQuarantineWrite(t *testing.T) {
 	}
 	if !slices.Equal(transport.quarantined, []string{"1-0:schema_invalid"}) || !slices.Equal(transport.acked, []string{"1-0"}) {
 		t.Fatalf("poison outcome = quarantine=%v ack=%v", transport.quarantined, transport.acked)
+	}
+}
+
+func TestRunnerFinalizesPermanentStatusBetweenDLQAndAck(t *testing.T) {
+	transport := &fakeTransport{new: []Message{{Stream: "test:stream", ID: "1-0"}}}
+	handler := &finalizingHandler{transport: transport}
+	runner, err := New(transport, handler, testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.window(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(transport.events, []string{"quarantine", "finalize", "ack"}) {
+		t.Fatalf("permanent durability order = %v", transport.events)
+	}
+
+	transport.events = nil
+	transport.new = []Message{{Stream: "test:stream", ID: "2-0"}}
+	handler.finalErr = errors.New("postgres unavailable")
+	if err := runner.window(context.Background()); err == nil {
+		t.Fatal("status finalization failure was treated as terminal")
+	}
+	if !slices.Equal(transport.events, []string{"quarantine", "finalize"}) {
+		t.Fatalf("failed finalization order = %v", transport.events)
+	}
+	if slices.Contains(transport.acked, "2-0") {
+		t.Fatal("message ACKed before failed status finalization")
+	}
+}
+
+func TestRunnerClaimsPoisonFieldsBeforeDLQFinalization(t *testing.T) {
+	message := Message{
+		Stream: "external-ingest:org-a:batches", ID: "1-0",
+		Fields: map[string]string{"org_id": "org-a", "ingestion_id": "batch-a"},
+	}
+	transport := &fakeTransport{
+		pending: []Pending{{MessageID: message.ID, TimesDelivered: 3, Idle: time.Hour}},
+		claimed: []Message{message},
+	}
+	handler := &finalizingHandler{transport: transport}
+	runner, err := New(transport, handler, testConfig(), health.NewRegistry(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.reclaim(context.Background(), message.Stream); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.finalized) != 1 || handler.finalized[0].Fields["ingestion_id"] != "batch-a" {
+		t.Fatalf("poison finalizer lost claimed fields: %#v", handler.finalized)
 	}
 }
 

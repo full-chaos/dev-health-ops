@@ -68,6 +68,14 @@ type Handler interface {
 	Handle(context.Context, Message) error
 }
 
+// PermanentFinalizer is implemented by handlers whose authoritative status
+// store must transition only after the quarantine row is durable. The runner
+// invokes it between Quarantine and ACK, preserving the external-ingest
+// DLQ-first/status-second/ACK-last contract.
+type PermanentFinalizer interface {
+	FinalizePermanent(context.Context, Message, string) error
+}
+
 // PermanentError marks a syntactically/semantically invalid message that can
 // never become valid through retry. Reason is intentionally bounded by the
 // caller and is safe for the quarantine stream, not for metrics labels.

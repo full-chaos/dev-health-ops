@@ -81,3 +81,60 @@ func TestValkeyDiscoveryGroupReadAndReclaim(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalQuarantineIsIdempotentAndRepairsTrimmedRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate Valkey: %v", err)
+		}
+	})
+	client, err := valkeystore.Open(ctx, valkeystore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	transport, err := NewValkeyTransport(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := Message{
+		Stream: "external-ingest:org-a:batches", ID: "1-0",
+		Fields: map[string]string{"org_id": "org-a", "ingestion_id": "batch-a"},
+	}
+	if err := transport.Quarantine(ctx, message, "schema_invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.Quarantine(ctx, message, "schema_invalid"); err != nil {
+		t.Fatal(err)
+	}
+	dlq := "external-ingest:org-a:dlq"
+	entries, err := client.Do(ctx, client.B().Xrange().Key(dlq).Start("-").End("+").Build()).AsXRange()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("duplicate quarantine rows = %d", len(entries))
+	}
+	firstID := entries[0].ID
+	if err := client.Do(ctx, client.B().Xdel().Key(dlq).Id(firstID).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.Quarantine(ctx, message, "schema_invalid"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = client.Do(ctx, client.B().Xrange().Key(dlq).Start("-").End("+").Build()).AsXRange()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID == firstID {
+		t.Fatalf("trimmed DLQ row not repaired: %#v", entries)
+	}
+}

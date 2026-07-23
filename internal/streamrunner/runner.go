@@ -240,19 +240,10 @@ func (r *Runner) reclaim(ctx context.Context, stream string) error {
 		return fmt.Errorf("inspect pending: %w", err)
 	}
 	claim := make([]string, 0, len(pending))
+	poison := make(map[string]struct{})
 	for _, item := range pending {
 		if item.TimesDelivered >= r.config.MaxDeliveries {
-			message := Message{Stream: stream, ID: item.MessageID}
-			if err := r.transport.Quarantine(ctx, message, "max_deliveries_exceeded"); err != nil {
-				return fmt.Errorf("quarantine poison pending message: %w", err)
-			}
-			if err := r.transport.Ack(ctx, stream, r.config.ConsumerGroup, item.MessageID); err != nil {
-				return fmt.Errorf("ack quarantined pending message: %w", err)
-			}
-			r.mu.Lock()
-			r.quarantined++
-			r.mu.Unlock()
-			continue
+			poison[item.MessageID] = struct{}{}
 		}
 		claim = append(claim, item.MessageID)
 	}
@@ -263,11 +254,31 @@ func (r *Runner) reclaim(ctx context.Context, stream string) error {
 	if err != nil {
 		return fmt.Errorf("claim pending: %w", err)
 	}
-	var failures []error
+	claimedByID := make(map[string]Message, len(claimed))
 	for _, message := range claimed {
+		claimedByID[message.ID] = message
+	}
+	var failures []error
+	for _, item := range pending {
+		message, found := claimedByID[item.MessageID]
+		if !found {
+			if _, isPoison := poison[item.MessageID]; !isPoison {
+				continue
+			}
+			// Streams can trim an entry while its ID remains in the PEL. With
+			// no fields left to recover, preserve a tombstone DLQ row and ACK
+			// the orphan; the external orphan reconciler owns any status row.
+			message = Message{Stream: stream, ID: item.MessageID}
+		}
 		r.mu.Lock()
 		r.reclaimed++
 		r.mu.Unlock()
+		if _, isPoison := poison[item.MessageID]; isPoison {
+			if err := r.quarantine(ctx, message, "max_deliveries_exceeded"); err != nil {
+				failures = append(failures, err)
+			}
+			continue
+		}
 		if err := r.process(ctx, message); err != nil {
 			failures = append(failures, err)
 		}
@@ -291,16 +302,7 @@ func (r *Runner) process(ctx context.Context, message Message) error {
 			if errors.As(err, &permanent) && permanent.Reason != "" {
 				reason = permanent.Reason
 			}
-			if err := r.transport.Quarantine(ctx, message, reason); err != nil {
-				return fmt.Errorf("quarantine permanent message: %w", err)
-			}
-			if err := r.transport.Ack(ctx, message.Stream, r.config.ConsumerGroup, message.ID); err != nil {
-				return fmt.Errorf("ack quarantined message: %w", err)
-			}
-			r.mu.Lock()
-			r.quarantined++
-			r.mu.Unlock()
-			return nil
+			return r.quarantine(ctx, message, reason)
 		}
 		// A transient durable-write failure must leave the entry in the PEL.
 		r.mu.Lock()
@@ -316,6 +318,24 @@ func (r *Runner) process(ctx context.Context, message Message) error {
 	}
 	r.mu.Lock()
 	r.processed++
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runner) quarantine(ctx context.Context, message Message, reason string) error {
+	if err := r.transport.Quarantine(ctx, message, reason); err != nil {
+		return fmt.Errorf("quarantine permanent message: %w", err)
+	}
+	if finalizer, ok := r.handler.(PermanentFinalizer); ok {
+		if err := finalizer.FinalizePermanent(ctx, message, reason); err != nil {
+			return fmt.Errorf("finalize permanent message: %w", err)
+		}
+	}
+	if err := r.transport.Ack(ctx, message.Stream, r.config.ConsumerGroup, message.ID); err != nil {
+		return fmt.Errorf("ack quarantined message: %w", err)
+	}
+	r.mu.Lock()
+	r.quarantined++
 	r.mu.Unlock()
 	return nil
 }

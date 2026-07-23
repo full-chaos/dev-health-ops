@@ -11,6 +11,8 @@ import (
 	valkeygo "github.com/valkey-io/valkey-go"
 )
 
+const externalDLQMarkerTTL = 7 * 24 * time.Hour
+
 // ValkeyTransport is the production Redis Streams adapter. It deliberately
 // uses the long-lived client supplied by storage/valkey rather than creating a
 // client per poll, and all blocking reads inherit their lifecycle context.
@@ -149,6 +151,9 @@ func (t *ValkeyTransport) Ack(ctx context.Context, stream, group, id string) err
 }
 
 func (t *ValkeyTransport) Quarantine(ctx context.Context, message Message, reason string) error {
+	if strings.HasPrefix(message.Stream, "external-ingest:") {
+		return t.quarantineExternal(ctx, message, reason)
+	}
 	fields := map[string]string{"original_stream": message.Stream, "entry_id": message.ID, "reason": reason, "moved_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	for key, value := range message.Fields {
 		if key == "ingestion_id" || key == "org_id" {
@@ -160,6 +165,60 @@ func (t *ValkeyTransport) Quarantine(ctx context.Context, message Message, reaso
 		command = command.FieldValue(key, value)
 	}
 	return t.client.Do(ctx, command.Build()).Error()
+}
+
+func (t *ValkeyTransport) quarantineExternal(ctx context.Context, message Message, reason string) error {
+	dlq := quarantineStream(message.Stream)
+	marker := dlq + ":written:" + message.ID
+	priorID, err := t.client.Do(ctx, t.client.B().Get().Key(marker).Build()).ToString()
+	switch {
+	case err == nil:
+		entries, rangeErr := t.client.Do(ctx, t.client.B().Xrange().Key(dlq).Start(priorID).End(priorID).Count(1).Build()).AsXRange()
+		if rangeErr != nil {
+			// A transient verification error must not create an unbounded
+			// duplicate stream while status finalization is retrying.
+			return nil
+		}
+		if len(entries) == 1 && entries[0].ID == priorID {
+			return nil
+		}
+	case valkeygo.IsValkeyNil(err):
+		// No prior durable DLQ row.
+	default:
+		return fmt.Errorf("read external DLQ marker: %w", err)
+	}
+
+	fields := map[string]string{
+		"original_stream": message.Stream,
+		"entry_id":        message.ID,
+		"reason":          reason,
+		"ingestion_id":    message.Fields["ingestion_id"],
+		"org_id":          externalOrgID(message),
+		"moved_at":        time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	command := t.client.B().Xadd().Key(dlq).Maxlen().Almost().Threshold("100000").Id("*").FieldValue()
+	for key, value := range fields {
+		command = command.FieldValue(key, value)
+	}
+	newID, err := t.client.Do(ctx, command.Build()).ToString()
+	if err != nil {
+		return err
+	}
+	// The marker is only a deduplication optimization. XADD is the durable
+	// boundary, so marker failure is deliberately best-effort.
+	_ = t.client.Do(ctx, t.client.B().Set().Key(marker).Value(newID).Ex(externalDLQMarkerTTL).Build()).Error()
+	return nil
+}
+
+func externalOrgID(message Message) string {
+	if orgID := message.Fields["org_id"]; orgID != "" {
+		return orgID
+	}
+	parts := strings.Split(message.Stream, ":")
+	if len(parts) == 3 {
+		return parts[1]
+	}
+	return "unknown"
 }
 
 func (t *ValkeyTransport) Stats(ctx context.Context, stream, group string) (StreamStats, error) {

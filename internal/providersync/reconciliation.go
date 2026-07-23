@@ -33,17 +33,16 @@ func (reconciler OperatorReconciler) now() time.Time {
 func (reconciler OperatorReconciler) Reconcile(
 	ctx context.Context,
 	claim Claim,
-	blocks []providerfoundation.GenerationBlock,
 ) (ReconciliationResult, error) {
 	if ctx == nil || claim.Validate() != nil || reconciler.Journal == nil ||
-		reconciler.Readback == nil || len(blocks) == 0 {
+		reconciler.Readback == nil {
 		return ReconciliationResult{}, ErrInvalidConfiguration
 	}
-	desired, err := NewGenerationJournalState(blocks, reconciler.now())
+	persisted, err := reconciler.Journal.Load(ctx, claim, reconciler.now())
 	if err != nil {
 		return ReconciliationResult{}, err
 	}
-	persisted, err := reconciler.Journal.Prepare(ctx, claim, desired, reconciler.now())
+	blocks, err := persisted.recoveryBlocks()
 	if err != nil {
 		return ReconciliationResult{}, err
 	}

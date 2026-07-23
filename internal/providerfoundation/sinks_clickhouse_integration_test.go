@@ -79,6 +79,15 @@ func TestClickHouseGenerationBlocksDeduplicateRetriesAndRetainDistinctBlocks(t *
 	if rows != 2 || uniqueRows != 2 {
 		t.Fatalf("rows=%d unique_rows=%d", rows, uniqueRows)
 	}
+	conflicting := blocks[0].Batch()[0]
+	conflicting.Attributes = map[string]string{"name": "conflicting-version"}
+	if err := sink.WriteBatch(ctx, []NormalizedEnvelope{conflicting}); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGenerationBlock(ctx, blocks[0]); err != nil ||
+		inspection != GenerationBlockConflict {
+		t.Fatalf("exact plus conflict inspection=%q error=%v", inspection, err)
+	}
 
 	partialBlocks, err := BuildGenerationBlocks(
 		"sync-unit:33333333-3333-4333-8333-333333333333",

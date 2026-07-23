@@ -17,6 +17,7 @@ var (
 	ErrCompatibilityRequired     = errors.New("provider sync dataset requires Python compatibility execution")
 	ErrGenerationJournalConflict = errors.New("provider sync generation journal conflicts with persisted state")
 	ErrGenerationBlockAmbiguous  = errors.New("provider sync generation block requires readback reconciliation")
+	ErrGenerationRecoveryUnsafe  = errors.New("provider sync generation recovery payload is outside the bounded contract")
 	ErrShadowMismatch            = errors.New("provider sync native shadow differs from Python compatibility output")
 )
 

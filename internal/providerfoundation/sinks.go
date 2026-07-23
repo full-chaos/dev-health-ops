@@ -295,6 +295,7 @@ WHERE org_id = ? AND integration_id = ? AND dedupe_key = ?`,
 	if err != nil {
 		return false, false, err
 	}
+	conflicting := false
 	for rows.Next() {
 		var (
 			schemaVersion, provider, orgID, integrationID string
@@ -335,12 +336,14 @@ WHERE org_id = ? AND integration_id = ? AND dedupe_key = ?`,
 		}
 		if actualDigest == expectedDigest {
 			matched = true
+		} else {
+			conflicting = true
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return false, false, fmt.Errorf("%w: ClickHouse generation rows", ErrSinkGenerationUnsafe)
 	}
-	return matched, found, nil
+	return matched && !conflicting, found, nil
 }
 
 type clickHouseGenerationContextKey struct{}

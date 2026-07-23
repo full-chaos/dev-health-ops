@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +87,6 @@ func TestOperatorReconcilerResolvesOnlyExactOrWhollyAbsentWritingBlock(t *testin
 			result, err := reconciler.Reconcile(
 				context.Background(),
 				nativeTestClaim("github", "repo-metadata"),
-				blocks,
 			)
 			if !errors.Is(err, test.wantErr) || result != test.wantResult ||
 				journal.state.Blocks[0].Status != test.wantStatus {
@@ -104,3 +104,52 @@ func TestOperatorReconcilerResolvesOnlyExactOrWhollyAbsentWritingBlock(t *testin
 }
 
 var _ providerfoundation.GenerationBlockReadback = staticGenerationReadback{}
+
+func TestGenerationJournalRecoveryPayloadFailsClosedOutsideRepositorySingleton(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	base := providerfoundation.NormalizedEnvelope{
+		SchemaVersion: "v1", Provider: "github", OrgID: "org-acme",
+		IntegrationID: firstIntegrationID, EntityType: "repository",
+		SourceID:   "github:repo:acme/api",
+		DedupeKey:  "github:repository:github:repo:acme/api",
+		ObservedAt: now,
+		Provenance: providerfoundation.Provenance{
+			Source: "github_rest", Confidence: "1.0",
+		},
+		Attributes: map[string]string{"name": "acme/api"},
+	}
+	second := base
+	second.SourceID = "github:repo:acme/other"
+	second.DedupeKey = "github:repository:github:repo:acme/other"
+	nonRepository := base
+	nonRepository.EntityType = "work_item"
+	oversized := base
+	oversized.Attributes = map[string]string{"name": strings.Repeat("x", maxRecoveryPayloadBytes)}
+	for _, test := range []struct {
+		name    string
+		records []providerfoundation.NormalizedEnvelope
+	}{
+		{name: "multiple rows", records: []providerfoundation.NormalizedEnvelope{base, second}},
+		{name: "non repository", records: []providerfoundation.NormalizedEnvelope{nonRepository}},
+		{name: "oversized", records: []providerfoundation.NormalizedEnvelope{oversized}},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			blocks, err := providerfoundation.BuildGenerationBlocks(
+				nativeTestClaim("github", "repo-metadata").GenerationKey(),
+				"provider_records",
+				test.records,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewGenerationJournalState(blocks, now); !errors.Is(
+				err, ErrGenerationRecoveryUnsafe,
+			) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}

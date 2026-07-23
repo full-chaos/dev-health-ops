@@ -293,6 +293,14 @@ type memoryGenerationJournal struct {
 
 type ambiguousGenerationJournal struct{}
 
+func (ambiguousGenerationJournal) Load(
+	context.Context,
+	Claim,
+	time.Time,
+) (GenerationJournalState, error) {
+	panic("executor must not load recovery state")
+}
+
 func (ambiguousGenerationJournal) Prepare(
 	_ context.Context,
 	_ Claim,
@@ -334,6 +342,19 @@ func (ambiguousGenerationJournal) ResolveBlock(
 	time.Time,
 ) error {
 	panic("executor must not reconcile implicitly")
+}
+
+func (journal *memoryGenerationJournal) Load(
+	_ context.Context,
+	_ Claim,
+	_ time.Time,
+) (GenerationJournalState, error) {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	if journal.state.validate() != nil {
+		return GenerationJournalState{}, ErrGenerationJournalConflict
+	}
+	return journal.state, nil
 }
 
 func (journal *memoryGenerationJournal) Prepare(

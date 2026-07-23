@@ -10,7 +10,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const generationJournalResultKey = "go_generation_v1"
+const (
+	generationJournalResultKey       = "go_generation_v2"
+	generationJournalLegacyResultKey = "go_generation_v1"
+	maxRecoveryPayloadRows           = 1
+	maxRecoveryPayloadBytes          = 16 << 10
+	maxGenerationJournalStateBytes   = 24 << 10
+)
 
 type GenerationBlockStatus string
 type GenerationBlockResolution string
@@ -25,11 +31,12 @@ const (
 )
 
 type GenerationJournalBlock struct {
-	Index         int                   `json:"index"`
-	ContentDigest string                `json:"content_digest"`
-	Status        GenerationBlockStatus `json:"status"`
-	StartedAt     *time.Time            `json:"started_at,omitempty"`
-	CommittedAt   *time.Time            `json:"committed_at,omitempty"`
+	Index           int                                     `json:"index"`
+	ContentDigest   string                                  `json:"content_digest"`
+	Status          GenerationBlockStatus                   `json:"status"`
+	RecoveryPayload []providerfoundation.NormalizedEnvelope `json:"recovery_payload"`
+	StartedAt       *time.Time                              `json:"started_at,omitempty"`
+	CommittedAt     *time.Time                              `json:"committed_at,omitempty"`
 }
 
 type GenerationJournalState struct {
@@ -45,34 +52,41 @@ func NewGenerationJournalState(
 	blocks []providerfoundation.GenerationBlock,
 	now time.Time,
 ) (GenerationJournalState, error) {
-	if len(blocks) == 0 || now.IsZero() {
+	if len(blocks) != 1 || now.IsZero() {
+		return GenerationJournalState{}, ErrGenerationRecoveryUnsafe
+	}
+	recoveryPayload := blocks[0].Batch()
+	if len(recoveryPayload) != maxRecoveryPayloadRows ||
+		recoveryPayload[0].EntityType != "repository" {
+		return GenerationJournalState{}, ErrGenerationRecoveryUnsafe
+	}
+	encodedPayload, err := json.Marshal(recoveryPayload)
+	if err != nil || len(encodedPayload) > maxRecoveryPayloadBytes {
+		return GenerationJournalState{}, ErrGenerationRecoveryUnsafe
+	}
+	if blocks[0].Index() != 0 || blocks[0].ContentDigest() == "" {
 		return GenerationJournalState{}, ErrInvalidConfiguration
 	}
 	state := GenerationJournalState{
-		SchemaVersion: "v1",
+		SchemaVersion: "v2",
 		Generation:    blocks[0].Generation(),
 		Destination:   blocks[0].Destination(),
 		CreatedAt:     now.UTC(),
 		UpdatedAt:     now.UTC(),
-		Blocks:        make([]GenerationJournalBlock, 0, len(blocks)),
+		Blocks: []GenerationJournalBlock{{
+			Index: 0, ContentDigest: blocks[0].ContentDigest(),
+			Status: GenerationBlockPending, RecoveryPayload: recoveryPayload,
+		}},
 	}
-	for index, block := range blocks {
-		if block.Generation() != state.Generation ||
-			block.Destination() != state.Destination ||
-			block.Index() != index ||
-			block.ContentDigest() == "" {
-			return GenerationJournalState{}, ErrInvalidConfiguration
-		}
-		state.Blocks = append(state.Blocks, GenerationJournalBlock{
-			Index: index, ContentDigest: block.ContentDigest(), Status: GenerationBlockPending,
-		})
+	if state.validate() != nil {
+		return GenerationJournalState{}, ErrGenerationRecoveryUnsafe
 	}
 	return state, nil
 }
 
 func (state GenerationJournalState) validate() error {
-	if state.SchemaVersion != "v1" || state.Generation == "" ||
-		state.Destination == "" || len(state.Blocks) == 0 ||
+	if state.SchemaVersion != "v2" || state.Generation == "" ||
+		state.Destination == "" || len(state.Blocks) != 1 ||
 		state.CreatedAt.IsZero() || state.UpdatedAt.IsZero() {
 		return ErrInvalidConfiguration
 	}
@@ -97,7 +111,52 @@ func (state GenerationJournalState) validate() error {
 			return ErrInvalidConfiguration
 		}
 	}
+	if _, err := state.recoveryBlocks(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (state GenerationJournalState) recoveryBlocks() ([]providerfoundation.GenerationBlock, error) {
+	if len(state.Blocks) != 1 ||
+		len(state.Blocks[0].RecoveryPayload) != maxRecoveryPayloadRows ||
+		state.Blocks[0].RecoveryPayload[0].EntityType != "repository" {
+		return nil, ErrGenerationRecoveryUnsafe
+	}
+	encodedPayload, err := json.Marshal(state.Blocks[0].RecoveryPayload)
+	if err != nil || len(encodedPayload) > maxRecoveryPayloadBytes {
+		return nil, ErrGenerationRecoveryUnsafe
+	}
+	blocks, err := providerfoundation.BuildGenerationBlocks(
+		state.Generation, state.Destination, state.Blocks[0].RecoveryPayload,
+	)
+	if err != nil || len(blocks) != 1 || blocks[0].Index() != 0 ||
+		blocks[0].ContentDigest() != state.Blocks[0].ContentDigest {
+		return nil, ErrGenerationRecoveryUnsafe
+	}
+	return blocks, nil
+}
+
+func encodeGenerationJournalState(state GenerationJournalState) ([]byte, error) {
+	if state.validate() != nil {
+		return nil, ErrGenerationJournalConflict
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil || len(encoded) > maxGenerationJournalStateBytes {
+		return nil, ErrGenerationRecoveryUnsafe
+	}
+	return encoded, nil
+}
+
+func decodeGenerationJournalState(raw []byte) (GenerationJournalState, error) {
+	if len(raw) == 0 || len(raw) > maxGenerationJournalStateBytes {
+		return GenerationJournalState{}, ErrGenerationRecoveryUnsafe
+	}
+	var state GenerationJournalState
+	if json.Unmarshal(raw, &state) != nil || state.validate() != nil {
+		return GenerationJournalState{}, ErrGenerationJournalConflict
+	}
+	return state, nil
 }
 
 func sameGenerationManifest(left, right GenerationJournalState) bool {
@@ -117,10 +176,36 @@ func sameGenerationManifest(left, right GenerationJournalState) bool {
 }
 
 type GenerationJournal interface {
+	Load(context.Context, Claim, time.Time) (GenerationJournalState, error)
 	Prepare(context.Context, Claim, GenerationJournalState, time.Time) (GenerationJournalState, error)
 	BeginBlock(context.Context, Claim, int, string, time.Time) error
 	CommitBlock(context.Context, Claim, int, string, time.Time) error
 	ResolveBlock(context.Context, Claim, int, string, GenerationBlockResolution, time.Time) error
+}
+
+func (repository *PostgresRepository) Load(
+	ctx context.Context,
+	claim Claim,
+	now time.Time,
+) (GenerationJournalState, error) {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() {
+		return GenerationJournalState{}, ErrInvalidConfiguration
+	}
+	var stateRaw []byte
+	var legacyStatePresent bool
+	if err := repository.Pool.QueryRow(
+		ctx, loadGenerationJournalSQL, claim.ID, claim.Owner, now.UTC(),
+	).Scan(&stateRaw, &legacyStatePresent); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GenerationJournalState{}, ErrLeaseLost
+		}
+		return GenerationJournalState{}, ErrGenerationJournalConflict
+	}
+	if len(stateRaw) == 0 && legacyStatePresent {
+		return GenerationJournalState{}, ErrGenerationRecoveryUnsafe
+	}
+	return decodeGenerationJournalState(stateRaw)
 }
 
 func (repository *PostgresRepository) Prepare(
@@ -135,9 +220,14 @@ func (repository *PostgresRepository) Prepare(
 	var prepared GenerationJournalState
 	err := repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
 		raw := document[generationJournalResultKey]
+		if len(raw) == 0 && len(document[generationJournalLegacyResultKey]) != 0 {
+			return ErrGenerationRecoveryUnsafe
+		}
 		if len(raw) != 0 {
-			if json.Unmarshal(raw, &prepared) != nil || prepared.validate() != nil {
-				return ErrGenerationJournalConflict
+			var err error
+			prepared, err = decodeGenerationJournalState(raw)
+			if err != nil {
+				return err
 			}
 			if !sameGenerationManifest(prepared, desired) {
 				return ErrGenerationJournalConflict
@@ -147,9 +237,9 @@ func (repository *PostgresRepository) Prepare(
 		prepared = desired
 		prepared.CreatedAt = now.UTC()
 		prepared.UpdatedAt = now.UTC()
-		encoded, err := json.Marshal(prepared)
+		encoded, err := encodeGenerationJournalState(prepared)
 		if err != nil {
-			return ErrInvalidConfiguration
+			return err
 		}
 		document[generationJournalResultKey] = encoded
 		return nil
@@ -196,9 +286,8 @@ func (repository *PostgresRepository) ResolveBlock(
 		return ErrInvalidConfiguration
 	}
 	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
-		var state GenerationJournalState
-		if json.Unmarshal(document[generationJournalResultKey], &state) != nil ||
-			state.validate() != nil || index >= len(state.Blocks) ||
+		state, decodeErr := decodeGenerationJournalState(document[generationJournalResultKey])
+		if decodeErr != nil || index >= len(state.Blocks) ||
 			state.Blocks[index].ContentDigest != digest {
 			return ErrGenerationJournalConflict
 		}
@@ -228,9 +317,9 @@ func (repository *PostgresRepository) ResolveBlock(
 			return ErrInvalidConfiguration
 		}
 		state.UpdatedAt = now
-		encoded, err := json.Marshal(state)
+		encoded, err := encodeGenerationJournalState(state)
 		if err != nil {
-			return ErrInvalidConfiguration
+			return err
 		}
 		document[generationJournalResultKey] = encoded
 		return nil
@@ -250,9 +339,8 @@ func (repository *PostgresRepository) transitionGenerationBlock(
 		return ErrInvalidConfiguration
 	}
 	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
-		var state GenerationJournalState
-		if json.Unmarshal(document[generationJournalResultKey], &state) != nil ||
-			state.validate() != nil || index >= len(state.Blocks) ||
+		state, decodeErr := decodeGenerationJournalState(document[generationJournalResultKey])
+		if decodeErr != nil || index >= len(state.Blocks) ||
 			state.Blocks[index].ContentDigest != digest {
 			return ErrGenerationJournalConflict
 		}
@@ -280,9 +368,9 @@ func (repository *PostgresRepository) transitionGenerationBlock(
 		}
 		block.Status = to
 		state.UpdatedAt = now
-		encoded, err := json.Marshal(state)
+		encoded, err := encodeGenerationJournalState(state)
 		if err != nil {
-			return ErrInvalidConfiguration
+			return err
 		}
 		document[generationJournalResultKey] = encoded
 		return nil
@@ -344,6 +432,26 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at > $3
   AND run.status NOT IN ('success', 'partial_failed', 'failed')
 FOR UPDATE OF unit`
+
+const loadGenerationJournalSQL = `
+SELECT
+  COALESCE(
+    (COALESCE(unit.result::jsonb, '{}'::jsonb) -> 'go_generation_v2')::text,
+    ''
+  ),
+  COALESCE(
+    COALESCE(unit.result::jsonb, '{}'::jsonb) ? 'go_generation_v1',
+    FALSE
+  )
+FROM public.sync_run_units AS unit
+JOIN public.sync_runs AS run
+  ON run.id = unit.sync_run_id AND run.org_id = unit.org_id
+WHERE unit.id = $1::uuid
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3
+  AND run.status NOT IN ('success', 'partial_failed', 'failed')`
 
 const updateGenerationJournalSQL = `
 UPDATE public.sync_run_units

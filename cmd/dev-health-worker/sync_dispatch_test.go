@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
@@ -31,7 +32,7 @@ func TestPostSyncRemainingScopeMatchesBoundedFamilyContract(t *testing.T) {
 	}
 }
 
-func TestPostSyncWorkGraphScopesPreserveLegacyWindowShapes(t *testing.T) {
+func TestPostSyncWorkGraphScopePreservesLegacyWindowShape(t *testing.T) {
 	t.Parallel()
 	from := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 1, 14, 23, 0, 0, 0, time.UTC)
@@ -40,9 +41,8 @@ func TestPostSyncWorkGraphScopesPreserveLegacyWindowShapes(t *testing.T) {
 	if err != nil || string(build) != `{"from_date":"2026-01-01T03:00:00Z","to_date":"2026-01-14T23:00:00Z"}` {
 		t.Fatalf("build=%s err=%v", build, err)
 	}
-	investment, err := postSyncWorkGraphScope(workgraph.KindDispatch, plan)
-	if err != nil || string(investment) != `{"from_date":"2026-01-01","to_date":"2026-01-14"}` {
-		t.Fatalf("investment=%s err=%v", investment, err)
+	if _, err := postSyncWorkGraphScope(workgraph.KindDispatch, plan); !errors.Is(err, syncdispatchruntime.ErrPostSyncUnavailable) {
+		t.Fatalf("investment scope err=%v", err)
 	}
 }
 
@@ -52,8 +52,18 @@ func TestPostSyncRequestIDsMatchCrossLanguagePlanner(t *testing.T) {
 	if got, want := postSyncRequestID(runID, "workgraph"), "02be9bc9-c26b-5735-8ace-04e72d4c80a8"; got != want {
 		t.Fatalf("workgraph id=%s want=%s", got, want)
 	}
-	if got, want := postSyncRequestID(runID, "investment"), "c53e7bf8-705f-583e-828e-f2540336645a"; got != want {
-		t.Fatalf("investment id=%s want=%s", got, want)
+}
+
+func TestInvestmentDispatchIsFailClosedUntilNativeFanoutExists(t *testing.T) {
+	t.Parallel()
+	writer := workGraphPostSyncWriter{}
+	if err := writer.StartRequestTx(
+		nil,
+		nil,
+		jobcontract.KindInvestmentDispatch,
+		syncdispatchruntime.PostSyncPlan{},
+	); !errors.Is(err, syncdispatchruntime.ErrPostSyncUnavailable) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

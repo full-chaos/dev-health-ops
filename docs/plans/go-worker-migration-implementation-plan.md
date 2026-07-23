@@ -774,11 +774,19 @@ The `post_sync` River consumer now validates the exact dispatched outbox ID,
 tenant, SyncRun, route generation, and live unpaused River route before it
 does any work. It then reloads only successful `sync_run_units` and the
 canonical parent sync configuration. Daily metrics, complexity, DORA,
-work-graph build, investment dispatch, and team autoimport are staged in one
-caller-owned PostgreSQL transaction through package-owned writers. A failure
-in any writer rolls back every domain request and handoff; River retries the
-same guarded delivery. Replays use deterministic generation/request IDs and
-outbox dedupe keys, and reject a reused identity whose immutable scope changed.
+work-graph build, and team autoimport use package-owned transaction writers in
+one caller-owned PostgreSQL transaction. A failure in any writer rolls back
+every domain request and handoff; River retries the same guarded delivery.
+Replays use deterministic generation/request IDs and outbox dedupe keys, and
+reject a reused identity whose immutable scope changed.
+
+Investment dispatch deliberately remains fail-closed in native post-sync. Its
+temporary compatibility endpoint still invokes the legacy Python dispatcher,
+which creates a Celery chord; binding that endpoint would hide a second
+transport inside River execution. The post-sync transaction therefore returns
+a retryable error and commits none of its earlier children whenever investment
+fanout is required. CHAOS-3050 must supply a direct/native non-Celery dispatch
+writer before this dependency can be bound.
 
 Child contracts remain `go_implemented` with `route=celery` and
 `rollback_route=celery` until their individual parity/canary gates are
@@ -830,9 +838,11 @@ consumer. The legacy Celery chain remains the production path while
 **Blocked by:** CHAOS-2596.
 
 Implementation status: the guarded native consumer and atomic, deterministic
-fanout are implemented. Production activation remains a route-only decision
-after the downstream child contracts complete their independent promotion
-evidence.
+fanout are implemented for daily, remaining metrics, work-graph build, and
+team autoimport. Investment dispatch remains an explicit fail-closed
+dependency until its direct/native non-Celery fanout lands. Production
+activation remains blocked until that dependency and the downstream child
+contracts complete their independent promotion evidence.
 
 #### Work
 

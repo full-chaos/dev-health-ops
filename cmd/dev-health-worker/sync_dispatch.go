@@ -129,7 +129,10 @@ func (writer workGraphPostSyncWriter) StartRequestTx(
 	case jobcontract.KindWorkGraphBuild:
 		requestKind, consumer = workgraph.KindBuild, "workgraph"
 	case jobcontract.KindInvestmentDispatch:
-		requestKind, consumer = workgraph.KindDispatch, "investment"
+		// The current compatibility executor delegates to the legacy Python
+		// dispatcher, which creates a Celery chord. Native post-sync must not
+		// hide that second transport behind a River delivery.
+		return syncdispatchruntime.ErrPostSyncUnavailable
 	default:
 		return syncdispatchruntime.ErrPostSyncUnavailable
 	}
@@ -169,13 +172,6 @@ func postSyncWorkGraphScope(
 		}
 		if plan.To != nil {
 			scope["to_date"] = plan.To.UTC().Format(time.RFC3339)
-		}
-	case workgraph.KindDispatch:
-		if plan.From != nil {
-			scope["from_date"] = plan.From.UTC().Format("2006-01-02")
-		}
-		if plan.To != nil {
-			scope["to_date"] = plan.To.UTC().Format("2006-01-02")
 		}
 	default:
 		return nil, syncdispatchruntime.ErrPostSyncUnavailable

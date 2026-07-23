@@ -219,10 +219,15 @@ organization, dispatched transport, dispatched generation, and current
 unpaused route in PostgreSQL. A stale delivery commits no child state. A
 current delivery reconstructs the fanout from successful SyncRun units and
 stages all supported child domain rows plus `worker_job_outbox` handoffs in one
-transaction. Daily and remaining-metric runs, work-graph and investment
-requests, and team autoimport each use deterministic identities. If any child
-writer or handoff fails, the transaction rolls back and the River delivery is
-retryable; no partial generation can escape.
+transaction. Daily and remaining-metric runs, work-graph requests, and team
+autoimport each use deterministic identities. If any child writer or handoff
+fails, the transaction rolls back and the River delivery is retryable; no
+partial generation can escape.
+
+Investment dispatch is currently such a fail-closed dependency. Its temporary
+Python compatibility executor creates a Celery chord, so native post-sync does
+not bind or call it. A run requiring investment fanout rolls back the complete
+transaction until a direct/native non-Celery dispatch writer is available.
 
 Child routes are evaluated independently. While a reviewed child remains
 `go_implemented` and Celery-routed, its generic outbox row is persisted as

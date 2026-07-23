@@ -12,7 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from dev_health_ops.db import get_postgres_session_sync
-from dev_health_ops.models import SyncDispatchOutbox, SyncDispatchTransportRoute
+from dev_health_ops.models import (
+    SyncDispatchOutbox,
+    SyncDispatchTransportRoute,
+    SyncRun,
+)
 from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
 from dev_health_ops.workers.sync_units import dispatch_sync_run, finalize_sync_run
 from dev_health_ops.workers.team_autoimport import run_post_sync_team_autoimport
@@ -98,6 +102,21 @@ def _current_river_reference(reference: SyncCoordinatorReference, *, kind: str) 
     return outbox is not None and route is not None
 
 
+def _current_sync_run_reference(reference: TeamAutoImportReference) -> bool:
+    """Reject a trusted bridge request whose run belongs to another tenant."""
+
+    with get_postgres_session_sync() as session:
+        run = (
+            session.query(SyncRun.id)
+            .filter(
+                SyncRun.id == reference.sync_run_id,
+                SyncRun.org_id == str(reference.organization_id),
+            )
+            .one_or_none()
+        )
+    return run is not None
+
+
 @router.post("/dispatch", dependencies=[])
 async def dispatch_reference(
     reference: SyncCoordinatorReference,
@@ -168,6 +187,8 @@ async def team_autoimport_reference(
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, str]:
     _authorize(authorization)
+    if not _current_sync_run_reference(reference):
+        return {"status": "stale"}
     result = await run_in_threadpool(
         run_post_sync_team_autoimport.run, str(reference.sync_run_id)
     )

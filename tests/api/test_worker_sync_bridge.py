@@ -110,3 +110,28 @@ def test_sync_bridge_retries_failure_after_effect_without_publishing_celery_task
     assert retry.status_code == 200
     assert retry.json() == {"status": "pending"}
     assert observed == ["effect", "effect"]
+
+
+def test_team_autoimport_bridge_rejects_cross_org_run(monkeypatch) -> None:
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    reference = {
+        "organization_id": _REFERENCE["organization_id"],
+        "sync_run_id": _REFERENCE["sync_run_id"],
+    }
+    with (
+        patch(
+            "dev_health_ops.api.internal.worker_sync._current_sync_run_reference",
+            return_value=False,
+        ),
+        patch(
+            "dev_health_ops.api.internal.worker_sync.run_post_sync_team_autoimport.run"
+        ) as run,
+    ):
+        response = TestClient(app).post(
+            "/api/internal/worker-sync/team-autoimport",
+            headers={"Authorization": "Bearer test-token"},
+            json=reference,
+        )
+    assert response.status_code == 200
+    assert response.json() == {"status": "stale"}
+    run.assert_not_called()

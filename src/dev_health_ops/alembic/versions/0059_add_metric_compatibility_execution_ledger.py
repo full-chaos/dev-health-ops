@@ -33,7 +33,9 @@ def upgrade() -> None:
             ),
             claim_token uuid NOT NULL,
             state text NOT NULL
-                CHECK (state IN ('executing', 'succeeded', 'ambiguous')),
+                CHECK (state IN (
+                    'executing', 'succeeded', 'ambiguous', 'retry_authorized'
+                )),
             attempt_count integer NOT NULL DEFAULT 1
                 CHECK (attempt_count >= 1),
             output_evidence jsonb NULL,
@@ -59,6 +61,33 @@ def upgrade() -> None:
     )
     op.execute(
         """
+        CREATE TABLE metric_compatibility_execution_repairs (
+            id uuid PRIMARY KEY,
+            execution_id uuid NOT NULL
+                REFERENCES metric_compatibility_executions(id) ON DELETE CASCADE,
+            expected_state text NOT NULL
+                CHECK (expected_state IN ('executing', 'ambiguous')),
+            expected_attempt_count integer NOT NULL
+                CHECK (expected_attempt_count >= 1),
+            resolution text NOT NULL
+                CHECK (resolution IN ('retry_safe', 'confirm_succeeded')),
+            review_evidence text NOT NULL
+                CHECK (length(review_evidence) BETWEEN 1 AND 2048),
+            output_evidence jsonb NULL,
+            created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+            CHECK (
+                (resolution = 'confirm_succeeded' AND output_evidence IS NOT NULL)
+                OR
+                (resolution = 'retry_safe' AND output_evidence IS NULL)
+            ),
+            UNIQUE (
+                execution_id, expected_state, expected_attempt_count, resolution
+            )
+        )
+        """
+    )
+    op.execute(
+        """
         CREATE INDEX ix_metric_compatibility_executions_run
         ON metric_compatibility_executions
             (worker_kind, run_id, partition_id, operation)
@@ -67,4 +96,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS metric_compatibility_execution_repairs")
     op.execute("DROP TABLE IF EXISTS metric_compatibility_executions")

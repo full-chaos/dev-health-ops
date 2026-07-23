@@ -116,6 +116,22 @@ async def test_effect_before_ack_is_never_reexecuted_after_lease_reclaim() -> No
             assert retry.value.status_code == 409
             assert effects == ["append-output"]
 
+            repaired = await worker_metrics._repair_execution(
+                session,
+                execution.id,
+                worker_metrics.MetricExecutionRepairRequest(
+                    expected_state="ambiguous",
+                    expected_attempt_count=1,
+                    resolution="confirm_succeeded",
+                    review_evidence="verified one capacity output for this generation",
+                    output_evidence={"forecast_count": 1, "reviewed": True},
+                ),
+            )
+            assert repaired["state"] == "succeeded"
+            assert await worker_metrics._reserve_execution(session, reclaimed) == (
+                "skipped"
+            )
+
             ledger = (
                 (
                     await session.execute(
@@ -132,6 +148,134 @@ async def test_effect_before_ack_is_never_reexecuted_after_lease_reclaim() -> No
                 .mappings()
                 .one()
             )
-            assert ledger == {"state": "ambiguous", "attempt_count": 2}
+            assert ledger == {"state": "succeeded", "attempt_count": 1}
+            assert effects == ["append-output"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_executing_repair_waits_for_claim_loss_and_retries_exact_attempt() -> (
+    None
+):
+    assert _TEST_URI is not None
+    engine = create_async_engine(_TEST_URI)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    run_id = uuid.uuid4()
+    partition_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    first_claim = uuid.uuid4()
+    second_claim = uuid.uuid4()
+    scope = {
+        "version": 1,
+        "all_teams": True,
+        "history_days": 90,
+        "simulations": 1000,
+    }
+    try:
+        async with session_factory() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO remaining_metric_runs (
+                        id, org_id, family, generation, scope_key,
+                        generation_seed, status
+                    )
+                    VALUES (
+                        CAST(:run_id AS uuid), CAST(:org_id AS uuid), 'capacity',
+                        'generation-v2', 'all-teams', 4321, 'running'
+                    )
+                    """
+                ),
+                {"run_id": str(run_id), "org_id": str(org_id)},
+            )
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO remaining_metric_partitions (
+                        id, run_id, ordinal, scope, status, claim_token,
+                        lease_expires_at
+                    )
+                    VALUES (
+                        CAST(:partition_id AS uuid), CAST(:run_id AS uuid), 1,
+                        CAST(:scope AS jsonb), 'running',
+                        CAST(:claim_token AS uuid),
+                        statement_timestamp() + interval '10 minutes'
+                    )
+                    """
+                ),
+                {
+                    "partition_id": str(partition_id),
+                    "run_id": str(run_id),
+                    "scope": worker_metrics._canonical_json(scope),
+                    "claim_token": str(first_claim),
+                },
+            )
+            await session.commit()
+            request = worker_metrics.RemainingMetricsExecutionRequest(
+                operation="partition",
+                run_id=run_id,
+                partition_id=partition_id,
+            )
+            execution = await worker_metrics._load_remaining_execution(session, request)
+            assert await worker_metrics._reserve_execution(session, execution) == (
+                "execute"
+            )
+            repair = worker_metrics.MetricExecutionRepairRequest(
+                expected_state="executing",
+                expected_attempt_count=1,
+                resolution="retry_safe",
+                review_evidence="verified no output exists for attempt one",
+            )
+            with pytest.raises(HTTPException) as active:
+                await worker_metrics._repair_execution(session, execution.id, repair)
+            assert active.value.status_code == 409
+            await session.rollback()
+
+            await session.execute(
+                text(
+                    """
+                    UPDATE remaining_metric_partitions
+                    SET claim_token = CAST(:claim_token AS uuid),
+                        lease_expires_at = statement_timestamp() + interval '10 minutes'
+                    WHERE id = CAST(:partition_id AS uuid)
+                    """
+                ),
+                {
+                    "claim_token": str(second_claim),
+                    "partition_id": str(partition_id),
+                },
+            )
+            await session.commit()
+            repaired = await worker_metrics._repair_execution(
+                session, execution.id, repair
+            )
+            assert repaired["state"] == "retry_authorized"
+
+            reclaimed = await worker_metrics._load_remaining_execution(session, request)
+            assert await worker_metrics._reserve_execution(session, reclaimed) == (
+                "execute"
+            )
+            replay = await worker_metrics._repair_execution(
+                session, execution.id, repair
+            )
+            assert replay == {
+                "status": "already_applied",
+                "execution_id": str(execution.id),
+                "state": "executing",
+            }
+            attempt_count = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT attempt_count
+                        FROM metric_compatibility_executions
+                        WHERE id = CAST(:id AS uuid)
+                        """
+                    ),
+                    {"id": str(execution.id)},
+                )
+            ).scalar_one()
+            assert attempt_count == 2
     finally:
         await engine.dispose()

@@ -17,7 +17,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -63,6 +63,28 @@ class RemainingMetricsExecutionRequest(_StrictRequest):
     operation: Literal["partition"]
     run_id: uuid.UUID
     partition_id: uuid.UUID
+
+
+class MetricExecutionRepairRequest(_StrictRequest):
+    expected_state: Literal["executing", "ambiguous"]
+    expected_attempt_count: int = Field(ge=1)
+    resolution: Literal["retry_safe", "confirm_succeeded"]
+    review_evidence: str = Field(min_length=1, max_length=2048)
+    output_evidence: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_resolution_evidence(self) -> MetricExecutionRepairRequest:
+        if len(self.review_evidence.encode()) > 2048:
+            raise ValueError("review_evidence must not exceed 2048 UTF-8 bytes")
+        if (self.resolution == "confirm_succeeded") != (
+            self.output_evidence is not None
+        ):
+            raise ValueError("output_evidence is required only when confirming success")
+        if self.output_evidence is not None:
+            encoded = _canonical_json(self.output_evidence)
+            if len(encoded.encode()) > _MAX_EVIDENCE_BYTES:
+                raise ValueError("output_evidence exceeds the durable bound")
+        return self
 
 
 @dataclass(frozen=True)
@@ -313,7 +335,7 @@ async def _reserve_execution(
         text(
             """
             SELECT worker_kind, operation, run_id, partition_id, family,
-                   generation, scope_digest, state
+                   generation, scope_digest, state, attempt_count
             FROM metric_compatibility_executions
             WHERE id = CAST(:id AS uuid)
             FOR UPDATE
@@ -344,20 +366,37 @@ async def _reserve_execution(
     )
     if actual != expected:
         raise HTTPException(status_code=409, detail="Execution identity collision")
-    await session.execute(
-        text(
-            """
-            UPDATE metric_compatibility_executions
-            SET attempt_count = attempt_count + 1,
-                last_attempt_at = statement_timestamp()
-            WHERE id = CAST(:id AS uuid)
-            """
-        ),
-        {"id": str(execution.id)},
-    )
-    await session.commit()
     if existing["state"] == "succeeded":
+        await session.commit()
         return "skipped"
+    if existing["state"] == "retry_authorized":
+        retried = await session.execute(
+            text(
+                """
+                UPDATE metric_compatibility_executions
+                SET state = 'executing',
+                    claim_token = CAST(:claim_token AS uuid),
+                    attempt_count = attempt_count + 1,
+                    last_attempt_at = statement_timestamp()
+                WHERE id = CAST(:id AS uuid)
+                  AND state = 'retry_authorized'
+                  AND attempt_count = :attempt_count
+                RETURNING id
+                """
+            ),
+            {
+                "id": str(execution.id),
+                "claim_token": str(execution.claim_token),
+                "attempt_count": existing["attempt_count"],
+            },
+        )
+        if retried.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=409, detail="Execution repair state changed"
+            )
+        await session.commit()
+        return "execute"
+    await session.commit()
     raise HTTPException(
         status_code=409,
         detail={
@@ -366,6 +405,210 @@ async def _reserve_execution(
             "state": str(existing["state"]),
         },
     )
+
+
+def _repair_id(
+    execution_id: uuid.UUID, request: MetricExecutionRepairRequest
+) -> uuid.UUID:
+    identity = _canonical_json(
+        [
+            "metric-compatibility-execution-repair",
+            str(execution_id),
+            request.expected_state,
+            request.expected_attempt_count,
+            request.resolution,
+        ]
+    )
+    return uuid.uuid5(_EXECUTION_NAMESPACE, identity)
+
+
+async def _original_claim_is_active(session: AsyncSession, row: Any) -> bool:
+    parameters = {
+        "run_id": str(row["run_id"]),
+        "partition_id": (
+            str(row["partition_id"]) if row["partition_id"] is not None else None
+        ),
+        "claim_token": str(row["claim_token"]),
+    }
+    if row["worker_kind"] == "remaining":
+        query = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM remaining_metric_runs AS r
+                JOIN remaining_metric_partitions AS p ON p.run_id = r.id
+                WHERE r.id = CAST(:run_id AS uuid)
+                  AND p.id = CAST(:partition_id AS uuid)
+                  AND r.status = 'running'
+                  AND r.canceled_at IS NULL
+                  AND p.status = 'running'
+                  AND p.claim_token = CAST(:claim_token AS uuid)
+                  AND p.lease_expires_at > statement_timestamp()
+            )
+        """
+    elif row["operation"] == "partition":
+        query = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM daily_metrics_runs AS r
+                JOIN daily_metrics_partitions AS p ON p.run_id = r.id
+                WHERE r.id = CAST(:run_id AS uuid)
+                  AND p.id = CAST(:partition_id AS uuid)
+                  AND r.status = 'running'
+                  AND p.status = 'running'
+                  AND p.claim_token = CAST(:claim_token AS uuid)
+                  AND p.lease_expires_at > statement_timestamp()
+            )
+        """
+    else:
+        query = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM daily_metrics_runs AS r
+                WHERE r.id = CAST(:run_id AS uuid)
+                  AND r.status = 'running'
+                  AND r.finalization_status = 'running'
+                  AND r.finalization_claim_token = CAST(:claim_token AS uuid)
+                  AND r.finalization_lease_expires_at > statement_timestamp()
+            )
+        """
+    result = await session.execute(text(query), parameters)
+    return bool(result.scalar_one())
+
+
+async def _repair_execution(
+    session: AsyncSession,
+    execution_id: uuid.UUID,
+    request: MetricExecutionRepairRequest,
+) -> dict[str, str]:
+    result = await session.execute(
+        text(
+            """
+            SELECT id, worker_kind, operation, run_id, partition_id, claim_token,
+                   state, attempt_count
+            FROM metric_compatibility_executions
+            WHERE id = CAST(:id AS uuid)
+            FOR UPDATE
+            """
+        ),
+        {"id": str(execution_id)},
+    )
+    row = result.mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    repair_id = _repair_id(execution_id, request)
+    prior_result = await session.execute(
+        text(
+            """
+            SELECT resolution, review_evidence, output_evidence
+            FROM metric_compatibility_execution_repairs
+            WHERE id = CAST(:id AS uuid)
+            """
+        ),
+        {"id": str(repair_id)},
+    )
+    prior = prior_result.mappings().first()
+    encoded_output = (
+        _canonical_json(request.output_evidence)
+        if request.output_evidence is not None
+        else None
+    )
+    if prior is not None:
+        if (
+            prior["resolution"] != request.resolution
+            or prior["review_evidence"] != request.review_evidence
+            or (
+                prior["output_evidence"] is not None
+                and _canonical_json(prior["output_evidence"]) != encoded_output
+            )
+        ):
+            raise HTTPException(status_code=409, detail="Repair identity conflict")
+        await session.commit()
+        return {
+            "status": "already_applied",
+            "execution_id": str(execution_id),
+            "state": str(row["state"]),
+        }
+
+    if (
+        row["state"] != request.expected_state
+        or row["attempt_count"] != request.expected_attempt_count
+    ):
+        raise HTTPException(
+            status_code=409, detail="Execution state or attempt changed"
+        )
+    if request.expected_state == "executing" and await _original_claim_is_active(
+        session, row
+    ):
+        raise HTTPException(
+            status_code=409, detail="Original execution claim is still active"
+        )
+
+    if request.resolution == "retry_safe":
+        update = """
+            UPDATE metric_compatibility_executions
+            SET state = 'retry_authorized',
+                last_attempt_at = statement_timestamp()
+            WHERE id = CAST(:id AS uuid)
+              AND state = :expected_state
+              AND attempt_count = :expected_attempt_count
+            RETURNING id
+        """
+        target_state = "retry_authorized"
+    else:
+        update = """
+            UPDATE metric_compatibility_executions
+            SET state = 'succeeded',
+                output_evidence = CAST(:output_evidence AS jsonb),
+                completed_at = statement_timestamp(),
+                last_attempt_at = statement_timestamp()
+            WHERE id = CAST(:id AS uuid)
+              AND state = :expected_state
+              AND attempt_count = :expected_attempt_count
+            RETURNING id
+        """
+        target_state = "succeeded"
+    updated = await session.execute(
+        text(update),
+        {
+            "id": str(execution_id),
+            "expected_state": request.expected_state,
+            "expected_attempt_count": request.expected_attempt_count,
+            "output_evidence": encoded_output,
+        },
+    )
+    if updated.scalar_one_or_none() is None:
+        raise HTTPException(status_code=409, detail="Execution repair CAS failed")
+    await session.execute(
+        text(
+            """
+            INSERT INTO metric_compatibility_execution_repairs (
+                id, execution_id, expected_state, expected_attempt_count,
+                resolution, review_evidence, output_evidence
+            )
+            VALUES (
+                CAST(:id AS uuid), CAST(:execution_id AS uuid), :expected_state,
+                :expected_attempt_count, :resolution, :review_evidence,
+                CAST(:output_evidence AS jsonb)
+            )
+            """
+        ),
+        {
+            "id": str(repair_id),
+            "execution_id": str(execution_id),
+            "expected_state": request.expected_state,
+            "expected_attempt_count": request.expected_attempt_count,
+            "resolution": request.resolution,
+            "review_evidence": request.review_evidence,
+            "output_evidence": encoded_output,
+        },
+    )
+    await session.commit()
+    return {
+        "status": "repaired",
+        "execution_id": str(execution_id),
+        "state": target_state,
+    }
 
 
 async def _mark_ambiguous(
@@ -794,3 +1037,14 @@ async def read_metric_execution(
         "attempt_count": row["attempt_count"],
         "output_evidence": row["output_evidence"],
     }
+
+
+@router.post("/metric-executions/v1/{execution_id}/repair")
+async def repair_metric_execution(
+    execution_id: uuid.UUID,
+    request: MetricExecutionRepairRequest,
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, str]:
+    authorize_worker_bridge(authorization)
+    return await _repair_execution(session, execution_id, request)

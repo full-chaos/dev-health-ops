@@ -255,6 +255,7 @@ async def test_ambiguous_ledger_row_never_reexecutes(state: str) -> None:
         "generation": execution.generation,
         "scope_digest": execution.scope_digest,
         "state": state,
+        "attempt_count": 1,
     }
     session = _Session([_Result(), _Result(row=existing), _Result()])
     with pytest.raises(HTTPException) as exc:
@@ -272,9 +273,36 @@ def test_execution_ledger_migration_has_attempt_and_exact_output_state() -> None
     ).read_text()
     assert 'down_revision: str | None = "0058"' in migration
     assert "attempt_count integer NOT NULL DEFAULT 1" in migration
-    assert "state IN ('executing', 'succeeded', 'ambiguous')" in migration
+    assert "'executing', 'succeeded', 'ambiguous', 'retry_authorized'" in migration
     assert "output_evidence jsonb NULL" in migration
     assert "claim_token uuid NOT NULL" in migration
+    assert "CREATE TABLE metric_compatibility_execution_repairs" in migration
+    assert "resolution IN ('retry_safe', 'confirm_succeeded')" in migration
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "expected_state": "ambiguous",
+            "expected_attempt_count": 1,
+            "resolution": "retry_safe",
+            "review_evidence": "reviewed no-effect failure",
+            "output_evidence": {"rows": 1},
+        },
+        {
+            "expected_state": "ambiguous",
+            "expected_attempt_count": 1,
+            "resolution": "confirm_succeeded",
+            "review_evidence": "reviewed output",
+        },
+    ],
+)
+def test_repair_contract_requires_resolution_specific_evidence(
+    payload: dict[str, Any],
+) -> None:
+    with pytest.raises(ValueError):
+        worker_metrics.MetricExecutionRepairRequest.model_validate(payload)
 
 
 def test_daily_expiry_query_is_a_database_time_fence() -> None:

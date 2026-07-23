@@ -700,6 +700,42 @@ quiescer/controller plus external-handoff binding remain open.
 
 ### CHAOS-3049 — Migrate remaining metrics, backfills, recommendations, and membership jobs
 
+#### Current compatibility foundation (not promotion)
+
+The checked-in compatibility bridge is a dormant, fail-closed foundation. Its
+HTTP requests carry only durable run/partition identifiers and a fixed
+operation; PostgreSQL supplies the organization, generation, scope, claim, and
+lease. Celery remains the production owner. No remaining-metrics family is
+promoted or independently rollback-capable merely because its reviewed Python
+callable appears in the bridge allowlist.
+
+Each output identity has one durable execution row. A new row starts at attempt
+one. A completed row returns `skipped`; an `executing` or `ambiguous` row never
+silently re-enters compute. Operators first use the authenticated readback
+endpoint and inspect the output named by the generation/scope digest. They may
+then submit one exact-state repair:
+
+- `confirm_succeeded` records bounded reviewed output evidence and makes the
+  next worker call return `skipped`;
+- `retry_safe` records why no effect exists and moves the row to
+  `retry_authorized`; only the next matching durable claim may consume that
+  authorization and increment the execution attempt;
+- an `executing` attempt cannot be repaired while its original claim and lease
+  remain active.
+
+Repairs require the expected state and attempt count, use a deterministic
+repair identity, and persist an immutable repair audit row. This is the bounded
+repair path required for a single-attempt effect boundary; it is not a generic
+task/command executor.
+
+The family inventory's `max_concurrency`, ClickHouse read budget, and
+ClickHouse write budget are still declarative evidence at this foundation
+stage. Promotion remains blocked until worker registration enforces those
+limits, per-family shadow/parity evidence is reviewed, each route has an
+audited Celery/River transition and rollback, and the four `inventory_only`
+families have independent compute/write parity rather than broad shared-job
+coverage.
+
 #### Work
 
 - Port complexity, DORA, release impact, capacity, recommendations, extra metrics, membership backfill, and team metrics.

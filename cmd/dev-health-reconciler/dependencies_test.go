@@ -153,6 +153,7 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 	sources.buildSyncMutation = func(
 		*pgxpool.Pool,
 		*pgxpool.Pool,
+		string,
 		*syncdispatchcontract.Registry,
 	) (syncreconciler.Stepper, error) {
 		mutationBuilds++

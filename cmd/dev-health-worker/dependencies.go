@@ -114,27 +114,29 @@ func (database *postgresWorkerDatabase) Close() {
 }
 
 type workerDependencySources struct {
-	openDatabase        func(context.Context, config.Config) (workerDatabase, error)
-	loadRuntimeRegistry func(string) (*jobruntime.Registry, error)
-	loadJobRegistry     func(string) (jobcontract.Registry, error)
-	loadDeployment      func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
-	compiledHandlers    func(string) []jobruntime.HandlerSpec
-	newRiverClientID    func() string
-	buildOperational    func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
-	contractRoot        string
-	deploymentProfile   string
+	openDatabase         func(context.Context, config.Config) (workerDatabase, error)
+	loadRuntimeRegistry  func(string) (*jobruntime.Registry, error)
+	loadJobRegistry      func(string) (jobcontract.Registry, error)
+	loadDeployment       func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
+	compiledHandlers     func(string) []jobruntime.HandlerSpec
+	newRiverClientID     func() string
+	buildOperational     func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildSyncCoordinator func(config.Config, workerDatabase, *slog.Logger) (lifecycle.Component, error)
+	contractRoot         string
+	deploymentProfile    string
 }
 
 var productionWorkerDependencySources = workerDependencySources{
-	openDatabase:        openWorkerDatabase,
-	loadRuntimeRegistry: jobruntime.Load,
-	loadJobRegistry:     jobcontract.LoadRegistry,
-	loadDeployment:      deploymentcontract.Load,
-	compiledHandlers:    compiledWorkerHandlers,
-	newRiverClientID:    defaultRiverClientID,
-	buildOperational:    buildOperationalWorker,
-	contractRoot:        defaultContractRoot,
-	deploymentProfile:   defaultDeploymentProfile,
+	openDatabase:         openWorkerDatabase,
+	loadRuntimeRegistry:  jobruntime.Load,
+	loadJobRegistry:      jobcontract.LoadRegistry,
+	loadDeployment:       deploymentcontract.Load,
+	compiledHandlers:     compiledWorkerHandlers,
+	newRiverClientID:     defaultRiverClientID,
+	buildOperational:     buildOperationalWorker,
+	buildSyncCoordinator: buildSyncCoordinatorWorker,
+	contractRoot:         defaultContractRoot,
+	deploymentProfile:    defaultDeploymentProfile,
 }
 
 func defaultRiverClientID() string {
@@ -270,6 +272,16 @@ func configureWorkerDependenciesWithSources(
 		}
 		if len(handlers) > 0 {
 			dependencies.startup.Handlers = handlers
+		}
+		if component != nil {
+			components = append(components, component)
+		}
+	}
+	if sources.buildSyncCoordinator != nil {
+		component, err := sources.buildSyncCoordinator(cfg, dependencies.database, logger)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
 		}
 		if component != nil {
 			components = append(components, component)

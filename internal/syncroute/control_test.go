@@ -69,66 +69,29 @@ func TestResumeFailsBeforeTransactionWithoutMatchingRiverCapability(t *testing.T
 	}
 }
 
-func TestResumeCapabilityAllowsSameTransportPostSyncAndGuardsCutover(t *testing.T) {
+func TestResumeCapabilityTreatsPostSyncAsOrdinaryClaimFencedRoute(t *testing.T) {
 	t.Parallel()
 	empty, err := NewCapabilities(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, required, err := resumeCapability(
+	if err := resumeCapability(
 		empty, syncdispatchcontract.KindPostSync,
 		syncdispatchcontract.RouteCelery, syncdispatchcontract.RouteCelery,
-	); err != nil || required {
-		t.Fatalf("same-transport post_sync capability = required:%t err:%v", required, err)
+	); err != nil {
+		t.Fatalf("same-transport post_sync capability error=%v", err)
 	}
-	riverWithoutBarrier, err := NewCapabilities([]Capability{{
+	riverCapability, err := NewCapabilities([]Capability{{
 		Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver,
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := resumeCapability(
-		riverWithoutBarrier, syncdispatchcontract.KindPostSync,
-		syncdispatchcontract.RouteCelery, syncdispatchcontract.RouteRiver,
-	); !errors.Is(err, ErrQuiescenceMissing) {
-		t.Fatalf("Celery-to-River post_sync error=%v", err)
-	}
-	riverWithOldBarrier, err := NewCapabilities([]Capability{
-		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver},
-		{
-			Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteCelery,
-			Quiescer: quiescerFunc(func(context.Context, QuiescenceRequest) error { return nil }),
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	capability, required, err := resumeCapability(
-		riverWithOldBarrier, syncdispatchcontract.KindPostSync,
+	err = resumeCapability(
+		riverCapability, syncdispatchcontract.KindPostSync,
 		syncdispatchcontract.RouteCelery, syncdispatchcontract.RouteRiver,
 	)
-	if err != nil || !required || capability.Transport != syncdispatchcontract.RouteCelery {
-		t.Fatalf(
-			"registered cutover capability = transport:%s required:%t err:%v",
-			capability.Transport, required, err,
-		)
+	if err != nil {
+		t.Fatalf("post_sync cutover capability error=%v", err)
 	}
-}
-
-func TestPostSyncQuiescenceTimeoutIsStrictlyBounded(t *testing.T) {
-	t.Parallel()
-	for _, timeout := range []time.Duration{0, maximumQuiescenceTimeout + time.Nanosecond} {
-		if validQuiescenceTimeout(timeout) {
-			t.Fatalf("timeout %s was accepted", timeout)
-		}
-	}
-	if !validQuiescenceTimeout(maximumQuiescenceTimeout) {
-		t.Fatal("maximum timeout was rejected")
-	}
-}
-
-type quiescerFunc func(context.Context, QuiescenceRequest) error
-
-func (function quiescerFunc) Quiesce(ctx context.Context, request QuiescenceRequest) error {
-	return function(ctx, request)
 }

@@ -51,9 +51,8 @@ type Quiescer interface {
 }
 
 // Capability is registered only by composition code that has a concrete
-// publisher/handler. A post-sync capability's Quiescer stops publishers owned
-// by Capability.Transport because its mark-before-publish window outlives the
-// database claim.
+// publisher/handler. Quiescer is retained for generic route-control callers,
+// but sync dispatch has no external-effect window outside its transaction.
 type Capability struct {
 	Kind      string
 	Transport string
@@ -207,14 +206,13 @@ func (controller *Controller) Drain(ctx context.Context, kind string) (RouteStat
 
 // Resume holds the outbox table lock while rechecking claims and changing the
 // generation. This prevents an old-generation terminal update from committing
-// after the route becomes active. River requires an exact capability; a
-// transport-changing post_sync resume additionally requires and executes a
-// deadline-bounded external barrier.
+// after the route becomes active. River requires an exact capability. The same
+// durable claim and route-generation terminal fence applies to every kind.
 func (controller *Controller) Resume(
 	ctx context.Context,
 	kind string,
 	transport string,
-	quiescenceTimeout time.Duration,
+	_ time.Duration, // Kept for CLI compatibility; the durable claim fence is sufficient.
 ) (RouteState, error) {
 	descriptor, known := controller.registry.Lookup(kind)
 	if !known {
@@ -242,24 +240,10 @@ func (controller *Controller) Resume(
 	if state.LiveClaims != 0 {
 		return RouteState{}, ErrLiveClaims
 	}
-	capability, requiresQuiescence, err := resumeCapability(
+	if err := resumeCapability(
 		controller.capabilities, kind, state.Transport, transport,
-	)
-	if err != nil {
+	); err != nil {
 		return RouteState{}, err
-	}
-	if requiresQuiescence {
-		if !validQuiescenceTimeout(quiescenceTimeout) {
-			return RouteState{}, ErrInvalidConfiguration
-		}
-		barrierCtx, cancel := context.WithTimeout(ctx, quiescenceTimeout)
-		err = capability.Quiescer.Quiesce(barrierCtx, QuiescenceRequest{
-			Kind: kind, Transport: state.Transport, Generation: state.Generation - 1,
-		})
-		cancel()
-		if err != nil {
-			return RouteState{}, ErrLiveClaims
-		}
 	}
 	row := tx.QueryRow(ctx, `
 UPDATE public.sync_dispatch_transport_routes
@@ -289,26 +273,16 @@ func validQuiescenceTimeout(timeout time.Duration) bool {
 func resumeCapability(
 	capabilities Capabilities,
 	kind string,
-	currentTransport string,
+	_ string,
 	targetTransport string,
-) (Capability, bool, error) {
+) error {
 	if targetTransport == syncdispatchcontract.RouteRiver {
 		capability, ok := capabilities.Lookup(kind, targetTransport)
 		if !ok || capability.Kind != kind || capability.Transport != targetTransport {
-			return Capability{}, false, ErrCapabilityMissing
+			return ErrCapabilityMissing
 		}
 	}
-	if kind != syncdispatchcontract.KindPostSync || currentTransport == targetTransport {
-		return Capability{}, false, nil
-	}
-	capability, ok := capabilities.Lookup(kind, currentTransport)
-	if !ok || capability.Kind != kind || capability.Transport != currentTransport {
-		return Capability{}, false, ErrQuiescenceMissing
-	}
-	if capability.Quiescer == nil {
-		return Capability{}, false, ErrQuiescenceMissing
-	}
-	return capability, true, nil
+	return nil
 }
 
 // beginRouteMutation follows the producer lock order: route row first, then

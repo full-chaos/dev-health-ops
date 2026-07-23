@@ -34,6 +34,7 @@ from dev_health_ops.api.internal import router as internal_acr_router
 from dev_health_ops.api.internal.worker_operational import (
     router as worker_operational_router,
 )
+from dev_health_ops.api.internal.worker_sync import router as worker_sync_router
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
@@ -223,6 +224,7 @@ app.include_router(external_ingest_router)
 app.include_router(external_ingest_status_router)
 app.include_router(internal_acr_router)
 app.include_router(worker_operational_router)
+app.include_router(worker_sync_router)
 app.include_router(orgs_router)
 
 register_observability(app)

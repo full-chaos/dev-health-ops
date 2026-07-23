@@ -27,6 +27,7 @@ import (
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/jackc/pgx/v5"
 )
@@ -197,7 +198,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "contract_registry_invalid")
 	}
-	routeCapabilities, err := syncroute.NewCapabilities(nil)
+	routeCapabilities, err := syncroute.NewCapabilities(syncdispatchruntime.RouteCapabilities())
 	if err != nil {
 		return nil, writeError(stderr, "contract_registry_invalid")
 	}
@@ -360,7 +361,7 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	reason := flags.String("reason", "", "bounded reason code")
 	correlation := flags.String("correlation-id", "", "bounded correlation ID")
 	transport := flags.String("transport", "", "checked-in target transport")
-	quiescenceTimeout := flags.Duration("quiescence-timeout", 10*time.Second, "bounded external quiescence timeout")
+	quiescenceTimeout := flags.Duration("quiescence-timeout", 10*time.Second, "legacy compatibility; no-op for sync-dispatch routes")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 1 || *reason == "" || *correlation == "" {
 		return writeError(stderr, "invalid_request")
 	}

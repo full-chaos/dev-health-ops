@@ -185,6 +185,26 @@ func TestCapabilitiesCannotAdvertiseWithoutEveryConcreteHandler(t *testing.T) {
 	}
 }
 
+func TestRouteCapabilitiesMatchTheRegisteredAtLeastOnceWorkers(t *testing.T) {
+	t.Parallel()
+	capabilities, err := syncroute.NewCapabilities(RouteCapabilities())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{
+		syncdispatchcontract.KindDispatchSyncRun,
+		syncdispatchcontract.KindFinalizeSyncRun,
+		syncdispatchcontract.KindReferenceDiscovery,
+	} {
+		if _, ok := capabilities.Lookup(kind, syncdispatchcontract.RouteRiver); !ok {
+			t.Fatalf("missing River capability for %s", kind)
+		}
+	}
+	if _, ok := capabilities.Lookup(syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteRiver); ok {
+		t.Fatal("post_sync capability advertised before its worker is registered")
+	}
+}
+
 func TestCapabilitiesRetainAndDispatchEveryTypedHandler(t *testing.T) {
 	t.Parallel()
 	called := make(map[string]bool)

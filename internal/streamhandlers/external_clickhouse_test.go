@@ -3,7 +3,13 @@ package streamhandlers
 import (
 	"context"
 	"encoding/json"
+	"math/big"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -185,6 +191,171 @@ func TestExternalSchemaRegistryAndSinkCoverTheSameTwentyOneKinds(t *testing.T) {
 		if _, err := externalInsertQuery(record.Kind); err != nil {
 			t.Errorf("%s has no sink: %v", record.Kind, err)
 		}
+	}
+}
+
+func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate golden test")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "..", "..", "tests", "fixtures", "external_ingest_sink_python_golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden struct {
+		FixedNow string `json:"fixed_now"`
+		OrgID    string `json:"org_id"`
+		SourceID string `json:"source_id"`
+		Sources  map[string]struct {
+			System, Instance string
+		} `json:"sources"`
+		Rows map[string]struct {
+			Payload map[string]any `json:"payload"`
+			Table   string         `json:"table"`
+			Columns []string       `json:"columns"`
+			Values  []any          `json:"values"`
+		} `json:"rows"`
+		EdgeCases map[string]string `json:"edge_cases"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&golden); err != nil {
+		t.Fatal(err)
+	}
+	now, err := time.Parse(time.RFC3339Nano, golden.FixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID := uuid.MustParse(golden.SourceID)
+	if len(golden.Rows) != 21 {
+		t.Fatalf("Python golden rows = %d, want all 21 kinds", len(golden.Rows))
+	}
+	for kind, expected := range golden.Rows {
+		kind, expected := kind, expected
+		t.Run(kind, func(t *testing.T) {
+			family := "legacy"
+			if _, operational := operationalExternalKinds[kind]; operational {
+				family = "operational"
+			}
+			source := golden.Sources[family]
+			pointer := externalPointer{
+				OrgID: golden.OrgID, SourceSystem: source.System,
+				SourceInstance: source.Instance, IngestionID: uuid.MustParse("11111111-2222-4333-8444-555555555555"),
+			}
+			record := externalSinkRecord{Kind: kind, ExternalID: "golden", Payload: expected.Payload}
+			values, err := externalRecordValues(
+				externalSinkBatch{Pointer: pointer, SourceID: sourceID},
+				record, now, &ExternalRecomputeScope{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			query, err := externalInsertQuery(kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			table, columns := externalQueryContract(query)
+			if table != expected.Table || !slices.Equal(columns, expected.Columns) {
+				t.Fatalf("ClickHouse contract mismatch:\n got table=%s columns=%v\nwant table=%s columns=%v", table, columns, expected.Table, expected.Columns)
+			}
+			got := goldenComparable(values)
+			want := goldenComparable(expected.Values)
+			if !reflect.DeepEqual(got, want) {
+				gotJSON, _ := json.MarshalIndent(got, "", "  ")
+				wantJSON, _ := json.MarshalIndent(want, "", "  ")
+				t.Fatalf("Python row parity mismatch:\n got %s\nwant %s", gotJSON, wantJSON)
+			}
+		})
+	}
+
+	if got := externalWorkItemID("github", "Acme/API", "7", "pr"); got != golden.EdgeCases["github_pr"] {
+		t.Fatalf("GitHub PR mapping = %q", got)
+	}
+	if got := externalWorkItemID("gitlab", "Group/Project", "9", "merge_request"); got != golden.EdgeCases["gitlab_merge_request"] {
+		t.Fatalf("GitLab MR mapping = %q", got)
+	}
+	if got := externalWorkItemID("jira", "", "ABC-42", "issue"); got != golden.EdgeCases["jira_issue"] {
+		t.Fatalf("Jira mapping = %q", got)
+	}
+	if got := uuid.Nil.String(); got != golden.EdgeCases["non_git_repo_uuid"] {
+		t.Fatalf("non-git repo UUID = %q", got)
+	}
+	if got := externalRepoUUID("github", "Acme/API", "Acme/API").String(); got != golden.EdgeCases["repo_uuid"] {
+		t.Fatalf("repo UUID = %q", got)
+	}
+	if got := ""; got != golden.EdgeCases["empty_identity"] {
+		t.Fatalf("empty identity contract = %q", got)
+	}
+}
+
+func externalQueryContract(query string) (string, []string) {
+	const prefix = "INSERT INTO "
+	body := strings.TrimPrefix(query, prefix)
+	open, close := strings.IndexByte(body, '('), strings.LastIndexByte(body, ')')
+	if open < 1 || close <= open {
+		return "", nil
+	}
+	table := strings.TrimSpace(body[:open])
+	rawColumns := strings.Split(body[open+1:close], ",")
+	columns := make([]string, 0, len(rawColumns))
+	for _, column := range rawColumns {
+		columns = append(columns, strings.TrimSpace(column))
+	}
+	return table, columns
+}
+
+func goldenComparable(values []any) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = goldenComparableValue(value)
+	}
+	return result
+}
+
+func goldenComparableValue(value any) any {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed.UTC().Format("2006-01-02T15:04:05.000000Z")
+	case uuid.UUID:
+		return typed.String()
+	case *big.Int:
+		if typed == nil {
+			return nil
+		}
+		return typed.String()
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatFloat(typed, 'g', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'g', -1, 32)
+	case int:
+		return strconv.FormatInt(int64(typed), 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case []string:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = item
+		}
+		return result
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = goldenComparableValue(item)
+		}
+		return result
+	default:
+		return value
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,15 +76,15 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 
 func externalInsertQuery(kind string) (string, error) {
 	queries := map[string]string{
-		"repository.v1":                 "INSERT INTO repos (org_id,id,repo,ref,created_at,settings,tags,provider,last_synced,source_id)",
-		"commit.v1":                     "INSERT INTO git_commits (org_id,repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id)",
-		"pull_request.v1":               "INSERT INTO git_pull_requests (org_id,repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id)",
-		"review.v1":                     "INSERT INTO git_pull_request_reviews (org_id,repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id)",
+		"repository.v1":                 "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,source_id,org_id)",
+		"commit.v1":                     "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
+		"pull_request.v1":               "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
+		"review.v1":                     "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
 		"team.v1":                       "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
 		"identity.v1":                   "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
-		"work_item.v1":                  "INSERT INTO work_items (org_id,repo_id,work_item_id,provider,title,description,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,priority_raw,service_class,due_at,last_synced,source_id)",
-		"work_item_transition.v1":       "INSERT INTO work_item_transitions (org_id,repo_id,work_item_id,occurred_at,provider,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,source_id)",
-		"work_item_dependency.v1":       "INSERT INTO work_item_dependencies (org_id,source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,last_synced,source_id)",
+		"work_item.v1":                  "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
+		"work_item_transition.v1":       "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
+		"work_item_dependency.v1":       "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,last_synced,org_id,source_id)",
 		"operational_service.v1":        "INSERT INTO operational_services (" + operationalBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at)",
 		"operational_incident.v1":       "INSERT INTO operational_incidents (" + operationalBaseColumns + ",service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at)",
 		"operational_alert.v1":          "INSERT INTO operational_alerts (" + operationalBaseColumns + ",service_id,incident_id,title,description,triggered_at,acknowledged_at,resolved_at,is_deleted,deleted_at)",
@@ -114,19 +115,20 @@ func externalRecordValues(
 	orgID, system, instance := source.Pointer.OrgID, source.Pointer.SourceSystem, source.Pointer.SourceInstance
 	switch record.Kind {
 	case "repository.v1":
-		repoID := externalRepoUUID(system, instance, stringField(payload, "externalId"))
+		repositorySystem := externalStringDefault(payload, "sourceSystem", system)
+		repoID := externalRepoUUID(repositorySystem, instance, stringField(payload, "externalId"))
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
-		settings, err := json.Marshal(objectField(payload, "settings"))
+		settings, err := externalPythonJSON(objectField(payload, "settings"))
 		if err != nil {
 			return nil, err
 		}
-		tags, err := json.Marshal(stringArrayField(payload, "tags"))
+		tags, err := externalPythonJSON(stringArrayField(payload, "tags"))
 		if err != nil {
 			return nil, err
 		}
 		return []any{
-			orgID, repoID, stringField(payload, "externalId"), externalNullableString(payload, "defaultRef"),
-			now, string(settings), string(tags), system, now, source.SourceID,
+			repoID, stringField(payload, "externalId"), externalNullableString(payload, "defaultRef"),
+			now, settings, tags, repositorySystem, now, source.SourceID, orgID,
 		}, nil
 	case "commit.v1":
 		repoID := externalRepoUUID(system, instance, stringField(payload, "repositoryExternalId"))
@@ -143,10 +145,10 @@ func externalRecordValues(
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 		trackExternalTime(scope, authorWhen)
 		return []any{
-			orgID, repoID, stringField(payload, "hash"), externalNullableString(payload, "message"),
+			repoID, stringField(payload, "hash"), externalNullableString(payload, "message"),
 			externalNullableString(payload, "authorName"), externalNullableString(payload, "authorEmail"), authorWhen,
 			externalNullableString(payload, "committerName"), externalNullableString(payload, "committerEmail"), committerWhen,
-			uint32(externalIntegerDefault(payload, "parents", 1)), now, source.SourceID,
+			uint32(externalIntegerDefault(payload, "parents", 1)), now, source.SourceID, orgID,
 		}, nil
 	case "pull_request.v1":
 		repoID := externalRepoUUID(system, instance, stringField(payload, "repositoryExternalId"))
@@ -157,7 +159,7 @@ func externalRecordValues(
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 		trackExternalTime(scope, createdAt)
 		return []any{
-			orgID, repoID, uint32(externalIntegerDefault(payload, "number", 0)),
+			repoID, uint32(externalIntegerDefault(payload, "number", 0)),
 			externalNullableString(payload, "title"), externalNullableString(payload, "body"), stringField(payload, "state"),
 			externalNullableString(payload, "authorName"), externalNullableString(payload, "authorEmail"), createdAt,
 			externalNullableTime(payload, "mergedAt"), externalNullableTime(payload, "closedAt"),
@@ -166,7 +168,7 @@ func externalRecordValues(
 			externalNullableTime(payload, "firstReviewAt"), externalNullableTime(payload, "firstCommentAt"),
 			uint32(externalIntegerDefault(payload, "changesRequestedCount", 0)),
 			uint32(externalIntegerDefault(payload, "reviewsCount", 0)),
-			uint32(externalIntegerDefault(payload, "commentsCount", 0)), now, source.SourceID,
+			uint32(externalIntegerDefault(payload, "commentsCount", 0)), now, source.SourceID, orgID,
 		}, nil
 	case "review.v1":
 		repoID := externalRepoUUID(system, instance, stringField(payload, "repositoryExternalId"))
@@ -177,9 +179,9 @@ func externalRecordValues(
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 		trackExternalTime(scope, submittedAt)
 		return []any{
-			orgID, repoID, uint32(externalIntegerDefault(payload, "pullRequestNumber", 0)),
+			repoID, uint32(externalIntegerDefault(payload, "pullRequestNumber", 0)),
 			stringField(payload, "reviewId"), stringField(payload, "reviewer"), stringField(payload, "state"),
-			submittedAt, now, source.SourceID,
+			submittedAt, now, source.SourceID, orgID,
 		}, nil
 	case "team.v1":
 		teamID := stringField(payload, "id")
@@ -203,14 +205,14 @@ func externalRecordValues(
 			return nil, err
 		}
 		updatedAt = externalClampUpdatedAt(updatedAt, now)
-		providerIdentities, err := json.Marshal(objectField(payload, "providerIdentities"))
+		providerIdentities, err := externalPythonJSON(objectField(payload, "providerIdentities"))
 		if err != nil {
 			return nil, err
 		}
 		return []any{
 			orgID, canonicalID, uuid.NewSHA1(uuid.NameSpaceURL, []byte("identity:"+orgID+":"+canonicalID)),
 			externalNullableString(payload, "displayName"), externalNullableString(payload, "email"),
-			string(providerIdentities), stringArrayField(payload, "teamIds"),
+			providerIdentities, stringArrayField(payload, "teamIds"),
 			externalBoolUint(payload, "isActive", true), updatedAt, source.SourceID,
 		}, nil
 	case "work_item.v1":
@@ -221,8 +223,8 @@ func externalRecordValues(
 		sourceID := externalWorkItemID(system, externalWorkItemInstance(system, instance, ""), stringField(payload, "sourceExternalKey"), stringField(payload, "sourceWorkItemType"))
 		targetID := externalWorkItemID(system, externalWorkItemInstance(system, instance, ""), stringField(payload, "targetExternalKey"), stringField(payload, "targetWorkItemType"))
 		return []any{
-			orgID, sourceID, targetID, stringField(payload, "relationshipType"),
-			stringField(payload, "relationshipTypeRaw"), now, source.SourceID,
+			sourceID, targetID, stringField(payload, "relationshipType"),
+			stringField(payload, "relationshipTypeRaw"), now, orgID, source.SourceID,
 		}, nil
 	default:
 		return externalOperationalValues(source, record, now, scope)
@@ -255,26 +257,27 @@ func externalWorkItemValues(source externalSinkBatch, payload map[string]any, no
 	if system == "linear" {
 		nativeTeamKey = stringField(payload, "nativeTeamKey")
 	}
-	assignees := stringArrayField(payload, "assignees")
-	for index := range assignees {
-		assignees[index] = externalIdentity(system, assignees[index])
+	rawAssignees := stringArrayField(payload, "assignees")
+	assignees := make([]string, 0, len(rawAssignees))
+	for _, raw := range rawAssignees {
+		if strings.TrimSpace(raw) != "" {
+			assignees = append(assignees, externalIdentity(system, raw))
+		}
 	}
 	reporter := ""
 	if raw := stringField(payload, "reporter"); raw != "" {
 		reporter = externalIdentity(system, raw)
 	}
 	return []any{
-		source.Pointer.OrgID, repoID, workItemID, system, stringField(payload, "title"),
-		externalNullableString(payload, "description"), externalStringDefault(payload, "type", "unknown"),
+		repoID, workItemID, system, stringField(payload, "title"),
+		externalStringDefault(payload, "type", "unknown"),
 		stringField(payload, "status"), stringField(payload, "statusRaw"), projectKey, projectID,
 		nativeTeamKey, projectName, assignees, reporter, createdAt, updatedAt,
 		externalNullableTime(payload, "startedAt"), externalNullableTime(payload, "completedAt"),
 		externalNullableTime(payload, "closedAt"), stringArrayField(payload, "labels"),
 		externalNullableNumber(payload, "storyPoints"), stringField(payload, "sprintId"),
 		stringField(payload, "sprintName"), stringField(payload, "parentId"), stringField(payload, "epicId"),
-		stringField(payload, "url"), externalNullableString(payload, "priorityRaw"),
-		externalNullableString(payload, "serviceClass"), externalNullableTime(payload, "dueAt"),
-		now, source.SourceID,
+		stringField(payload, "url"), now, source.Pointer.OrgID, source.SourceID,
 	}, nil
 }
 
@@ -297,10 +300,10 @@ func externalTransitionValues(source externalSinkBatch, payload map[string]any, 
 		actor = externalIdentity(system, raw)
 	}
 	return []any{
-		source.Pointer.OrgID, repoID, workItemID, occurredAt, system,
+		repoID, workItemID, occurredAt,
 		stringField(payload, "fromStatus"), stringField(payload, "toStatus"),
 		stringField(payload, "fromStatusRaw"), stringField(payload, "toStatusRaw"),
-		actor, now, source.SourceID,
+		actor, now, source.Pointer.OrgID, source.SourceID,
 	}, nil
 }
 
@@ -578,6 +581,84 @@ func externalIdentity(provider, raw string) string {
 		return "unknown"
 	}
 	return provider + ":" + raw
+}
+
+// externalPythonJSON preserves the current Python sink's json.dumps wire
+// shape for String columns (spaces after separators, stable key order). The
+// JSON is data in ClickHouse rather than a native JSON column, so equivalent
+// but byte-different encodings would otherwise create false parity drift.
+func externalPythonJSON(value any) (string, error) {
+	var output strings.Builder
+	var encode func(any) error
+	encode = func(item any) error {
+		switch typed := item.(type) {
+		case nil:
+			output.WriteString("null")
+		case bool:
+			output.WriteString(strconv.FormatBool(typed))
+		case string:
+			encoded, _ := json.Marshal(typed)
+			output.Write(encoded)
+		case json.Number:
+			if _, err := typed.Float64(); err != nil {
+				return err
+			}
+			output.WriteString(typed.String())
+		case float64:
+			output.WriteString(strconv.FormatFloat(typed, 'g', -1, 64))
+		case int:
+			output.WriteString(strconv.Itoa(typed))
+		case []string:
+			output.WriteByte('[')
+			for index, element := range typed {
+				if index > 0 {
+					output.WriteString(", ")
+				}
+				if err := encode(element); err != nil {
+					return err
+				}
+			}
+			output.WriteByte(']')
+		case []any:
+			output.WriteByte('[')
+			for index, element := range typed {
+				if index > 0 {
+					output.WriteString(", ")
+				}
+				if err := encode(element); err != nil {
+					return err
+				}
+			}
+			output.WriteByte(']')
+		case map[string]any:
+			keys := make([]string, 0, len(typed))
+			for key := range typed {
+				keys = append(keys, key)
+			}
+			slices.Sort(keys)
+			output.WriteByte('{')
+			for index, key := range keys {
+				if index > 0 {
+					output.WriteString(", ")
+				}
+				if err := encode(key); err != nil {
+					return err
+				}
+				output.WriteString(": ")
+				if err := encode(typed[key]); err != nil {
+					return err
+				}
+			}
+			output.WriteByte('}')
+		default:
+			return fmt.Errorf("unsupported external JSON value %T", item)
+		}
+		return nil
+	}
+	if err := encode(value); err != nil {
+		return "", err
+	}
+	return output.String(), nil
 }
 
 func normalizeExternalOperationalInstance(provider, raw string) (string, error) {

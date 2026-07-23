@@ -8,144 +8,14 @@
     "same_version_rollout": "schema_digest_all_live_profiles"
   },
   "jobs": [
-    {
-      "kind": "investment.chunk",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "profile": "heavy",
-      "queue": "investment",
-      "handler_owner": "internal/jobs/investment",
-      "execution_mode": "command",
-      "priority": 2,
-      "timeout_seconds": 7200,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_investment_chunk",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "investment_chunk",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 1
-      },
-      "sensitive_fields": [],
-      "domain_link": "investment_chunk",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/investment.chunk.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/investment.chunk.v1.json"
-        ]
-      }
-    },
-    {
-      "kind": "investment.dispatch",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "profile": "heavy",
-      "queue": "investment",
-      "handler_owner": "internal/jobs/investment",
-      "execution_mode": "coordinator",
-      "priority": 2,
-      "timeout_seconds": 900,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_investment_request",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "investment_dispatch",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 1
-      },
-      "sensitive_fields": [],
-      "domain_link": "investment_request",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/investment.dispatch.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/investment.dispatch.v1.json"
-        ]
-      }
-    },
-    {
-      "kind": "investment.finalize",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "profile": "heavy",
-      "queue": "investment",
-      "handler_owner": "internal/jobs/investment",
-      "execution_mode": "coordinator",
-      "priority": 2,
-      "timeout_seconds": 900,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_investment_run",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "investment_finalize",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 1
-      },
-      "sensitive_fields": [],
-      "domain_link": "investment_run",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/investment.finalize.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/investment.finalize.v1.json"
-        ]
-      }
-    },
-    {
-      "kind": "investment.materialize",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "profile": "heavy",
-      "queue": "investment",
-      "handler_owner": "internal/jobs/investment",
-      "execution_mode": "command",
-      "priority": 2,
-      "timeout_seconds": 7200,
-      "max_attempts": 3,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_investment_request",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "investment_request",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 1
-      },
-      "sensitive_fields": [],
-      "domain_link": "investment_request",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/investment.materialize.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/investment.materialize.v1.json"
-        ]
-      }
-    },
+    {"kind":"investment.chunk","current_version":1,"supported_versions":[1],"profile":"heavy","queue":"investment","handler_owner":"internal/jobs/investment","execution_mode":"command","priority":2,"timeout_seconds":7200,"max_attempts":3,"retry_policy":"bounded_exponential_jitter","cancellation":"authoritative_investment_chunk","delivery":"guarded_at_least_once","idempotency":"investment_chunk","concurrency":{"scope":"organization","limit":1},"sensitive_fields":[],"domain_link":"investment_chunk","organization_scope":"tenant","schema_versions":{"1":"schemas/investment.chunk.v1.schema.json"},"fixtures":{"1":["examples/investment.chunk.v1.json"]}},
+    {"kind":"investment.dispatch","current_version":1,"supported_versions":[1],"profile":"heavy","queue":"investment","handler_owner":"internal/jobs/investment","execution_mode":"coordinator","priority":2,"timeout_seconds":900,"max_attempts":3,"retry_policy":"bounded_exponential_jitter","cancellation":"authoritative_investment_request","delivery":"guarded_at_least_once","idempotency":"investment_dispatch","concurrency":{"scope":"organization","limit":1},"sensitive_fields":[],"domain_link":"investment_request","organization_scope":"tenant","schema_versions":{"1":"schemas/investment.dispatch.v1.schema.json"},"fixtures":{"1":["examples/investment.dispatch.v1.json"]}},
+    {"kind":"investment.finalize","current_version":1,"supported_versions":[1],"profile":"heavy","queue":"investment","handler_owner":"internal/jobs/investment","execution_mode":"coordinator","priority":2,"timeout_seconds":900,"max_attempts":3,"retry_policy":"bounded_exponential_jitter","cancellation":"authoritative_investment_run","delivery":"guarded_at_least_once","idempotency":"investment_finalize","concurrency":{"scope":"organization","limit":1},"sensitive_fields":[],"domain_link":"investment_run","organization_scope":"tenant","schema_versions":{"1":"schemas/investment.finalize.v1.schema.json"},"fixtures":{"1":["examples/investment.finalize.v1.json"]}},
+    {"kind":"investment.materialize","current_version":1,"supported_versions":[1],"profile":"heavy","queue":"investment","handler_owner":"internal/jobs/investment","execution_mode":"command","priority":2,"timeout_seconds":7200,"max_attempts":3,"retry_policy":"bounded_exponential_jitter","cancellation":"authoritative_investment_request","delivery":"guarded_at_least_once","idempotency":"investment_request","concurrency":{"scope":"organization","limit":1},"sensitive_fields":[],"domain_link":"investment_request","organization_scope":"tenant","schema_versions":{"1":"schemas/investment.materialize.v1.schema.json"},"fixtures":{"1":["examples/investment.materialize.v1.json"]}},
     {
       "kind": "metrics.daily_dispatch",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "heavy",
       "queue": "metrics",
       "handler_owner": "internal/jobs/metrics/daily",
@@ -157,28 +27,17 @@
       "cancellation": "authoritative_daily_run",
       "delivery": "replay_safe_at_least_once",
       "idempotency": "daily_metrics_run",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 1
-      },
+      "concurrency": {"scope": "organization", "limit": 1},
       "sensitive_fields": [],
       "domain_link": "daily_metrics_run",
       "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/metrics.daily_dispatch.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/metrics.daily_dispatch.v1.json"
-        ]
-      }
+      "schema_versions": {"1": "schemas/metrics.daily_dispatch.v1.schema.json"},
+      "fixtures": {"1": ["examples/metrics.daily_dispatch.v1.json"]}
     },
     {
       "kind": "metrics.daily_finalize",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "heavy",
       "queue": "metrics",
       "handler_owner": "internal/jobs/metrics/daily",
@@ -190,28 +49,17 @@
       "cancellation": "authoritative_daily_run",
       "delivery": "guarded_at_least_once",
       "idempotency": "daily_metrics_finalize",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 1
-      },
+      "concurrency": {"scope": "organization", "limit": 1},
       "sensitive_fields": [],
       "domain_link": "daily_metrics_run",
       "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/metrics.daily_finalize.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/metrics.daily_finalize.v1.json"
-        ]
-      }
+      "schema_versions": {"1": "schemas/metrics.daily_finalize.v1.schema.json"},
+      "fixtures": {"1": ["examples/metrics.daily_finalize.v1.json"]}
     },
     {
       "kind": "metrics.daily_partition",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "heavy",
       "queue": "metrics",
       "handler_owner": "internal/jobs/metrics/daily",
@@ -223,28 +71,17 @@
       "cancellation": "authoritative_daily_partition",
       "delivery": "guarded_at_least_once",
       "idempotency": "daily_metrics_partition",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 2
-      },
+      "concurrency": {"scope": "organization", "limit": 2},
       "sensitive_fields": [],
       "domain_link": "daily_metrics_partition",
       "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/metrics.daily_partition.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/metrics.daily_partition.v1.json"
-        ]
-      }
+      "schema_versions": {"1": "schemas/metrics.daily_partition.v1.schema.json"},
+      "fixtures": {"1": ["examples/metrics.daily_partition.v1.json"]}
     },
     {
       "kind": "operational.billing_notification",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "ops",
       "queue": "webhooks",
       "handler_owner": "internal/jobs/operational",
@@ -267,17 +104,13 @@
         "1": "schemas/operational.billing_notification.v1.schema.json"
       },
       "fixtures": {
-        "1": [
-          "examples/operational.billing_notification.v1.json"
-        ]
+        "1": ["examples/operational.billing_notification.v1.json"]
       }
     },
     {
       "kind": "operational.webhook_delivery",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "ops",
       "queue": "webhooks",
       "handler_owner": "internal/jobs/operational",
@@ -300,17 +133,13 @@
         "1": "schemas/operational.webhook_delivery.v1.schema.json"
       },
       "fixtures": {
-        "1": [
-          "examples/operational.webhook_delivery.v1.json"
-        ]
+        "1": ["examples/operational.webhook_delivery.v1.json"]
       }
     },
     {
       "kind": "report.execute_on_demand",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "heavy",
       "queue": "reports",
       "handler_owner": "internal/jobs/reports",
@@ -333,17 +162,13 @@
         "1": "schemas/report.execute_on_demand.v1.schema.json"
       },
       "fixtures": {
-        "1": [
-          "examples/report.execute_on_demand.v1.json"
-        ]
+        "1": ["examples/report.execute_on_demand.v1.json"]
       }
     },
     {
       "kind": "report.execute_scheduled",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "heavy",
       "queue": "reports",
       "handler_owner": "internal/jobs/reports",
@@ -366,17 +191,13 @@
         "1": "schemas/report.execute_scheduled.v1.schema.json"
       },
       "fixtures": {
-        "1": [
-          "examples/report.execute_scheduled.v1.json"
-        ]
+        "1": ["examples/report.execute_scheduled.v1.json"]
       }
     },
     {
       "kind": "system.heartbeat",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "ops",
       "queue": "heartbeat",
       "handler_owner": "internal/jobs/system",
@@ -399,17 +220,13 @@
         "1": "schemas/system.heartbeat.v1.schema.json"
       },
       "fixtures": {
-        "1": [
-          "examples/system.heartbeat.v1.json"
-        ]
+        "1": ["examples/system.heartbeat.v1.json"]
       }
     },
     {
       "kind": "system.retention_cleanup",
       "current_version": 1,
-      "supported_versions": [
-        1
-      ],
+      "supported_versions": [1],
       "profile": "ops",
       "queue": "retention",
       "handler_owner": "internal/jobs/system/retention",
@@ -432,43 +249,9 @@
         "1": "schemas/system.retention_cleanup.v1.schema.json"
       },
       "fixtures": {
-        "1": [
-          "examples/system.retention_cleanup.v1.json"
-        ]
+        "1": ["examples/system.retention_cleanup.v1.json"]
       }
     },
-    {
-      "kind": "workgraph.build",
-      "current_version": 1,
-      "supported_versions": [
-        1
-      ],
-      "profile": "heavy",
-      "queue": "workgraph",
-      "handler_owner": "internal/jobs/workgraph",
-      "execution_mode": "command",
-      "priority": 2,
-      "timeout_seconds": 3600,
-      "max_attempts": 4,
-      "retry_policy": "bounded_exponential_jitter",
-      "cancellation": "authoritative_work_graph_request",
-      "delivery": "guarded_at_least_once",
-      "idempotency": "work_graph_request",
-      "concurrency": {
-        "scope": "organization",
-        "limit": 1
-      },
-      "sensitive_fields": [],
-      "domain_link": "work_graph_request",
-      "organization_scope": "tenant",
-      "schema_versions": {
-        "1": "schemas/workgraph.build.v1.schema.json"
-      },
-      "fixtures": {
-        "1": [
-          "examples/workgraph.build.v1.json"
-        ]
-      }
-    }
+    {"kind":"workgraph.build","current_version":1,"supported_versions":[1],"profile":"heavy","queue":"workgraph","handler_owner":"internal/jobs/workgraph","execution_mode":"command","priority":2,"timeout_seconds":3600,"max_attempts":4,"retry_policy":"bounded_exponential_jitter","cancellation":"authoritative_work_graph_request","delivery":"guarded_at_least_once","idempotency":"work_graph_request","concurrency":{"scope":"organization","limit":1},"sensitive_fields":[],"domain_link":"work_graph_request","organization_scope":"tenant","schema_versions":{"1":"schemas/workgraph.build.v1.schema.json"},"fixtures":{"1":["examples/workgraph.build.v1.json"]}}
   ]
 }

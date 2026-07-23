@@ -25,6 +25,8 @@ var (
 	ErrLeaseLost            = errors.New("provider lease is no longer valid")
 	ErrBudgetUnavailable    = errors.New("provider budget unavailable")
 	ErrSinkDuplicate        = errors.New("provider sink duplicate has different content")
+	ErrSinkGenerationUnsafe = errors.New("provider sink generation is not safely deduplicated")
+	ErrSinkReplayConflict   = errors.New("provider sink generation replay has different content")
 	ErrNormalizationInvalid = errors.New("provider normalized record is invalid")
 )
 

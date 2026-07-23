@@ -221,11 +221,20 @@ func TestEnvelopeDedupeRejectsConflictingContent(t *testing.T) {
 
 func TestClickHouseGenerationTokenIsStableAndOpaque(t *testing.T) {
 	t.Parallel()
-	first, err := clickHouseGenerationContext(context.Background(), "sync-unit:11111111-1111-4111-8111-111111111111")
+	envelope := testGenerationEnvelope("record-1")
+	blocks, err := BuildGenerationBlocks(
+		"sync-unit:11111111-1111-4111-8111-111111111111",
+		"provider_records",
+		[]NormalizedEnvelope{envelope},
+	)
+	if err != nil || len(blocks) != 1 {
+		t.Fatalf("blocks=%d error=%v", len(blocks), err)
+	}
+	first, err := clickHouseGenerationContext(context.Background(), blocks[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := clickHouseGenerationContext(context.Background(), "sync-unit:11111111-1111-4111-8111-111111111111")
+	second, err := clickHouseGenerationContext(context.Background(), blocks[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,9 +248,70 @@ func TestClickHouseGenerationTokenIsStableAndOpaque(t *testing.T) {
 func TestClickHouseGenerationRejectsUnboundedOrEmptyKeys(t *testing.T) {
 	t.Parallel()
 	for _, generation := range []string{"", " ", strings.Repeat("x", 257)} {
-		if _, err := clickHouseGenerationContext(context.Background(), generation); !errors.Is(err, ErrCredentialInvalid) {
+		if _, err := BuildGenerationBlocks(generation, "provider_records", []NormalizedEnvelope{testGenerationEnvelope("record-1")}); !errors.Is(err, ErrSinkGenerationUnsafe) {
 			t.Fatalf("generation length=%d error=%v", len(generation), err)
 		}
+	}
+}
+
+func TestGenerationBlocksAreBoundedDeterministicAndDestinationScoped(t *testing.T) {
+	t.Parallel()
+	input := []NormalizedEnvelope{
+		testGenerationEnvelope("record-3"),
+		testGenerationEnvelope("record-1"),
+		testGenerationEnvelope("record-2"),
+	}
+	first, err := buildGenerationBlocks("sync-unit:one", "provider_records", input, 2, maxGenerationBlockBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := buildGenerationBlocks("sync-unit:one", "provider_records", input, 2, maxGenerationBlockBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || first[0].Index() != 0 || first[1].Index() != 1 ||
+		first[0].ContentDigest() != second[0].ContentDigest() ||
+		first[0].Batch()[0].SourceID != "record-1" ||
+		first[1].Batch()[0].SourceID != "record-3" {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	firstContext, _ := clickHouseGenerationContext(context.Background(), first[0])
+	secondContext, _ := clickHouseGenerationContext(context.Background(), first[1])
+	if clickHouseGenerationToken(firstContext) == clickHouseGenerationToken(secondContext) {
+		t.Fatal("distinct blocks reused a ClickHouse token")
+	}
+}
+
+func TestGenerationReplayGuardRejectsConflictingContent(t *testing.T) {
+	t.Parallel()
+	first, _ := buildGenerationBlocks(
+		"sync-unit:one", "provider_records",
+		[]NormalizedEnvelope{testGenerationEnvelope("record-1")}, 1, maxGenerationBlockBytes,
+	)
+	conflicting, _ := buildGenerationBlocks(
+		"sync-unit:one", "provider_records",
+		[]NormalizedEnvelope{testGenerationEnvelope("record-2")}, 1, maxGenerationBlockBytes,
+	)
+	guard := NewGenerationReplayGuard()
+	if err := guard.Remember(first[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.Remember(first[0]); err != nil {
+		t.Fatalf("identical replay failed: %v", err)
+	}
+	if err := guard.Remember(conflicting[0]); !errors.Is(err, ErrSinkReplayConflict) {
+		t.Fatalf("conflicting replay error=%v", err)
+	}
+}
+
+func testGenerationEnvelope(sourceID string) NormalizedEnvelope {
+	return NormalizedEnvelope{
+		SchemaVersion: "v1", Provider: "github", OrgID: "org",
+		IntegrationID: "integration", EntityType: "repository",
+		SourceID: sourceID, DedupeKey: "github:repository:" + sourceID,
+		ObservedAt: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+		Provenance: Provenance{Source: "native", Confidence: "1.0"},
+		Attributes: map[string]string{"name": sourceID},
 	}
 }
 

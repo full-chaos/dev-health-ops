@@ -38,16 +38,28 @@ jobs:
           python-version: '3.12'
 
       - name: Apply canonical documentation finalization
+        id: finalize
+        continue-on-error: true
         run: python scripts/pr1256_finalize_docs.py
 
       - name: Remove one-time helper files from the review branch
+        if: always()
         run: |
           rm -f \
             scripts/pr1256_finalize_docs.py \
             .github/workflows/pr1256-docs-finalize.yml
 
       - name: Commit and push the applied changes
+        if: always()
         run: |
           git add -A
-          git commit -m 'docs: apply canonical migration cleanup'
-          git push origin HEAD:agent/docs-content-style-remediation
+          if git diff --cached --quiet; then
+            echo 'No finalizer changes to commit.'
+          else
+            git commit -m 'docs: apply canonical migration cleanup'
+            git push origin HEAD:agent/docs-content-style-remediation
+          fi
+
+      - name: Record finalizer result
+        if: always()
+        run: echo "finalizer outcome: ${{ steps.finalize.outcome }}"

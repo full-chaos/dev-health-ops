@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "jobs": [
-    {"kind":"investment.chunk","state":"contract_frozen","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory"]},
-    {"kind":"investment.dispatch","state":"contract_frozen","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory"]},
-    {"kind":"investment.finalize","state":"contract_frozen","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory"]},
-    {"kind":"investment.materialize","state":"contract_frozen","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory"]},
+    {"kind":"investment.chunk","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
+    {"kind":"investment.dispatch","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
+    {"kind":"investment.finalize","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
+    {"kind":"investment.materialize","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
     {
       "kind": "metrics.daily_dispatch",
       "state": "go_implemented",
@@ -163,6 +163,6 @@
       "rollback_route": "celery",
       "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
     },
-    {"kind":"workgraph.build","state":"contract_frozen","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory"]}
+    {"kind":"workgraph.build","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]}
   ]
 }

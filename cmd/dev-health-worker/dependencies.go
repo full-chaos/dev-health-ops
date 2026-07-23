@@ -125,6 +125,7 @@ type workerDependencySources struct {
 	buildSyncCoordinator func(config.Config, workerDatabase, *slog.Logger) (lifecycle.Component, error)
 	buildDaily           func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
 	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildWorkgraph       func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
 	contractRoot         string
 	deploymentProfile    string
 }
@@ -140,6 +141,7 @@ var productionWorkerDependencySources = workerDependencySources{
 	buildSyncCoordinator: buildSyncCoordinatorWorker,
 	buildDaily:           buildDailyWorker,
 	buildProviderSync:    buildProviderSyncWorker,
+	buildWorkgraph:       buildWorkgraphWorker,
 	contractRoot:         defaultContractRoot,
 	deploymentProfile:    defaultDeploymentProfile,
 }
@@ -169,6 +171,11 @@ var compiledHeavyHandlerKinds = []string{
 	jobcontract.KindRemainingTeamMetrics,
 	jobcontract.KindReportExecuteOnDemand,
 	jobcontract.KindReportExecuteScheduled,
+	jobcontract.KindWorkGraphBuild,
+	jobcontract.KindInvestmentMaterialize,
+	jobcontract.KindInvestmentDispatch,
+	jobcontract.KindInvestmentChunk,
+	jobcontract.KindInvestmentFinalize,
 }
 
 var compiledHandlerKinds = map[string][]string{
@@ -299,6 +306,7 @@ func configureWorkerDependenciesWithSources(
 	) (lifecycle.Component, []jobruntime.HandlerSpec, error){
 		sources.buildOperational,
 		sources.buildDaily,
+		sources.buildWorkgraph,
 	} {
 		if build == nil {
 			continue

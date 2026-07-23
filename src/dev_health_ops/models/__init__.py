@@ -66,6 +66,7 @@ from .licensing import (
     OrgFeatureOverride,
     OrgLicense,
 )
+from .operational_deliveries import BillingNotification, WebhookDelivery
 from .org_invite import OrgInvite
 from .pagerduty_webhook_binding import PagerDutyWebhookBinding
 from .rate_limit_observations import ProviderRateLimitObservation
@@ -75,6 +76,7 @@ from .reports import (
     ReportRun,
     ReportRunStatus,
     SavedReport,
+    ScheduledReportOccurrence,
 )
 from .retention import (
     OrgRetentionPolicy,
@@ -118,6 +120,8 @@ from .work_items import (
     WorkItemStatusTransition,
 )
 from .worker_job_outbox import WorkerJobOutbox
+from .worker_job_route import WorkerJobRoute
+from .worker_job_run import WorkerJobRun
 
 __all__ = [
     "AuditAction",
@@ -139,6 +143,7 @@ __all__ = [
     "FeatureFlag",
     "Base",
     "BillingAuditLog",
+    "BillingNotification",
     "GitBlame",
     "GitBlameMixin",
     "GitCommit",
@@ -182,6 +187,7 @@ __all__ = [
     "RefreshToken",
     "ReportRun",
     "ReportRunStatus",
+    "ScheduledReportOccurrence",
     "Repo",
     "RetentionResourceType",
     "Subscription",
@@ -223,4 +229,7 @@ __all__ = [
     "WorkItemReopenEvent",
     "WorkItemStatusTransition",
     "WorkerJobOutbox",
+    "WorkerJobRoute",
+    "WorkerJobRun",
+    "WebhookDelivery",
 ]

@@ -41,6 +41,7 @@ def enqueue_worker_job(
     scheduled_at: datetime | None = None,
     registry: Registry | None = None,
     now: datetime | None = None,
+    allow_deferred_route: bool = False,
 ) -> WorkerJobOutbox:
     """Stage one dispatch in the caller's transaction without committing it.
 
@@ -57,9 +58,10 @@ def enqueue_worker_job(
     try:
         contract_registry = registry or load_registry()
         contract = contract_registry.by_kind(payload.KIND)
-        _require_executable_migration_route(
+        _require_migration_route(
             payload.KIND,
             load_migration_jobs(),
+            allow_deferred_route=allow_deferred_route,
         )
         envelope = build_envelope(
             payload,
@@ -117,12 +119,17 @@ def enqueue_worker_job(
     return row
 
 
-def _require_executable_migration_route(
-    kind: str, jobs: tuple[MigrationJob, ...]
+def _require_migration_route(
+    kind: str,
+    jobs: tuple[MigrationJob, ...],
+    *,
+    allow_deferred_route: bool,
 ) -> None:
     matching_jobs = tuple(job for job in jobs if job.kind == kind)
     if len(matching_jobs) != 1:
         raise ContractDecodeError("migration state does not define job route")
+    if matching_jobs[0].route == "celery" and allow_deferred_route:
+        return
     if matching_jobs[0].route not in _EXECUTABLE_MIGRATION_ROUTES:
         raise ContractDecodeError("migration route is not executable")
 

@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000009",
+  "correlation_id": "investment-direct-2026-07-23",
+  "idempotency_key": "investment:materialize:00000000-0000-4000-8000-000000000102",
+  "domain": {
+    "type": "investment_request",
+    "id": "00000000-0000-4000-8000-000000000102"
+  },
+  "payload": {
+    "request_id": "00000000-0000-4000-8000-000000000102"
+  }
+}

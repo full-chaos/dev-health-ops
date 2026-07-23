@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/riverqueue/river"
 )
@@ -37,6 +38,35 @@ type Claim struct {
 type DomainReference struct {
 	OrganizationID string
 	SyncRunID      string
+}
+
+// TeamAutoimportJobArgs is the generic worker-outbox envelope for the
+// sync.team_autoimport child job. Unlike coordinator transport arguments, it
+// has no route-generation claim because worker_job_outbox owns its dedupe and
+// delivery lifecycle.
+type TeamAutoimportJobArgs struct {
+	Version       int                               `json:"contract_version"`
+	OrgID         string                            `json:"organization_id"`
+	CorrelationID string                            `json:"correlation_id"`
+	Idempotency   string                            `json:"idempotency_key"`
+	Domain        jobcontract.DomainLink            `json:"domain"`
+	Payload       jobcontract.TeamAutoimportPayload `json:"payload"`
+}
+
+func (TeamAutoimportJobArgs) Kind() string { return jobcontract.KindTeamAutoimport }
+
+func (args TeamAutoimportJobArgs) valid() error {
+	if args.Version != jobcontract.ContractVersionV1 ||
+		!uuidPattern.MatchString(args.OrgID) ||
+		!uuidPattern.MatchString(args.Domain.ID) ||
+		!uuidPattern.MatchString(args.Payload.SyncRunID) ||
+		args.Domain.Type != "sync_run" ||
+		args.Domain.ID != args.Payload.SyncRunID ||
+		args.CorrelationID == "" ||
+		args.Idempotency == "" {
+		return ErrInvalidReference
+	}
+	return nil
 }
 
 // Args is the exact versioned River argument shape shared by all four frozen
@@ -92,9 +122,9 @@ func (FinalizeSyncRunArgs) Kind() string                { return syncdispatchcon
 func (args FinalizeSyncRunArgs) RouteGeneration() int64 { return args.Generation() }
 func (args FinalizeSyncRunArgs) valid() error           { return args.TransportArgs.valid() }
 
-// PostSyncArgs is the exact v1 argument type for post_sync. It is also used
-// by the separately controlled mark-before external-handoff seam; creating it
-// does not publish a message or execute an external effect.
+// PostSyncArgs is the exact v1 argument type for guarded at-least-once
+// post_sync delivery. Creating it does not publish a message or execute an
+// external effect.
 type PostSyncArgs struct{ TransportArgs }
 
 func (PostSyncArgs) Kind() string                { return syncdispatchcontract.KindPostSync }

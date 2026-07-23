@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.fullchaos.dev/evidence/go-worker-migration/v3/artifact.schema.json",
+  "title": "Canary release proof candidate artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evidence_version", "captured_at", "scope", "input_fingerprint", "inputs", "builds", "checked_in_documents", "measurements", "result", "proofs", "release_eligibility", "redaction"],
+  "properties": {
+    "schema_version": {"const": 2}, "evidence_version": {"const": "v3-canary-release-proof"},
+    "captured_at": {"type": "string", "format": "date-time"}, "scope": {"const": "local_or_preproduction_canary"},
+    "input_fingerprint": {"$ref": "#/$defs/digest"}, "inputs": {"$ref": "#/$defs/inputs"},
+    "builds": {"$ref": "#/$defs/builds"}, "checked_in_documents": {"$ref": "#/$defs/documents"},
+    "measurements": {"$ref": "#/$defs/measurements"}, "result": {"$ref": "#/$defs/result"},
+    "proofs": {"$ref": "#/$defs/proofs"}, "release_eligibility": {"$ref": "#/$defs/release_eligibility"},
+    "redaction": {"$ref": "#/$defs/redaction"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "inputs": {"type": "object", "additionalProperties": false, "required": ["dataset_scope", "run_scope", "kind", "celery_baseline_generation", "river_canary_generation", "restored_celery_generation"], "properties": {"dataset_scope": {"$ref": "#/$defs/digest"}, "run_scope": {"$ref": "#/$defs/digest"}, "kind": {"type": "string"}, "celery_baseline_generation": {"type": "integer", "minimum": 1}, "river_canary_generation": {"type": "integer", "minimum": 1}, "restored_celery_generation": {"type": "integer", "minimum": 1}}},
+    "build": {"type": "object", "additionalProperties": false, "required": ["revision", "image_digest"], "properties": {"revision": {"type": "string"}, "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}},
+    "builds": {"type": "object", "additionalProperties": false, "required": ["celery", "go"], "properties": {"celery": {"$ref": "#/$defs/build"}, "go": {"$ref": "#/$defs/build"}}},
+    "document": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string"}, "sha256": {"$ref": "#/$defs/digest"}}},
+    "documents": {"type": "object", "additionalProperties": false, "required": ["registry", "migration_state", "thresholds", "baseline"], "properties": {"registry": {"$ref": "#/$defs/document"}, "migration_state": {"$ref": "#/$defs/document"}, "thresholds": {"$ref": "#/$defs/document"}, "baseline": {"$ref": "#/$defs/document"}}},
+    "measurements": {"type": "object", "additionalProperties": false, "required": ["lag_seconds_delta", "error_count_delta", "cpu_cores_ratio", "memory_bytes_ratio"], "properties": {"lag_seconds_delta": {"type": "number"}, "error_count_delta": {"type": "integer"}, "cpu_cores_ratio": {"type": ["number", "null"]}, "memory_bytes_ratio": {"type": ["number", "null"]}}},
+    "result": {"type": "object", "additionalProperties": false, "required": ["status", "failures"], "properties": {"status": {"enum": ["pass", "fail"]}, "failures": {"type": "array", "items": {"type": "string"}}}},
+    "proofs": {"type": "object", "additionalProperties": false, "required": ["output_state_idempotency", "lag_error_resource", "thresholds_reviewed_and_approved", "route_quiescence", "rollback"], "properties": {"output_state_idempotency": {"type": "boolean"}, "lag_error_resource": {"type": "boolean"}, "thresholds_reviewed_and_approved": {"type": "boolean"}, "route_quiescence": {"type": "boolean"}, "rollback": {"type": "boolean"}}},
+    "release_eligibility": {"type": "object", "additionalProperties": false, "required": ["eligible", "reason"], "properties": {"eligible": {"const": false}, "reason": {"type": "string"}}},
+    "redaction": {"type": "object", "additionalProperties": false, "required": ["contains_payloads_or_identifiers", "contains_credentials_or_dsns"], "properties": {"contains_payloads_or_identifiers": {"const": false}, "contains_credentials_or_dsns": {"const": false}}}
+  }
+}

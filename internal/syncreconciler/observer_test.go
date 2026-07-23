@@ -33,9 +33,6 @@ func testRegistry(t *testing.T, riverKind string) registryMap {
 			route = syncdispatchcontract.RouteRiver
 		}
 		delivery := syncdispatchcontract.DeliveryAtLeastOnce
-		if kind == syncdispatchcontract.KindPostSync {
-			delivery = syncdispatchcontract.DeliveryAtMostOnceMarkBefore
-		}
 		registry[kind] = syncdispatchcontract.Descriptor{
 			Kind:          kind,
 			Delivery:      delivery,
@@ -163,7 +160,7 @@ func TestObserverValidatesRegistryInputsAndCandidateBounds(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*syncdispatchcontract.Descriptor){
 		"wrong delivery": func(descriptor *syncdispatchcontract.Descriptor) {
-			descriptor.Delivery = syncdispatchcontract.DeliveryAtMostOnceMarkBefore
+			descriptor.Delivery = "at_most_once_mark_before"
 		},
 		"wrong rollback": func(descriptor *syncdispatchcontract.Descriptor) {
 			descriptor.RollbackRoute = syncdispatchcontract.RouteRiver

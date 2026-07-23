@@ -94,6 +94,14 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			wantCancelError: true, wantDomain: true,
 		},
 		{
+			name: "duplicate checkpoint", attempt: 1, claimState: ClaimAlreadyComplete,
+			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
+				t.Fatal("completed duplicate reached handler")
+				return nil
+			},
+			wantResult: ResultDuplicate, wantCategory: CategoryNone,
+		},
+		{
 			name: "unclassified failure cancels", attempt: 1, claimState: ClaimProceed,
 			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
 				return errors.New("unclassified-secret")

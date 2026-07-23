@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
@@ -67,6 +68,29 @@ func (commandAuditor) Begin(context.Context, joboperator.AuditEvent) (joboperato
 type commandRouteController struct {
 	state syncroute.RouteState
 	err   error
+}
+
+type commandJobRouteController struct{}
+
+func (commandJobRouteController) Inspect(_ context.Context, kind string) (jobroute.State, error) {
+	return jobroute.State{
+		Kind: kind, Transport: "celery", Generation: 1,
+		UpdatedAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
+	}, nil
+}
+
+func (commandJobRouteController) Rollback(_ context.Context, kind string) (jobroute.State, error) {
+	return jobroute.State{
+		Kind: kind, Transport: "celery", Generation: 2,
+		UpdatedAt: time.Date(2026, 7, 21, 12, 1, 0, 0, time.UTC),
+	}, nil
+}
+
+func (commandJobRouteController) ApplyCheckedIn(_ context.Context, kind string) (jobroute.State, error) {
+	return jobroute.State{
+		Kind: kind, Transport: "river_canary", Generation: 2,
+		UpdatedAt: time.Date(2026, 7, 21, 12, 1, 0, 0, time.UTC),
+	}, nil
 }
 
 func (controller commandRouteController) Inspect(context.Context, string) (syncroute.RouteState, error) {
@@ -166,6 +190,41 @@ func TestDispatchStreamsStatusIsAuthorizedBoundedCoexistenceState(t *testing.T) 
 	}
 }
 
+func TestDispatchJobRouteRollbackIsOneBoundedAuthenticatedCommand(t *testing.T) {
+	runtime := commandRuntime(t, commandAuthorizer{})
+	var stdout, stderr bytes.Buffer
+	code := dispatch(context.Background(), runtime, []string{
+		"job-routes", "rollback", "--reason", "provider_failure",
+		"--correlation-id", "job-route-cli-1",
+		"operational.billing_notification",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("rollback code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"kind":"operational.billing_notification"`) ||
+		!strings.Contains(stdout.String(), `"transport":"celery"`) ||
+		!strings.Contains(stdout.String(), `"generation":2`) {
+		t.Fatalf("rollback output=%q", stdout.String())
+	}
+}
+
+func TestDispatchJobRouteApplyIsOneBoundedAuthenticatedCommand(t *testing.T) {
+	runtime := commandRuntime(t, commandAuthorizer{})
+	var stdout, stderr bytes.Buffer
+	code := dispatch(context.Background(), runtime, []string{
+		"job-routes", "apply", "--reason", "canary_start",
+		"--correlation-id", "job-route-cli-apply-1",
+		"operational.billing_notification",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("apply code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"transport":"river_canary"`) ||
+		!strings.Contains(stdout.String(), `"generation":2`) {
+		t.Fatalf("apply output=%q", stdout.String())
+	}
+}
+
 func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRuntime {
 	t.Helper()
 	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
@@ -175,7 +234,8 @@ func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRu
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: commandBackend{}, Authorizer: authorizer,
 		DomainGuard: commandDomainGuard{}, Auditor: commandAuditor{},
-		RouteController: commandRouteController{},
+		RouteController:    commandRouteController{},
+		JobRouteController: commandJobRouteController{},
 	})
 	if err != nil {
 		t.Fatal(err)

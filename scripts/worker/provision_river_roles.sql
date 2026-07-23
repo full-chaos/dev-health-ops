@@ -49,14 +49,16 @@ SELECT format(
 
 GRANT CONNECT ON DATABASE :"app_database" TO :"domain_role";
 GRANT CONNECT ON DATABASE :"app_database" TO :"queue_role";
+REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role", :"queue_role";
 
--- The domain runtime owns semantic DML, never DDL or migration metadata.
--- The one-shot migration repeats these grants after every Alembic upgrade so
--- newly added application tables fail closed until their grants are current.
+-- The domain runtime receives only the semantic access exercised by the
+-- executable provider-unit canary and the reconciler's observe-only paths.
+-- Route mutation remains an operator concern and no current domain path uses
+-- a PostgreSQL sequence.
 GRANT USAGE ON SCHEMA public TO :"domain_role";
 REVOKE CREATE ON SCHEMA public FROM :"domain_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"domain_role";
-GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO :"domain_role";
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"domain_role";
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM :"domain_role";
 SELECT format(
          'REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM %I',
          :'domain_role'
@@ -64,10 +66,39 @@ SELECT format(
  WHERE to_regclass('public.alembic_version') IS NOT NULL
 \gexec
 SELECT format(
-         'REVOKE ALL PRIVILEGES ON TABLE public.worker_job_outbox FROM %I',
+         'GRANT SELECT ON TABLE public.%I TO %I',
+         required.table_name,
          :'domain_role'
        )
- WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+  FROM (
+         VALUES
+           ('integrations'),
+           ('integration_sources'),
+           ('integration_datasets'),
+           ('integration_credentials'),
+           ('sync_runs'),
+           ('worker_job_routes'),
+           ('sync_dispatch_transport_routes')
+       ) AS required(table_name)
+ WHERE to_regclass(format('public.%I', required.table_name)) IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_run_units') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_watermarks') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO %I',
+         :'domain_role'
+       )
+ WHERE to_regclass('public.sync_dispatch_outbox') IS NOT NULL
 \gexec
 SELECT format(
          'GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO %I',
@@ -83,11 +114,18 @@ GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM :"queue_role";
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM :"queue_role";
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, :"domain_role", :"queue_role";
 SELECT format(
          'GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO %I',
          :'queue_role'
        )
  WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
+\gexec
+SELECT format(
+         'GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.worker_job_completion_fences') IS NOT NULL
 \gexec
 SELECT format(
          'GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO %I',

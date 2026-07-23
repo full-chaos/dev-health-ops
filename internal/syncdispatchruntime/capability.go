@@ -54,9 +54,9 @@ func (function ReferenceDiscoveryHandlerFunc) Work(ctx context.Context, args Ref
 	return function(ctx, args)
 }
 
-// PostSyncHandoff remains separate because post_sync is mark-before and its
-// external effect must happen after the terminal transaction commits. It is
-// deliberately not implemented by this package.
+// PostSyncHandoff is retained only for compatibility with the old local
+// handoff API. Guarded at-least-once post_sync delivery uses Publisher.Publish
+// and PostSync instead; this callback is not readiness or route evidence.
 type PostSyncHandoff interface {
 	Handoff(context.Context, PostSyncArgs) error
 }
@@ -94,13 +94,13 @@ type Capabilities struct {
 func NewCapabilities(publisher *Publisher, handlers Handlers, quiescer *GenerationTracker) (*Capabilities, error) {
 	if !publisher.valid() || !quiescer.valid() || !present(handlers.DispatchSyncRun) ||
 		!present(handlers.FinalizeSyncRun) || !present(handlers.PostSync) ||
-		!present(handlers.ReferenceDiscovery) || !present(handlers.PostSyncHandoff) {
+		!present(handlers.ReferenceDiscovery) {
 		return nil, ErrCapabilityUnavailable
 	}
 	descriptors := []CapabilityDescriptor{
 		{Kind: syncdispatchcontract.KindDispatchSyncRun, Transport: syncdispatchcontract.RouteRiver, ContractVersion: ContractVersionV1, HandlerRegistered: true, PublisherBound: true},
 		{Kind: syncdispatchcontract.KindFinalizeSyncRun, Transport: syncdispatchcontract.RouteRiver, ContractVersion: ContractVersionV1, HandlerRegistered: true, PublisherBound: true},
-		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver, ContractVersion: ContractVersionV1, HandlerRegistered: true, HandoffBound: true},
+		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver, ContractVersion: ContractVersionV1, HandlerRegistered: true, PublisherBound: true},
 		{Kind: syncdispatchcontract.KindReferenceDiscovery, Transport: syncdispatchcontract.RouteRiver, ContractVersion: ContractVersionV1, HandlerRegistered: true, PublisherBound: true},
 	}
 	sort.Slice(descriptors, func(left, right int) bool { return descriptors[left].Kind < descriptors[right].Kind })
@@ -163,11 +163,8 @@ func (capabilities *Capabilities) ReferenceDiscovery(ctx context.Context, args R
 	return capabilities.handlers.ReferenceDiscovery.Work(ctx, args)
 }
 
-// HandoffPostSync runs the supplied concrete external handoff inside the
-// tracker-managed pre-publish window. It is intentionally separate from
-// Publisher.Publish: callers may invoke it only after the mark-before terminal
-// transaction committed. The tracker covers only handoffs issued through this
-// process; it is not a syncroute capability or a cross-process cutover barrier.
+// HandoffPostSync preserves the previous local callback API. It is not used by
+// guarded at-least-once post_sync delivery and cannot advertise route readiness.
 func (capabilities *Capabilities) HandoffPostSync(ctx context.Context, args PostSyncArgs) error {
 	if capabilities == nil || capabilities.quiescer == nil || !present(capabilities.postSync) || ctx == nil || args.valid() != nil {
 		return ErrCapabilityUnavailable

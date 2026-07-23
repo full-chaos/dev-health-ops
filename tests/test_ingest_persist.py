@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,9 @@ from dev_health_ops.api.ingest.persist import (
     persist_items,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from dev_health_ops.storage.operational_ordering_guard import (
+    OperationalOrderingContract,
+)
 
 
 class TestRepoIdFromUrl:
@@ -236,6 +240,23 @@ class TestClickHouseStoreSettings:
     def test_default_settings_empty(self):
         store = ClickHouseStore("clickhouse://localhost")
         assert store._settings == {}
+
+    def test_explicit_operational_ordering_contract(self):
+        store = ClickHouseStore(
+            "clickhouse://localhost",
+            operational_ordering_contract=OperationalOrderingContract.CURRENT,
+        )
+        assert (
+            store._operational_ordering_contract is OperationalOrderingContract.CURRENT
+        )
+        assert store._operational_ordering_contract_is_explicit
+
+    def test_rejects_raw_operational_ordering_contract(self):
+        with pytest.raises(TypeError, match="must be an OperationalOrderingContract"):
+            ClickHouseStore(
+                "clickhouse://localhost",
+                operational_ordering_contract=cast(OperationalOrderingContract, 2),
+            )
 
     @pytest.mark.asyncio
     async def test_insert_rows_passes_settings(self):

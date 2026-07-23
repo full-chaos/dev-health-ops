@@ -67,6 +67,7 @@ from dev_health_ops.models import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.sync.dispatch_outbox import OUTBOX_KIND_DISPATCH
+from tests._helpers import seed_sync_dispatch_transport_routes
 from tests.test_sync_units import (
     _aware,
     _patch_db_session,
@@ -80,6 +81,7 @@ def db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        seed_sync_dispatch_transport_routes(session)
         yield session
     engine.dispose()
 

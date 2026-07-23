@@ -1,0 +1,1870 @@
+{
+  "metrics": [
+    {
+      "canonical_name": "active_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "issue_type",
+        "provider",
+        "day"
+      ],
+      "display_name": "Active Count",
+      "source_table": "issue_type_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "active_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Active Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "active_time_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Active Time Hours",
+      "source_table": "work_item_cycle_times",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "after_hours_commit_ratio",
+      "dimensions": [
+        "team",
+        "day"
+      ],
+      "display_name": "After Hours Commit Ratio",
+      "source_table": "team_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "after_hours_commits_count",
+      "dimensions": [
+        "team",
+        "day"
+      ],
+      "display_name": "After Hours Commits Count",
+      "source_table": "team_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "assignee",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Assignee",
+      "source_table": "work_item_cycle_times",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "author",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Author",
+      "source_table": "review_edges_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "avg_commit_size_loc",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Avg Commit Size LOC",
+      "source_table": "user_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "avg_duration_minutes",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Avg Duration Minutes",
+      "source_table": "cicd_metrics_daily",
+      "unit": "minutes"
+    },
+    {
+      "canonical_name": "avg_pr_cycle_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Avg PR Cycle Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "avg_queue_minutes",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Avg Queue Minutes",
+      "source_table": "cicd_metrics_daily",
+      "unit": "minutes"
+    },
+    {
+      "canonical_name": "avg_queue_seconds",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Avg Queue Seconds",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "seconds"
+    },
+    {
+      "canonical_name": "avg_wip",
+      "dimensions": [
+        "team",
+        "status",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Avg WIP",
+      "source_table": "work_item_state_duration_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "blame_concentration",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Blame Concentration",
+      "source_table": "file_hotspot_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "branch_coverage_pct",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Branch Coverage Pct",
+      "source_table": "testops_coverage_metrics_daily",
+      "unit": "percent"
+    },
+    {
+      "canonical_name": "bug_completed_ratio",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Bug Completed Ratio",
+      "source_table": "work_item_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "bus_factor",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Bus Factor",
+      "source_table": "repo_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "cancel_rate",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Cancel Rate",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "cancelled_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Cancelled Count",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "change_failure_rate",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Change Failure Rate",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "changes_requested_given",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Changes Requested Given",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "churn",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Churn",
+      "source_table": "file_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "churn_commits_30d",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Churn Commits 30d",
+      "source_table": "file_hotspot_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "churn_loc",
+      "dimensions": [
+        "repo",
+        "team",
+        "investment_area",
+        "day"
+      ],
+      "display_name": "Churn LOC",
+      "source_table": "investment_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "churn_loc_30d",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "Churn LOC 30d",
+      "source_table": "ic_landscape_rolling",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "code_ownership_gini",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Code Ownership Gini",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "commit_hash",
+      "dimensions": [
+        "repo",
+        "author",
+        "day"
+      ],
+      "display_name": "Commit Hash",
+      "source_table": "commit_metrics",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "commits_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Commits Count",
+      "source_table": "user_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "completed_at",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Completed At",
+      "source_table": "work_item_cycle_times",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "completed_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "issue_type",
+        "provider",
+        "day"
+      ],
+      "display_name": "Completed Count",
+      "source_table": "issue_type_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "context_spread_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Context Spread Count",
+      "source_table": "user_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "contributors",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Contributors",
+      "source_table": "file_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "coverage_delta_pct",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Coverage Delta Pct",
+      "source_table": "testops_coverage_metrics_daily",
+      "unit": "percent"
+    },
+    {
+      "canonical_name": "coverage_regression_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Coverage Regression Count",
+      "source_table": "testops_coverage_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "created_at",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Created At",
+      "source_table": "work_item_cycle_times",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "created_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "issue_type",
+        "provider",
+        "day"
+      ],
+      "display_name": "Created Count",
+      "source_table": "issue_type_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "cycle_p50_30d_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "Cycle P50 30d Hours",
+      "source_table": "ic_landscape_rolling",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "cycle_p50_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Cycle P50 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "cycle_p90_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Cycle P90 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "cycle_time_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Cycle Time Hours",
+      "source_table": "work_item_cycle_times",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "cycle_time_p50_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Cycle Time P50 Hours",
+      "source_table": "work_item_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "cycle_time_p90_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Cycle Time P90 Hours",
+      "source_table": "work_item_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "cyclomatic_avg",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Cyclomatic Avg",
+      "source_table": "file_complexity_snapshots",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "cyclomatic_per_kloc",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Cyclomatic Per Kloc",
+      "source_table": "repo_complexity_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "cyclomatic_total",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Cyclomatic Total",
+      "source_table": "file_complexity_snapshots",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "defect_intro_rate",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Defect Intro Rate",
+      "source_table": "work_item_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "delivery_units",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Delivery Units",
+      "source_table": "user_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "delivery_units_30d",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "Delivery Units 30d",
+      "source_table": "ic_landscape_rolling",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "deploy_time_p50_hours",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Deploy Time P50 Hours",
+      "source_table": "deploy_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "deployments_count",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Deployments Count",
+      "source_table": "deploy_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "duration_hours",
+      "dimensions": [
+        "team",
+        "status",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Duration Hours",
+      "source_table": "work_item_state_duration_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "failed_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Failed Count",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "failed_deployments_count",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Failed Deployments Count",
+      "source_table": "deploy_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "failure_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Failure Count",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "failure_rate",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Failure Rate",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "failure_recurrence_score",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Failure Recurrence Score",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "score"
+    },
+    {
+      "canonical_name": "files_changed",
+      "dimensions": [
+        "repo",
+        "author",
+        "day"
+      ],
+      "display_name": "Files Changed",
+      "source_table": "commit_metrics",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "flake_rate",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Flake Rate",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "flow_efficiency",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Flow Efficiency",
+      "source_table": "work_item_cycle_times",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "functions_count",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Functions Count",
+      "source_table": "file_complexity_snapshots",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "high_complexity_functions",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "High Complexity Functions",
+      "source_table": "file_complexity_snapshots",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "hotspot_score",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Hotspot Score",
+      "source_table": "file_metrics_daily",
+      "unit": "score"
+    },
+    {
+      "canonical_name": "incidents_count",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Incidents Count",
+      "source_table": "incident_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "investment_area",
+      "dimensions": [
+        "repo",
+        "team",
+        "investment_area",
+        "day"
+      ],
+      "display_name": "Investment Area",
+      "source_table": "investment_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "issue_type_norm",
+      "dimensions": [
+        "repo",
+        "team",
+        "issue_type",
+        "provider",
+        "day"
+      ],
+      "display_name": "Issue Type Norm",
+      "source_table": "issue_type_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "items_completed",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Items Completed",
+      "source_table": "work_item_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "items_completed_unassigned",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Items Completed Unassigned",
+      "source_table": "work_item_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "items_started",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Items Started",
+      "source_table": "work_item_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "items_started_unassigned",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Items Started Unassigned",
+      "source_table": "work_item_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "items_touched",
+      "dimensions": [
+        "team",
+        "status",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Items Touched",
+      "source_table": "work_item_state_duration_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "large_commit_ratio",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Large Commit Ratio",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "large_commits_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Large Commits Count",
+      "source_table": "user_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "large_pr_ratio",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Large PR Ratio",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "lead_p50_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "issue_type",
+        "provider",
+        "day"
+      ],
+      "display_name": "Lead P50 Hours",
+      "source_table": "issue_type_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "lead_time_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Lead Time Hours",
+      "source_table": "work_item_cycle_times",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "lead_time_p50_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Lead Time P50 Hours",
+      "source_table": "work_item_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "lead_time_p90_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Lead Time P90 Hours",
+      "source_table": "work_item_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "line_coverage_pct",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Line Coverage Pct",
+      "source_table": "testops_coverage_metrics_daily",
+      "unit": "percent"
+    },
+    {
+      "canonical_name": "lines_covered",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Lines Covered",
+      "source_table": "testops_coverage_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "lines_total",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Lines Total",
+      "source_table": "testops_coverage_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "loc",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "LOC",
+      "source_table": "file_complexity_snapshots",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "loc_added",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "LOC Added",
+      "source_table": "user_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "loc_deleted",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "LOC Deleted",
+      "source_table": "user_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "loc_total",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "LOC Total",
+      "source_table": "repo_complexity_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "loc_touched",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "LOC Touched",
+      "source_table": "user_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "map_name",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "Map Name",
+      "source_table": "ic_landscape_rolling",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "median_duration_seconds",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Median Duration Seconds",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "seconds"
+    },
+    {
+      "canonical_name": "median_pr_cycle_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Median PR Cycle Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "mttr_hours",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "MTTR Hours",
+      "source_table": "repo_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "mttr_p50_hours",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "MTTR P50 Hours",
+      "source_table": "incident_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "mttr_p90_hours",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "MTTR P90 Hours",
+      "source_table": "incident_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "new_bugs_count",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "New Bugs Count",
+      "source_table": "work_item_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "new_items_count",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "New Items Count",
+      "source_table": "work_item_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "p90_duration_minutes",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "P90 Duration Minutes",
+      "source_table": "cicd_metrics_daily",
+      "unit": "minutes"
+    },
+    {
+      "canonical_name": "p95_duration_seconds",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "P95 Duration Seconds",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "seconds"
+    },
+    {
+      "canonical_name": "p95_queue_seconds",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "P95 Queue Seconds",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "seconds"
+    },
+    {
+      "canonical_name": "pass_rate",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Pass Rate",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "passed_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Passed Count",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "pipelines_count",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Pipelines Count",
+      "source_table": "cicd_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "pr_comments_per_100_loc",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "PR Comments Per 100 LOC",
+      "source_table": "repo_metrics_daily",
+      "unit": "count_per_100_loc"
+    },
+    {
+      "canonical_name": "pr_cycle_p75_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "PR Cycle P75 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "pr_cycle_p90_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "PR Cycle P90 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "pr_first_review_p50_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "PR First Review P50 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "pr_first_review_p90_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "PR First Review P90 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "pr_interruption_load",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "PR Interruption Load",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "pr_pickup_time_p50_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "PR Pickup Time P50 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "pr_review_time_p50_hours",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "PR Review Time P50 Hours",
+      "source_table": "user_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "pr_reviews_per_100_loc",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "PR Reviews Per 100 LOC",
+      "source_table": "repo_metrics_daily",
+      "unit": "count_per_100_loc"
+    },
+    {
+      "canonical_name": "pr_rework_ratio",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "PR Rework Ratio",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "pr_size_p50_loc",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "PR Size P50 LOC",
+      "source_table": "repo_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "pr_size_p90_loc",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "PR Size P90 LOC",
+      "source_table": "repo_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "predictability_score",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Predictability Score",
+      "source_table": "work_item_metrics_daily",
+      "unit": "score"
+    },
+    {
+      "canonical_name": "project_stream",
+      "dimensions": [
+        "repo",
+        "team",
+        "investment_area",
+        "day"
+      ],
+      "display_name": "Project Stream",
+      "source_table": "investment_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "prs_authored",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Prs Authored",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "prs_merged",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Prs Merged",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "prs_opened",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Prs Opened",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "prs_with_first_review",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Prs With First Review",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "quarantined_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Quarantined Count",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "rerun_rate",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Rerun Rate",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "retry_dependency_rate",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Retry Dependency Rate",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "review_load_top_reviewer_ratio",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Review Load Top Reviewer Ratio",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "review_reciprocity",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Review Reciprocity",
+      "source_table": "user_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "review_request_load",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Review Request Load",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "reviewer",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Reviewer",
+      "source_table": "review_edges_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "reviews_count",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Reviews Count",
+      "source_table": "review_edges_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "reviews_given",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Reviews Given",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "reviews_received",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Reviews Received",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "rework_churn_ratio_30d",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Rework Churn Ratio 30d",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "risk_score",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Risk Score",
+      "source_table": "file_hotspot_daily",
+      "unit": "score"
+    },
+    {
+      "canonical_name": "single_owner_file_ratio_30d",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Single Owner File Ratio 30d",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "size_bucket",
+      "dimensions": [
+        "repo",
+        "author",
+        "day"
+      ],
+      "display_name": "Size Bucket",
+      "source_table": "commit_metrics",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "skipped_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Skipped Count",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "started_at",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Started At",
+      "source_table": "work_item_cycle_times",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "story_points_completed",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Story Points Completed",
+      "source_table": "work_item_metrics_daily",
+      "unit": "story_points"
+    },
+    {
+      "canonical_name": "success_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Success Count",
+      "source_table": "testops_pipeline_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "success_rate",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Success Rate",
+      "source_table": "cicd_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "suite_duration_p50_seconds",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Suite Duration P50 Seconds",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "seconds"
+    },
+    {
+      "canonical_name": "suite_duration_p95_seconds",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Suite Duration P95 Seconds",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "seconds"
+    },
+    {
+      "canonical_name": "total_cases",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Total Cases",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "total_loc",
+      "dimensions": [
+        "repo",
+        "author",
+        "day"
+      ],
+      "display_name": "Total LOC",
+      "source_table": "commit_metrics",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "total_loc_touched",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Total LOC Touched",
+      "source_table": "repo_metrics_daily",
+      "unit": "loc"
+    },
+    {
+      "canonical_name": "total_suites",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Total Suites",
+      "source_table": "testops_test_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "uncovered_files_count",
+      "dimensions": [
+        "repo",
+        "team",
+        "service",
+        "day"
+      ],
+      "display_name": "Uncovered Files Count",
+      "source_table": "testops_coverage_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "value",
+      "dimensions": [
+        "repo",
+        "metric_name",
+        "day"
+      ],
+      "display_name": "Value",
+      "source_table": "dora_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "very_high_complexity_functions",
+      "dimensions": [
+        "repo",
+        "file",
+        "day"
+      ],
+      "display_name": "Very High Complexity Functions",
+      "source_table": "file_complexity_snapshots",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "wait_time_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Wait Time Hours",
+      "source_table": "work_item_cycle_times",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "weekend_commit_ratio",
+      "dimensions": [
+        "team",
+        "day"
+      ],
+      "display_name": "Weekend Commit Ratio",
+      "source_table": "team_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "weekend_commits_count",
+      "dimensions": [
+        "team",
+        "day"
+      ],
+      "display_name": "Weekend Commits Count",
+      "source_table": "team_metrics_daily",
+      "unit": "count"
+    },
+    {
+      "canonical_name": "weekend_days",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Weekend Days",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "wip_age_p50_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "WIP Age P50 Hours",
+      "source_table": "work_item_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "wip_age_p90_hours",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "WIP Age P90 Hours",
+      "source_table": "work_item_metrics_daily",
+      "unit": "hours"
+    },
+    {
+      "canonical_name": "wip_congestion_ratio",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "WIP Congestion Ratio",
+      "source_table": "work_item_metrics_daily",
+      "unit": "ratio"
+    },
+    {
+      "canonical_name": "wip_count_end_of_day",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "WIP Count End Of Day",
+      "source_table": "work_item_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "wip_max_30d",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "WIP Max 30d",
+      "source_table": "ic_landscape_rolling",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "wip_unassigned_end_of_day",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "WIP Unassigned End Of Day",
+      "source_table": "work_item_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "work_item_id",
+      "dimensions": [
+        "team",
+        "work_scope",
+        "provider",
+        "day"
+      ],
+      "display_name": "Work Item Id",
+      "source_table": "work_item_cycle_times",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "work_items_active",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Work Items Active",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "work_items_completed",
+      "dimensions": [
+        "repo",
+        "team",
+        "author",
+        "day"
+      ],
+      "display_name": "Work Items Completed",
+      "source_table": "user_metrics_daily",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "x_norm",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "X Norm",
+      "source_table": "ic_landscape_rolling",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "x_raw",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "X Raw",
+      "source_table": "ic_landscape_rolling",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "y_norm",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "Y Norm",
+      "source_table": "ic_landscape_rolling",
+      "unit": "unitless"
+    },
+    {
+      "canonical_name": "y_raw",
+      "dimensions": [
+        "repo",
+        "team",
+        "identity",
+        "day"
+      ],
+      "display_name": "Y Raw",
+      "source_table": "ic_landscape_rolling",
+      "unit": "unitless"
+    }
+  ],
+  "schema_version": 1
+}

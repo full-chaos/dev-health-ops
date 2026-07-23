@@ -72,6 +72,24 @@ docker service logs -f dev-health_worker
 docker stack deploy -c stack.yml dev-health
 ```
 
+## Additive Go/River topology (CHAOS-3052)
+
+The Go topology is a separate, zero-replica overlay. It preserves the Celery,
+Beat, and Valkey DB 0 services in `stack.yml` and must be deployed explicitly:
+
+```bash
+docker stack deploy -c stack.yml -c stack.go-workers.yml dev-health
+docker service scale dev-health_go-worker-heavy=1
+docker service ps dev-health_go-worker-heavy
+```
+
+The overlay uses non-root/read-only tasks, explicit resource budgets, and
+start-first/rollback rolling updates. Swarm does not have an HPA: use
+`worker_jobs_available`, `worker_job_oldest_age_seconds`, and
+`worker_execution_saturation_ratio` from the Go `/metrics` endpoint as the
+manual scale signals. Do not scale Celery/Beat to zero until the Go-only gate
+in `../go-workers/README.md` is satisfied.
+
 ## Removing the Stack
 
 ```bash

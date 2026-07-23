@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -55,6 +56,23 @@ func (policy operatorIntegrationPolicyRegistry) Descriptor(kind string) (jobrunt
 	}
 	return descriptor, true
 }
+
+func (policy operatorIntegrationPolicyRegistry) Descriptors() []jobruntime.Descriptor {
+	descriptors := policy.registry.Descriptors()
+	for index, descriptor := range descriptors {
+		if descriptor.Kind == jobcontract.KindHeartbeat {
+			descriptor.MigrationState = "canary"
+			descriptor.Route = "river_canary"
+			descriptor.RollbackRoute = "celery"
+			descriptors[index] = descriptor
+		}
+	}
+	return descriptors
+}
+
+type idleJobRouteQuiescer struct{}
+
+func (idleJobRouteQuiescer) Quiesce(context.Context, string) error { return nil }
 
 func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -118,7 +136,9 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	authenticator, err := NewAuthenticator(domainPool)
+	// The operator credential store is intentionally outside the domain runtime
+	// allow-list, so authenticate through the fixture's operator/admin pool.
+	authenticator, err := NewAuthenticator(adminPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +157,7 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auditor, err := NewPostgresAuditor(domainPool)
+	auditor, err := NewPostgresAuditor(adminPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,10 +177,19 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	jobRouteController, err := jobroute.NewControllerWithCeleryQuiescer(
+		adminPool,
+		operatorIntegrationPolicyRegistry{registry: registry},
+		idleJobRouteQuiescer{},
+		idleJobRouteQuiescer{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	service, err := New(Dependencies{
 		Registry: registry, Backend: backend, Authorizer: authentication.Authorizer(),
 		DomainGuard: allowIntegrationDomainGuard{}, Auditor: auditor, Clock: func() time.Time { return now },
-		RouteController: routeController,
+		RouteController: routeController, JobRouteController: jobRouteController,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +210,7 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatalf("List() = %+v, %v", jobs, err)
 	}
 	queues, err := service.Queues(ctx, principal, "ops")
-	if err != nil || len(queues) != 2 {
+	if err != nil || len(queues) != 3 {
 		t.Fatalf("Queues() = %+v, %v", queues, err)
 	}
 	if err := productionGuard.Check(ctx, ActionCancel, job); !errors.Is(err, ErrDomainPreconditionUnsupported) {
@@ -208,6 +237,26 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatalf("ResumeQueue: %v", err)
 	}
 	assertOperatorIntegrationAudit(t, ctx, adminPool, 3, "queues.resume", "succeeded")
+
+	activated, err := service.ApplyCheckedInJobRoute(
+		ctx, principal, jobcontract.KindHeartbeat, "canary", "operator-integration-apply",
+	)
+	if err != nil {
+		t.Fatalf("ApplyCheckedInJobRoute: %v", err)
+	}
+	if activated.Transport != "river_canary" || activated.Generation != 2 {
+		t.Fatalf("activated route = %+v", activated)
+	}
+	restored, err := service.RollbackJobRoute(
+		ctx, principal, jobcontract.KindHeartbeat, "rollback", "operator-integration-rollback",
+	)
+	if err != nil {
+		t.Fatalf("RollbackJobRoute: %v", err)
+	}
+	if restored.Transport != "celery" || restored.Generation != 3 {
+		t.Fatalf("restored route = %+v", restored)
+	}
+	assertOperatorIntegrationAudit(t, ctx, adminPool, 5, "job_routes.rollback", "succeeded")
 
 	var auditColumns []string
 	rows, err := adminPool.Query(ctx, `
@@ -244,6 +293,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	statements := []string{
+		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 		"CREATE ROLE " + operatorIntegrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationDomainPass + "'",
 		"CREATE ROLE " + operatorIntegrationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationQueuePass + "'",
 		`CREATE TABLE public.internal_service_credentials (
@@ -267,12 +317,40 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			correlation_id varchar(128) NOT NULL,
 			status varchar(16) NOT NULL,
 			created_at timestamptz NOT NULL,
-			completed_at timestamptz
+			completed_at timestamptz,
+			CONSTRAINT ck_worker_operator_audits_action CHECK (
+				action IN (
+					'jobs.cancel', 'jobs.retry', 'queues.pause', 'queues.resume',
+					'workers.drain', 'job_routes.apply_checked_in', 'job_routes.rollback'
+				)
+			)
 		)`,
 		`CREATE TABLE public.worker_job_outbox (
 			id uuid PRIMARY KEY,
-			state text NOT NULL
+			state text NOT NULL,
+			job_kind text,
+			status text
 		)`,
+		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
+		`CREATE TABLE public.worker_job_runs (
+			id uuid PRIMARY KEY,
+			job_kind text NOT NULL,
+			status text NOT NULL
+		)`,
+		`CREATE TABLE public.worker_job_routes (
+			job_kind text PRIMARY KEY,
+			transport text NOT NULL,
+			paused boolean NOT NULL,
+			generation bigint NOT NULL,
+			updated_at timestamptz NOT NULL
+		)`,
+		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		`CREATE TABLE public.sync_dispatch_outbox (
 			id uuid PRIMARY KEY,
 			state text NOT NULL
@@ -286,6 +364,12 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.worker_job_routes
+			(job_kind, transport, paused, generation, updated_at)
+		VALUES ($1, 'celery', FALSE, 1, statement_timestamp())`, jobcontract.KindHeartbeat); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO public.internal_service_credentials (id, service_name, token_hash, scopes)

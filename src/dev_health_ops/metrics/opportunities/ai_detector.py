@@ -9,6 +9,7 @@ from dev_health_ops.api.graphql.models.ai import (
     AIOpportunityKind,
     AIWorkGraphDrilldownRef,
 )
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.ai_impact import AI_BUCKETS, AttributionBucket
 from dev_health_ops.metrics.loaders.base import parse_uuid
 from dev_health_ops.metrics.opportunities.scoring import (
@@ -604,7 +605,7 @@ class AIOpportunityDetector:
             toString(repo_id) AS repo_id,
             sum(total_cases) AS cases_total,
             sum(flake_rate * total_cases) / sum(total_cases) AS weighted_flake_rate
-        FROM testops_test_metrics_daily
+        FROM {dedup_from("testops_test_metrics_daily")}
         WHERE {where_clause}
         GROUP BY repo_id
         HAVING cases_total >= {{min_cases:UInt64}}

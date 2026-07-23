@@ -32,9 +32,19 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
 	for _, statement := range []string{
+		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE TABLE public.runtime_semantic_probe (id bigserial PRIMARY KEY, value text NOT NULL)",
+		"CREATE TABLE public.integrations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.integration_sources (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.integration_datasets (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_routes (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
+		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
@@ -48,11 +58,12 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE ROLE " + runtimeAuthorizationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationQueuePass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
-		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.runtime_semantic_probe TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_runs, public.worker_job_routes, public.sync_dispatch_transport_routes TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_dispatch_outbox, public.sync_dispatch_transport_routes TO " + runtimeAuthorizationDomainRole,
-		"GRANT USAGE, SELECT, UPDATE ON SEQUENCE public.runtime_semantic_probe_id_seq TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA river TO " + runtimeAuthorizationQueueRole,
@@ -75,6 +86,33 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
 		t.Fatalf("queue authorization failed: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT TEMPORARY ON DATABASE worker_test TO PUBLIC"); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		name  string
+		check func() error
+	}{
+		{name: "domain", check: func() error {
+			return postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river")
+		}},
+		{name: "queue", check: func() error {
+			return postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river")
+		}},
+	} {
+		if err := check.check(); !errors.Is(err, postgresstore.ErrUnavailable) {
+			t.Fatalf("%s authorization with ambient PUBLIC TEMPORARY error = %v, want ErrUnavailable", check.name, err)
+		}
+	}
+	if _, err := admin.Exec(ctx, "REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC"); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); err != nil {
+		t.Fatalf("domain authorization did not recover after revoking ambient PUBLIC TEMPORARY: %v", err)
+	}
+	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
+		t.Fatalf("queue authorization did not recover after revoking ambient PUBLIC TEMPORARY: %v", err)
 	}
 	if _, err := queue.Exec(ctx, "INSERT INTO public.sync_dispatch_outbox (id, state) VALUES ('00000000-0000-4000-8000-000000000001', 'forbidden')"); err == nil {
 		t.Fatal("queue unexpectedly inserts sync-dispatch outbox state")

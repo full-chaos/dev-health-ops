@@ -93,9 +93,7 @@ def test_v1_schema_describes_the_canonical_transport_artifact() -> None:
         assert route["route"] in definitions["transport"]["enum"]
         assert route["rollback_route"] in definitions["transport"]["enum"]
 
-    assert load_transport_routes().by_kind("post_sync").delivery == (
-        "at_most_once_mark_before"
-    )
+    assert load_transport_routes().by_kind("post_sync").delivery == "at_least_once"
 
 
 def test_contract_covers_exactly_the_production_outbox_kinds() -> None:
@@ -117,7 +115,7 @@ def test_checked_in_transport_routes_are_celery_only_and_immutable() -> None:
         "post_sync",
         "reference_discovery",
     )
-    assert routes.by_kind("post_sync").delivery == "at_most_once_mark_before"
+    assert routes.by_kind("post_sync").delivery == "at_least_once"
     assert all(
         route.route == route.rollback_route == "celery"
         for route in routes.routes.values()
@@ -159,7 +157,7 @@ def test_checked_in_transport_routes_are_celery_only_and_immutable() -> None:
         ),
         (
             lambda document: document["routes"][2].update(
-                {"delivery": "at_least_once"}
+                {"delivery": "at_most_once_mark_before"}
             ),
             "delivery",
         ),

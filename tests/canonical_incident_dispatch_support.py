@@ -30,8 +30,6 @@ class Signature:
     def set(self, *, queue: str) -> Signature:
         return self
 
-
-class Chord:
     def apply_async(self) -> None:
         return None
 
@@ -105,6 +103,3 @@ def patch_dispatch(monkeypatch: pytest.MonkeyPatch, session: Session) -> None:
         lambda: session_context(session),
     )
     monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda _unit_id: Signature())
-    monkeypatch.setattr(sync_units.finalize_sync_run, "si", lambda _run_id: Signature())
-    monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(sync_units, "chord", lambda *_args: Chord())

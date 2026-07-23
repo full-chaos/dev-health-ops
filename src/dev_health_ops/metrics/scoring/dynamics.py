@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.scoring.dimensions import (
     ClickHouseClient,
     DimensionScorer,
@@ -52,7 +53,7 @@ class DynamicsScorer(DimensionScorer):
 
         drag_query = f"""
             SELECT avg(drag_hours) AS avg_drag
-            FROM {_QUALITY_DRAG_TABLE}
+            FROM {dedup_from(_QUALITY_DRAG_TABLE)}
             WHERE org_id = {{org_id:String}}
               AND day = {{day:Date}}
               {team_clause}
@@ -71,7 +72,7 @@ class DynamicsScorer(DimensionScorer):
             SELECT
                 avg(failure_rate)                       AS avg_failure_rate,
                 avgIf(rerun_rate, failure_count > 0)    AS avg_rerun_on_failure
-            FROM {_PIPELINE_TABLE}
+            FROM {dedup_from(_PIPELINE_TABLE)}
             WHERE org_id = {{org_id:String}}
               AND day = {{day:Date}}
               {team_clause}
@@ -93,7 +94,7 @@ class DynamicsScorer(DimensionScorer):
 
         wip_query = f"""
             SELECT avg(wip_congestion_ratio) AS avg_congestion
-            FROM {_WORK_ITEM_TABLE}
+            FROM {dedup_from(_WORK_ITEM_TABLE)}
             WHERE org_id = {{org_id:String}}
               AND day = {{day:Date}}
               {team_clause}

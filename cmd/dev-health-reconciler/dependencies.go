@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -14,9 +15,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 const (
@@ -101,17 +107,32 @@ func (database *postgresReconcilerDatabase) Close() {
 type reconcilerDependencySources struct {
 	openDatabase        func(context.Context, config.Config) (reconcilerDatabase, error)
 	loadRuntimeRegistry func(string) (*jobruntime.Registry, error)
-	buildRelay          func(*pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error)
+	buildRelay          func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error)
 	newLoop             func(joboutbox.RelayStepper, joboutbox.ReconcilerLoopConfig) (*joboutbox.ReconcilerLoop, error)
 	contractRoot        string
 
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
 	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
 	buildSyncShadow          func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
+	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
 	syncDispatchContractRoot string
 }
+
+// reconcilerActivation is a source-reviewed composition seam. It is
+// deliberately not configurable through environment or deployment profiles:
+// changing from observation to mutation must retain concrete River delivery
+// capabilities in the same reviewed source change.
+type reconcilerActivation struct {
+	syncMutation bool
+}
+
+// The checked-in routes remain Celery until the canary owner proves a River
+// consumer deployment. The complete mutation composition is retained below,
+// but source activation stays false so this branch cannot alter the current
+// production baseline merely by starting a reconciler replica.
+var checkedInReconcilerActivation = reconcilerActivation{}
 
 var productionReconcilerDependencySources = reconcilerDependencySources{
 	openDatabase:             openReconcilerDatabase,
@@ -126,11 +147,101 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	buildSyncShadow: func(pool *pgxpool.Pool, registry *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
 		return syncreconciler.NewShadow(pool, registry)
 	},
+	buildSyncMutation: buildSyncMutationPipeline,
 	newSyncRecorder: func(logger *slog.Logger) (reconcilerObservationRecorder, error) {
 		return syncreconciler.NewSlogObservationRecorder(logger)
 	},
 	newSyncLoop:              syncreconciler.NewLoop,
 	syncDispatchContractRoot: defaultSyncDispatchContractRoot,
+}
+
+func buildSyncMutationPipeline(
+	domainPool *pgxpool.Pool,
+	queuePool *pgxpool.Pool,
+	riverSchema string,
+	registry *syncdispatchcontract.Registry,
+) (syncreconciler.Stepper, error) {
+	repair, err := syncreconciler.NewLeaseRepair(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	materializer, err := syncreconciler.NewMaterializer(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	riverClient, err := river.NewClient(riverpgxv5.New(queuePool), &river.Config{Schema: riverSchema})
+	if err != nil {
+		return nil, err
+	}
+	publisher, err := syncdispatchruntime.NewPublisher(riverClient, syncdispatchruntime.PublisherOptions{
+		Queue: "sync", MaxAttempts: 5,
+	})
+	if err != nil {
+		return nil, err
+	}
+	kernel, err := syncreconciler.NewKernel(
+		domainPool,
+		queuePool,
+		registry,
+		syncreconciler.KernelModeMutation,
+	)
+	if err != nil {
+		return nil, err
+	}
+	observer, err := syncreconciler.NewObserver(domainPool, registry)
+	if err != nil {
+		return nil, err
+	}
+	publish := func(ctx context.Context, tx pgx.Tx, claim syncreconciler.TransportClaim) (string, error) {
+		reference, referenceErr := syncDispatchReference(ctx, domainPool, claim.ID, claim.Kind)
+		if referenceErr != nil {
+			return "", referenceErr
+		}
+		return publisher.Publish(ctx, tx, syncdispatchruntime.Claim{
+			OutboxID: claim.ID, Kind: claim.Kind, RouteGeneration: claim.RouteGeneration,
+		}, reference)
+	}
+	// The bridge workers cover the three concrete coordinator kinds. post_sync
+	// remains fail-closed under its current Celery route until a concrete River
+	// fanout handler is registered and proven independently.
+	return syncreconciler.NewMutationPipeline(
+		repair,
+		materializer,
+		kernel,
+		observer,
+		publish,
+		nil,
+		syncreconciler.DefaultMutationPipelineConfig(),
+	)
+}
+
+func syncDispatchReference(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	outboxID string,
+	kind string,
+) (syncdispatchruntime.DomainReference, error) {
+	if pool == nil {
+		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable
+	}
+	if _, err := uuid.Parse(outboxID); err != nil {
+		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable
+	}
+	var reference syncdispatchruntime.DomainReference
+	err := pool.QueryRow(ctx, `
+SELECT org_id::text, sync_run_id::text
+FROM public.sync_dispatch_outbox
+WHERE id = $1::uuid AND kind = $2`, outboxID, kind).Scan(&reference.OrganizationID, &reference.SyncRunID)
+	if err != nil {
+		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable
+	}
+	if _, orgErr := uuid.Parse(reference.OrganizationID); orgErr != nil {
+		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable
+	}
+	if _, runErr := uuid.Parse(reference.SyncRunID); runErr != nil {
+		return syncdispatchruntime.DomainReference{}, syncreconciler.ErrUnavailable
+	}
+	return reference, nil
 }
 
 // reconcilerObservationRecorder is the command-owned recorder seam. The
@@ -142,6 +253,7 @@ type reconcilerObservationRecorder interface {
 }
 
 func buildReconcilerRelay(
+	domainPool *pgxpool.Pool,
 	queuePool *pgxpool.Pool,
 	riverSchema string,
 	registry *jobruntime.Registry,
@@ -154,7 +266,15 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
-	return joboutbox.NewRelay(repository, inserter, joboutbox.DefaultRelayConfig())
+	quiescer, err := jobroute.NewPostgresRiverQuiescer(queuePool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
+	routes, err := jobroute.NewController(domainPool, registry, quiescer)
+	if err != nil {
+		return nil, err
+	}
+	return joboutbox.NewRelayWithRoutes(repository, inserter, routes, joboutbox.DefaultRelayConfig())
 }
 
 type reconcilerDependencies struct {
@@ -185,11 +305,29 @@ func configureReconcilerDependenciesWithSourcesAndLogger(
 	logger *slog.Logger,
 	sources reconcilerDependencySources,
 ) ([]lifecycle.Component, error) {
+	return configureReconcilerDependenciesWithActivationSourcesAndLogger(
+		ctx,
+		cfg,
+		registry,
+		logger,
+		checkedInReconcilerActivation,
+		sources,
+	)
+}
+
+func configureReconcilerDependenciesWithActivationSourcesAndLogger(
+	ctx context.Context,
+	cfg config.Config,
+	registry *health.Registry,
+	logger *slog.Logger,
+	activation reconcilerActivation,
+	sources reconcilerDependencySources,
+) ([]lifecycle.Component, error) {
 	if registry == nil {
 		return nil, errReconcilerDependencyUnavailable
 	}
 
-	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, sources)
+	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, activation, sources)
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -244,6 +382,7 @@ func buildReconcilerDependencies(
 	cfg config.Config,
 	registry *health.Registry,
 	logger *slog.Logger,
+	activation reconcilerActivation,
 	sources reconcilerDependencySources,
 ) *reconcilerDependencies {
 	dependencies := &reconcilerDependencies{}
@@ -271,7 +410,9 @@ func buildReconcilerDependencies(
 		dependencies.syncRegistryErr != nil || dependencies.syncDispatchRegistry == nil ||
 		sources.buildRelay == nil || sources.newLoop == nil ||
 		sources.buildSyncRouteFence == nil ||
-		sources.buildSyncShadow == nil || sources.newSyncRecorder == nil ||
+		(!activation.syncMutation && sources.buildSyncShadow == nil) ||
+		(activation.syncMutation && sources.buildSyncMutation == nil) ||
+		sources.newSyncRecorder == nil ||
 		sources.newSyncLoop == nil {
 		dependencies.relayErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()
@@ -279,6 +420,7 @@ func buildReconcilerDependencies(
 	}
 
 	relay, err := sources.buildRelay(
+		dependencies.database.DomainPool(),
 		dependencies.database.QueuePool(),
 		cfg.RiverDatabaseSchema,
 		dependencies.runtimeRegistry,
@@ -302,8 +444,21 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	dependencies.syncRouteFence = routeFence
-	shadow, err := sources.buildSyncShadow(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
-	if err != nil || shadow == nil {
+	var syncStepper syncreconciler.Stepper
+	if activation.syncMutation {
+		syncStepper, err = sources.buildSyncMutation(
+			dependencies.database.DomainPool(),
+			dependencies.database.QueuePool(),
+			cfg.RiverDatabaseSchema,
+			dependencies.syncDispatchRegistry,
+		)
+	} else {
+		syncStepper, err = sources.buildSyncShadow(
+			dependencies.database.DomainPool(),
+			dependencies.syncDispatchRegistry,
+		)
+	}
+	if err != nil || syncStepper == nil {
 		dependencies.syncObserverErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()
 		return dependencies
@@ -322,7 +477,7 @@ func buildReconcilerDependencies(
 	}
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
 	syncLoopConfig.Recorder = recorder
-	syncLoop, err := sources.newSyncLoop(shadow, syncLoopConfig)
+	syncLoop, err := sources.newSyncLoop(syncStepper, syncLoopConfig)
 	if err != nil || syncLoop == nil {
 		dependencies.syncLoopErr = errReconcilerDependencyUnavailable
 		dependencies.disableDatabase()

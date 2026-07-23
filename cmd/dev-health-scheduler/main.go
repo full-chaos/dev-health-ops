@@ -26,8 +26,9 @@ var errSchedulerActivationUnavailable = errors.New("scheduler activation is unav
 
 // schedulerActivation is a source-reviewed, package-private composition seam.
 // It deliberately cannot be influenced by process environment or deployment
-// profile. A future owner-transfer change must prove coordinator policy parity
-// before it supplies a loop factory and sets both gates true.
+// profile. The production loop factory is retained but remains unreachable
+// until a future owner-transfer change proves coordinator policy parity and
+// sets both gates true.
 type schedulerActivation struct {
 	goOwnsMarkers           bool
 	coordinatorPolicyParity bool
@@ -39,7 +40,9 @@ type schedulerDependencySources struct {
 	buildLoop func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error)
 }
 
-var productionSchedulerDependencySources = schedulerDependencySources{}
+var productionSchedulerDependencySources = schedulerDependencySources{
+	buildLoop: buildProductionSchedulerLoop,
+}
 
 func main() {
 	shell.Main(schedulerSpec)

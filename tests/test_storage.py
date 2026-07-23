@@ -110,6 +110,22 @@ def test_model_to_dict_serializes_uuid_and_fields(repo_uuid):
     assert doc["commit_hash"] == "abc123"
 
 
+@pytest.mark.asyncio
+async def test_clickhouse_complexity_snapshots_dedup_compute_generations() -> None:
+    """The selected newest snapshot day must also use its newest generation."""
+    client = MagicMock()
+    client.query.return_value = MagicMock(result_rows=[], column_names=[])
+    store = ClickHouseStore("clickhouse://localhost:8123/default")
+    store.client = client
+
+    await store.get_complexity_snapshots(as_of_day=date(2026, 5, 1))
+
+    query = client.query.call_args.args[0]
+    assert "argMax(ref, computed_at) AS ref" in query
+    assert "argMax(cyclomatic_total, computed_at) AS cyclomatic_total" in query
+    assert "GROUP BY repo_id, as_of_day, file_path" in query
+
+
 @pytest.fixture
 def test_db_url():
     """Return a SQLite in-memory database URL for testing."""

@@ -14,6 +14,19 @@ from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
 
+# The River migration has one fixed, reviewed target for every current task
+# entrypoint. Until the durable request ledger and compatibility bridge are
+# promoted, migration-state.json keeps these routes on Celery; this map makes a
+# missing/renamed task fail contract coverage rather than silently losing its
+# future River target.
+RIVER_CONTRACT_TARGETS = {
+    "run_work_graph_build": "workgraph.build",
+    "run_investment_materialize": "investment.materialize",
+    "dispatch_investment_materialize_partitioned": "investment.dispatch",
+    "run_investment_materialize_chunk": "investment.chunk",
+    "finalize_investment_materialize_partitioned": "investment.finalize",
+}
+
 
 def _llm_concurrency(value: object | None = None) -> int:
     import os

@@ -19,6 +19,14 @@ _PRODUCTION_COMPOSE = (
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
 _KUBERNETES = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_CHART = _REPO_ROOT / "deploy" / "helm" / "dev-health"
+_GO_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.go-workers.yml"
+_GO_COMPOSE_ONLY = (
+    _REPO_ROOT / "deploy" / "docker-compose" / "compose.go-workers-only.yml"
+)
+_GO_SWARM = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers.yml"
+_GO_SWARM_ONLY = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers-only.yml"
+_GO_KUBERNETES = _KUBERNETES / "go-workers.yaml"
+_GO_KUBERNETES_ONLY = _KUBERNETES / "go-workers-only.yaml"
 
 _MIGRATION_CONFIG_DEFAULTS = {
     "RIVER_DATABASE_SCHEMA": "river",
@@ -112,17 +120,222 @@ def test_go_profiles_are_disabled_future_topology() -> None:
     }
 
 
+def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() -> None:
+    """CHAOS-3052: every supported deploy surface renders an inert, hardened
+    topology. It must never change the default Celery/Beat/Valkey deployment
+    merely by being present in the repository.
+    """
+    expected_profiles = {
+        process["name"] for process in _load_json(_PROFILES)["processes"]
+    }
+    assert expected_profiles == {
+        "heavy",
+        "latency",
+        "ops",
+        "reconciler",
+        "scheduler",
+        "stream-external",
+        "stream-ingest",
+        "sync",
+    }
+
+    compose = _load_yaml(_GO_COMPOSE)["services"]
+    runtime_services = {
+        "go-worker-heavy",
+        "go-worker-latency",
+        "go-worker-ops",
+        "go-worker-sync-provider",
+        "go-reconciler",
+        "go-scheduler",
+        "go-stream-external",
+        "go-stream-ingest",
+    }
+    assert set(compose) == runtime_services | {
+        "go-river-provision",
+        "go-river-migrate",
+        "go-contractcheck",
+    }
+    for name in runtime_services:
+        service = compose[name]
+        assert service["profiles"] == ["go-workers"]
+        assert service["read_only"] is True
+        assert service["user"] == "65532:65532"
+        assert "no-new-privileges:true" in service["security_opt"]
+        assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
+    assert (
+        compose["go-worker-sync-provider"]["environment"]["DEV_HEALTH_PROFILE"]
+        == "sync"
+    )
+
+    swarm = _load_yaml(_GO_SWARM)["services"]
+    assert set(swarm) == runtime_services
+    for service in swarm.values():
+        assert service["read_only"] is True
+        assert service["user"] == "65532:65532"
+        assert service["environment"]["AUTO_RUN_MIGRATIONS"] == "false"
+        assert service["deploy"]["replicas"] == 0
+        assert service["deploy"]["update_config"]["order"] == "start-first"
+
+    deployments = {
+        document["metadata"]["name"]: document
+        for document in _load_yaml_documents(_GO_KUBERNETES)
+        if document["kind"] == "Deployment"
+    }
+    assert len(deployments) == len(expected_profiles)
+    for deployment in deployments.values():
+        assert deployment["spec"]["replicas"] == 0
+        pod_security = deployment["spec"]["template"]["spec"]["securityContext"]
+        assert pod_security["runAsNonRoot"] is True
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        assert container["securityContext"]["readOnlyRootFilesystem"] is True
+        assert container["resources"]["requests"]["cpu"]
+        assert container["resources"]["limits"]["memory"]
+    sync_labels = deployments["dev-health-go-worker-sync-provider"]["metadata"][
+        "labels"
+    ]
+    assert sync_labels["dev-health.io/profile"] == "sync"
+    assert sync_labels["dev-health.io/queue"] == "sync_provider"
+
+    values = _load_yaml(_HELM_CHART / "values.yaml")
+    assert values["goWorkers"]["enabled"] is False
+    assert {
+        profile["name"] for profile in values["goWorkers"]["profiles"]
+    } == expected_profiles
+    sync_profile = next(
+        profile
+        for profile in values["goWorkers"]["profiles"]
+        if profile["name"] == "sync"
+    )
+    assert sync_profile["runtimeProfile"] == "sync"
+    assert sync_profile["queue"] == "sync_provider"
+    assert "worker_jobs_available" in (
+        _HELM_CHART / "templates" / "go-workers.yaml"
+    ).read_text(encoding="utf-8")
+    assert "worker_job_oldest_age_seconds" in (
+        _HELM_CHART / "templates" / "go-workers.yaml"
+    ).read_text(encoding="utf-8")
+    assert "worker_execution_saturation_ratio" in (
+        _HELM_CHART / "templates" / "go-workers.yaml"
+    ).read_text(encoding="utf-8")
+
+
+def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> None:
+    services = _load_yaml(_GO_COMPOSE)["services"]
+
+    provision = services["go-river-provision"]
+    assert provision["profiles"] == ["go-workers"]
+    assert provision["restart"] == "no"
+    assert (
+        provision["depends_on"]["migrate"]["condition"]
+        == "service_completed_successfully"
+    )
+    provision_command = _command_string(provision)
+    assert "psql" in provision_command
+    assert "provision_river_roles.sql" in provision_command
+    assert any(
+        str(volume).endswith(
+            "scripts/worker/provision_river_roles.sql:"
+            "/opt/dev-health/provision_river_roles.sql:ro"
+        )
+        for volume in provision["volumes"]
+    )
+
+    river_migrate = services["go-river-migrate"]
+    assert river_migrate["profiles"] == ["go-workers"]
+    assert river_migrate["restart"] == "no"
+    assert (
+        river_migrate["depends_on"]["go-river-provision"]["condition"]
+        == "service_completed_successfully"
+    )
+    migration_command = _command_string(river_migrate)
+    assert migration_command.count("dev-health-worker-migrate") == 2
+    assert "dev-health-worker-migrate --check" in migration_command
+    assert "MIGRATION_DATABASE_URI" in river_migrate["environment"]
+
+    contractcheck = services["go-contractcheck"]
+    assert contractcheck["profiles"] == ["go-workers"]
+    assert contractcheck["restart"] == "no"
+    assert contractcheck["network_mode"] == "none"
+    assert contractcheck["build"]["target"] == "contractcheck"
+    assert (
+        contractcheck["depends_on"]["go-river-migrate"]["condition"]
+        == "service_completed_successfully"
+    )
+    assert "validate" in _command_string(contractcheck)
+
+    for name, service in services.items():
+        if name in {"go-river-provision", "go-river-migrate", "go-contractcheck"}:
+            continue
+        assert (
+            service["depends_on"]["go-contractcheck"]["condition"]
+            == "service_completed_successfully"
+        ), f"{name} must wait for the complete local Go bootstrap chain"
+        assert "MIGRATION_DATABASE_URI" not in service["environment"]
+
+    rendered = _GO_COMPOSE.read_text(encoding="utf-8")
+    assert "workerctl route" not in rendered
+    assert _load_json(_PROFILES)["deployment_state"] == "coexistence_disabled"
+
+
+@pytest.mark.parametrize(
+    "path", [_GO_COMPOSE_ONLY, _GO_SWARM_ONLY, _GO_KUBERNETES_ONLY]
+)
+def test_go_only_overlays_scale_but_do_not_remove_celery_baseline(path: Path) -> None:
+    documents = _load_yaml_documents(path)
+    if len(documents) == 1:
+        services = documents[0]["services"]
+        assert set(services) == {
+            "worker",
+            "worker-ingest",
+            "worker-external-ingest",
+            "worker-heavy",
+            "beat",
+        }
+        assert all(service["deploy"]["replicas"] == 0 for service in services.values())
+        return
+
+    deployments = {document["metadata"]["name"]: document for document in documents}
+    assert set(deployments) == {
+        "dev-health-worker",
+        "dev-health-worker-ingest",
+        "dev-health-worker-external-ingest",
+        "dev-health-worker-heavy",
+        "dev-health-beat",
+    }
+    assert all(
+        deployment["spec"]["replicas"] == 0 for deployment in deployments.values()
+    )
+
+
 def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
     dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
 
     assert (
-        "cp -R /src/contracts/jobs/v1 "
-        "/runtime/reconciler/app/contracts/jobs/v1;" in dockerfile
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/reconciler/app/contracts/jobs/v1;"
+        in dockerfile
     )
     assert (
         "cp -R /src/contracts/sync-dispatch/v1 "
-        "/runtime/reconciler/app/contracts/sync-dispatch/v1;" in dockerfile
+        + "/runtime/reconciler/app/contracts/sync-dispatch/v1;"
+        in dockerfile
     )
+
+
+def test_scheduler_image_packages_runtime_policy_inputs() -> None:
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/scheduler/app/contracts/jobs/v1;"
+        in dockerfile
+    )
+    assert (
+        "cp /src/deploy/go-workers/profiles.json "
+        + "/runtime/scheduler/app/deploy/go-workers/profiles.json;"
+        in dockerfile
+    )
+    scheduler_target = dockerfile.split("FROM runtime AS scheduler", maxsplit=1)[1]
+    scheduler_target = scheduler_target.split("FROM runtime AS", maxsplit=1)[0]
+    assert "WORKDIR /app" in scheduler_target
 
 
 def test_sync_parity_image_packages_fixed_runtime_paths() -> None:
@@ -131,11 +344,11 @@ def test_sync_parity_image_packages_fixed_runtime_paths() -> None:
     for required in (
         "FROM runtime AS sync-parity",
         "COPY --from=go-migrator-builder /out/dev-health-sync-parity "
-        "/usr/local/bin/dev-health-sync-parity",
+        + "/usr/local/bin/dev-health-sync-parity",
         "COPY --from=builder /build/contracts/sync-dispatch/v1 "
-        "/app/contracts/sync-dispatch/v1",
+        + "/app/contracts/sync-dispatch/v1",
         "COPY --from=builder /build/scripts/worker/observe_sync_dispatch_parity.py "
-        "/app/scripts/worker/observe_sync_dispatch_parity.py",
+        + "/app/scripts/worker/observe_sync_dispatch_parity.py",
         "ln -s /usr/local/bin/python /app/.venv/bin/python",
         "ENV PYTHONPATH=/app/src",
         'ENTRYPOINT ["dev-health-sync-parity"]',
@@ -299,7 +512,7 @@ def test_helm_accepts_dedicated_migration_dsn_without_sharing_it() -> None:
             str(_HELM_CHART),
             "--set-string",
             "migrations.hook.secretData.MIGRATION_DATABASE_URI="
-            "postgresql://migration@direct/app",
+            + "postgresql://migration@direct/app",
         ],
         check=False,
         capture_output=True,

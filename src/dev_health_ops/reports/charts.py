@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.testops_schemas import ChartSpec
 from dev_health_ops.reports.metric_registry import (
     MetricDefinition,
@@ -72,6 +73,7 @@ def build_chart_query(spec: ChartSpec) -> tuple[str, dict[str, Any]]:
 
     x_expr, x_type, _, x_is_temporal = _resolve_grouping(spec, definition)
     y_expr = _aggregate_expression(spec.metric, definition)
+    source_table = dedup_from(definition.source_table)
 
     params: dict[str, Any] = {}
     clauses = [f"{spec.metric} IS NOT NULL"]
@@ -100,7 +102,7 @@ def build_chart_query(spec: ChartSpec) -> tuple[str, dict[str, Any]]:
         {x_expr} AS x,
         CAST(NULL, 'Nullable(String)') AS group_value,
         {y_expr} AS y
-    FROM {definition.source_table}
+    FROM {source_table}
     WHERE
         {where_clause}
     GROUP BY x
@@ -116,7 +118,7 @@ def build_chart_query(spec: ChartSpec) -> tuple[str, dict[str, Any]]:
             CAST('total', '{x_type}') AS x,
             CAST(NULL, 'Nullable(String)') AS group_value,
             {y_expr} AS y
-        FROM {definition.source_table}
+        FROM {source_table}
         WHERE
             {where_clause}
         """.strip()

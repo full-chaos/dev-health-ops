@@ -9,7 +9,7 @@ from dev_health_ops.metrics.opportunities.flow_detector import FlowOpportunityDe
 
 
 @pytest.mark.asyncio
-async def test_detector_metric_queries_dedup_only_replacing_merge_tree_tables(
+async def test_detector_metric_queries_dedup_all_rerunnable_daily_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     queries: list[str] = []
@@ -31,5 +31,5 @@ async def test_detector_metric_queries_dedup_only_replacing_merge_tree_tables(
         query for query in queries if "FROM work_item_metrics_daily" in query
     )
 
-    assert "FROM repo_metrics_daily FINAL" not in repo_query
+    assert "ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day" in repo_query
     assert "FROM work_item_metrics_daily FINAL" in work_item_query

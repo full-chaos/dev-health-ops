@@ -36,7 +36,7 @@ func TestSchedulerSpecConfiguresFailClosedDependencies(t *testing.T) {
 		t.Fatalf("configureSchedulerDependencies() error = %v", err)
 	}
 	if len(components) != 0 {
-		t.Fatalf("components = %d, want no scheduler runtime before its loop is implemented", len(components))
+		t.Fatalf("components = %d, want no scheduler runtime before reviewed activation", len(components))
 	}
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)

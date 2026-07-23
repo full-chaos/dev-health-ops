@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000010",
+  "correlation_id": "billing-notification-0001",
+  "idempotency_key": "billing:invoice_receipt:00000000-0000-4000-8000-000000000011",
+  "domain": {
+    "type": "billing_notification",
+    "id": "00000000-0000-4000-8000-000000000011"
+  },
+  "payload": {
+    "notification_id": "00000000-0000-4000-8000-000000000011"
+  }
+}

@@ -246,6 +246,9 @@ class TestDispatchersForwardSelectedTimezone:
         )
         db_session.add(report)
         db_session.flush()
+        # The report dispatcher owns its transaction so the occurrence,
+        # ReportRun, and outbox handoff can commit or roll back atomically.
+        db_session.commit()
 
         seen: dict[str, str | None] = {}
 

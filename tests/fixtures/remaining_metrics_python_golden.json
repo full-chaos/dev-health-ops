@@ -1,0 +1,239 @@
+{
+  "capacity": [
+    {
+      "expected": [
+        1,
+        1,
+        1,
+        4,
+        6,
+        6,
+        7
+      ],
+      "history": [
+        0,
+        1,
+        2,
+        3,
+        8
+      ],
+      "mean": 2.8,
+      "percentiles": [
+        0,
+        5,
+        15,
+        50,
+        85,
+        95,
+        100
+      ],
+      "stddev": 2.7856776554368237,
+      "values": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "expected": [
+        0,
+        0,
+        0
+      ],
+      "history": [
+        5
+      ],
+      "mean": 5,
+      "percentiles": [
+        50,
+        85,
+        95
+      ],
+      "stddev": 0.0,
+      "values": []
+    }
+  ],
+  "complexity": [
+    {
+      "expected": {
+        "CyclomaticPerKLOC": 100.0,
+        "CyclomaticTotal": 50,
+        "HighComplexity": 5,
+        "LOCTotal": 500,
+        "VeryHighComplexity": 1
+      },
+      "files": [
+        {
+          "CyclomaticTotal": 20,
+          "HighComplexity": 2,
+          "LOC": 100,
+          "VeryHighComplexity": 1
+        },
+        {
+          "CyclomaticTotal": 30,
+          "HighComplexity": 3,
+          "LOC": 400,
+          "VeryHighComplexity": 0
+        }
+      ]
+    },
+    {
+      "expected": {
+        "CyclomaticPerKLOC": 0.0,
+        "CyclomaticTotal": 7,
+        "HighComplexity": 1,
+        "LOCTotal": 0,
+        "VeryHighComplexity": 1
+      },
+      "files": [
+        {
+          "CyclomaticTotal": 7,
+          "HighComplexity": 1,
+          "LOC": 0,
+          "VeryHighComplexity": 1
+        }
+      ]
+    },
+    {
+      "expected": {
+        "CyclomaticPerKLOC": 0.0,
+        "CyclomaticTotal": 0,
+        "HighComplexity": 0,
+        "LOCTotal": 0,
+        "VeryHighComplexity": 0
+      },
+      "files": []
+    }
+  ],
+  "dora": [
+    {
+      "day": "2026-07-20",
+      "deployments": [
+        {
+          "deployed_at": "2026-07-20T14:00:00Z",
+          "merged_at": "2026-07-20T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000b",
+          "started_at": "",
+          "status": "success"
+        },
+        {
+          "deployed_at": "2026-07-20T10:00:00Z",
+          "merged_at": "2026-07-20T08:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000a",
+          "started_at": "",
+          "status": " FAILURE "
+        },
+        {
+          "deployed_at": "",
+          "merged_at": "2026-07-20T09:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000a",
+          "started_at": "2026-07-20T12:00:00Z",
+          "status": "canceled"
+        },
+        {
+          "deployed_at": "2026-07-19T23:59:59Z",
+          "merged_at": "2026-07-19T22:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000a",
+          "started_at": "",
+          "status": "success"
+        },
+        {
+          "deployed_at": "2026-07-20T18:00:00Z",
+          "merged_at": "2026-07-20T19:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000b",
+          "started_at": "",
+          "status": "success"
+        }
+      ],
+      "expected": [
+        {
+          "Name": "deployment_frequency",
+          "RepoID": "00000000-0000-4000-8000-00000000000a",
+          "Value": 2.0
+        },
+        {
+          "Name": "change_failure_rate",
+          "RepoID": "00000000-0000-4000-8000-00000000000a",
+          "Value": 1.0
+        },
+        {
+          "Name": "lead_time_for_changes",
+          "RepoID": "00000000-0000-4000-8000-00000000000a",
+          "Value": 9000.0
+        },
+        {
+          "Name": "deployment_frequency",
+          "RepoID": "00000000-0000-4000-8000-00000000000b",
+          "Value": 2.0
+        },
+        {
+          "Name": "change_failure_rate",
+          "RepoID": "00000000-0000-4000-8000-00000000000b",
+          "Value": 0.0
+        },
+        {
+          "Name": "lead_time_for_changes",
+          "RepoID": "00000000-0000-4000-8000-00000000000b",
+          "Value": 7200.0
+        },
+        {
+          "Name": "time_to_restore_service",
+          "RepoID": "00000000-0000-4000-8000-00000000000a",
+          "Value": 10800.0
+        }
+      ],
+      "incidents": [
+        {
+          "repo_id": "00000000-0000-4000-8000-00000000000a",
+          "resolved_at": "2026-07-20T09:00:00Z",
+          "started_at": "2026-07-20T07:00:00Z"
+        },
+        {
+          "repo_id": "00000000-0000-4000-8000-00000000000a",
+          "resolved_at": "2026-07-20T14:00:00Z",
+          "started_at": "2026-07-20T10:00:00Z"
+        },
+        {
+          "repo_id": "00000000-0000-4000-8000-00000000000b",
+          "resolved_at": "2026-07-20T15:00:00Z",
+          "started_at": "2026-07-20T16:00:00Z"
+        }
+      ]
+    }
+  ],
+  "release_confidence": [
+    {
+      "concurrent_deploys": 0,
+      "coverage": 1.0,
+      "expected": 1.0,
+      "minimum_sessions": 300,
+      "total_sessions": 300
+    },
+    {
+      "concurrent_deploys": 1,
+      "coverage": 0.5,
+      "expected": 0.5,
+      "minimum_sessions": 300,
+      "total_sessions": 150
+    },
+    {
+      "concurrent_deploys": 5,
+      "coverage": -1.0,
+      "expected": 0.0,
+      "minimum_sessions": 300,
+      "total_sessions": 0
+    },
+    {
+      "concurrent_deploys": 0,
+      "coverage": 2.0,
+      "expected": 1.0,
+      "minimum_sessions": 0,
+      "total_sessions": 1
+    }
+  ],
+  "schema_version": 1
+}

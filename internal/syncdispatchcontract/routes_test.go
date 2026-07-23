@@ -29,7 +29,7 @@ func TestCheckedInArtifactIsFrozenAndLookupIsImmutable(t *testing.T) {
 		}
 	}
 	descriptor, ok := registry.Lookup(KindPostSync)
-	if !ok || descriptor.Delivery != DeliveryAtMostOnceMarkBefore {
+	if !ok || descriptor.Delivery != DeliveryAtLeastOnce {
 		t.Fatalf("post_sync descriptor = %#v", descriptor)
 	}
 	descriptor.Route = RouteRiver
@@ -53,7 +53,7 @@ func TestLoadRejectsInvalidArtifacts(t *testing.T) {
 		{name: "duplicate JSON key", contents: strings.Replace(canonicalArtifact, `"schema_version": 1,`, `"schema_version": 1, "schema_version": 1,`, 1)},
 		{name: "out of order", contents: outOfOrderArtifact},
 		{name: "missing coverage", contents: strings.Replace(canonicalArtifact, `"reference_discovery"`, `"unfrozen_kind"`, 1)},
-		{name: "wrong delivery", contents: strings.Replace(canonicalArtifact, `"kind": "post_sync", "delivery": "at_most_once_mark_before"`, `"kind": "post_sync", "delivery": "at_least_once"`, 1)},
+		{name: "wrong delivery", contents: strings.Replace(canonicalArtifact, `"kind": "post_sync", "delivery": "at_least_once"`, `"kind": "post_sync", "delivery": "at_most_once_mark_before"`, 1)},
 		{name: "unknown route", contents: strings.Replace(canonicalArtifact, `"route": "celery"`, `"route": "sqs"`, 1)},
 		{name: "celery with river rollback", contents: strings.Replace(canonicalArtifact, `"rollback_route": "celery"`, `"rollback_route": "river"`, 1)},
 		{name: "river with river rollback", contents: strings.ReplaceAll(canonicalArtifact, `"celery"`, `"river"`)},
@@ -160,7 +160,7 @@ const canonicalArtifact = `{
   "routes": [
     {"kind": "dispatch_sync_run", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"},
     {"kind": "finalize_sync_run", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"},
-    {"kind": "post_sync", "delivery": "at_most_once_mark_before", "route": "celery", "rollback_route": "celery"},
+    {"kind": "post_sync", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"},
     {"kind": "reference_discovery", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"}
   ]
 }`
@@ -170,7 +170,7 @@ const outOfOrderArtifact = `{
   "routes": [
     {"kind": "finalize_sync_run", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"},
     {"kind": "dispatch_sync_run", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"},
-    {"kind": "post_sync", "delivery": "at_most_once_mark_before", "route": "celery", "rollback_route": "celery"},
+    {"kind": "post_sync", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"},
     {"kind": "reference_discovery", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"}
   ]
 }`

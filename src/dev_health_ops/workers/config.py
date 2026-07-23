@@ -51,12 +51,15 @@ late_ack_excluded_tasks = (
     "dev_health_ops.workers.tasks.run_ingest_consumer",
     "dev_health_ops.workers.tasks.run_product_telemetry_consumer",
     "dev_health_ops.workers.tasks.run_external_ingest_consumer",
-    # CHAOS-2699's debounced recompute flush task (master-spec CC20; see the
-    # INTEGRATOR TODO atop workers/external_ingest_recompute.py). Valkey's
-    # SETNX debounce guard is the durability/dedup layer here, not Celery's
-    # acks-late redelivery -- reuses the existing `default` queue, no
-    # task_queues/compose change needed.
+    # CHAOS-2699's debounced recompute flush task. Valkey's SETNX debounce
+    # guard is the durability/dedup layer here, not Celery's acks-late
+    # redelivery -- reuses the existing `default` queue, no task_queues/compose
+    # change needed.
     "dev_health_ops.workers.tasks.flush_external_ingest_recompute",
+    # The Go compatibility bridge has its own persisted claim lease and
+    # deterministic ledger identity. Celery redelivery is not its retry
+    # mechanism, so keep it out of the global acks-late policy too.
+    "dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge",
 )
 task_annotations = {
     task_name: {"acks_late": False, "reject_on_worker_lost": False}
@@ -227,6 +230,15 @@ beat_schedule = {
             "queue": "external-ingest",
             "expires": stream_consumer_expires_seconds,
         },
+    },
+    # Dormant unless the disabled Go external-stream profile writes a typed
+    # compatibility bridge row. Downstream metric execution remains on the
+    # current Python planner/Celery routes through the coexistence window.
+    "dispatch-go-external-ingest-recompute-bridge": {
+        "task": "dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge",
+        "schedule": 10.0,
+        "kwargs": {"limit": 50},
+        "options": {"queue": "default", "expires": 30},
     },
     "external-ingest-stream-health": {
         "task": "dev_health_ops.workers.tasks.external_ingest_stream_health",

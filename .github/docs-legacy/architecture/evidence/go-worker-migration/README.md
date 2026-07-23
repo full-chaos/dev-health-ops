@@ -9,6 +9,7 @@ database schema version.
 | [`v0-celery-baseline`](v0-celery-baseline/README.md) | Capture the current Celery reliability, latency, resource, and deploy baseline | Five-minute production-equivalent local capture recorded; production-canary authority remains false |
 | [`v1-river-spike`](v1-river-spike/README.md) | Record River, PgBouncer, Python enqueue, version, and licensing compatibility | Harness complete: direct PostgreSQL GO; session mode unverified; PollOnly-only and Python client NO-GO; N/N-1, load, interop, and crash evidence recorded |
 | [`v2-sync-dispatch-parity`](v2-sync-dispatch-parity/README.md) | Compare Python and Go sync-dispatch observations at one exported PostgreSQL snapshot | Local production-equivalent dataset matched; mutation and canary authority remain false |
+| [`v3-canary-release-proof`](v3-canary-release-proof/README.md) | Define the pinned, redacted canary comparison and rollback evidence protocol | Thresholds and production attestation are unapproved; no CHAOS-3053 acceptance |
 
 ## Evidence rules
 

@@ -10,16 +10,52 @@ from typing import Any
 
 from .models import (
     CONTRACT_VERSION_V1,
+    KIND_BILLING_NOTIFICATION,
+    KIND_DAILY_METRICS_DISPATCH,
+    KIND_DAILY_METRICS_FINALIZE,
+    KIND_DAILY_METRICS_PARTITION,
     KIND_HEARTBEAT,
+    KIND_INVESTMENT_CHUNK,
+    KIND_INVESTMENT_DISPATCH,
+    KIND_INVESTMENT_FINALIZE,
+    KIND_INVESTMENT_MATERIALIZE,
+    KIND_REPORT_EXECUTE_ON_DEMAND,
+    KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_SYNC_PROVIDER_UNIT,
+    KIND_TEAM_AUTOIMPORT,
+    KIND_WEBHOOK_DELIVERY,
+    KIND_WORK_GRAPH_BUILD,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
+    BillingNotificationPayload,
     ContractPayload,
+    DailyMetricsDispatchPayload,
+    DailyMetricsFinalizePayload,
+    DailyMetricsPartitionPayload,
     DomainLink,
     Envelope,
     HeartbeatPayload,
+    InvestmentChunkPayload,
+    InvestmentDispatchPayload,
+    InvestmentFinalizePayload,
+    InvestmentMaterializePayload,
     JobPayload,
+    OnDemandReportExecutionPayload,
+    ProviderUnitPayload,
+    RemainingCapacityPayload,
+    RemainingComplexityPayload,
+    RemainingDORAPayload,
+    RemainingExtraMetricsPayload,
+    RemainingMembershipPayload,
+    RemainingRecommendationsPayload,
+    RemainingReleaseImpactPayload,
+    RemainingTeamMetricsPayload,
     RetentionCleanupPayload,
+    ScheduledReportExecutionPayload,
+    TeamAutoimportPayload,
+    WebhookDeliveryPayload,
+    WorkGraphBuildPayload,
 )
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
@@ -30,6 +66,19 @@ _UUID = re.compile(
 )
 _RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 _MAX_JSON_DEPTH = 16
+_REMAINING_PAYLOAD_TYPES = (
+    RemainingCapacityPayload,
+    RemainingComplexityPayload,
+    RemainingDORAPayload,
+    RemainingExtraMetricsPayload,
+    RemainingMembershipPayload,
+    RemainingRecommendationsPayload,
+    RemainingReleaseImpactPayload,
+    RemainingTeamMetricsPayload,
+)
+_REMAINING_PAYLOAD_BY_KIND = {
+    payload_type.KIND: payload_type for payload_type in _REMAINING_PAYLOAD_TYPES
+}
 
 
 class ContractDecodeError(ValueError):
@@ -39,7 +88,25 @@ class ContractDecodeError(ValueError):
 def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     """Decode one known kind without accepting extensions or duplicate keys."""
 
-    if kind not in {KIND_HEARTBEAT, KIND_RETENTION_CLEANUP}:
+    if kind not in {
+        KIND_HEARTBEAT,
+        KIND_BILLING_NOTIFICATION,
+        KIND_RETENTION_CLEANUP,
+        KIND_REPORT_EXECUTE_ON_DEMAND,
+        KIND_REPORT_EXECUTE_SCHEDULED,
+        KIND_WEBHOOK_DELIVERY,
+        KIND_DAILY_METRICS_DISPATCH,
+        KIND_DAILY_METRICS_PARTITION,
+        KIND_DAILY_METRICS_FINALIZE,
+        KIND_WORK_GRAPH_BUILD,
+        KIND_INVESTMENT_MATERIALIZE,
+        KIND_INVESTMENT_DISPATCH,
+        KIND_INVESTMENT_CHUNK,
+        KIND_INVESTMENT_FINALIZE,
+        KIND_TEAM_AUTOIMPORT,
+        *_REMAINING_PAYLOAD_BY_KIND,
+        KIND_SYNC_PROVIDER_UNIT,
+    }:
         raise ContractDecodeError("unknown job kind")
     document = load_json_document(data, max_bytes=MAX_ENVELOPE_BYTES)
     envelope = _expect_object(
@@ -65,7 +132,23 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     else:
         organization_id = _expect_string(organization_id_value, "organization_id")
         _validate_uuid("organization_id", organization_id)
-    if organization_id is not None:
+    tenant_kind = kind in {
+        KIND_BILLING_NOTIFICATION,
+        KIND_DAILY_METRICS_DISPATCH,
+        KIND_DAILY_METRICS_PARTITION,
+        KIND_DAILY_METRICS_FINALIZE,
+        KIND_INVESTMENT_CHUNK,
+        KIND_INVESTMENT_DISPATCH,
+        KIND_INVESTMENT_FINALIZE,
+        KIND_INVESTMENT_MATERIALIZE,
+        KIND_WORK_GRAPH_BUILD,
+        KIND_TEAM_AUTOIMPORT,
+        *_REMAINING_PAYLOAD_BY_KIND,
+        KIND_SYNC_PROVIDER_UNIT,
+    }
+    if tenant_kind and organization_id is None:
+        raise ContractDecodeError("organization_id is required for a tenant job")
+    if not tenant_kind and organization_id is not None:
         raise ContractDecodeError("organization_id is forbidden for a global job")
 
     correlation_id = _expect_string(envelope["correlation_id"], "correlation_id")
@@ -83,14 +166,87 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     _validate_uuid("domain.id", domain_id)
 
     payload: JobPayload
-    if kind == KIND_HEARTBEAT:
+    if kind == KIND_BILLING_NOTIFICATION:
+        if domain_type != BillingNotificationPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_billing_notification(envelope["payload"])
+    elif kind == KIND_WEBHOOK_DELIVERY:
+        if domain_type != WebhookDeliveryPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_webhook_delivery(envelope["payload"])
+    elif kind == KIND_HEARTBEAT:
         if domain_type != HeartbeatPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_heartbeat(envelope["payload"])
-    else:
+    elif kind == KIND_RETENTION_CLEANUP:
         if domain_type != RetentionCleanupPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_retention(envelope["payload"])
+    elif kind == KIND_REPORT_EXECUTE_ON_DEMAND:
+        if domain_type != OnDemandReportExecutionPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_on_demand_report_execution(envelope["payload"])
+    elif kind == KIND_REPORT_EXECUTE_SCHEDULED:
+        if domain_type != ScheduledReportExecutionPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_scheduled_report_execution(envelope["payload"])
+    elif kind == KIND_SYNC_PROVIDER_UNIT:
+        if domain_type != ProviderUnitPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_provider_unit(envelope["payload"])
+    elif kind == KIND_DAILY_METRICS_DISPATCH:
+        if domain_type != DailyMetricsDispatchPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_daily_dispatch(envelope["payload"])
+    elif kind == KIND_DAILY_METRICS_PARTITION:
+        if domain_type != DailyMetricsPartitionPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_daily_partition(envelope["payload"])
+    elif kind == KIND_DAILY_METRICS_FINALIZE:
+        if domain_type != DailyMetricsFinalizePayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_daily_finalize(envelope["payload"])
+    elif kind == KIND_TEAM_AUTOIMPORT:
+        if domain_type != TeamAutoimportPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = TeamAutoimportPayload(
+            sync_run_id=_decode_reference(envelope["payload"], "sync_run_id")
+        )
+    elif kind == KIND_WORK_GRAPH_BUILD:
+        if domain_type != WorkGraphBuildPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = WorkGraphBuildPayload(
+            request_id=_decode_reference(envelope["payload"], "request_id")
+        )
+    elif kind == KIND_INVESTMENT_MATERIALIZE:
+        if domain_type != InvestmentMaterializePayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentMaterializePayload(
+            request_id=_decode_reference(envelope["payload"], "request_id")
+        )
+    elif kind == KIND_INVESTMENT_DISPATCH:
+        if domain_type != InvestmentDispatchPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentDispatchPayload(
+            request_id=_decode_reference(envelope["payload"], "request_id")
+        )
+    elif kind == KIND_INVESTMENT_CHUNK:
+        if domain_type != InvestmentChunkPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentChunkPayload(
+            chunk_id=_decode_reference(envelope["payload"], "chunk_id")
+        )
+    elif kind == KIND_INVESTMENT_FINALIZE:
+        if domain_type != InvestmentFinalizePayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentFinalizePayload(
+            run_id=_decode_reference(envelope["payload"], "run_id")
+        )
+    else:
+        payload_type = _REMAINING_PAYLOAD_BY_KIND[kind]
+        if domain_type != payload_type.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_remaining_partition(envelope["payload"], payload_type)
 
     return Envelope(
         contract_version=version,
@@ -112,7 +268,28 @@ def build_envelope(
 ) -> Envelope:
     """Build and validate arguments for the transitional outbox producer."""
 
-    if not isinstance(payload, (HeartbeatPayload, RetentionCleanupPayload)):
+    if not isinstance(
+        payload,
+        (
+            HeartbeatPayload,
+            BillingNotificationPayload,
+            RetentionCleanupPayload,
+            OnDemandReportExecutionPayload,
+            ScheduledReportExecutionPayload,
+            DailyMetricsDispatchPayload,
+            DailyMetricsPartitionPayload,
+            DailyMetricsFinalizePayload,
+            WorkGraphBuildPayload,
+            InvestmentMaterializePayload,
+            InvestmentDispatchPayload,
+            InvestmentChunkPayload,
+            InvestmentFinalizePayload,
+            TeamAutoimportPayload,
+            WebhookDeliveryPayload,
+            *_REMAINING_PAYLOAD_TYPES,
+            ProviderUnitPayload,
+        ),
+    ):
         raise ContractDecodeError("unsupported payload type")
     envelope = Envelope(
         contract_version=payload.CONTRACT_VERSION,
@@ -143,10 +320,40 @@ def encode_envelope(envelope: Envelope) -> bytes:
     encoded = (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode()
     if len(encoded) > MAX_ENVELOPE_BYTES:
         raise ContractDecodeError("encoded envelope exceeds size limit")
-    if isinstance(envelope.payload, HeartbeatPayload):
+    if isinstance(envelope.payload, BillingNotificationPayload):
+        kind = KIND_BILLING_NOTIFICATION
+    elif isinstance(envelope.payload, WebhookDeliveryPayload):
+        kind = KIND_WEBHOOK_DELIVERY
+    elif isinstance(envelope.payload, HeartbeatPayload):
         kind = KIND_HEARTBEAT
     elif isinstance(envelope.payload, RetentionCleanupPayload):
         kind = KIND_RETENTION_CLEANUP
+    elif isinstance(envelope.payload, OnDemandReportExecutionPayload):
+        kind = KIND_REPORT_EXECUTE_ON_DEMAND
+    elif isinstance(envelope.payload, ScheduledReportExecutionPayload):
+        kind = KIND_REPORT_EXECUTE_SCHEDULED
+    elif isinstance(envelope.payload, DailyMetricsDispatchPayload):
+        kind = KIND_DAILY_METRICS_DISPATCH
+    elif isinstance(envelope.payload, DailyMetricsPartitionPayload):
+        kind = KIND_DAILY_METRICS_PARTITION
+    elif isinstance(envelope.payload, DailyMetricsFinalizePayload):
+        kind = KIND_DAILY_METRICS_FINALIZE
+    elif isinstance(envelope.payload, WorkGraphBuildPayload):
+        kind = KIND_WORK_GRAPH_BUILD
+    elif isinstance(envelope.payload, InvestmentMaterializePayload):
+        kind = KIND_INVESTMENT_MATERIALIZE
+    elif isinstance(envelope.payload, InvestmentDispatchPayload):
+        kind = KIND_INVESTMENT_DISPATCH
+    elif isinstance(envelope.payload, InvestmentChunkPayload):
+        kind = KIND_INVESTMENT_CHUNK
+    elif isinstance(envelope.payload, InvestmentFinalizePayload):
+        kind = KIND_INVESTMENT_FINALIZE
+    elif isinstance(envelope.payload, TeamAutoimportPayload):
+        kind = KIND_TEAM_AUTOIMPORT
+    elif isinstance(envelope.payload, _REMAINING_PAYLOAD_TYPES):
+        kind = envelope.payload.KIND
+    elif isinstance(envelope.payload, ProviderUnitPayload):
+        kind = KIND_SYNC_PROVIDER_UNIT
     else:
         raise ContractDecodeError("unsupported payload type")
     decode_envelope(kind, encoded)
@@ -224,7 +431,125 @@ def _decode_retention(value: Any) -> RetentionCleanupPayload:
     )
 
 
+def _decode_billing_notification(value: Any) -> BillingNotificationPayload:
+    payload = _expect_object(
+        value,
+        required={"notification_id"},
+        optional=set(),
+        label="billing notification payload",
+    )
+    notification_id = _expect_string(payload["notification_id"], "notification_id")
+    _validate_uuid("notification_id", notification_id)
+    return BillingNotificationPayload(notification_id=notification_id)
+
+
+def _decode_webhook_delivery(value: Any) -> WebhookDeliveryPayload:
+    payload = _expect_object(
+        value,
+        required={"delivery_id"},
+        optional=set(),
+        label="webhook delivery payload",
+    )
+    delivery_id = _expect_string(payload["delivery_id"], "delivery_id")
+    _validate_uuid("delivery_id", delivery_id)
+    return WebhookDeliveryPayload(delivery_id=delivery_id)
+
+
+def _decode_on_demand_report_execution(value: Any) -> OnDemandReportExecutionPayload:
+    payload = _expect_object(
+        value, required={"report_id"}, optional=set(), label="report execution payload"
+    )
+    report_id = _expect_string(payload["report_id"], "report_id")
+    _validate_uuid("report_id", report_id)
+    return OnDemandReportExecutionPayload(report_id=report_id)
+
+
+def _decode_scheduled_report_execution(value: Any) -> ScheduledReportExecutionPayload:
+    payload = _expect_object(
+        value, required={"report_id"}, optional=set(), label="report execution payload"
+    )
+    report_id = _expect_string(payload["report_id"], "report_id")
+    _validate_uuid("report_id", report_id)
+    return ScheduledReportExecutionPayload(report_id=report_id)
+
+
+def _decode_daily_dispatch(value: Any) -> DailyMetricsDispatchPayload:
+    payload = _expect_object(
+        value, required={"run_id"}, optional=set(), label="daily dispatch payload"
+    )
+    run_id = _expect_string(payload["run_id"], "run_id")
+    _validate_uuid("run_id", run_id)
+    return DailyMetricsDispatchPayload(run_id=run_id)
+
+
+def _decode_daily_partition(value: Any) -> DailyMetricsPartitionPayload:
+    payload = _expect_object(
+        value,
+        required={"partition_id"},
+        optional=set(),
+        label="daily partition payload",
+    )
+    partition_id = _expect_string(payload["partition_id"], "partition_id")
+    _validate_uuid("partition_id", partition_id)
+    return DailyMetricsPartitionPayload(partition_id=partition_id)
+
+
+def _decode_daily_finalize(value: Any) -> DailyMetricsFinalizePayload:
+    payload = _expect_object(
+        value, required={"run_id"}, optional=set(), label="daily finalize payload"
+    )
+    run_id = _expect_string(payload["run_id"], "run_id")
+    _validate_uuid("run_id", run_id)
+    return DailyMetricsFinalizePayload(run_id=run_id)
+
+
+def _decode_reference(value: Any, field: str) -> str:
+    payload = _expect_object(
+        value, required={field}, optional=set(), label="reference payload"
+    )
+    reference = _expect_string(payload[field], field)
+    _validate_uuid(field, reference)
+    return reference
+
+
+def _decode_remaining_partition(
+    value: Any,
+    payload_type: type[
+        RemainingCapacityPayload
+        | RemainingComplexityPayload
+        | RemainingDORAPayload
+        | RemainingExtraMetricsPayload
+        | RemainingMembershipPayload
+        | RemainingRecommendationsPayload
+        | RemainingReleaseImpactPayload
+        | RemainingTeamMetricsPayload
+    ],
+) -> JobPayload:
+    payload = _expect_object(
+        value,
+        required={"partition_id"},
+        optional=set(),
+        label="remaining metrics partition payload",
+    )
+    partition_id = _expect_string(payload["partition_id"], "partition_id")
+    _validate_uuid("partition_id", partition_id)
+    return payload_type(partition_id=partition_id)
+
+
+def _decode_provider_unit(value: Any) -> ProviderUnitPayload:
+    payload = _expect_object(
+        value, required={"unit_id"}, optional=set(), label="provider unit payload"
+    )
+    unit_id = _expect_string(payload["unit_id"], "unit_id")
+    _validate_uuid("unit_id", unit_id)
+    return ProviderUnitPayload(unit_id=unit_id)
+
+
 def _payload_document(payload: object) -> dict[str, Any]:
+    if isinstance(payload, BillingNotificationPayload):
+        return {"notification_id": payload.notification_id}
+    if isinstance(payload, WebhookDeliveryPayload):
+        return {"delivery_id": payload.delivery_id}
     if isinstance(payload, HeartbeatPayload):
         return {"scheduled_for": payload.scheduled_for}
     if isinstance(payload, RetentionCleanupPayload):
@@ -233,6 +558,32 @@ def _payload_document(payload: object) -> dict[str, Any]:
             "delete_before": payload.delete_before,
             "retention_policy": payload.retention_policy,
         }
+    if isinstance(payload, OnDemandReportExecutionPayload):
+        return {"report_id": payload.report_id}
+    if isinstance(payload, ScheduledReportExecutionPayload):
+        return {"report_id": payload.report_id}
+    if isinstance(payload, DailyMetricsDispatchPayload):
+        return {"run_id": payload.run_id}
+    if isinstance(payload, DailyMetricsPartitionPayload):
+        return {"partition_id": payload.partition_id}
+    if isinstance(payload, DailyMetricsFinalizePayload):
+        return {"run_id": payload.run_id}
+    if isinstance(payload, TeamAutoimportPayload):
+        return {"sync_run_id": payload.sync_run_id}
+    if isinstance(payload, WorkGraphBuildPayload):
+        return {"request_id": payload.request_id}
+    if isinstance(payload, InvestmentMaterializePayload):
+        return {"request_id": payload.request_id}
+    if isinstance(payload, InvestmentDispatchPayload):
+        return {"request_id": payload.request_id}
+    if isinstance(payload, InvestmentChunkPayload):
+        return {"chunk_id": payload.chunk_id}
+    if isinstance(payload, InvestmentFinalizePayload):
+        return {"run_id": payload.run_id}
+    if isinstance(payload, _REMAINING_PAYLOAD_TYPES):
+        return {"partition_id": payload.partition_id}
+    if isinstance(payload, ProviderUnitPayload):
+        return {"unit_id": payload.unit_id}
     raise ContractDecodeError("unsupported payload type")
 
 

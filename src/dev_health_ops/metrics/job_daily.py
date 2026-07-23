@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dev_health_ops.audit.ai_governance.loaders import build_governance_rows_for_day
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.active_incidents import (
     IncidentWindow,
@@ -1508,7 +1509,9 @@ async def run_daily_metrics_finalize(
             f.name for f in _dc.fields(deps.work_item_user_metrics_daily_record)
         }
 
-        um_query = "SELECT * FROM user_metrics_daily WHERE day = {day:Date}"
+        um_query = (
+            f"SELECT * FROM {dedup_from('user_metrics_daily')} WHERE day = {{day:Date}}"
+        )
         um_params: dict[str, Any] = {"day": day}
         if org_id:
             um_query += " AND org_id = {org_id:String}"

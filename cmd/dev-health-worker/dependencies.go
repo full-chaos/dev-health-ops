@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -113,38 +115,94 @@ func (database *postgresWorkerDatabase) Close() {
 }
 
 type workerDependencySources struct {
-	openDatabase        func(context.Context, config.Config) (workerDatabase, error)
-	loadRuntimeRegistry func(string) (*jobruntime.Registry, error)
-	loadJobRegistry     func(string) (jobcontract.Registry, error)
-	loadDeployment      func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
-	compiledHandlers    func(string) []jobruntime.HandlerSpec
-	newRiverClientID    func() string
-	contractRoot        string
-	deploymentProfile   string
+	openDatabase         func(context.Context, config.Config) (workerDatabase, error)
+	loadRuntimeRegistry  func(string) (*jobruntime.Registry, error)
+	loadJobRegistry      func(string) (jobcontract.Registry, error)
+	loadDeployment       func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
+	compiledHandlers     func(string) []jobruntime.HandlerSpec
+	newRiverClientID     func() string
+	buildOperational     func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildSyncCoordinator func(config.Config, workerDatabase, *slog.Logger) (lifecycle.Component, error)
+	buildDaily           func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildWorkgraph       func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	contractRoot         string
+	deploymentProfile    string
 }
 
 var productionWorkerDependencySources = workerDependencySources{
-	openDatabase:        openWorkerDatabase,
-	loadRuntimeRegistry: jobruntime.Load,
-	loadJobRegistry:     jobcontract.LoadRegistry,
-	loadDeployment:      deploymentcontract.Load,
-	compiledHandlers:    compiledWorkerHandlers,
-	newRiverClientID:    defaultRiverClientID,
-	contractRoot:        defaultContractRoot,
-	deploymentProfile:   defaultDeploymentProfile,
+	openDatabase:         openWorkerDatabase,
+	loadRuntimeRegistry:  jobruntime.Load,
+	loadJobRegistry:      jobcontract.LoadRegistry,
+	loadDeployment:       deploymentcontract.Load,
+	compiledHandlers:     compiledWorkerHandlers,
+	newRiverClientID:     defaultRiverClientID,
+	buildOperational:     buildOperationalWorker,
+	buildSyncCoordinator: buildSyncCoordinatorWorker,
+	buildDaily:           buildDailyWorker,
+	buildProviderSync:    buildProviderSyncWorker,
+	buildWorkgraph:       buildWorkgraphWorker,
+	contractRoot:         defaultContractRoot,
+	deploymentProfile:    defaultDeploymentProfile,
 }
 
 func defaultRiverClientID() string {
 	return (&river.Config{}).WithDefaults().ID
 }
 
-// compiledWorkerHandlers is intentionally empty during the Phase 1
-// foundation. The only checked-in job kinds remain routed to Celery, so this
-// process must neither advertise complete River handler coverage nor fetch
-// their queues. Later phases add concrete adapters and return their Spec values
-// here only after the migration state permits River execution.
-func compiledWorkerHandlers(string) []jobruntime.HandlerSpec {
-	return nil
+// compiledWorkerHandlers advertises code capability independently of routing.
+// Report, daily, and remaining-metrics adapters are complete for the disabled
+// heavy profile, but their checked-in routes remain Celery and cannot fetch.
+func compiledWorkerHandlers(profile string) []jobruntime.HandlerSpec {
+	return compiledWorkerHandlersFromRoot(profile, defaultContractRoot)
+}
+
+var compiledHeavyHandlerKinds = []string{
+	jobcontract.KindDailyMetricsDispatch,
+	jobcontract.KindDailyMetricsFinalize,
+	jobcontract.KindDailyMetricsPartition,
+	jobcontract.KindRemainingCapacity,
+	jobcontract.KindRemainingComplexity,
+	jobcontract.KindRemainingDORA,
+	jobcontract.KindRemainingExtraMetrics,
+	jobcontract.KindRemainingMembership,
+	jobcontract.KindRemainingRecommendations,
+	jobcontract.KindRemainingReleaseImpact,
+	jobcontract.KindRemainingTeamMetrics,
+	jobcontract.KindReportExecuteOnDemand,
+	jobcontract.KindReportExecuteScheduled,
+	jobcontract.KindWorkGraphBuild,
+	jobcontract.KindInvestmentMaterialize,
+	jobcontract.KindInvestmentDispatch,
+	jobcontract.KindInvestmentChunk,
+	jobcontract.KindInvestmentFinalize,
+}
+
+var compiledHandlerKinds = map[string][]string{
+	"heavy": compiledHeavyHandlerKinds,
+	"sync":  {jobcontract.KindTeamAutoimport},
+}
+
+func compiledWorkerHandlersFromRoot(profile, contractRoot string) []jobruntime.HandlerSpec {
+	kinds := compiledHandlerKinds[profile]
+	if len(kinds) == 0 {
+		return nil
+	}
+	registry, err := jobruntime.Load(contractRoot)
+	if err != nil {
+		return nil
+	}
+	handlers := make([]jobruntime.HandlerSpec, 0, len(kinds))
+	for _, kind := range kinds {
+		handler, ok := registry.Descriptor(kind)
+		if !ok || handler.Profile != profile ||
+			handler.MigrationState != "go_implemented" || handler.Route != "celery" ||
+			handler.RollbackRoute != "celery" {
+			return nil
+		}
+		handlers = append(handlers, handler)
+	}
+	return handlers
 }
 
 type workerDependencies struct {
@@ -167,11 +225,21 @@ func configureWorkerDependencies(
 	cfg config.Config,
 	registry *health.Registry,
 ) ([]lifecycle.Component, error) {
+	return configureWorkerDependenciesWithLogger(ctx, cfg, registry, slog.Default())
+}
+
+func configureWorkerDependenciesWithLogger(
+	ctx context.Context,
+	cfg config.Config,
+	registry *health.Registry,
+	logger *slog.Logger,
+) ([]lifecycle.Component, error) {
 	return configureWorkerDependenciesWithSources(
 		ctx,
 		cfg,
 		registry,
 		productionWorkerDependencySources,
+		logger,
 	)
 }
 
@@ -180,7 +248,12 @@ func configureWorkerDependenciesWithSources(
 	cfg config.Config,
 	registry *health.Registry,
 	sources workerDependencySources,
+	loggers ...*slog.Logger,
 ) ([]lifecycle.Component, error) {
+	logger := slog.Default()
+	if len(loggers) > 0 && loggers[0] != nil {
+		logger = loggers[0]
+	}
 	dependencies := buildWorkerDependencies(ctx, cfg, sources)
 	if registry == nil {
 		dependencies.close()
@@ -199,6 +272,7 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, err
 	}
+	providerRuntimeConstructed := false
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -206,6 +280,7 @@ func configureWorkerDependenciesWithSources(
 		{name: "domain_postgres", check: dependencies.domainReady},
 		{name: "job_registry", check: dependencies.jobRegistryReady},
 		{name: "profile_completeness", check: dependencies.profileReady},
+		{name: "provider_route_switches", check: providerRouteSwitchesReady(cfg, &providerRuntimeConstructed)},
 		{name: "queued_contract_versions", check: dependencies.queuedContractVersionsReady},
 		{name: "queue_control_config", check: dependencies.queueControlConfigReady},
 		{name: "queue_postgres", check: dependencies.queueReady},
@@ -220,7 +295,143 @@ func configureWorkerDependenciesWithSources(
 	if dependencies.database == nil {
 		return nil, nil
 	}
-	return []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}, nil
+	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
+	var activeHandlers []jobruntime.HandlerSpec
+	for _, build := range []func(
+		config.Config,
+		workerDatabase,
+		*jobruntime.Registry,
+		jobruntime.Observer,
+		*slog.Logger,
+	) (lifecycle.Component, []jobruntime.HandlerSpec, error){
+		sources.buildOperational,
+		sources.buildDaily,
+		sources.buildWorkgraph,
+	} {
+		if build == nil {
+			continue
+		}
+		component, handlers, err := build(
+			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger,
+		)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+		activeHandlers, err = composeHandlerSpecs(activeHandlers, handlers)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+		if component != nil {
+			components = append(components, component)
+		}
+	}
+	if len(activeHandlers) > 0 {
+		dependencies.startup.Handlers = activeHandlers
+		if err := dependencies.profileReady(ctx); err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+	}
+	if sources.buildSyncCoordinator != nil {
+		component, err := sources.buildSyncCoordinator(cfg, dependencies.database, logger)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+		if component != nil {
+			components = append(components, component)
+		}
+	}
+	if sources.buildProviderSync != nil {
+		component, handlers, err := sources.buildProviderSync(
+			ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
+			dependencies.metrics, logger,
+		)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+		if len(handlers) > 0 {
+			dependencies.startup.Handlers = handlers
+			for _, handler := range handlers {
+				if handler.Kind == jobcontract.KindSyncProviderUnit {
+					providerRuntimeConstructed = true
+				}
+			}
+		}
+		if component != nil {
+			components = append(components, component)
+		}
+	}
+	return components, nil
+}
+
+func composeHandlerSpecs(
+	existing []jobruntime.HandlerSpec,
+	additional []jobruntime.HandlerSpec,
+) ([]jobruntime.HandlerSpec, error) {
+	result := append([]jobruntime.HandlerSpec(nil), existing...)
+	seen := make(map[string]struct{}, len(existing)+len(additional))
+	for _, handler := range existing {
+		if handler.Kind == "" {
+			return nil, errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[handler.Kind]; duplicate {
+			return nil, errWorkerDependencyUnavailable
+		}
+		seen[handler.Kind] = struct{}{}
+	}
+	for _, handler := range additional {
+		if handler.Kind == "" {
+			return nil, errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[handler.Kind]; duplicate {
+			return nil, errWorkerDependencyUnavailable
+		}
+		seen[handler.Kind] = struct{}{}
+		result = append(result, handler)
+	}
+	return result, nil
+}
+
+func providerRouteSwitchesReady(
+	cfg config.Config,
+	runtimeConstructed *bool,
+) health.CheckFunc {
+	switches := providersync.CompleteRouteSwitches{
+		LinearWorkItems:          cfg.WorkerLinearWorkItemsEnabled,
+		JiraWorkItems:            cfg.WorkerJiraWorkItemsEnabled,
+		JiraIncidents:            cfg.WorkerJiraIncidentsEnabled,
+		LaunchDarklyFeatureFlags: cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
+	}
+	routes := []struct {
+		provider string
+		dataset  string
+		enabled  bool
+	}{
+		{"linear", "work-items", cfg.WorkerLinearWorkItemsEnabled},
+		{"jira", "work-items", cfg.WorkerJiraWorkItemsEnabled},
+		{"jira", "incidents", cfg.WorkerJiraIncidentsEnabled},
+		{"launchdarkly", "feature-flags", cfg.WorkerLaunchDarklyFeatureFlagsEnabled},
+	}
+	return func(context.Context) error {
+		for _, route := range routes {
+			if !route.enabled {
+				continue
+			}
+			descriptor, ok := switches.Descriptor(route.provider, route.dataset)
+			if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
+				return errWorkerDependencyUnavailable
+			}
+			if route.provider == "launchdarkly" &&
+				(runtimeConstructed == nil || !*runtimeConstructed) {
+				return errWorkerDependencyUnavailable
+			}
+		}
+		return nil
+	}
 }
 
 type workerMetricsSource struct {
@@ -470,14 +681,33 @@ func (dependencies *workerDependencies) profileReady(context.Context) error {
 	if dependencies == nil || dependencies.registryErr != nil || dependencies.runtimeRegistry == nil || dependencies.startupErr != nil {
 		return errWorkerDependencyUnavailable
 	}
+	expected := make(map[string]jobruntime.Descriptor)
+	for _, descriptor := range dependencies.runtimeRegistry.Profile(dependencies.startup.Profile) {
+		if descriptor.Executable() {
+			expected[descriptor.Kind] = descriptor
+		}
+	}
+	if len(expected) == 0 || len(dependencies.startup.Handlers) != len(expected) {
+		return errWorkerDependencyUnavailable
+	}
+	seen := make(map[string]struct{}, len(dependencies.startup.Handlers))
 	for _, handler := range dependencies.startup.Handlers {
-		descriptor, ok := dependencies.runtimeRegistry.Descriptor(handler.Kind)
-		if !ok || !descriptor.Executable() {
+		descriptor, ok := expected[handler.Kind]
+		if !ok || descriptor.Kind == "" {
+			return errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[handler.Kind]; duplicate {
+			return errWorkerDependencyUnavailable
+		}
+		seen[handler.Kind] = struct{}{}
+		if err := dependencies.runtimeRegistry.ValidateHandler(handler); err != nil {
 			return errWorkerDependencyUnavailable
 		}
 	}
-	if err := dependencies.runtimeRegistry.ValidateStartup(dependencies.startup); err != nil {
-		return errWorkerDependencyUnavailable
+	for kind := range expected {
+		if _, ok := seen[kind]; !ok {
+			return errWorkerDependencyUnavailable
+		}
 	}
 	return nil
 }

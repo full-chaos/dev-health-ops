@@ -109,3 +109,16 @@ func TestManifestRejectsMigrationDSNOnRuntimeProcess(t *testing.T) {
 		t.Fatal("expected migration DSN exposure to fail validation")
 	}
 }
+
+func TestManifestRejectsDuplicateExternalStreamReplicaConfiguration(t *testing.T) {
+	t.Parallel()
+	manifest, registry := loadFixture(t)
+	for index := range manifest.Processes {
+		if manifest.Processes[index].Name == "stream-external" {
+			manifest.Processes[index].MaxReplicas = 2
+		}
+	}
+	if _, err := manifest.Validate(registry); err == nil {
+		t.Fatal("expected duplicate external stream replica configuration to fail")
+	}
+}

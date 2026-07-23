@@ -7,6 +7,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.active_incidents import (
     IncidentWindow,
     active_incidents_query,
@@ -1016,7 +1017,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             sum(delivery_units) as delivery_units_30d,
             median(cycle_p50_hours) as cycle_p50_30d_hours,
             max(work_items_active) as wip_max_30d
-        FROM user_metrics_daily
+        FROM {dedup_from("user_metrics_daily")}
         WHERE day >= {{start:Date}} AND day <= {{end:Date}}
         {org_filter}
         GROUP BY identity_id

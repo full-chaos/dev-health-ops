@@ -13,7 +13,6 @@ from dev_health_ops.models import (
     JobStatus,
     ScheduledJob,
     SyncDispatchOutbox,
-    SyncDispatchTransportRoute,
     SyncRun,
     SyncRunReferenceDiscovery,
     SyncRunStatus,
@@ -178,23 +177,6 @@ def test_feature_denial_clears_transport_binding_from_active_claim(
     state = canonical_state
     graph = _seed_due_schedule(state)
     assert graph.config is not None
-    for kind in (
-        "dispatch_sync_run",
-        "finalize_sync_run",
-        "post_sync",
-        "reference_discovery",
-    ):
-        state.session.add(
-            SyncDispatchTransportRoute(
-                kind=kind,
-                transport="celery",
-                generation=1,
-                paused=False,
-                paused_at=None,
-                rollback_transport="celery",
-            )
-        )
-    state.session.flush()
     monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)
 
     assert sync_scheduler._maybe_dispatch_config(

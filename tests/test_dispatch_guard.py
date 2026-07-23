@@ -233,29 +233,11 @@ def test_concurrency_cap_defers_not_fails(db_session, monkeypatch):
             unit_queued.append(self)
             return self
 
-    class FakeFinalizeSig:
-        def __init__(self, run_id):
-            self.run_id = run_id
-
-        def set(self, *, queue):
-            return self
-
-    class FakeChord:
-        def __init__(self, header, callback):
-            pass
-
         def apply_async(self):
             return None
 
     monkeypatch.setattr(
         sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
-    )
-    monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
     )
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -355,29 +337,11 @@ def test_partial_cap_dispatch_schedules_redispatch(db_session, monkeypatch):
             unit_queued.append(self)
             return self
 
-    class FakeFinalizeSig:
-        def __init__(self, run_id):
-            self.run_id = run_id
-
-        def set(self, *, queue):
-            return self
-
-    class FakeChord:
-        def __init__(self, header, callback):
-            pass
-
         def apply_async(self):
             return None
 
     monkeypatch.setattr(
         sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
-    )
-    monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
     )
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -820,7 +784,7 @@ def _make_dispatch_harness(db_session, monkeypatch, *, unit_count, cap, active_s
     return run, units, integration, source
 
 
-def test_chord_capped_redispatch_failure_preserves_published_work(
+def test_independent_unit_publish_capped_redispatch_failure_preserves_published_work(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import sync_units
@@ -836,44 +800,14 @@ def test_chord_capped_redispatch_failure_preserves_published_work(
         def set(self, *, queue):
             return self
 
-    class FakeFinalizeSig:
-        def __init__(self, run_id):
-            pass
-
-        def set(self, *, queue):
-            return self
-
-    class FakeChord:
-        def __init__(self, header, callback):
-            pass
-
-        def apply_async(self):
-            return None
-
-    monkeypatch.setattr(
-        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
-    )
-    monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
-    )
-
-    call_count = [0]
-
-    class CountingChord:
-        def __init__(self, header, callback):
-            pass
-
         def apply_async(self):
             call_count[0] += 1
             return None
 
     monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: CountingChord(header, callback)
+        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
     )
+    call_count = [0]
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(run)
@@ -1027,29 +961,11 @@ def test_long_running_unit_counts_against_cap_and_is_not_re_enqueued(
         def set(self, *, queue):
             return self
 
-    class FakeFinalizeSig:
-        def __init__(self, run_id):
-            pass
-
-        def set(self, *, queue):
-            return self
-
-    class FakeChord:
-        def __init__(self, header, callback):
-            pass
-
         def apply_async(self):
             return None
 
     monkeypatch.setattr(
         sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "si", lambda run_id: FakeFinalizeSig(run_id)
-    )
-    monkeypatch.setattr(sync_units, "group", list)
-    monkeypatch.setattr(
-        sync_units, "chord", lambda header, callback: FakeChord(header, callback)
     )
     monkeypatch.setattr(
         sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
@@ -277,12 +278,14 @@ func TestQueueInspectionRequiresExactSanitizedProfileCoverage(t *testing.T) {
 	fixture.backend.queues = []QueueSummary{
 		{Name: "retention", Profile: "ops", Available: 2, Running: 1},
 		{Name: "heartbeat", Profile: "ops", Scheduled: 1},
+		{Name: "webhooks", Profile: "ops"},
 	}
 	queues, err := fixture.service.Queues(context.Background(), testPrincipal(), "ops")
 	if err != nil {
 		t.Fatalf("Queues: %v", err)
 	}
-	if len(queues) != 2 || queues[0].Name != "heartbeat" || queues[1].Name != "retention" {
+	if len(queues) != 3 || queues[0].Name != "heartbeat" ||
+		queues[1].Name != "retention" || queues[2].Name != "webhooks" {
 		t.Fatalf("queues were not sanitized/sorted: %+v", queues)
 	}
 
@@ -352,6 +355,7 @@ type serviceFixture struct {
 	guard      *fakeDomainGuard
 	auditor    *fakeAuditor
 	routes     *fakeRouteController
+	jobRoutes  *fakeJobRouteController
 	order      []string
 }
 
@@ -372,17 +376,85 @@ func newServiceFixtureWithRegistry(t *testing.T, registry RuntimeRegistry) *serv
 	fixture.guard = &fakeDomainGuard{order: &fixture.order}
 	fixture.auditor = &fakeAuditor{order: &fixture.order}
 	fixture.routes = &fakeRouteController{order: &fixture.order}
+	fixture.jobRoutes = &fakeJobRouteController{order: &fixture.order}
 	service, err := New(Dependencies{
 		Registry: registry, Backend: fixture.backend, Authorizer: fixture.authorizer,
 		DomainGuard: fixture.guard, Auditor: fixture.auditor,
-		RouteController: fixture.routes,
-		Clock:           func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) },
+		RouteController:    fixture.routes,
+		JobRouteController: fixture.jobRoutes,
+		Clock:              func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	fixture.service = service
 	return fixture
+}
+
+type fakeJobRouteController struct {
+	order *[]string
+	state jobroute.State
+	err   error
+}
+
+func (controller *fakeJobRouteController) Inspect(context.Context, string) (jobroute.State, error) {
+	*controller.order = append(*controller.order, "job_route_inspect")
+	return controller.state, controller.err
+}
+
+func (controller *fakeJobRouteController) Rollback(context.Context, string) (jobroute.State, error) {
+	*controller.order = append(*controller.order, "job_route_rollback")
+	return controller.state, controller.err
+}
+
+func (controller *fakeJobRouteController) ApplyCheckedIn(context.Context, string) (jobroute.State, error) {
+	*controller.order = append(*controller.order, "job_route_apply")
+	return controller.state, controller.err
+}
+
+func TestJobRouteRollbackIsAuthorizedAndDurablyAudited(t *testing.T) {
+	fixture := newServiceFixture(t)
+	fixture.jobRoutes.state = jobroute.State{
+		Kind: jobcontract.KindBillingNotification, Transport: "celery",
+		Generation: 2, UpdatedAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
+	}
+	state, err := fixture.service.RollbackJobRoute(
+		context.Background(), testPrincipal(), jobcontract.KindBillingNotification,
+		"rollback", "corr-job-route-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Generation != 2 ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,job_route_rollback,audit_succeeded" {
+		t.Fatalf("state=%+v order=%v", state, fixture.order)
+	}
+	if fixture.auditor.event.Action != ActionRollbackJobRoute ||
+		fixture.auditor.event.ResourceType != "job_route" {
+		t.Fatalf("audit=%+v", fixture.auditor.event)
+	}
+}
+
+func TestJobRouteApplyIsAuthorizedAndDurablyAudited(t *testing.T) {
+	fixture := newServiceFixture(t)
+	fixture.jobRoutes.state = jobroute.State{
+		Kind: jobcontract.KindBillingNotification, Transport: "river_canary",
+		Generation: 3, UpdatedAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
+	}
+	state, err := fixture.service.ApplyCheckedInJobRoute(
+		context.Background(), testPrincipal(), jobcontract.KindBillingNotification,
+		"canary", "corr-job-route-apply-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Generation != 3 ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,job_route_apply,audit_succeeded" {
+		t.Fatalf("state=%+v order=%v", state, fixture.order)
+	}
+	if fixture.auditor.event.Action != ActionApplyJobRoute {
+		t.Fatalf("audit=%+v", fixture.auditor.event)
+	}
 }
 
 type fakeRouteController struct {

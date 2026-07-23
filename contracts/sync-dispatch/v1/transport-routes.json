@@ -15,7 +15,7 @@
     },
     {
       "kind": "post_sync",
-      "delivery": "at_most_once_mark_before",
+      "delivery": "at_least_once",
       "route": "celery",
       "rollback_route": "celery"
     },

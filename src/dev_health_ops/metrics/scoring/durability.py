@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.scoring.dimensions import (
     ClickHouseClient,
     DimensionScorer,
@@ -46,7 +47,7 @@ class DurabilityScorer(DimensionScorer):
             SELECT
                 avg(pass_rate)  AS avg_pass_rate,
                 avg(flake_rate) AS avg_flake_rate
-            FROM {_TEST_TABLE}
+            FROM {dedup_from(_TEST_TABLE)}
             WHERE org_id = {{org_id:String}}
               AND day = {{day:Date}}
               {team_clause}
@@ -72,7 +73,7 @@ class DurabilityScorer(DimensionScorer):
             SELECT
                 avg(line_coverage_pct)   AS avg_line_cov,
                 avg(branch_coverage_pct) AS avg_branch_cov
-            FROM {_COVERAGE_TABLE}
+            FROM {dedup_from(_COVERAGE_TABLE)}
             WHERE org_id = {{org_id:String}}
               AND day = {{day:Date}}
               {team_clause}

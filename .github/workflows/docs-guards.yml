@@ -1,59 +1,116 @@
 name: Docs Guards
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - 'scripts/validate_docs_v2_publication.py'
+      - 'scripts/check_built_site_links.py'
+      - 'scripts/check_docs_candidate_search.py'
+      - 'scripts/check_docs_candidate_accessibility.py'
+      - 'scripts/check_docs_candidate_facts.py'
+      - 'scripts/mkdocs_migrated_source_links.py'
+      - '.github/documentation-program/content/migrated-source-pages.json'
+      - '.github/documentation-program/ia/**'
+      - '.github/documentation-program/phase-9/**'
+      - '.github/documentation-program/phase-10/**'
+      - '.github/workflows/docs-guards.yml'
   pull_request:
     branches: ['**']
     paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - 'scripts/validate_docs_v2_publication.py'
+      - 'scripts/check_built_site_links.py'
+      - 'scripts/check_docs_candidate_search.py'
+      - 'scripts/check_docs_candidate_accessibility.py'
+      - 'scripts/check_docs_candidate_facts.py'
+      - 'scripts/mkdocs_migrated_source_links.py'
+      - '.github/documentation-program/content/migrated-source-pages.json'
+      - '.github/documentation-program/ia/**'
+      - '.github/documentation-program/phase-9/**'
+      - '.github/documentation-program/phase-10/**'
       - '.github/workflows/docs-guards.yml'
+  merge_group:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-canonical-docs-finalization:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.head_ref == 'agent/docs-content-style-remediation'
+  docs-guards:
+    name: docs-guards
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the documentation branch
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: agent/docs-content-style-remediation
-          fetch-depth: 0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
-      - name: Apply the final canonical documentation cleanup
-        id: finalize
-        continue-on-error: true
-        run: python scripts/pr1256_finalize_docs.py
+      - name: Install documentation dependencies
+        run: pip install -r requirements-docs.txt
 
-      - name: Remove one-time helper files
-        if: always()
+      - name: Validate publication inventory and IA placement
         run: |
-          rm -f \
-            scripts/pr1256_finalize_docs.py \
-            .github/workflows/pr1256-docs-finalize.yml \
-            .github/documentation-program/content/pr-1256-migration-trigger.txt
+          mkdir -p .build
+          set -o pipefail
+          python scripts/validate_docs_v2_publication.py \
+            2>&1 | tee .build/docs-publication-validation.log
 
-      - name: Commit and push the applied state
-        if: always()
+      - name: Strict canonical build
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          if git diff --cached --quiet; then
-            echo 'No finalization changes to commit.'
-          else
-            git commit -m 'docs: apply canonical migration cleanup'
-            git push origin HEAD:agent/docs-content-style-remediation
-          fi
+          set -o pipefail
+          python -m mkdocs build --strict --config-file mkdocs.yml \
+            2>&1 | tee .build/docs-build.log
 
-      - name: Record finalizer outcome
+      - name: Check rendered links, anchors, and assets
+        run: |
+          set -o pipefail
+          python scripts/check_built_site_links.py \
+            --site-dir .build/docs \
+            2>&1 | tee .build/docs-links.log
+
+      - name: Check task-based search acceptance
+        run: |
+          set -o pipefail
+          python scripts/check_docs_candidate_search.py \
+            --site-dir .build/docs \
+            --queries .github/documentation-program/phase-10/search-acceptance.json \
+            2>&1 | tee .build/docs-search.log
+
+      - name: Check structural accessibility invariants
+        run: |
+          set -o pipefail
+          python scripts/check_docs_candidate_accessibility.py \
+            --site-dir .build/docs \
+            --css docs/stylesheets/extra.css \
+            2>&1 | tee .build/docs-accessibility.log
+
+      - name: Check objective documentation facts
+        run: |
+          set -o pipefail
+          python scripts/check_docs_candidate_facts.py \
+            2>&1 | tee .build/docs-facts.log
+
+      - name: Upload documentation quality evidence
         if: always()
-        run: echo "finalizer outcome: ${{ steps.finalize.outcome }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docs-quality-evidence
+          path: |
+            .build/docs-*.log
+            .build/docs-*.tsv
+            .build/docs-*.md
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

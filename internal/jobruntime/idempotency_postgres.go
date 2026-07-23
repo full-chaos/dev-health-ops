@@ -45,7 +45,8 @@ func NewPostgresIdempotency(pool *pgxpool.Pool) (*PostgresIdempotency, error) {
 func (store *PostgresIdempotency) Supports(policy string) bool {
 	switch policy {
 	case "unique_schedule_occurrence", "maintenance_run_checkpoint",
-		"billing_notification", "webhook_delivery":
+		"billing_notification", "webhook_delivery", "daily_metrics_run",
+		"daily_metrics_partition", "daily_metrics_finalize":
 		return true
 	default:
 		return false

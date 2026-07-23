@@ -21,6 +21,9 @@ const (
 	KindRetentionCleanup       = "system.retention_cleanup"
 	KindReportExecuteOnDemand  = "report.execute_on_demand"
 	KindReportExecuteScheduled = "report.execute_scheduled"
+	KindDailyMetricsDispatch   = "metrics.daily_dispatch"
+	KindDailyMetricsPartition  = "metrics.daily_partition"
+	KindDailyMetricsFinalize   = "metrics.daily_finalize"
 	RetentionWorkerTerminal    = "worker_job_terminal"
 )
 
@@ -87,6 +90,25 @@ type ScheduledReportExecutionPayload struct {
 	ReportID string `json:"report_id"`
 }
 
+// DailyMetricsDispatchPayload contains only the authoritative durable run
+// identity. The dispatcher reloads its partition plan from PostgreSQL.
+type DailyMetricsDispatchPayload struct {
+	RunID string `json:"run_id"`
+}
+
+// DailyMetricsPartitionPayload contains only the authoritative durable
+// partition identity. Repository scopes and compute options never travel in
+// River arguments.
+type DailyMetricsPartitionPayload struct {
+	PartitionID string `json:"partition_id"`
+}
+
+// DailyMetricsFinalizePayload contains only the authoritative durable run
+// identity. The finalizer reloads completion counts and generation state.
+type DailyMetricsFinalizePayload struct {
+	RunID string `json:"run_id"`
+}
+
 type wireEnvelope struct {
 	ContractVersion int             `json:"contract_version"`
 	OrganizationID  *string         `json:"organization_id,omitempty"`
@@ -146,6 +168,27 @@ var definitions = map[string]contractDefinition{
 		SupportedVersions: []int{ContractVersionV1},
 		DomainLink:        "report_run",
 		OrganizationScope: "global",
+	},
+	KindDailyMetricsDispatch: {
+		Kind:              KindDailyMetricsDispatch,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "daily_metrics_run",
+		OrganizationScope: "tenant",
+	},
+	KindDailyMetricsPartition: {
+		Kind:              KindDailyMetricsPartition,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "daily_metrics_partition",
+		OrganizationScope: "tenant",
+	},
+	KindDailyMetricsFinalize: {
+		Kind:              KindDailyMetricsFinalize,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "daily_metrics_run",
+		OrganizationScope: "tenant",
 	},
 }
 
@@ -224,6 +267,33 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindDailyMetricsDispatch:
+		var value DailyMetricsDispatchPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindDailyMetricsPartition:
+		var value DailyMetricsPartitionPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindDailyMetricsFinalize:
+		var value DailyMetricsFinalizePayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	default:
 		return Envelope{}, fmt.Errorf("job kind %q has no decoder", kind)
 	}
@@ -254,6 +324,12 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindReportExecuteOnDemand
 	case ScheduledReportExecutionPayload:
 		kind = KindReportExecuteScheduled
+	case DailyMetricsDispatchPayload:
+		kind = KindDailyMetricsDispatch
+	case DailyMetricsPartitionPayload:
+		kind = KindDailyMetricsPartition
+	case DailyMetricsFinalizePayload:
+		kind = KindDailyMetricsFinalize
 	default:
 		return nil, errors.New("unsupported payload type")
 	}
@@ -366,6 +442,27 @@ func (payload OnDemandReportExecutionPayload) validate() error {
 func (payload ScheduledReportExecutionPayload) validate() error {
 	if !uuidPattern.MatchString(payload.ReportID) {
 		return errors.New("report_id must be a lowercase UUID")
+	}
+	return nil
+}
+
+func (payload DailyMetricsDispatchPayload) validate() error {
+	if !uuidPattern.MatchString(payload.RunID) {
+		return errors.New("run_id must be a lowercase UUID")
+	}
+	return nil
+}
+
+func (payload DailyMetricsPartitionPayload) validate() error {
+	if !uuidPattern.MatchString(payload.PartitionID) {
+		return errors.New("partition_id must be a lowercase UUID")
+	}
+	return nil
+}
+
+func (payload DailyMetricsFinalizePayload) validate() error {
+	if !uuidPattern.MatchString(payload.RunID) {
+		return errors.New("run_id must be a lowercase UUID")
 	}
 	return nil
 }

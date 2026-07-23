@@ -2,6 +2,36 @@
   "schema_version": 1,
   "jobs": [
     {
+      "kind": "metrics.daily_dispatch",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "kill_window_matrix", "replay_matrix"]
+    },
+    {
+      "kind": "metrics.daily_finalize",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "kill_window_matrix", "replay_matrix"]
+    },
+    {
+      "kind": "metrics.daily_partition",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "kill_window_matrix", "replay_matrix"]
+    },
+    {
       "kind": "operational.billing_notification",
       "state": "go_implemented",
       "producer_version": 1,

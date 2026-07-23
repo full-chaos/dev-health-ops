@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "owner": "metrics.daily",
+  "source": "src/dev_health_ops/metrics/job_daily.py",
+  "families": [
+    {"name":"repo_user_commit","python":"compute_daily_metrics","writes":["repo_metrics_daily","user_metrics_daily","commit_metrics"],"port":"next_core","golden":"required"},
+    {"name":"team_wellbeing","python":"compute_team_wellbeing_metrics_daily","writes":["team_metrics_daily"],"port":"next_core","golden":"required"},
+    {"name":"file_hotspots","python":"compute_file_hotspots","writes":["file_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"file_risk_hotspots","python":"compute_file_risk_hotspots","writes":["file_hotspot_daily"],"port":"pending","golden":"required"},
+    {"name":"work_item","python":"compute_work_item_metrics_daily","writes":["work_item_metrics_daily","work_item_user_metrics_daily","work_item_cycle_times_daily"],"port":"pending","golden":"required"},
+    {"name":"work_item_estimate","python":"compute_estimate_coverage_metrics_daily","writes":["estimate_coverage_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"work_item_attribution","python":"compute_work_item_team_attributions","writes":["work_item_team_attributions"],"port":"pending","golden":"required"},
+    {"name":"work_item_state","python":"compute_work_item_state_durations_daily","writes":["work_item_state_durations_daily"],"port":"pending","golden":"required"},
+    {"name":"review_edges","python":"compute_review_edges_daily","writes":["review_edges_daily"],"port":"pending","golden":"required"},
+    {"name":"cicd","python":"compute_cicd_metrics_daily","writes":["cicd_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"testops_pipeline","python":"compute_pipeline_metrics_daily","writes":["testops_pipeline_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"testops_test","python":"compute_test_metrics_daily","writes":["testops_test_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"testops_coverage","python":"compute_coverage_metrics_daily","writes":["testops_coverage_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"deploy","python":"compute_deploy_metrics_daily","writes":["deploy_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"incident","python":"compute_incident_metrics_daily","writes":["incident_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"ai_governance","python":"build_governance_rows_for_day","writes":["ai_policy_events","ai_governance_coverage_daily"],"port":"pending","golden":"required"},
+    {"name":"ai_impact","python":"compute_ai_impact_metrics_daily","writes":["ai_impact_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"ai_workflow","python":"_extract_ai_workflow_for_day","writes":["ai_workflow_runs","ai_workflow_artifact_edges","ai_workflow_issue_edges"],"port":"pending","golden":"required"},
+    {"name":"work_graph_edges","python":"extract_review_deployment_incident_edges","writes":["work_graph_pr_review_outcome_edges","work_graph_pr_deployment_edges","work_graph_deployment_incident_edges"],"port":"pending","golden":"required"},
+    {"name":"compounding_risk","python":"_write_compounding_risk_for_day","writes":["compounding_risk_daily"],"port":"pending","golden":"required"},
+    {"name":"testops_risk","python":"compute_release_confidence,compute_quality_drag,compute_pipeline_stability","writes":["release_confidence_daily","quality_drag_daily","pipeline_stability_daily"],"port":"pending","golden":"required"},
+    {"name":"benchmarking","python":"run_benchmarking_for_day","writes":["benchmarking_rollups"],"port":"pending","golden":"required"},
+    {"name":"ic_finalize","python":"compute_ic_metrics_daily,compute_ic_landscape_rolling","writes":["user_metrics_daily","ic_landscape_rolling_30d"],"port":"pending","golden":"required"}
+  ]
+}

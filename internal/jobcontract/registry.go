@@ -439,6 +439,9 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindWebhookDelivery:        {"delivery_id"},
 		KindReportExecuteOnDemand:  {"report_id"},
 		KindReportExecuteScheduled: {"report_id"},
+		KindDailyMetricsDispatch:   {"run_id"},
+		KindDailyMetricsPartition:  {"partition_id"},
+		KindDailyMetricsFinalize:   {"run_id"},
 		KindHeartbeat:              {"scheduled_for"},
 		KindRetentionCleanup:       {"batch_size", "delete_before", "retention_policy"},
 	}[kind]
@@ -450,6 +453,12 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindReportExecuteOnDemand || kind == KindReportExecuteScheduled {
 		return validateUUIDProperty(properties["report_id"])
+	}
+	if kind == KindDailyMetricsDispatch || kind == KindDailyMetricsFinalize {
+		return validateUUIDProperty(properties["run_id"])
+	}
+	if kind == KindDailyMetricsPartition {
+		return validateUUIDProperty(properties["partition_id"])
 	}
 	if kind == KindBillingNotification {
 		return validateUUIDProperty(properties["notification_id"])

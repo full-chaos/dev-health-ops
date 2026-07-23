@@ -105,12 +105,15 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 6 || descriptors[0].Kind != jobcontract.KindBillingNotification ||
-		descriptors[1].Kind != jobcontract.KindWebhookDelivery ||
-		descriptors[2].Kind != jobcontract.KindReportExecuteOnDemand ||
-		descriptors[3].Kind != jobcontract.KindReportExecuteScheduled ||
-		descriptors[4].Kind != jobcontract.KindHeartbeat ||
-		descriptors[5].Kind != jobcontract.KindRetentionCleanup {
+	if len(descriptors) != 9 || descriptors[0].Kind != jobcontract.KindDailyMetricsDispatch ||
+		descriptors[1].Kind != jobcontract.KindDailyMetricsFinalize ||
+		descriptors[2].Kind != jobcontract.KindDailyMetricsPartition ||
+		descriptors[3].Kind != jobcontract.KindBillingNotification ||
+		descriptors[4].Kind != jobcontract.KindWebhookDelivery ||
+		descriptors[5].Kind != jobcontract.KindReportExecuteOnDemand ||
+		descriptors[6].Kind != jobcontract.KindReportExecuteScheduled ||
+		descriptors[7].Kind != jobcontract.KindHeartbeat ||
+		descriptors[8].Kind != jobcontract.KindRetentionCleanup {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	for _, descriptor := range descriptors {

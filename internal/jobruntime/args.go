@@ -107,6 +107,36 @@ type ScheduledReportExecutionArgs struct {
 	EnvelopeArgs[jobcontract.ScheduledReportExecutionPayload]
 }
 
+type DailyMetricsDispatchArgs struct {
+	EnvelopeArgs[jobcontract.DailyMetricsDispatchPayload]
+}
+
+func (DailyMetricsDispatchArgs) Kind() string { return jobcontract.KindDailyMetricsDispatch }
+func (DailyMetricsDispatchArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args DailyMetricsDispatchArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
+type DailyMetricsPartitionArgs struct {
+	EnvelopeArgs[jobcontract.DailyMetricsPartitionPayload]
+}
+
+func (DailyMetricsPartitionArgs) Kind() string { return jobcontract.KindDailyMetricsPartition }
+func (DailyMetricsPartitionArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args DailyMetricsPartitionArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
+type DailyMetricsFinalizeArgs struct {
+	EnvelopeArgs[jobcontract.DailyMetricsFinalizePayload]
+}
+
+func (DailyMetricsFinalizeArgs) Kind() string { return jobcontract.KindDailyMetricsFinalize }
+func (DailyMetricsFinalizeArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args DailyMetricsFinalizeArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
 func (ScheduledReportExecutionArgs) Kind() string { return jobcontract.KindReportExecuteScheduled }
 
 func (ScheduledReportExecutionArgs) SupportedContractVersions() []int {

@@ -103,7 +103,7 @@ func ComputeDORA(day time.Time, deployments []Deployment, incidents []Incident) 
 			})
 		}
 		if len(bucket.leadTimes) > 0 {
-			result = append(result, DORAMetric{RepoID: repoID, Name: "lead_time_for_changes", Value: Median(bucket.leadTimes)})
+			result = append(result, DORAMetric{RepoID: repoID, Name: "lead_time_for_changes", Value: median(bucket.leadTimes)})
 		}
 	}
 	repoIDs = repoIDs[:0]
@@ -115,13 +115,16 @@ func ComputeDORA(day time.Time, deployments []Deployment, incidents []Incident) 
 		result = append(result, DORAMetric{
 			RepoID: repoID,
 			Name:   "time_to_restore_service",
-			Value:  Median(incidentDurations[repoID]),
+			Value:  median(incidentDurations[repoID]),
 		})
 	}
 	return result
 }
 
-func Median(values []float64) float64 {
+func median(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
 	sorted := append([]float64(nil), values...)
 	sort.Float64s(sorted)
 	mid := len(sorted) / 2

@@ -6,13 +6,16 @@ from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
+from dev_health_ops.analytics.complexity import FileComplexity
 from dev_health_ops.metrics.compute_capacity import (
     ThroughputHistory,
     ThroughputSample,
     compute_percentiles,
 )
 from dev_health_ops.metrics.compute_dora import compute_dora_metrics_daily
+from dev_health_ops.metrics.job_complexity_db import _build_snapshots
 from dev_health_ops.metrics.release_impact import _compute_confidence
 from dev_health_ops.metrics.schemas import DeploymentRow, IncidentRow
 
@@ -172,22 +175,40 @@ def _complexity() -> list[dict[str, Any]]:
                 "VeryHighComplexity": 1,
             }
         ],
+        [],
     ]
     result = []
-    for files in cases:
-        loc = sum(row["LOC"] for row in files)
-        cyclomatic = sum(row["CyclomaticTotal"] for row in files)
+    for case_index, files in enumerate(cases):
+        production_files = [
+            FileComplexity(
+                file_path=f"src/file_{index}.py",
+                language="python",
+                loc=row["LOC"],
+                functions_count=1,
+                cyclomatic_total=row["CyclomaticTotal"],
+                cyclomatic_avg=float(row["CyclomaticTotal"]),
+                high_complexity_functions=row["HighComplexity"],
+                very_high_complexity_functions=row["VeryHighComplexity"],
+            )
+            for index, row in enumerate(files)
+        ]
+        _, repo_daily = _build_snapshots(
+            repo_id=UUID(REPO_A),
+            day=DAY,
+            ref_value=f"fixture-{case_index}",
+            file_results=production_files,
+            computed_at=COMPUTED_AT,
+            org_id="org-golden",
+        )
         result.append(
             {
                 "files": files,
                 "expected": {
-                    "LOCTotal": loc,
-                    "CyclomaticTotal": cyclomatic,
-                    "CyclomaticPerKLOC": cyclomatic / (loc / 1000.0) if loc else 0.0,
-                    "HighComplexity": sum(row["HighComplexity"] for row in files),
-                    "VeryHighComplexity": sum(
-                        row["VeryHighComplexity"] for row in files
-                    ),
+                    "LOCTotal": repo_daily.loc_total,
+                    "CyclomaticTotal": repo_daily.cyclomatic_total,
+                    "CyclomaticPerKLOC": repo_daily.cyclomatic_per_kloc,
+                    "HighComplexity": repo_daily.high_complexity_functions,
+                    "VeryHighComplexity": repo_daily.very_high_complexity_functions,
                 },
             }
         )

@@ -97,6 +97,16 @@
           "VeryHighComplexity": 1
         }
       ]
+    },
+    {
+      "expected": {
+        "CyclomaticPerKLOC": 0.0,
+        "CyclomaticTotal": 0,
+        "HighComplexity": 0,
+        "LOCTotal": 0,
+        "VeryHighComplexity": 0
+      },
+      "files": []
     }
   ],
   "dora": [

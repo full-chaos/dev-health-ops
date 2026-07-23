@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import posixpath
 import re
 import sys
 from collections import Counter
@@ -17,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "mkdocs.prototype.yml"
 PHASE9 = ROOT / ".github" / "documentation-program" / "phase-9"
 IA_DIR = ROOT / ".github" / "documentation-program" / "ia"
+MIGRATED_SOURCE_MAP_PATH = (
+    ROOT / ".github" / "documentation-program" / "content" / "migrated-source-pages.json"
+)
 BUILD = ROOT / ".build"
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 FRONT_MATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -25,6 +30,13 @@ FRONT_MATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 def _load_yaml(path: Path) -> dict[str, Any]:
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _load_json_map(path: Path) -> dict[str, str]:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Expected an object in {path}")
+    return {str(key): str(value) for key, value in loaded.items()}
 
 
 def _front_matter(path: Path) -> dict[str, Any]:
@@ -87,27 +99,62 @@ def _load_ia() -> list[dict[str, str]]:
     return rows
 
 
-def _resolve_relative(page: Path, href: str, docs_dir: Path) -> bool:
-    parsed = urlparse(href)
-    if parsed.scheme or parsed.netloc or href.startswith(("#", "mailto:")):
-        return True
-    path_part = parsed.path
-    if not path_part:
-        return True
-    if path_part.startswith("/"):
-        relative = path_part.strip("/")
-        candidates = [docs_dir / relative]
-    else:
-        candidates = [(page.parent / path_part).resolve()]
+def _expanded_candidates(targets: list[Path]) -> list[Path]:
     expanded: list[Path] = []
-    for target in candidates:
+    for target in targets:
         expanded.append(target)
         if target.suffix == "":
             expanded.append(target.with_suffix(".md"))
             expanded.append(target / "index.md")
         elif target.suffix.lower() in {".html", ".htm"}:
             expanded.append(target.with_suffix(".md"))
-    return any(candidate.exists() for candidate in expanded)
+    return expanded
+
+
+def _resolve_source_relative(source_path: str, href: str) -> bool:
+    parsed = urlparse(href)
+    if parsed.scheme or parsed.netloc or href.startswith(("#", "mailto:", "tel:")):
+        return True
+    if not parsed.path:
+        return True
+    if parsed.path.startswith("/"):
+        return False
+
+    resolved = posixpath.normpath(
+        posixpath.join(posixpath.dirname(source_path), parsed.path)
+    )
+    if resolved.startswith("../"):
+        return False
+    target = (ROOT / resolved).resolve()
+    try:
+        target.relative_to(ROOT.resolve())
+    except ValueError:
+        return False
+    return any(candidate.exists() for candidate in _expanded_candidates([target]))
+
+
+def _resolve_relative(
+    page: Path,
+    source_path: str,
+    href: str,
+    docs_dir: Path,
+    migrated_sources: dict[str, str],
+) -> bool:
+    parsed = urlparse(href)
+    if parsed.scheme or parsed.netloc or href.startswith(("#", "mailto:", "tel:")):
+        return True
+    path_part = parsed.path
+    if not path_part:
+        return True
+    if path_part.startswith("/"):
+        targets = [docs_dir / path_part.strip("/")]
+    else:
+        targets = [(page.parent / path_part).resolve()]
+    if any(candidate.exists() for candidate in _expanded_candidates(targets)):
+        return True
+
+    migrated_source = migrated_sources.get(source_path)
+    return bool(migrated_source and _resolve_source_relative(migrated_source, href))
 
 
 def main() -> int:
@@ -116,6 +163,7 @@ def main() -> int:
     docs_dir = (ROOT / str(config.get("docs_dir") or "docs-prototype")).resolve()
     nav_records = _flatten_nav(config.get("nav", []))
     nav_paths = [record["source_path"] for record in nav_records]
+    migrated_sources = _load_json_map(MIGRATED_SOURCE_MAP_PATH)
 
     duplicate_paths = [path for path, count in Counter(nav_paths).items() if count > 1]
     if duplicate_paths:
@@ -131,6 +179,12 @@ def main() -> int:
     off_nav = sorted(actual_markdown - set(nav_paths))
     if off_nav:
         errors.append(f"unclassified Markdown outside navigation: {off_nav[:30]}")
+
+    for target_path, source_path in sorted(migrated_sources.items()):
+        if target_path not in actual_markdown:
+            errors.append(f"migrated-source target does not exist: {target_path}")
+        if not (ROOT / source_path).is_file():
+            errors.append(f"migrated-source input does not exist: {source_path}")
 
     ia_rows = _load_ia()
     ia_by_url = {row["url"]: row for row in ia_rows if row.get("url")}
@@ -175,7 +229,13 @@ def main() -> int:
         text = page.read_text(encoding="utf-8")
         for raw in LINK_RE.findall(text):
             href = raw.strip().split()[0].strip("<>")
-            if not _resolve_relative(page, href, docs_dir):
+            if not _resolve_relative(
+                page,
+                source_path,
+                href,
+                docs_dir,
+                migrated_sources,
+            ):
                 errors.append(f"broken local link: {source_path} -> {raw}")
 
     redirects_path = PHASE9 / "redirects.tsv"

@@ -20,24 +20,21 @@ jobs:
           ref: agent/docs-content-style-remediation
           fetch-depth: 0
 
-      - name: Execute and remove the one-time promotion
+      - name: Promote documentation directories
         shell: bash
         run: |
           set -euo pipefail
 
-          awk '
-            found {
-              sub(/^          /, "")
-              print
-            }
-            /^        run: \|$/ {
-              found = 1
-            }
-          ' .github/workflows/promote-docs-canonical.yml > /tmp/promote-docs.sh
+          git mv docs .github/docs-legacy
+          git mv docs-prototype docs
 
-          bash /tmp/promote-docs.sh
+          rm -f \
+            .github/workflows/promote-docs-canonical.yml \
+            .github/workflows/run-docs-promotion.yml \
+            .github/workflows/ruff-format-probe.yml
 
-          rm -f .github/workflows/run-docs-promotion.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'ci: remove one-time documentation promotion runner'
+          git commit -m 'docs: promote documentation directories'
           git push origin HEAD:agent/docs-content-style-remediation

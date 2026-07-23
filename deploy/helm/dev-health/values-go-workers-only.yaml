@@ -1,0 +1,10 @@
+# Explicit go-only topology. Apply only after every route-owner release gate;
+# it retains the Celery/Beat templates and Valkey DB 0, but scales consumers to
+# zero. Go profiles remain zero until an operator deliberately scales them.
+goWorkers:
+  enabled: true
+worker: {enabled: false}
+workerIngest: {enabled: false}
+workerExternalIngest: {enabled: false}
+workerHeavy: {enabled: false}
+beat: {enabled: false}

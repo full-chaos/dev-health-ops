@@ -43,6 +43,18 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return now }
+	if dispatched, err := store.ClaimDispatch(ctx, runID); err != nil || dispatched == nil || dispatched.Status != "running" {
+		t.Fatalf("dispatch claim = %#v, %v", dispatched, err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'canceled' WHERE id = $1::uuid", runID); err != nil {
+		t.Fatal(err)
+	}
+	if dispatched, err := store.ClaimDispatch(ctx, runID); err != nil || dispatched != nil {
+		t.Fatalf("canceled dispatch = %#v, %v", dispatched, err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'running' WHERE id = $1::uuid", runID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Kill after claim: an unexpired lease suppresses duplicate execution;
 	// advancing the durable clock makes the same partition reclaimable.
@@ -52,6 +64,18 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	}
 	if duplicate, err := store.ClaimPartition(ctx, partitionID); err != nil || duplicate != nil {
 		t.Fatalf("unexpired duplicate = %#v, %v", duplicate, err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'canceled' WHERE id = $1::uuid", runID); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, err := store.ClaimPartition(ctx, partitionID); err != nil || blocked != nil {
+		t.Fatalf("canceled partition claim = %#v, %v", blocked, err)
+	}
+	if err := store.CompletePartition(ctx, *first); err == nil {
+		t.Fatal("canceled run completed an in-flight partition")
+	}
+	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'running' WHERE id = $1::uuid", runID); err != nil {
+		t.Fatal(err)
 	}
 	now = now.Add(store.lease + time.Second)
 	reclaimed, err := store.ClaimPartition(ctx, partitionID)
@@ -68,6 +92,15 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	// Kill between all partition writes and finalize: finalization only claims
 	// after the durable success state is visible, and its token fences a stale
 	// claimant after lease recovery.
+	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'canceled' WHERE id = $1::uuid", runID); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, err := store.ClaimFinalize(ctx, runID); err != nil || blocked != nil {
+		t.Fatalf("canceled finalizer claim = %#v, %v", blocked, err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'running' WHERE id = $1::uuid", runID); err != nil {
+		t.Fatal(err)
+	}
 	firstFinalize, err := store.ClaimFinalize(ctx, runID)
 	if err != nil || firstFinalize == nil {
 		t.Fatalf("first finalize = %#v, %v", firstFinalize, err)

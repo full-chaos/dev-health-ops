@@ -83,6 +83,12 @@ type fakeStore struct {
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
 	return store.run, store.loadErr
 }
+func (store *fakeStore) ClaimDispatch(context.Context, string) (*Run, error) {
+	if store.loadErr != nil {
+		return nil, store.loadErr
+	}
+	return &store.run, nil
+}
 func (*fakeStore) DispatchablePartitions(context.Context, string) ([]Partition, error) {
 	return nil, nil
 }

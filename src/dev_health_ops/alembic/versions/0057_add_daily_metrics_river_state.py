@@ -41,7 +41,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
-            "status IN ('pending', 'running', 'succeeded', 'failed')",
+            "status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')",
             name="ck_daily_metrics_run_status",
         ),
         sa.CheckConstraint(

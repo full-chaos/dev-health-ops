@@ -34,8 +34,8 @@ func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, err
 	}
 	var run Run
 	err := store.pool.QueryRow(ctx, `
-SELECT id::text, org_id::text, generation
-FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&run.ID, &run.OrganizationID, &run.Generation)
+SELECT id::text, org_id::text, generation, status
+FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrInvalidState
 	}
@@ -45,13 +45,35 @@ FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&run.ID, &run.O
 	return run, nil
 }
 
+func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*Run, error) {
+	if !store.valid() || !validUUID(runID) {
+		return nil, ErrUnavailable
+	}
+	var run Run
+	err := store.pool.QueryRow(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'running', updated_at = $1
+WHERE id = $2::uuid AND status IN ('pending', 'running')
+RETURNING id::text, org_id::text, generation, status`, store.now().UTC(), runID).
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	return &run, nil
+}
+
 func (store *PostgresStore) DispatchablePartitions(ctx context.Context, runID string) ([]Partition, error) {
 	if !store.valid() || !validUUID(runID) {
 		return nil, ErrUnavailable
 	}
 	rows, err := store.pool.Query(ctx, `
-SELECT id::text, run_id::text FROM public.daily_metrics_partitions
-WHERE run_id = $1::uuid AND status IN ('pending', 'failed') ORDER BY ordinal`, runID)
+SELECT partition.id::text, partition.run_id::text FROM public.daily_metrics_partitions AS partition
+JOIN public.daily_metrics_runs AS run ON run.id = partition.run_id
+WHERE partition.run_id = $1::uuid AND partition.status IN ('pending', 'failed')
+  AND run.status = 'running' ORDER BY partition.ordinal`, runID)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -82,6 +104,10 @@ SET status = 'running', claim_token = $2, lease_expires_at = $3,
     attempt_count = attempt_count + 1, updated_at = $1
 WHERE id = $4::uuid AND (status IN ('pending', 'failed') OR
       (status = 'running' AND lease_expires_at <= $1))
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_runs AS run
+      WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
+  )
 RETURNING id::text, run_id::text, claim_token::text`,
 		now, token, now.Add(store.lease), partitionID,
 	).Scan(&claim.Partition.ID, &claim.Partition.RunID, &claim.Token)
@@ -111,7 +137,11 @@ UPDATE public.daily_metrics_partitions
 SET status = $1, claim_token = NULL, lease_expires_at = NULL,
     completed_at = CASE WHEN $1 = 'succeeded' THEN $2 ELSE completed_at END,
     updated_at = $2
-WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid`,
+WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_runs AS run
+      WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
+  )`,
 		status, store.now().UTC(), claim.Partition.ID, claim.Partition.RunID, claim.Token)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrUnavailable
@@ -129,16 +159,16 @@ func (store *PostgresStore) ClaimFinalize(ctx context.Context, runID string) (*F
 UPDATE public.daily_metrics_runs AS run
 SET finalization_status = 'running', finalization_claim_token = $2,
     finalization_lease_expires_at = $3, updated_at = $1
-WHERE run.id = $4::uuid
+WHERE run.id = $4::uuid AND run.status = 'running'
   AND NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )
   AND (run.finalization_status IN ('pending', 'failed') OR
       (run.finalization_status = 'running' AND run.finalization_lease_expires_at <= $1))
-RETURNING run.id::text, run.org_id::text, run.generation, run.finalization_claim_token::text`,
+RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finalization_claim_token::text`,
 		now, token, now.Add(store.lease), runID,
-	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Token)
+	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Run.Status, &claim.Token)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -168,7 +198,7 @@ SET finalization_status = $1, finalization_claim_token = NULL,
     status = CASE WHEN $1 = 'succeeded' THEN 'succeeded' ELSE status END,
     updated_at = $2
 WHERE id = $3::uuid AND finalization_status = 'running'
-  AND finalization_claim_token = $4::uuid`, status, store.now().UTC(), claim.Run.ID, claim.Token)
+  AND finalization_claim_token = $4::uuid AND status = 'running'`, status, store.now().UTC(), claim.Run.ID, claim.Token)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrUnavailable
 	}

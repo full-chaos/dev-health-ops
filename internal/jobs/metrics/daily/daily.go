@@ -29,6 +29,7 @@ type Run struct {
 	ID             string
 	OrganizationID string
 	Generation     string
+	Status         string
 }
 
 type Partition struct {
@@ -50,6 +51,7 @@ type FinalizeClaim struct {
 // use bounded leases and fence all completion transitions with their token.
 type Store interface {
 	LoadRun(context.Context, string) (Run, error)
+	ClaimDispatch(context.Context, string) (*Run, error)
 	DispatchablePartitions(context.Context, string) ([]Partition, error)
 	ClaimPartition(context.Context, string) (*PartitionClaim, error)
 	CompletePartition(context.Context, PartitionClaim) error
@@ -93,14 +95,17 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	if execution.Envelope.Domain.ID != runID {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
-	run, err := handler.store.LoadRun(ctx, runID)
+	run, err := handler.store.ClaimDispatch(ctx, runID)
 	if err != nil {
 		if errors.Is(err, ErrInvalidState) {
 			return jobruntime.Permanent(err)
 		}
 		return jobruntime.Retryable(err)
 	}
-	if run.ID != runID || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
+	if run == nil {
+		return nil
+	}
+	if run.ID != runID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	partitions, err := handler.store.DispatchablePartitions(ctx, runID)
@@ -111,7 +116,7 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 		if partition.ID == "" || partition.RunID != runID {
 			return jobruntime.Permanent(ErrInvalidState)
 		}
-		if err := handler.publisher.PublishPartition(ctx, run, partition); err != nil {
+		if err := handler.publisher.PublishPartition(ctx, *run, partition); err != nil {
 			return jobruntime.Retryable(err)
 		}
 	}
@@ -153,7 +158,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		}
 		return jobruntime.Retryable(err)
 	}
-	if claim.Partition.ID != partitionID || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
+	if claim.Partition.ID != partitionID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
 		_ = handler.store.ReleasePartition(ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}
@@ -195,7 +200,7 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 	if claim == nil {
 		return nil
 	}
-	if execution.OrganizationID == nil || claim.Run.ID != runID || claim.Run.OrganizationID != *execution.OrganizationID {
+	if execution.OrganizationID == nil || claim.Run.ID != runID || claim.Run.Status != "running" || claim.Run.OrganizationID != *execution.OrganizationID {
 		_ = handler.store.ReleaseFinalize(ctx, *claim)
 		return jobruntime.Permanent(ErrInvalidState)
 	}

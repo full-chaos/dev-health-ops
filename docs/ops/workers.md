@@ -52,6 +52,43 @@ scrape unavailable instead of publishing a misleading zero. Because Phase 1
 does not compile or start any migrated River handlers, this observability does
 not transfer queue ownership away from Celery.
 
+### Operational-job idempotency foundation (CHAOS-3040)
+
+`worker_job_runs` is the semantic execution record for a logical Go job. It is
+separate from River and `worker_job_outbox`: queue rows say whether work was
+transported, while a run row owns the durable idempotency claim, bounded lease,
+terminal result, and safe error category. A retry may reclaim only an expired
+lease; a completed or terminal key never invokes the handler again. This is
+the required precondition for future provider, billing, webhook, and
+maintenance adapters to make external effects replay-safe.
+
+The first concrete handler is the bounded `system.retention_cleanup` adapter.
+It deletes only one `worker_job_terminal` checkpoint-sized batch and marks the
+same maintenance-run claim through the common idempotency middleware. The
+`system.heartbeat` policy remains explicitly non-retryable. Neither handler is
+compiled into a production River process yet, and both registry routes remain
+Celery; this foundation creates no producer, route, schedule, or deployment
+change. Generic and PagerDuty webhook, billing-email, and provider adapters
+remain Celery-owned until they each have a persisted payload reference plus a
+stable external-effect key and their own shadow/canary evidence.
+
+The current operational inventory is intentionally a coexistence boundary, not
+an activation claim:
+
+| Family | Current side-effect guard | Go migration disposition |
+| --- | --- | --- |
+| Generic provider webhooks | 24-hour cache delivery marker; payload remains Celery task input | Needs a persisted delivery/reference row before a Go contract can avoid carrying raw payloads. |
+| PagerDuty webhooks | Valkey receipt plus stream entry; delete only after success or terminal dead-letter | Celery remains the stream owner until Go proves the read/delete/retry crash windows. |
+| Billing email | bounded Celery retry, but no provider-visible delivery key | Needs a canonical notification row and mail-provider idempotency key. |
+| Phone-home heartbeat | explicit `max_attempts=1` and best-effort endpoint post | Non-retryable; frozen `system.heartbeat` policy remains Celery-routed. |
+| Worker-outbox terminal retention | durable `maintenance_run_checkpoint` claim and bounded SQL delete | Go handler implemented but uncompiled and Celery-routed. |
+| Team autoimport | terminal sync-run post-sync work | Remains coupled to the sync cutover and is out of this independent operational route. |
+
+Each future kind must add and test a one-command rollback to `celery` before
+canary. Today both frozen system kinds already have `celery` as their route and
+rollback route, so no live route reverse exists or is authorized. Do not infer
+that a compiled handler authorizes a transition.
+
 `dev-health-workerctl` is the Phase 1 payload-redacted operator surface. It is
 shipped as a dedicated non-root image target and serialized to one invocation
 per semantic database with a PostgreSQL advisory transaction lock. Create its

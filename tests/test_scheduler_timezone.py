@@ -333,7 +333,9 @@ class TestSyncDispatchDstFold:
 
         trigger_mock = MagicMock(
             return_value=SyncExecutionTriggerResult(
-                sync_run_id="run-1", job_run_id="job-run-1", total_units=1
+                sync_run_id="00000000-0000-4000-8000-000000000101",
+                job_run_id="00000000-0000-4000-8000-000000000102",
+                total_units=1,
             )
         )
         monkeypatch.setattr(

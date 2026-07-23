@@ -556,29 +556,40 @@ The scheduler repeats a bounded loop:
 
 Multiple scheduler replicas are safe. A singleton deployment is no longer a correctness requirement, although only one process may hold a global advisory lock if that mode is selected.
 
-The coordinator in step 6 is a distinct scheduled-configuration planner
-(`sync.plan_scheduled_config`), not `sync.dispatch_run`.
-`sync.dispatch_run` requires an existing `SyncRun`; it cannot turn a
-`SyncConfiguration` occurrence into the authoritative `JobRun`, `SyncRun`,
-units, and dispatch outbox. The planner coordinator must consume a stable
-occurrence identity idempotently and create that domain state in one
-transaction. Its implementation belongs with sync coordination in Phase 4.
-Until that handler and its route are present, Celery Beat plus
-`dispatch_scheduled_syncs` remains the only mutation owner. A Go scheduler may
-evaluate or failure-test occurrences before then, but it must not advance a
-production marker or claim schedule ownership.
+The coordinator in step 6 is a distinct scheduled-configuration planner, not
+`sync.dispatch_run`. `sync.dispatch_run` requires an existing `SyncRun`; it
+cannot turn a `SyncConfiguration` occurrence into the authoritative `JobRun`,
+`SyncRun`, units, and dispatch outbox.
+
+Migration `0050` adds `scheduled_sync_occurrences`, whose versioned identity is
+shared by Python and Go. The active Python scheduler now locks configuration
+then marker state and idempotently creates or reuses that occurrence while
+materializing its `JobRun`, `SyncRun`, units, reference-discovery ledger/outbox,
+and next marker in the same transaction. A failed planner or marker update
+therefore leaves no partial occurrence graph.
+
+The dormant Go coordinator only inserts or verifies the pending occurrence
+identity through the scheduler transaction. The active Python planner accepts
+and completes an existing pending row when its own Celery dispatch reaches the
+same occurrence, which makes concurrent/retried cross-language handoff
+idempotent. No independent worker scans pending occurrences, however, and no
+command constructs the Go coordinator. A Go scheduler that advanced the marker
+by itself would therefore strand the pending row. Until a durable
+pending-occurrence consumer (or equivalent Go planner) and its audited route
+exist, Celery Beat plus `dispatch_scheduled_syncs` remains the only mutation
+owner; a Go scheduler must not advance a production marker or claim schedule
+ownership.
 
 The read-only comparison path in `internal/scheduler/sync` still performs one
 bounded schedule/configuration `SELECT` and evaluates a versioned candidate
 snapshot in memory. Beside it, an unregistered transaction kernel now locks a
-bounded due window with `FOR UPDATE ... SKIP LOCKED`, derives a stable
+bounded due window with `FOR UPDATE ... SKIP LOCKED`, derives the shared
 config-and-occurrence identity, invokes an injected coordinator through the
 same PostgreSQL transaction, and advances `next_run_at` only after that
 coordinator reports a durable handoff. No scheduler command constructs or
-calls this kernel. It also deliberately excludes missing-marker creation,
-organization and entitlement policy, authoritative `JobRun`/`SyncRun`/unit
-and outbox materialization, catch-up policy, and the
-`sync.plan_scheduled_config` handler. Celery Beat and
+calls this kernel. The active Python path remains responsible for
+missing-marker creation, organization and entitlement policy, authoritative
+plan materialization, and catch-up behavior. Celery Beat and
 `dispatch_scheduled_syncs` therefore remain the sole production scheduler.
 
 ### 10.2 Simple periodic maintenance
@@ -684,16 +695,29 @@ For the at-most-once `post_sync` kind it marks dispatched first and invokes a
 separate transaction-local seam that cannot perform the eventual external
 effect. Route generation and claim-token predicates fail closed at the
 terminal write. The checked-in contract currently contains no River route, so
-even explicit mutation mode returns without opening a write transaction, and
-the reconciler command does not construct this kernel.
+even explicit mutation mode returns without opening a write transaction.
+
+The reconciler command now reaches this package only through a shadow adapter
+whose kernel retains no transaction-begin function. The existing observer
+readiness and metrics contract is unchanged, and there is no environment
+toggle that can select mutation.
+
+A separate unregistered materializer reconstructs one bounded candidate window
+for each fixed wakeup kind in one domain transaction. Dispatch, finalize, and
+discovery reuse the current Python pending-skip, terminal-denial, and live-claim
+rules. Post-sync is insert-only: an existing row is never rearmed. The
+materializer does not inspect route ownership, claim an outbox row, or publish a
+transport job, so running its tests beside Celery does not create a second
+execution owner.
 
 This kernel is not the complete reconciler loop. Activation still needs
-command wiring and operator controls, materialization of missing
-dispatch/finalize/post-sync outbox rows, expired-domain-lease repair, persisted
-failure classification and retry backoff, concrete River publishers and
-handlers, and the bounded post-sync quiescence plus external-handoff mechanism.
-The reconciler image packages `contracts/sync-dispatch/v1` so the registry is
-available at runtime; that packaging does not change route ownership.
+an explicit materializer/transport loop, capability-aware route and operator
+controls, expired-domain-lease repair, persisted failure classification and
+retry backoff, a proven domain/queue-role River insertion boundary, concrete
+River publishers and handlers, and the bounded post-sync quiescence plus
+external-handoff mechanism. The reconciler image packages
+`contracts/sync-dispatch/v1` so the registry is available at runtime; that
+packaging does not change route ownership.
 
 - `dispatch_sync_run`: at-least-once queue insertion; unit claims prevent duplicate provider work.
 - `finalize_sync_run`: at-least-once queue insertion; finalization ledger prevents duplicate finalization.

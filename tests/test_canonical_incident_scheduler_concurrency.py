@@ -114,12 +114,15 @@ def test_no_apply_async_after_concurrent_disable_commit(
             assert config is not None
             return sync_scheduler._maybe_dispatch_config(session, config, NOW)
 
-    def remove_override() -> None:
+    def disable_override() -> None:
         assert final_gate_passed.wait(timeout=10)
         with Session(engine) as session:
             override = session.get(OrgFeatureOverride, override_id)
             assert override is not None
-            session.delete(override)
+            # Canonical incident ingestion is default-on. Deleting the
+            # override restores the tier default, so denial requires an
+            # explicit false organization override.
+            override.is_enabled = False
             session.commit()
         with timestamp_lock:
             timestamps["disable_commit"] = monotonic_ns()
@@ -137,7 +140,7 @@ def test_no_apply_async_after_concurrent_disable_commit(
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
             schedule_future = executor.submit(dispatch_schedule)
-            disable_future = executor.submit(remove_override)
+            disable_future = executor.submit(disable_override)
             dispatched = schedule_future.result(timeout=30)
             disable_future.result(timeout=30)
 
@@ -166,11 +169,12 @@ def test_disable_commit_before_scheduler_prevents_enqueue(
     disable_committed = Event()
     dispatch = MagicMock()
 
-    def remove_override() -> None:
+    def disable_override() -> None:
         with Session(engine) as session:
             override = session.get(OrgFeatureOverride, override_id)
             assert override is not None
-            session.delete(override)
+            # Deleting a default-on override does not disable the feature.
+            override.is_enabled = False
             session.commit()
         disable_committed.set()
 
@@ -186,7 +190,7 @@ def test_disable_commit_before_scheduler_prevents_enqueue(
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
-            disable_future = executor.submit(remove_override)
+            disable_future = executor.submit(disable_override)
             schedule_future = executor.submit(dispatch_schedule)
             disable_future.result(timeout=30)
             dispatched = schedule_future.result(timeout=30)

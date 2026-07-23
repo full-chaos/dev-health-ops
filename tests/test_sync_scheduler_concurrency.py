@@ -6,14 +6,20 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from threading import Barrier
+from threading import Barrier, Event
+from time import monotonic_ns
 from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
-from dev_health_ops.models import SyncDispatchOutbox
+from dev_health_ops.models import (
+    JobRun,
+    ScheduledSyncOccurrence,
+    SyncDispatchOutbox,
+    SyncRun,
+)
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import ScheduledJob, SyncConfiguration
 from dev_health_ops.workers import sync_scheduler, sync_units
@@ -175,6 +181,14 @@ def test_postgres_existing_job_marker_prevents_second_dispatcher(
                 session_one.query(SyncDispatchOutbox).filter_by(org_id=org_id).count()
                 == 1
             )
+            assert (
+                session_one.query(ScheduledSyncOccurrence)
+                .filter_by(org_id=org_id)
+                .count()
+                == 1
+            )
+            assert session_one.query(JobRun).filter_by(job_id=job_id).count() == 1
+            assert session_one.query(SyncRun).filter_by(org_id=org_id).count() == 1
         finally:
             session_one.close()
             session_two.close()
@@ -249,6 +263,12 @@ def test_postgres_missing_job_row_race_dispatches_once(monkeypatch):
             assert (
                 verify.query(SyncDispatchOutbox).filter_by(org_id=org_id).count() == 1
             )
+            assert (
+                verify.query(ScheduledSyncOccurrence).filter_by(org_id=org_id).count()
+                == 1
+            )
+            assert verify.query(JobRun).filter_by(job_id=jobs[0].id).count() == 1
+            assert verify.query(SyncRun).filter_by(org_id=org_id).count() == 1
     finally:
         with _session_scope(session_factory) as cleanup:
             for job in (
@@ -262,6 +282,92 @@ def test_postgres_missing_job_row_race_dispatches_once(monkeypatch):
             ):
                 cleanup.delete(job)
             config = cleanup.get(SyncConfiguration, config_id)
+            if config is not None:
+                cleanup.delete(config)
+            cleanup.commit()
+        engine.dispose()
+
+
+@pytest.mark.skipif(
+    not os.environ.get("POSTGRES_SYNC_SCHEDULER_TEST_URL"),
+    reason="POSTGRES_SYNC_SCHEDULER_TEST_URL is not set",
+)
+def test_postgres_config_lock_serializes_schedule_mutation(monkeypatch):
+    pytest.importorskip("psycopg2")
+    from sqlalchemy.orm import sessionmaker
+
+    from dev_health_ops.sync import execution_trigger
+
+    url = os.environ["POSTGRES_SYNC_SCHEDULER_TEST_URL"]
+    engine = create_engine(url)
+    Base.metadata.create_all(engine)
+    _ensure_postgres_sync_marker_constraint(engine)
+    session_factory = sessionmaker(bind=engine)
+    org_id = f"scheduler-config-lock-{uuid.uuid4()}"
+    now = datetime.now(timezone.utc)
+
+    monkeypatch.setitem(sys.modules, "croniter", _hourly_croniter_module())
+    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_: True)
+    real_trigger = execution_trigger.create_sync_execution_trigger
+    planner_entered = Event()
+    release_planner = Event()
+    timestamps: dict[str, int] = {}
+
+    def pause_planner(*args, **kwargs):
+        planner_entered.set()
+        assert release_planner.wait(timeout=10)
+        return real_trigger(*args, **kwargs)
+
+    monkeypatch.setattr(
+        execution_trigger, "create_sync_execution_trigger", pause_planner
+    )
+
+    with _session_scope(session_factory) as setup:
+        config = _make_config(setup, last_sync_at=now - 2 * HOUR, org_id=org_id)
+        job = _make_job(config)
+        setup.add(job)
+        setup.commit()
+        config_id = config.id
+        job_id = job.id
+
+    def dispatch_schedule() -> bool:
+        with _session_scope(session_factory) as session:
+            config = session.get(SyncConfiguration, config_id)
+            assert config is not None
+            result = sync_scheduler._maybe_dispatch_config(session, config, now)
+            timestamps["dispatch_commit"] = monotonic_ns()
+            return result
+
+    def pause_schedule() -> None:
+        assert planner_entered.wait(timeout=10)
+        with _session_scope(session_factory) as session:
+            config = session.get(SyncConfiguration, config_id)
+            assert config is not None
+            config.is_active = False
+            session.commit()
+            timestamps["mutation_commit"] = monotonic_ns()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            dispatch_future = executor.submit(dispatch_schedule)
+            mutation_future = executor.submit(pause_schedule)
+            assert planner_entered.wait(timeout=10)
+            release_planner.set()
+            assert dispatch_future.result(timeout=30) is True
+            mutation_future.result(timeout=30)
+
+        assert timestamps["dispatch_commit"] < timestamps["mutation_commit"]
+        with _session_scope(session_factory) as verify:
+            assert (
+                verify.query(ScheduledSyncOccurrence).filter_by(org_id=org_id).count()
+                == 1
+            )
+    finally:
+        with _session_scope(session_factory) as cleanup:
+            job = cleanup.get(ScheduledJob, job_id)
+            config = cleanup.get(SyncConfiguration, config_id)
+            if job is not None:
+                cleanup.delete(job)
             if config is not None:
                 cleanup.delete(config)
             cleanup.commit()

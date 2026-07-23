@@ -67,6 +67,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	database := &fakeReconcilerDatabase{}
 	calls := 0
 	syncCalls := 0
+	shadowBuilds := 0
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildRelay = func(*pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
@@ -74,7 +75,8 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 			return joboutbox.StepResult{}, nil
 		}), nil
 	}
-	sources.buildSyncObserver = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
+	sources.buildSyncShadow = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
+		shadowBuilds++
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			syncCalls++
 			return syncreconciler.Observation{}, nil
@@ -111,6 +113,9 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	}
 	if syncCalls != 1 {
 		t.Fatalf("immediate sync observer calls = %d, want 1", syncCalls)
+	}
+	if shadowBuilds != 1 {
+		t.Fatalf("sync shadow builds = %d, want 1", shadowBuilds)
 	}
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
@@ -293,12 +298,12 @@ func TestReconcilerSyncRegistryLoadFailureClosesDatabaseAndFailsReadiness(t *tes
 	}
 }
 
-func TestReconcilerSyncObserverBuildFailureClosesDatabaseAndFailsReadiness(t *testing.T) {
+func TestReconcilerSyncShadowBuildFailureClosesDatabaseAndFailsReadiness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeReconcilerDatabase{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildSyncObserver = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
-		return nil, errors.New("sync observer construction failed")
+	sources.buildSyncShadow = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
+		return nil, errors.New("sync shadow construction failed")
 	}
 
 	registry := health.NewRegistry(100 * time.Millisecond)
@@ -486,7 +491,7 @@ func reconcilerSourcesForTest(t *testing.T, database reconcilerDatabase) reconci
 	sources.buildSyncRouteFence = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error) {
 		return syncrouteCheckFunc(func(context.Context) error { return nil }), nil
 	}
-	sources.buildSyncObserver = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
+	sources.buildSyncShadow = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			return syncreconciler.Observation{}, nil
 		}), nil

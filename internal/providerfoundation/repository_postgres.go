@@ -51,7 +51,9 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 		}
 		record.Ciphertext = secrets.NewValue(cipherText)
 		record.Config = map[string]string{}
-		_ = decodeConfig(configJSON, record.Config)
+		if err := decodeConfig(configJSON, record.Config); err != nil {
+			return EncryptedCredential{}, ErrCredentialInvalid
+		}
 		matches = append(matches, record)
 	}
 	if err := rows.Err(); err != nil || len(matches) == 0 {

@@ -17,6 +17,7 @@ import (
 
 const maxProviderRequestBody = 1 << 20
 const maxProviderErrorBody = 64 << 10
+const defaultReservationReleaseTimeout = 5 * time.Second
 
 // RetryPolicy is an attempt budget, not a nested retry multiplier. A request
 // gets at most MaxAttempts calls including the initial call.
@@ -63,6 +64,10 @@ type HTTPClient struct {
 	Budget    BudgetStore
 	BudgetKey BudgetKey
 	Metrics   *Metrics
+
+	// ReservationReleaseTimeout bounds cleanup independently from a cancelled
+	// request. Zero uses defaultReservationReleaseTimeout.
+	ReservationReleaseTimeout time.Duration
 }
 
 func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
@@ -73,7 +78,7 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: doer, Auth: auth, Retry: retry, Lease: lease}, nil
 }
 
-func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {
 	if c == nil || c.BaseURL == nil {
 		return nil, ErrCredentialInvalid
 	}
@@ -96,7 +101,6 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		}
 	}
 	var reservation Reservation
-	var err error
 	if c.Budget != nil {
 		reservation, err = c.Budget.Acquire(ctx, c.BudgetKey)
 		if err != nil {
@@ -105,7 +109,28 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			}
 			return nil, err
 		}
-		defer reservation.Release(context.Background())
+		if reservation == nil {
+			if c.Metrics != nil {
+				c.Metrics.RecordBudgetDenied(c.Provider)
+			}
+			return nil, ErrBudgetUnavailable
+		}
+		defer func() {
+			releaseErr := c.releaseReservation(ctx, reservation)
+			if releaseErr == nil {
+				return
+			}
+			if c.Metrics != nil {
+				c.Metrics.RecordBudgetReleaseError(c.Provider)
+			}
+			if err == nil {
+				if response != nil && response.Body != nil {
+					_ = response.Body.Close()
+				}
+				response = nil
+			}
+			err = errors.Join(err, releaseErr)
+		}()
 	}
 	target, err := c.BaseURL.Parse(path)
 	if err != nil || target.Host != c.BaseURL.Host {
@@ -123,23 +148,32 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if err := c.Auth(request); err != nil {
 			return nil, err
 		}
-		response, requestErr := c.Doer.Do(request)
+		var requestErr error
+		response, requestErr = c.Doer.Do(request)
 		if requestErr != nil {
 			last = &ProviderError{Class: ErrorTransient}
 			c.observe(last.Class)
-			if err := c.wait(ctx, attempt, 0); err != nil {
+			if attempt == c.Retry.MaxAttempts {
+				return nil, last
+			}
+			if err := c.wait(ctx, c.retryDelay(attempt, 0)); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
-		classification := ClassifyHTTPWithMessage(c.Provider, response.StatusCode, response.Header, string(message))
+		classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
 		if classification == nil {
 			c.observe("")
 			return response, nil
 		}
+		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
+		classification = ClassifyHTTPWithMessage(c.Provider, response.StatusCode, response.Header, string(message))
+		retryDelay := c.retryDelay(attempt, classification.RetryAfter)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {
-			_ = c.Gate.Penalize(ctx, classification.RetryAfter)
+			if err := c.Gate.Penalize(ctx, retryDelay); err != nil {
+				_ = response.Body.Close()
+				return nil, err
+			}
 		}
 		_ = response.Body.Close()
 		last = classification
@@ -147,7 +181,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if !classification.Retryable() || attempt == c.Retry.MaxAttempts {
 			return nil, classification
 		}
-		if err := c.wait(ctx, attempt, classification.RetryAfter); err != nil {
+		if err := c.wait(ctx, retryDelay); err != nil {
 			return nil, err
 		}
 	}
@@ -157,15 +191,31 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 	return nil, last
 }
 
-func (c *HTTPClient) wait(ctx context.Context, attempt int, retryAfter time.Duration) error {
-	wait := retryAfter
-	if wait <= 0 {
-		wait = c.Retry.InitialWait << (attempt - 1)
-		if wait > c.Retry.MaxWait {
-			wait = c.Retry.MaxWait
+func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		if retryAfter > c.Retry.MaxWait {
+			return c.Retry.MaxWait
 		}
+		return retryAfter
+	}
+	wait := c.Retry.InitialWait
+	for current := 1; current < attempt && wait < c.Retry.MaxWait; current++ {
+		if wait > c.Retry.MaxWait/2 {
+			wait = c.Retry.MaxWait
+			break
+		}
+		wait *= 2
+	}
+	if wait < c.Retry.MaxWait {
 		wait += time.Duration(rand.Int64N(int64(wait/5 + 1)))
 	}
+	if wait > c.Retry.MaxWait {
+		return c.Retry.MaxWait
+	}
+	return wait
+}
+
+func (c *HTTPClient) wait(ctx context.Context, wait time.Duration) error {
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
@@ -174,6 +224,19 @@ func (c *HTTPClient) wait(ctx context.Context, attempt int, retryAfter time.Dura
 	case <-timer.C:
 		return nil
 	}
+}
+
+func (c *HTTPClient) releaseReservation(ctx context.Context, reservation Reservation) error {
+	timeout := c.ReservationReleaseTimeout
+	if timeout <= 0 {
+		timeout = defaultReservationReleaseTimeout
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := reservation.Release(releaseCtx); err != nil {
+		return ErrBudgetUnavailable
+	}
+	return nil
 }
 
 func (c *HTTPClient) observe(class ErrorClass) {

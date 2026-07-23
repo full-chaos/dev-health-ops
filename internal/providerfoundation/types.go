@@ -88,6 +88,22 @@ func (c Credential) Secret(name string) (secrets.Value, bool) {
 	return v, ok
 }
 
+// WithEphemeralSecret returns a copy augmented with a short-lived secret from
+// an explicit token repository. It lets OAuth hydration remain outside the
+// process environment without mutating the persisted credential descriptor.
+func (c Credential) WithEphemeralSecret(name string, value secrets.Value) (Credential, error) {
+	if strings.TrimSpace(name) == "" || !value.Configured() {
+		return Credential{}, ErrCredentialInvalid
+	}
+	fields := make(map[string]secrets.Value, len(c.fields)+1)
+	for key, existing := range c.fields {
+		fields[key] = existing
+	}
+	fields[name] = value
+	c.fields = fields
+	return c, nil
+}
+
 func (c Credential) SafeAttributes() map[string]any {
 	return map[string]any{
 		"provider": c.Provider, "credential_id_configured": c.ID != "",

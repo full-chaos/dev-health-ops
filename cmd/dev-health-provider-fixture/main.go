@@ -60,6 +60,9 @@ func run(args []string, stdout io.Writer) error {
 		if classification == nil {
 			return fmt.Errorf("fixture %s has a successful status", item.ID)
 		}
+		if classification.Class != item.Classification {
+			return fmt.Errorf("fixture %s classification mismatch", item.ID)
+		}
 		output.Cases = append(output.Cases, resultCase{ID: item.ID, Classification: classification.Class})
 	}
 	return json.NewEncoder(stdout).Encode(output)

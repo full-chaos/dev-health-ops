@@ -22,6 +22,13 @@ import (
 
 const githubAPIBase = "https://api.github.com"
 const gitlabAPIBase = "https://gitlab.com"
+const linearAPIBase = "https://api.linear.app"
+const launchDarklyAPIBase = "https://app.launchdarkly.com"
+const pagerDutyAPIBase = "https://api.pagerduty.com"
+const pagerDutyEUAPIBase = "https://api.eu.pagerduty.com"
+const pagerDutyTokenURL = "https://identity.pagerduty.com/oauth/token"
+const pagerDutyAccept = "application/vnd.pagerduty+json;version=2"
+const pagerDutyReadScopes = "escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read"
 
 // NewGitHubClient constructs either PAT or GitHub App authentication from the
 // same typed credential shape that Python accepts. App tokens remain in this
@@ -65,6 +72,90 @@ func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, leas
 	return NewHTTPClient("jira", credentialBaseURL(credential, ""), doer, auth, retry, lease)
 }
 
+func NewLinearClient(credential Credential, doer HTTPDoer, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
+	if credential.Provider != "linear" || ValidateCredentialShape(credential) != nil {
+		return nil, ErrCredentialInvalid
+	}
+	token, _ := credential.Secret("api_key")
+	auth := TokenAuth("Authorization", "", token)
+	return NewHTTPClient("linear", credentialBaseURL(credential, linearAPIBase), doer, withJSONContentType(auth), retry, lease)
+}
+
+func NewLaunchDarklyClient(credential Credential, doer HTTPDoer, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
+	if credential.Provider != "launchdarkly" || ValidateCredentialShape(credential) != nil {
+		return nil, ErrCredentialInvalid
+	}
+	token, _ := credential.Secret("api_key")
+	auth := TokenAuth("Authorization", "", token)
+	return NewHTTPClient("launchdarkly", credentialBaseURL(credential, launchDarklyAPIBase), doer, withJSONContentType(auth), retry, lease)
+}
+
+func NewPagerDutyClient(credential Credential, doer HTTPDoer, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
+	if credential.Provider != "pagerduty" || ValidateCredentialShape(credential) != nil {
+		return nil, ErrCredentialInvalid
+	}
+	base := pagerDutyAPIBase
+	if credentialValue(credential, "region") == "eu" {
+		base = pagerDutyEUAPIBase
+	}
+	base = credentialBaseURL(credential, base)
+	mode := credentialValue(credential, "auth_mode")
+	if mode == "" {
+		if token, ok := credential.Secret("api_token"); ok && token.Configured() {
+			mode = "api_token"
+		} else if token, ok := credential.Secret("access_token"); ok && token.Configured() {
+			mode = "oauth"
+		} else {
+			mode = "client_credentials"
+		}
+	}
+	var auth Auth
+	switch mode {
+	case "api_token":
+		token, _ := credential.Secret("api_token")
+		auth = TokenAuth("Authorization", "Token token=", token)
+	case "oauth":
+		token, _ := credential.Secret("access_token")
+		auth = TokenAuth("Authorization", "Bearer ", token)
+	case "client_credentials":
+		tokenAuth, err := NewPagerDutyClientCredentialsAuth(credential, doer)
+		if err != nil {
+			return nil, err
+		}
+		auth = tokenAuth.Apply
+	default:
+		return nil, ErrCredentialInvalid
+	}
+	return NewHTTPClient("pagerduty", base, doer, withPagerDutyAccept(auth), retry, lease)
+}
+
+func withJSONContentType(auth Auth) Auth {
+	return func(request *http.Request) error {
+		if err := auth(request); err != nil {
+			return err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		return nil
+	}
+}
+
+func withPagerDutyAccept(auth Auth) Auth {
+	return func(request *http.Request) error {
+		if err := auth(request); err != nil {
+			return err
+		}
+		request.Header.Set("Accept", pagerDutyAccept)
+		return nil
+	}
+}
+
+func credentialValue(credential Credential, name string) string {
+	if value, ok := credential.Secret(name); ok && value.Configured() {
+		return strings.TrimSpace(value.Reveal())
+	}
+	return strings.TrimSpace(credential.Config[name])
+}
+
 func credentialBaseURL(credential Credential, fallback string) string {
 	for _, name := range []string{"base_url", "url", "gitlab_url"} {
 		if value, ok := credential.Secret(name); ok && value.Configured() {
@@ -77,6 +168,93 @@ func credentialBaseURL(credential Credential, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// PagerDutyClientCredentialsAuth exchanges an explicit client credential for
+// a short-lived bearer token. Tokens are retained only on this client instance.
+type PagerDutyClientCredentialsAuth struct {
+	clientID, subdomain, region, scope string
+	clientSecret                       secrets.Value
+	doer                               HTTPDoer
+	now                                func() time.Time
+	mu                                 sync.Mutex
+	token                              secrets.Value
+	expiresAt                          time.Time
+}
+
+func NewPagerDutyClientCredentialsAuth(credential Credential, doer HTTPDoer) (*PagerDutyClientCredentialsAuth, error) {
+	clientID, _ := credential.Secret("client_id")
+	clientSecret, _ := credential.Secret("client_secret")
+	subdomain, _ := credential.Secret("subdomain")
+	if doer == nil || !clientID.Configured() || !clientSecret.Configured() || !subdomain.Configured() {
+		return nil, ErrCredentialInvalid
+	}
+	region := credentialValue(credential, "region")
+	if region == "" {
+		region = "us"
+	}
+	return &PagerDutyClientCredentialsAuth{
+		clientID:     clientID.Reveal(),
+		clientSecret: clientSecret,
+		subdomain:    subdomain.Reveal(),
+		region:       region,
+		scope:        pagerDutyReadScopes,
+		doer:         doer,
+		now:          time.Now,
+	}, nil
+}
+
+func (a *PagerDutyClientCredentialsAuth) Apply(request *http.Request) error {
+	token, err := a.accessToken(request.Context())
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+token.Reveal())
+	return nil
+}
+
+func (a *PagerDutyClientCredentialsAuth) accessToken(ctx context.Context) (secrets.Value, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.token.Configured() && a.expiresAt.After(a.now().Add(time.Minute)) {
+		return a.token, nil
+	}
+	form := url.Values{
+		"grant_type":    {"client_credentials"},
+		"client_id":     {a.clientID},
+		"client_secret": {a.clientSecret.Reveal()},
+		"subdomain":     {a.subdomain},
+		"region":        {a.region},
+	}
+	if a.scope != "" {
+		form.Set("scope", a.scope)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, pagerDutyTokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return secrets.Value{}, ErrCredentialInvalid
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := a.doer.Do(request)
+	if err != nil {
+		return secrets.Value{}, &ProviderError{Class: ErrorTransient}
+	}
+	defer response.Body.Close()
+	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
+		return secrets.Value{}, classification
+	}
+	var payload struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, maxProviderErrorBody)).Decode(&payload) != nil || payload.AccessToken == "" {
+		return secrets.Value{}, ErrCredentialInvalid
+	}
+	if payload.ExpiresIn < 1 {
+		payload.ExpiresIn = 3600
+	}
+	a.token = secrets.NewValue(payload.AccessToken)
+	a.expiresAt = a.now().Add(time.Duration(payload.ExpiresIn) * time.Second)
+	return a.token, nil
 }
 
 // GitHubAppAuth mints an installation token through the documented GitHub

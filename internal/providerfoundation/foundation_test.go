@@ -58,6 +58,39 @@ func TestCredentialResolverRequiresLeaseAndDoesNotExposeSecret(t *testing.T) {
 		t.Fatal("wrong secret")
 	}
 }
+
+func TestDecodeConfigRejectsMalformedStoredJSON(t *testing.T) {
+	t.Parallel()
+	target := map[string]string{}
+	if err := decodeConfig([]byte(`{"base_url":`), target); err == nil {
+		t.Fatal("malformed credential config was accepted")
+	}
+	if len(target) != 0 {
+		t.Fatalf("target mutated after malformed config: %v", target)
+	}
+}
+
+func TestCredentialEphemeralSecretDoesNotMutateDescriptor(t *testing.T) {
+	t.Parallel()
+	descriptor := Credential{
+		Provider: "pagerduty",
+		fields: map[string]secrets.Value{
+			"auth_mode":             secrets.NewValue("oauth"),
+			"oauth_credential_name": secrets.NewValue("default"),
+		},
+	}
+	hydrated, err := descriptor.WithEphemeralSecret("access_token", secrets.NewValue("ephemeral"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := descriptor.Secret("access_token"); exists {
+		t.Fatal("persisted descriptor was mutated")
+	}
+	token, exists := hydrated.Secret("access_token")
+	if !exists || token.Reveal() != "ephemeral" {
+		t.Fatal("hydrated credential is missing its ephemeral token")
+	}
+}
 func TestHTTPClassificationAndPaginationFixtures(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

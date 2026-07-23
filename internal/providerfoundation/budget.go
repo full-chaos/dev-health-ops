@@ -185,13 +185,18 @@ func (g ValkeyBackoffGate) Penalize(ctx context.Context, delay time.Duration) er
 }
 
 type Metrics struct {
-	mu           sync.Mutex
-	requests     map[string]uint64
-	budgetDenied map[string]uint64
+	mu                  sync.Mutex
+	requests            map[string]uint64
+	budgetDenied        map[string]uint64
+	budgetReleaseErrors map[string]uint64
 }
 
 func NewMetrics() *Metrics {
-	return &Metrics{requests: map[string]uint64{}, budgetDenied: map[string]uint64{}}
+	return &Metrics{
+		requests:            map[string]uint64{},
+		budgetDenied:        map[string]uint64{},
+		budgetReleaseErrors: map[string]uint64{},
+	}
 }
 func metricProvider(value string) string {
 	switch strings.ToLower(value) {
@@ -216,6 +221,14 @@ func (m *Metrics) RecordBudgetDenied(provider string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.budgetDenied[metricProvider(provider)]++
+}
+func (m *Metrics) RecordBudgetReleaseError(provider string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.budgetReleaseErrors[metricProvider(provider)]++
 }
 func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	if m == nil {
@@ -243,6 +256,17 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	for _, provider := range providers {
 		value := m.budgetDenied[provider]
 		if _, err := fmt.Fprintf(writer, "dev_health_provider_budget_denied_total{provider=%q} %d\n", provider, value); err != nil {
+			return err
+		}
+	}
+	providers = providers[:0]
+	for provider := range m.budgetReleaseErrors {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	for _, provider := range providers {
+		value := m.budgetReleaseErrors[provider]
+		if _, err := fmt.Fprintf(writer, "dev_health_provider_budget_release_errors_total{provider=%q} %d\n", provider, value); err != nil {
 			return err
 		}
 	}

@@ -131,6 +131,41 @@ func ValidateCredentialShape(credential Credential) error {
 		if !has("api_key") {
 			return ErrCredentialInvalid
 		}
+	case "launchdarkly":
+		if !has("api_key") {
+			return ErrCredentialInvalid
+		}
+	case "pagerduty":
+		mode := credentialValue(credential, "auth_mode")
+		if mode == "" {
+			switch {
+			case has("api_token"):
+				mode = "api_token"
+			case has("access_token"):
+				mode = "oauth"
+			case has("client_id") && has("client_secret"):
+				mode = "client_credentials"
+			}
+		}
+		switch mode {
+		case "api_token":
+			if !has("api_token") || has("access_token") {
+				return ErrCredentialInvalid
+			}
+		case "oauth":
+			if !has("access_token") || has("api_token") {
+				return ErrCredentialInvalid
+			}
+		case "client_credentials":
+			if !has("client_id") || !has("client_secret") || !has("subdomain") || has("api_token") {
+				return ErrCredentialInvalid
+			}
+		default:
+			return ErrCredentialInvalid
+		}
+		if region := credentialValue(credential, "region"); region != "" && region != "us" && region != "eu" {
+			return ErrCredentialInvalid
+		}
 	default:
 		return fmt.Errorf("%w: unsupported provider", ErrCredentialInvalid)
 	}

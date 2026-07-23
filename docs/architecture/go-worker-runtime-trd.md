@@ -931,6 +931,11 @@ and decryption, then reads the existing organization/provider-scoped
 Fernet ciphertext (and the legacy format), never reads or writes provider
 credentials through process-global environment mutation, and only reveals a
 typed secret at explicit HTTP-auth construction.
+Typed constructors cover GitHub (PAT or App), GitLab, Jira, Linear,
+LaunchDarkly, and PagerDuty (API token, OAuth bearer, or client-credentials
+exchange). Every token and refresh cache belongs to the constructed client;
+none of these constructors consults or mutates process-global environment
+state.
 
 The shared Valkey backoff gate uses the current Python key exactly:
 `rate_limit:<provider>:<org-or-_>:<host-or-_>`. Its Lua operation preserves the
@@ -940,10 +945,14 @@ provider/org/host/credential-fingerprint/dimension/route-family bucket; the
 authoritative durable reservation remains the unit's `DISPATCHING`/`RUNNING`
 lease. Provider/org/host/cost local concurrency counters use bounded Valkey Lua
 counters and must be released in `defer`; an unavailable reservation causes
-unit deferral rather than a sleeping worker.
-HTTP retry has a total-attempt budget, bounded backoff, `Retry-After`, and job
-context cancellation. It returns a sanitized error class, never a raw response
-body or credentials.
+unit deferral rather than a sleeping worker. Release uses a separate bounded
+cleanup context and exposes failures through
+`dev_health_provider_budget_release_errors_total`.
+HTTP retry has a total-attempt budget, bounded backoff, bounded integer or HTTP
+date `Retry-After`, and job context cancellation. A 429 without a
+`Retry-After` value publishes the same computed local wait to the shared gate.
+Successful response bodies remain unread for the dataset adapter. Errors
+return a sanitized class, never a raw response body or credentials.
 
 Provider adapters emit versioned normalized envelopes containing tenant and
 source identity, dedupe key, observation time, and provenance. Postgres writes
@@ -951,8 +960,12 @@ run in one transaction and ClickHouse writes use a fixed provenance-preserving
 column set. The sanitized `internal/providerfoundation/testdata/provider_parity.json`
 corpus covers auth, not-found, conflict, rate-limit, transient, and pagination
 cases. `go run ./cmd/dev-health-provider-fixture` emits the evaluated canonical
-JSON result for Python shadow comparison. This foundation is not a worker
-activation; provider-specific canary gates remain required.
+JSON result for Python shadow comparison and fails if any computed class differs
+from the checked-in expectation. The separate
+`tests/compatibility/provider/run.sh` harness compares Go sink-ready envelopes
+with actual Python `WorkItem`, feature-flag, and canonical operational models
+across all six covered providers. This foundation is not a worker activation;
+provider-specific canary gates remain required.
 
 River queue concurrency is insufficient for global provider limits because it is local to each client/process.
 

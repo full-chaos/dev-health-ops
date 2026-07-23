@@ -11,15 +11,16 @@ import (
 
 var ErrWorkerRegistration = errors.New("sync dispatch worker registration failed")
 
-// RegisterWorkers adds the three at-least-once coordinator consumers. post_sync
-// intentionally remains outside this registration until CHAOS-3051's delivery
-// semantics are activated and independently proven.
+// RegisterWorkers adds all four guarded at-least-once coordinator consumers.
+// Each worker carries only a durable domain reference and delegates execution
+// through the authenticated compatibility boundary.
 func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge) error {
 	if workers == nil || bridge == nil {
 		return ErrWorkerRegistration
 	}
 	if river.AddWorkerSafely(workers, &dispatchWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &finalizeWorker{bridge: bridge}) != nil ||
+		river.AddWorkerSafely(workers, &postSyncWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil {
 		return ErrWorkerRegistration
 	}
@@ -27,12 +28,11 @@ func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge) error {
 }
 
 // RouteCapabilities is the exact River surface registered by this runtime.
-// It deliberately excludes post_sync until its at-least-once worker is wired
-// and proven through the same route-generation terminal fence.
 func RouteCapabilities() []syncroute.Capability {
 	return []syncroute.Capability{
 		{Kind: syncdispatchcontract.KindDispatchSyncRun, Transport: syncdispatchcontract.RouteRiver},
 		{Kind: syncdispatchcontract.KindFinalizeSyncRun, Transport: syncdispatchcontract.RouteRiver},
+		{Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver},
 		{Kind: syncdispatchcontract.KindReferenceDiscovery, Transport: syncdispatchcontract.RouteRiver},
 	}
 }
@@ -59,6 +59,18 @@ func (worker *finalizeWorker) Work(ctx context.Context, job *river.Job[FinalizeS
 		return ErrWorkerRegistration
 	}
 	return worker.bridge.Finalize(ctx, job.Args)
+}
+
+type postSyncWorker struct {
+	river.WorkerDefaults[PostSyncArgs]
+	bridge CoordinatorBridge
+}
+
+func (worker *postSyncWorker) Work(ctx context.Context, job *river.Job[PostSyncArgs]) error {
+	if worker == nil || worker.bridge == nil || job == nil {
+		return ErrWorkerRegistration
+	}
+	return worker.bridge.PostSync(ctx, job.Args)
 }
 
 type referenceDiscoveryWorker struct {

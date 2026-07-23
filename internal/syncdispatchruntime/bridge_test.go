@@ -74,3 +74,28 @@ func TestHTTPBridgeRejectsUnsafeOrUnsuccessfulDelivery(t *testing.T) {
 		t.Fatalf("Finalize() error=%v", err)
 	}
 }
+
+func TestHTTPBridgePostsPostSyncReferenceToDedicatedEndpoint(t *testing.T) {
+	t.Parallel()
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		path = request.URL.Path
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	bridge, err := NewHTTPBridge(HTTPBridgeConfig{
+		BaseURL: server.URL, BearerToken: "token", Timeout: time.Second, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: testOrg, RunID: testRun, DispatchOutbox: testOutbox, RouteGeneration: 2,
+	}}
+	if err := bridge.PostSync(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/internal/worker-sync/post-sync" {
+		t.Fatalf("path=%q", path)
+	}
+}

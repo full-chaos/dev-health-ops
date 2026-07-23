@@ -194,14 +194,12 @@ func TestRouteCapabilitiesMatchTheRegisteredAtLeastOnceWorkers(t *testing.T) {
 	for _, kind := range []string{
 		syncdispatchcontract.KindDispatchSyncRun,
 		syncdispatchcontract.KindFinalizeSyncRun,
+		syncdispatchcontract.KindPostSync,
 		syncdispatchcontract.KindReferenceDiscovery,
 	} {
 		if _, ok := capabilities.Lookup(kind, syncdispatchcontract.RouteRiver); !ok {
 			t.Fatalf("missing River capability for %s", kind)
 		}
-	}
-	if _, ok := capabilities.Lookup(syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteRiver); ok {
-		t.Fatal("post_sync capability advertised before its worker is registered")
 	}
 }
 

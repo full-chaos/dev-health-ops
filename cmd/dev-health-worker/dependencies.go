@@ -152,12 +152,21 @@ func compiledWorkerHandlers(profile string) []jobruntime.HandlerSpec {
 	if err != nil {
 		return nil
 	}
-	handlers := registry.Profile(profile)
-	for _, handler := range handlers {
+	handlers := make([]jobruntime.HandlerSpec, 0, 2)
+	for _, handler := range registry.Profile(profile) {
+		switch handler.Kind {
+		case "report.execute_on_demand", "report.execute_scheduled":
+		default:
+			continue
+		}
 		if handler.MigrationState != "go_implemented" || handler.Route != "celery" ||
 			handler.RollbackRoute != "celery" {
 			return nil
 		}
+		handlers = append(handlers, handler)
+	}
+	if len(handlers) != 2 {
+		return nil
 	}
 	return handlers
 }

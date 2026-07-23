@@ -13,10 +13,11 @@ image target receives the operator token only when an operator invokes it.
 Go workload renderer: runtime DSN usernames must match both declared role names
 before a process can become ready.
 
-The checked-in Compose, Swarm, Kubernetes, and Helm stacks still render the
-Celery topology; none currently renders the Go `processes` entries. Static
-deployment-contract tests bind the shared PgBouncer budget and one-shot
-migration wiring to those real manifests until Go workload renderers land.
+The default Compose, Swarm, Kubernetes, and Helm stacks still render only the
+Celery topology. Additive Go workload overlays now render the declared
+`processes` at zero replicas and require an explicit coexistence or Go-only
+selection. Static deployment-contract tests bind those overlays, the shared
+PgBouncer budget, and one-shot migration wiring to the real manifests.
 
 The contract gate validates that:
 

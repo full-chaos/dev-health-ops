@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "correlation_id": "webhook-delivery-0001",
+  "idempotency_key": "webhook:github:delivery-0001",
+  "domain": {
+    "type": "webhook_delivery",
+    "id": "00000000-0000-4000-8000-000000000012"
+  },
+  "payload": {
+    "delivery_id": "00000000-0000-4000-8000-000000000012"
+  }
+}

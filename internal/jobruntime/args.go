@@ -57,6 +57,34 @@ type RetentionCleanupArgs struct {
 	EnvelopeArgs[jobcontract.RetentionCleanupPayload]
 }
 
+type BillingNotificationArgs struct {
+	EnvelopeArgs[jobcontract.BillingNotificationPayload]
+}
+
+func (BillingNotificationArgs) Kind() string { return jobcontract.KindBillingNotification }
+
+func (BillingNotificationArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args BillingNotificationArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
+type WebhookDeliveryArgs struct {
+	EnvelopeArgs[jobcontract.WebhookDeliveryPayload]
+}
+
+func (WebhookDeliveryArgs) Kind() string { return jobcontract.KindWebhookDelivery }
+
+func (WebhookDeliveryArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args WebhookDeliveryArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 // OnDemandReportExecutionArgs is the River-facing form of
 // report.execute_on_demand.v1.
 type OnDemandReportExecutionArgs struct {

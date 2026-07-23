@@ -35,6 +35,13 @@ from dev_health_ops.licensing import (
 )
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.models.operational_deliveries import BillingNotification
+from dev_health_ops.workers.job_contracts import BillingNotificationPayload
+from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_routes import (
+    resolve_worker_job_route,
+    route_requires_celery,
+    route_requires_outbox,
+)
 from dev_health_ops.workers.system_tasks import send_billing_notification
 
 from ._helpers import assign_attr, require_str, require_uuid
@@ -95,7 +102,9 @@ async def _enqueue_billing_notification(
     suffix = provider_identity or hashlib.sha256(canonical.encode()).hexdigest()
     idempotency_key = f"billing:{email_type}:{org_uuid}:{suffix}"
     async with get_postgres_session() as session:
+        notification_id = uuid.uuid4()
         notification = BillingNotification(
+            id=notification_id,
             org_id=org_uuid,
             notification_type=email_type,
             idempotency_key=idempotency_key,
@@ -104,7 +113,7 @@ async def _enqueue_billing_notification(
         session.add(notification)
         try:
             await session.commit()
-            notification_id: uuid.UUID = notification.id
+            notification_id = notification.id
         except IntegrityError:
             await session.rollback()
             existing_notification_id = await session.scalar(
@@ -115,9 +124,46 @@ async def _enqueue_billing_notification(
             if existing_notification_id is None:
                 raise
             notification_id = existing_notification_id
-    return cast(_BillingNotificationTask, send_billing_notification).delay(
-        durable_notification_id=str(notification_id)
+    route = await _route_billing_notification(
+        notification_id=notification_id,
+        org_id=org_uuid,
+        idempotency_key=idempotency_key,
     )
+    if route_requires_celery(route):
+        return cast(_BillingNotificationTask, send_billing_notification).delay(
+            durable_notification_id=str(notification_id)
+        )
+    return {"status": "routed", "transport": route}
+
+
+async def _route_billing_notification(
+    *,
+    notification_id: uuid.UUID,
+    org_id: uuid.UUID,
+    idempotency_key: str,
+) -> str:
+    async with get_postgres_session() as session:
+        async with session.begin():
+            route = await session.run_sync(
+                lambda sync_session: resolve_worker_job_route(
+                    sync_session, BillingNotificationPayload.KIND
+                )
+            )
+            if route_requires_outbox(route):
+                await session.run_sync(
+                    lambda sync_session: enqueue_worker_job(
+                        sync_session,
+                        BillingNotificationPayload(
+                            notification_id=str(notification_id)
+                        ),
+                        correlation_id=f"billing-notification:{notification_id}",
+                        idempotency_key=idempotency_key,
+                        domain_id=str(notification_id),
+                        organization_id=str(org_id),
+                        allow_deferred_route=True,
+                    )
+                )
+    return route
 
 
 logger = logging.getLogger(__name__)

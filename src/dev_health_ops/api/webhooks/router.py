@@ -24,6 +24,13 @@ from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.operational_deliveries import WebhookDelivery
+from dev_health_ops.workers.job_contracts import WebhookDeliveryPayload
+from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_routes import (
+    resolve_worker_job_route,
+    route_requires_celery,
+    route_requires_outbox,
+)
 from dev_health_ops.workers.system_tasks import process_webhook_event
 
 from .auth import GitHubWebhookBody, GitLabWebhookBody, JiraWebhookBody
@@ -58,6 +65,7 @@ async def _persist_webhook_delivery(event: WebhookEvent) -> uuid.UUID:
     digest = hashlib.sha256(raw_payload.encode()).hexdigest()
     async with get_postgres_session() as session:
         delivery = WebhookDelivery(
+            id=uuid.uuid4(),
             provider=str(event.provider),
             delivery_key=key,
             event_type=str(event.event_type),
@@ -87,10 +95,12 @@ async def _persist_webhook_delivery(event: WebhookEvent) -> uuid.UUID:
 async def _dispatch_webhook_task(event: WebhookEvent) -> uuid.UUID:
     """Persist first, then send Celery only the durable delivery reference."""
     delivery_id = await _persist_webhook_delivery(event)
+    route = await _route_webhook_delivery(event, delivery_id)
     try:
-        getattr(process_webhook_event, "delay")(
-            durable_delivery_id=str(delivery_id),
-        )
+        if route_requires_celery(route):
+            getattr(process_webhook_event, "delay")(
+                durable_delivery_id=str(delivery_id),
+            )
         logger.info(
             "Dispatched webhook event: provider=%s type=%s delivery=%s",
             event.provider,
@@ -106,6 +116,31 @@ async def _dispatch_webhook_task(event: WebhookEvent) -> uuid.UUID:
             delivery_id,
         )
     return delivery_id
+
+
+async def _route_webhook_delivery(event: WebhookEvent, delivery_id: uuid.UUID) -> str:
+    digest = hashlib.sha256(
+        f"{event.provider}:{_delivery_key(event)}".encode()
+    ).hexdigest()
+    async with get_postgres_session() as session:
+        async with session.begin():
+            route = await session.run_sync(
+                lambda sync_session: resolve_worker_job_route(
+                    sync_session, WebhookDeliveryPayload.KIND
+                )
+            )
+            if route_requires_outbox(route):
+                await session.run_sync(
+                    lambda sync_session: enqueue_worker_job(
+                        sync_session,
+                        WebhookDeliveryPayload(delivery_id=str(delivery_id)),
+                        correlation_id=f"webhook-delivery:{delivery_id}",
+                        idempotency_key=f"webhook:{digest}",
+                        domain_id=str(delivery_id),
+                        allow_deferred_route=True,
+                    )
+                )
+    return route
 
 
 @router.post("/github", response_model=WebhookResponse)

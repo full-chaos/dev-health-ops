@@ -15,6 +15,8 @@ const (
 	MaxEnvelopeBytes = 16 * 1024
 
 	ContractVersionV1          = 1
+	KindBillingNotification    = "operational.billing_notification"
+	KindWebhookDelivery        = "operational.webhook_delivery"
 	KindHeartbeat              = "system.heartbeat"
 	KindRetentionCleanup       = "system.retention_cleanup"
 	KindReportExecuteOnDemand  = "report.execute_on_demand"
@@ -60,6 +62,18 @@ type RetentionCleanupPayload struct {
 	RetentionPolicy string `json:"retention_policy"`
 }
 
+// BillingNotificationPayload carries only the durable PostgreSQL reference.
+// Rendering inputs and recipient addresses remain authoritative domain state.
+type BillingNotificationPayload struct {
+	NotificationID string `json:"notification_id"`
+}
+
+// WebhookDeliveryPayload carries only the durable PostgreSQL reference. Raw
+// provider bodies and credentials are never serialized into River.
+type WebhookDeliveryPayload struct {
+	DeliveryID string `json:"delivery_id"`
+}
+
 // OnDemandReportExecutionPayload identifies the authoritative SavedReport for
 // an already-created manual ReportRun. The domain link supplies the run ID.
 type OnDemandReportExecutionPayload struct {
@@ -91,6 +105,20 @@ type contractDefinition struct {
 }
 
 var definitions = map[string]contractDefinition{
+	KindBillingNotification: {
+		Kind:              KindBillingNotification,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "billing_notification",
+		OrganizationScope: "tenant",
+	},
+	KindWebhookDelivery: {
+		Kind:              KindWebhookDelivery,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "webhook_delivery",
+		OrganizationScope: "global",
+	},
 	KindHeartbeat: {
 		Kind:              KindHeartbeat,
 		CurrentVersion:    ContractVersionV1,
@@ -142,6 +170,24 @@ func Decode(kind string, data []byte) (Envelope, error) {
 
 	var payload any
 	switch kind {
+	case KindBillingNotification:
+		var value BillingNotificationPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindWebhookDelivery:
+		var value WebhookDeliveryPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	case KindHeartbeat:
 		var value HeartbeatPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
@@ -196,6 +242,10 @@ func Decode(kind string, data []byte) (Envelope, error) {
 func MarshalCanonical(envelope Envelope) ([]byte, error) {
 	kind := ""
 	switch envelope.Payload.(type) {
+	case BillingNotificationPayload:
+		kind = KindBillingNotification
+	case WebhookDeliveryPayload:
+		kind = KindWebhookDelivery
 	case HeartbeatPayload:
 		kind = KindHeartbeat
 	case RetentionCleanupPayload:
@@ -288,6 +338,20 @@ func (payload RetentionCleanupPayload) validate() error {
 	}
 	if payload.RetentionPolicy != RetentionWorkerTerminal {
 		return errors.New("unsupported retention_policy")
+	}
+	return nil
+}
+
+func (payload BillingNotificationPayload) validate() error {
+	if !uuidPattern.MatchString(payload.NotificationID) {
+		return errors.New("notification_id must be a lowercase UUID")
+	}
+	return nil
+}
+
+func (payload WebhookDeliveryPayload) validate() error {
+	if !uuidPattern.MatchString(payload.DeliveryID) {
+		return errors.New("delivery_id must be a lowercase UUID")
 	}
 	return nil
 }

@@ -435,6 +435,8 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		return fmt.Errorf("no compiled schema validator for version %d", version)
 	}
 	expectedFields := map[string][]string{
+		KindBillingNotification:    {"notification_id"},
+		KindWebhookDelivery:        {"delivery_id"},
 		KindReportExecuteOnDemand:  {"report_id"},
 		KindReportExecuteScheduled: {"report_id"},
 		KindHeartbeat:              {"scheduled_for"},
@@ -448,6 +450,12 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindReportExecuteOnDemand || kind == KindReportExecuteScheduled {
 		return validateUUIDProperty(properties["report_id"])
+	}
+	if kind == KindBillingNotification {
+		return validateUUIDProperty(properties["notification_id"])
+	}
+	if kind == KindWebhookDelivery {
+		return validateUUIDProperty(properties["delivery_id"])
 	}
 	batch, ok := properties["batch_size"].(map[string]any)
 	if !ok || batch["type"] != "integer" || fmt.Sprint(batch["minimum"]) != "1" || fmt.Sprint(batch["maximum"]) != "1000" {

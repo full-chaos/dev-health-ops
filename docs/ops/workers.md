@@ -48,9 +48,10 @@ dedicated DSN/mode/role-separation contract without exposing a DSN. Queue
 depth, oldest eligible age, execution
 saturation, and both PostgreSQL pool saturation ratios are sampled from the
 live database on each metrics scrape. A database sampling failure makes that
-scrape unavailable instead of publishing a misleading zero. Because Phase 1
-does not compile or start any migrated River handlers, this observability does
-not transfer queue ownership away from Celery.
+scrape unavailable instead of publishing a misleading zero. Operational
+adapters are compiled into the `ops` binary, but are registered with River only
+when their checked-in route is executable. The seeded durable routes remain
+Celery, so this observability does not transfer queue ownership.
 
 ### Operational-job idempotency foundation (CHAOS-3040)
 
@@ -62,15 +63,23 @@ lease; a completed or terminal key never invokes the handler again. This is
 the required precondition for future provider, billing, webhook, and
 maintenance adapters to make external effects replay-safe.
 
+Migration `0055` adds `worker_job_routes`, the runtime source of truth for each
+job transport and generation. Producers read the route with `FOR SHARE` in the
+same transaction that stages `worker_job_outbox`; rollback takes `FOR UPDATE`
+and refuses pending/claimed outbox rows, running semantic claims, or active
+River jobs. Missing, paused, or policy-drifted rows fail closed.
+
 The first concrete handler is the bounded `system.retention_cleanup` adapter.
 It deletes only one `worker_job_terminal` checkpoint-sized batch and marks the
 same maintenance-run claim through the common idempotency middleware. The
 `system.heartbeat` policy remains explicitly non-retryable. Neither handler is
 compiled into a production River process yet, and both registry routes remain
 Celery; this foundation creates no producer, route, schedule, or deployment
-change. Generic webhook and billing email now have persisted reference rows,
-but remain Celery-owned until their Go provider adapters and shadow/canary
-evidence exist. PagerDuty remains Celery-owned until Go proves the
+change. Generic webhook and billing email now have persisted reference rows and
+concrete Go handlers. The `ops` profile factory wires their PostgreSQL stores,
+runtime middleware, bounded HTTP dispatcher, and River adapters, but does not
+register them while their checked-in routes remain Celery. PagerDuty remains
+Celery-owned until Go proves the
 read/delete/retry crash windows.
 
 The current operational inventory is intentionally a coexistence boundary, not
@@ -85,10 +94,24 @@ an activation claim:
 | Worker-outbox terminal retention | durable `maintenance_run_checkpoint` claim and bounded SQL delete | Go handler implemented but uncompiled and Celery-routed. |
 | Team autoimport | terminal sync-run post-sync work | Remains coupled to the sync cutover and is out of this independent operational route. |
 
-Each future kind must add and test a one-command rollback to `celery` before
-canary. Today both frozen system kinds already have `celery` as their route and
-rollback route, so no live route reverse exists or is authorized. Do not infer
-that a compiled handler authorizes a transition.
+The authenticated operator surface applies only checked-in policy:
+
+```bash
+dev-health-workerctl job-routes status operational.webhook_delivery
+dev-health-workerctl job-routes apply \
+  --reason canary_start --correlation-id change-123 \
+  operational.webhook_delivery
+dev-health-workerctl job-routes rollback \
+  --reason canary_abort --correlation-id incident-456 \
+  operational.webhook_delivery
+```
+
+`apply` moves Celery to the exact route committed in migration policy; it
+cannot select an arbitrary transport. `rollback` returns to the checked-in
+rollback route and refuses to succeed until outbox, semantic-run, and River
+work are quiescent. Both mutations are authenticated, serialized,
+generation-fenced, and durably audited. Today all six route rows and policies
+remain Celery, so `apply` is a no-op and no River ownership is authorized.
 
 `dev-health-workerctl` is the Phase 1 payload-redacted operator surface. It is
 shipped as a dedicated non-root image target and serialized to one invocation
@@ -134,6 +157,17 @@ is fail-closed: the loop only opens readiness after one successful step, and
 persistence failures close it instead of being reported as harmless lease
 races.
 
+The operational effect bridge is an authenticated internal API. Set
+`WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
+`WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the
+optional `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` is bounded from 100ms to 30s and
+defaults to 10s. Plain HTTP is accepted only for loopback development, never
+for container service DNS. Requests contain durable UUID references and
+bounded routing metadata only. Webhook `success`/duplicate `skipped` and
+billing `sent` are success; deterministic `error`/`dropped` results become
+permanent 422 rejections, while transport failures, timeouts, 429, 5xx, and
+malformed upstream responses remain retryable.
+
 The typed `syncdispatchruntime` package is dormant and all-or-nothing. Its
 claim projection drops the claim token, its River args validate the exact
 contract/version/UUID/generation tuple, its publisher only calls `InsertTx`
@@ -152,13 +186,13 @@ so the checked-in scheduler state stays non-authoritative and avoids silent
 candidate starvation.
 
 The checked-in deployment profile still keeps the topology disabled
-(`coexistence_disabled`, all replicas `0`), both registered kinds still route
-to Celery, no current domain producer calls the bridge, and no Go handler is
-compiled. Celery therefore remains the only production writer. Migration
-policy is loaded at process startup: before a future rollback changes the
-checked-in route, stop new production, drain or classify in-flight River work,
-restore Celery routing, and restart the reconciler. Deferred generic-outbox
-rows remain auditable; the bridge does not silently republish them to Celery.
+(`coexistence_disabled`, all replicas `0`), all registered kinds still route
+to Celery, and no operational adapter is registered with River. Celery
+therefore remains the only production writer. Durable route policy is
+refreshed by producers and the relay; a successful audited rollback requires
+quiescence and takes effect without a reconciler restart. Deferred
+generic-outbox rows remain auditable; the bridge does not silently republish
+them to Celery.
 The Go foundations now also include bounded read-only sync-outbox observation,
 sync-schedule evaluation, and a database-backed sync-dispatch ownership fence.
 Migration `0049` seeds the four fixed sync wakeup kinds as active Celery routes

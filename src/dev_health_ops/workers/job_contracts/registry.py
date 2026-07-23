@@ -10,10 +10,12 @@ from typing import Any
 from .codec import ContractDecodeError, load_json_document
 from .models import (
     CONTRACT_VERSION_V1,
+    KIND_BILLING_NOTIFICATION,
     KIND_HEARTBEAT,
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_WEBHOOK_DELIVERY,
 )
 
 _MAX_ARTIFACT_BYTES = 512 * 1024
@@ -196,6 +198,8 @@ def load_registry(root: Path | None = None) -> Registry:
         raise ContractDecodeError("registry contains duplicate kinds")
 
     expected = {
+        KIND_BILLING_NOTIFICATION: (CONTRACT_VERSION_V1,),
+        KIND_WEBHOOK_DELIVERY: (CONTRACT_VERSION_V1,),
         KIND_REPORT_EXECUTE_ON_DEMAND: (CONTRACT_VERSION_V1,),
         KIND_REPORT_EXECUTE_SCHEDULED: (CONTRACT_VERSION_V1,),
         KIND_HEARTBEAT: (CONTRACT_VERSION_V1,),

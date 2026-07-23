@@ -36,6 +36,9 @@ def mock_celery(monkeypatch):
     async def fake_persist(event):
         return event.id
 
+    async def fake_route(event, delivery_id):
+        return "celery"
+
     def fake_delay(**kwargs):
         calls.append(kwargs)
 
@@ -44,6 +47,7 @@ def mock_celery(monkeypatch):
 
     monkeypatch.setattr(webhook_router, "process_webhook_event", FakeTask())
     monkeypatch.setattr(webhook_router, "_persist_webhook_delivery", fake_persist)
+    monkeypatch.setattr(webhook_router, "_route_webhook_delivery", fake_route)
     return calls
 
 

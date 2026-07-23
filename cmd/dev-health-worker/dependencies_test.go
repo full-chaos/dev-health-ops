@@ -24,7 +24,7 @@ func TestWorkerSpecConfiguresDependencies(t *testing.T) {
 	if !slices.Equal(workerSpec.Profiles, []string{"latency", "sync", "heavy", "ops"}) {
 		t.Fatalf("unexpected worker profiles: %v", workerSpec.Profiles)
 	}
-	if workerSpec.ConfigureDependencies == nil {
+	if workerSpec.ConfigureDependenciesWithLogger == nil {
 		t.Fatal("worker dependency configuration is not wired")
 	}
 }

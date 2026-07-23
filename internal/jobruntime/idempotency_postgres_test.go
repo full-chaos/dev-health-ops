@@ -9,13 +9,16 @@ import (
 func TestPostgresIdempotencyOnlySupportsRegistryPolicies(t *testing.T) {
 	t.Parallel()
 	store := &PostgresIdempotency{}
-	for _, policy := range []string{"unique_schedule_occurrence", "maintenance_run_checkpoint"} {
+	for _, policy := range []string{
+		"unique_schedule_occurrence", "maintenance_run_checkpoint",
+		"billing_notification", "webhook_delivery",
+	} {
 		if !store.Supports(policy) {
 			t.Fatalf("policy %q must be supported", policy)
 		}
 	}
-	if store.Supports("webhook_delivery") {
-		t.Fatal("unimplemented external-effect policy was accepted")
+	if store.Supports("unregistered_policy") {
+		t.Fatal("unregistered policy was accepted")
 	}
 }
 

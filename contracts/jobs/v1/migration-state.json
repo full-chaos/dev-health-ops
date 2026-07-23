@@ -2,6 +2,26 @@
   "schema_version": 1,
   "jobs": [
     {
+      "kind": "operational.billing_notification",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["ops"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
+    },
+    {
+      "kind": "operational.webhook_delivery",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["ops"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
+    },
+    {
       "kind": "report.execute_on_demand",
       "state": "go_implemented",
       "producer_version": 1,

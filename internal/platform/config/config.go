@@ -66,17 +66,20 @@ type Config struct {
 	ClickHouseURI     secrets.Value
 	ValkeyURI         secrets.Value
 
-	QueueDatabaseMode       QueueControlMode
-	RiverDatabaseSchema     string
-	DomainDatabaseRole      string
-	QueueDatabaseRole       string
-	DomainTransactionPooler bool
-	DomainDatabaseMaxConns  int32
-	QueueDatabaseMaxConns   int32
-	CompletedJobRetention   time.Duration
-	CancelledJobRetention   time.Duration
-	DiscardedJobRetention   time.Duration
-	RiverJobCleanerTimeout  time.Duration
+	QueueDatabaseMode        QueueControlMode
+	RiverDatabaseSchema      string
+	DomainDatabaseRole       string
+	QueueDatabaseRole        string
+	DomainTransactionPooler  bool
+	DomainDatabaseMaxConns   int32
+	QueueDatabaseMaxConns    int32
+	CompletedJobRetention    time.Duration
+	CancelledJobRetention    time.Duration
+	DiscardedJobRetention    time.Duration
+	RiverJobCleanerTimeout   time.Duration
+	OperationalBridgeURL     string
+	OperationalBridgeToken   secrets.Value
+	OperationalBridgeTimeout time.Duration
 }
 
 // Load reads and validates the process environment. CLI profile selection, if
@@ -136,6 +139,7 @@ func Load(spec Spec) (Config, error) {
 		{name: "WORKER_DATABASE_URI", target: &cfg.QueueDatabaseURI},
 		{name: "CLICKHOUSE_URI", target: &cfg.ClickHouseURI},
 		{name: "VALKEY_URI", target: &cfg.ValkeyURI},
+		{name: "WORKER_OPERATIONAL_BRIDGE_TOKEN", target: &cfg.OperationalBridgeToken},
 	}
 	for _, item := range secretTargets {
 		value, _, resolveErr := secrets.Resolve(item.name, lookup)
@@ -143,6 +147,19 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, resolveErr
 		}
 		*item.target = value
+	}
+	cfg.OperationalBridgeURL = envOrDefault(
+		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
+	)
+	cfg.OperationalBridgeTimeout, err = durationEnv(
+		lookup,
+		"WORKER_OPERATIONAL_BRIDGE_TIMEOUT",
+		10*time.Second,
+		100*time.Millisecond,
+		30*time.Second,
+	)
+	if err != nil {
+		return Config{}, err
 	}
 
 	postgresSchemes := []string{

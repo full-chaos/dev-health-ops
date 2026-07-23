@@ -11,7 +11,9 @@ import (
 
 var (
 	_ ContractArgs                = HeartbeatArgs{}
+	_ ContractArgs                = BillingNotificationArgs{}
 	_ ContractArgs                = RetentionCleanupArgs{}
+	_ ContractArgs                = WebhookDeliveryArgs{}
 	_ river.Worker[HeartbeatArgs] = (*Adapter[HeartbeatArgs])(nil)
 )
 

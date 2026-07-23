@@ -108,7 +108,8 @@
       "max_replicas": 1,
       "queues": [
         "heartbeat",
-        "retention"
+        "retention",
+        "webhooks"
       ],
       "queue_workers": [
         {
@@ -118,9 +119,15 @@
         {
           "queue": "retention",
           "max_workers": 1
+        },
+        {
+          "queue": "webhooks",
+          "max_workers": 4
         }
       ],
       "job_kinds": [
+        "operational.billing_notification",
+        "operational.webhook_delivery",
         "system.heartbeat",
         "system.retention_cleanup"
       ],

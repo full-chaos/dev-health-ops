@@ -58,8 +58,8 @@ def _canonical_incident_ingestion_allowed(org_id: str) -> bool:
 )
 def process_webhook_event(
     self,
-    provider: str,
-    event_type: str,
+    provider: str = "",
+    event_type: str = "",
     delivery_id: str | None = None,
     payload: dict | None = None,
     org_id: str | None = None,

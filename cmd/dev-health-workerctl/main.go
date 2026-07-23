@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -204,6 +205,14 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
+	jobQuiescer, err := jobroute.NewPostgresRiverQuiescer(pools.QueueControl, schema)
+	if err != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
+	jobRouteController, err := jobroute.NewController(pools.Domain, registry, jobQuiescer)
+	if err != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
 	streams := make([]streamProfileStatus, 0, 2)
 	for _, process := range manifest.Processes {
 		if process.Runtime != "stream" {
@@ -232,7 +241,8 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: backend, Authorizer: authentication.Authorizer(),
 		DomainGuard: guard, Auditor: auditor,
-		RouteController: routeController,
+		RouteController:    routeController,
+		JobRouteController: jobRouteController,
 	})
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
@@ -278,6 +288,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchContracts(ctx, runtime, args[1:], stdout, stderr)
 	case "routes":
 		return dispatchRoutes(ctx, runtime, args[1:], stdout, stderr)
+	case "job-routes":
+		return dispatchJobRoutes(ctx, runtime, args[1:], stdout, stderr)
 	case "streams":
 		if len(args) != 2 || args[1] != "status" {
 			return writeError(stderr, "invalid_request")
@@ -292,6 +304,42 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+func dispatchJobRoutes(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 2 && args[0] == "status" {
+		state, err := runtime.service.InspectJobRoute(ctx, runtime.principal, args[1])
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, state)
+	}
+	if len(args) == 0 || (args[0] != "apply" && args[0] != "rollback") {
+		return writeError(stderr, "invalid_request")
+	}
+	flags := quietFlags("job-routes " + args[0])
+	reason := flags.String("reason", "", "bounded reason code")
+	correlation := flags.String("correlation-id", "", "bounded correlation ID")
+	if flags.Parse(args[1:]) != nil || flags.NArg() != 1 || *reason == "" || *correlation == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	var (
+		state jobroute.State
+		err   error
+	)
+	if args[0] == "apply" {
+		state, err = runtime.service.ApplyCheckedInJobRoute(
+			ctx, runtime.principal, flags.Arg(0), *reason, *correlation,
+		)
+	} else {
+		state, err = runtime.service.RollbackJobRoute(
+			ctx, runtime.principal, flags.Arg(0), *reason, *correlation,
+		)
+	}
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, state)
 }
 
 func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {

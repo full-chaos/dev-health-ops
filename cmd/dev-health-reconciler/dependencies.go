@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -101,7 +102,7 @@ func (database *postgresReconcilerDatabase) Close() {
 type reconcilerDependencySources struct {
 	openDatabase        func(context.Context, config.Config) (reconcilerDatabase, error)
 	loadRuntimeRegistry func(string) (*jobruntime.Registry, error)
-	buildRelay          func(*pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error)
+	buildRelay          func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error)
 	newLoop             func(joboutbox.RelayStepper, joboutbox.ReconcilerLoopConfig) (*joboutbox.ReconcilerLoop, error)
 	contractRoot        string
 
@@ -195,6 +196,7 @@ type reconcilerObservationRecorder interface {
 }
 
 func buildReconcilerRelay(
+	domainPool *pgxpool.Pool,
 	queuePool *pgxpool.Pool,
 	riverSchema string,
 	registry *jobruntime.Registry,
@@ -207,7 +209,15 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
-	return joboutbox.NewRelay(repository, inserter, joboutbox.DefaultRelayConfig())
+	quiescer, err := jobroute.NewPostgresRiverQuiescer(queuePool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
+	routes, err := jobroute.NewController(domainPool, registry, quiescer)
+	if err != nil {
+		return nil, err
+	}
+	return joboutbox.NewRelayWithRoutes(repository, inserter, routes, joboutbox.DefaultRelayConfig())
 }
 
 type reconcilerDependencies struct {
@@ -353,6 +363,7 @@ func buildReconcilerDependencies(
 	}
 
 	relay, err := sources.buildRelay(
+		dependencies.database.DomainPool(),
 		dependencies.database.QueuePool(),
 		cfg.RiverDatabaseSchema,
 		dependencies.runtimeRegistry,

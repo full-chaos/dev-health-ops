@@ -10,12 +10,15 @@ from typing import Any
 
 from .models import (
     CONTRACT_VERSION_V1,
+    KIND_BILLING_NOTIFICATION,
     KIND_HEARTBEAT,
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_WEBHOOK_DELIVERY,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
+    BillingNotificationPayload,
     ContractPayload,
     DomainLink,
     Envelope,
@@ -24,6 +27,7 @@ from .models import (
     OnDemandReportExecutionPayload,
     RetentionCleanupPayload,
     ScheduledReportExecutionPayload,
+    WebhookDeliveryPayload,
 )
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
@@ -45,9 +49,11 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
 
     if kind not in {
         KIND_HEARTBEAT,
+        KIND_BILLING_NOTIFICATION,
         KIND_RETENTION_CLEANUP,
         KIND_REPORT_EXECUTE_ON_DEMAND,
         KIND_REPORT_EXECUTE_SCHEDULED,
+        KIND_WEBHOOK_DELIVERY,
     }:
         raise ContractDecodeError("unknown job kind")
     document = load_json_document(data, max_bytes=MAX_ENVELOPE_BYTES)
@@ -74,7 +80,10 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     else:
         organization_id = _expect_string(organization_id_value, "organization_id")
         _validate_uuid("organization_id", organization_id)
-    if organization_id is not None:
+    tenant_kind = kind == KIND_BILLING_NOTIFICATION
+    if tenant_kind and organization_id is None:
+        raise ContractDecodeError("organization_id is required for a tenant job")
+    if not tenant_kind and organization_id is not None:
         raise ContractDecodeError("organization_id is forbidden for a global job")
 
     correlation_id = _expect_string(envelope["correlation_id"], "correlation_id")
@@ -92,7 +101,15 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     _validate_uuid("domain.id", domain_id)
 
     payload: JobPayload
-    if kind == KIND_HEARTBEAT:
+    if kind == KIND_BILLING_NOTIFICATION:
+        if domain_type != BillingNotificationPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_billing_notification(envelope["payload"])
+    elif kind == KIND_WEBHOOK_DELIVERY:
+        if domain_type != WebhookDeliveryPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_webhook_delivery(envelope["payload"])
+    elif kind == KIND_HEARTBEAT:
         if domain_type != HeartbeatPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_heartbeat(envelope["payload"])
@@ -133,9 +150,11 @@ def build_envelope(
         payload,
         (
             HeartbeatPayload,
+            BillingNotificationPayload,
             RetentionCleanupPayload,
             OnDemandReportExecutionPayload,
             ScheduledReportExecutionPayload,
+            WebhookDeliveryPayload,
         ),
     ):
         raise ContractDecodeError("unsupported payload type")
@@ -168,7 +187,11 @@ def encode_envelope(envelope: Envelope) -> bytes:
     encoded = (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode()
     if len(encoded) > MAX_ENVELOPE_BYTES:
         raise ContractDecodeError("encoded envelope exceeds size limit")
-    if isinstance(envelope.payload, HeartbeatPayload):
+    if isinstance(envelope.payload, BillingNotificationPayload):
+        kind = KIND_BILLING_NOTIFICATION
+    elif isinstance(envelope.payload, WebhookDeliveryPayload):
+        kind = KIND_WEBHOOK_DELIVERY
+    elif isinstance(envelope.payload, HeartbeatPayload):
         kind = KIND_HEARTBEAT
     elif isinstance(envelope.payload, RetentionCleanupPayload):
         kind = KIND_RETENTION_CLEANUP
@@ -253,6 +276,30 @@ def _decode_retention(value: Any) -> RetentionCleanupPayload:
     )
 
 
+def _decode_billing_notification(value: Any) -> BillingNotificationPayload:
+    payload = _expect_object(
+        value,
+        required={"notification_id"},
+        optional=set(),
+        label="billing notification payload",
+    )
+    notification_id = _expect_string(payload["notification_id"], "notification_id")
+    _validate_uuid("notification_id", notification_id)
+    return BillingNotificationPayload(notification_id=notification_id)
+
+
+def _decode_webhook_delivery(value: Any) -> WebhookDeliveryPayload:
+    payload = _expect_object(
+        value,
+        required={"delivery_id"},
+        optional=set(),
+        label="webhook delivery payload",
+    )
+    delivery_id = _expect_string(payload["delivery_id"], "delivery_id")
+    _validate_uuid("delivery_id", delivery_id)
+    return WebhookDeliveryPayload(delivery_id=delivery_id)
+
+
 def _decode_on_demand_report_execution(value: Any) -> OnDemandReportExecutionPayload:
     payload = _expect_object(
         value, required={"report_id"}, optional=set(), label="report execution payload"
@@ -272,6 +319,10 @@ def _decode_scheduled_report_execution(value: Any) -> ScheduledReportExecutionPa
 
 
 def _payload_document(payload: object) -> dict[str, Any]:
+    if isinstance(payload, BillingNotificationPayload):
+        return {"notification_id": payload.notification_id}
+    if isinstance(payload, WebhookDeliveryPayload):
+        return {"delivery_id": payload.delivery_id}
     if isinstance(payload, HeartbeatPayload):
         return {"scheduled_for": payload.scheduled_for}
     if isinstance(payload, RetentionCleanupPayload):

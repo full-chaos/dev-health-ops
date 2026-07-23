@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,6 +34,26 @@ def _reset_price_map():
 def _billing_env():
     with patch.dict("os.environ", {"APP_BASE_URL": "https://example.com"}):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _billing_worker_route():
+    with patch(
+        "dev_health_ops.api.billing.router._route_billing_notification",
+        new=AsyncMock(return_value="celery"),
+    ):
+        yield
+
+
+def _assert_durable_billing_dispatch(mock_task: MagicMock) -> None:
+    mock_task.delay.assert_called_once()
+    args, kwargs = mock_task.delay.call_args
+    assert args == ()
+    assert set(kwargs) == {"durable_notification_id"}
+    assert (
+        str(uuid.UUID(kwargs["durable_notification_id"]))
+        == kwargs["durable_notification_id"]
+    )
 
 
 def _build_app() -> FastAPI:
@@ -179,8 +200,9 @@ async def test_webhook_subscription_trial_will_end_sends_expiring_email(client):
             return_value="whsec_test",
         ),
         patch(
-            "dev_health_ops.api.billing.router.send_billing_notification",
-        ) as mock_task,
+            "dev_health_ops.api.billing.router._enqueue_billing_notification",
+            new_callable=AsyncMock,
+        ) as mock_enqueue,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -195,10 +217,14 @@ async def test_webhook_subscription_trial_will_end_sends_expiring_email(client):
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
 
-        mock_task.delay.assert_called_once()
-        args, kwargs = mock_task.delay.call_args
-        assert args[0] == "trial_expiring"
-        assert args[1] == "00000000-0000-0000-0000-000000000001"
+        mock_enqueue.assert_awaited_once()
+        awaited = mock_enqueue.await_args
+        assert awaited is not None
+        args, kwargs = awaited
+        assert args == (
+            "trial_expiring",
+            "00000000-0000-0000-0000-000000000001",
+        )
         assert kwargs["days_remaining"] >= 0
         assert kwargs["trial_end_date"] == "2030-01-01"
 
@@ -509,13 +535,7 @@ async def test_webhook_invoice_paid_sends_receipt_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_task.delay.assert_called_once_with(
-            "invoice_receipt",
-            "00000000-0000-0000-0000-000000000001",
-            amount_cents=4900,
-            currency="usd",
-            invoice_url="https://invoice.stripe.com/i/test",
-        )
+        _assert_durable_billing_dispatch(mock_task)
 
 
 @pytest.mark.asyncio
@@ -576,13 +596,7 @@ async def test_webhook_invoice_payment_failed_sends_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_task.delay.assert_called_once_with(
-            "payment_failed",
-            "00000000-0000-0000-0000-000000000001",
-            amount_cents=4900,
-            currency="usd",
-            attempt_count=3,
-        )
+        _assert_durable_billing_dispatch(mock_task)
 
 
 @pytest.mark.asyncio
@@ -637,11 +651,7 @@ async def test_webhook_subscription_deleted_sends_cancelled_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_task.delay.assert_called_once_with(
-            "subscription_cancelled",
-            "00000000-0000-0000-0000-000000000001",
-            tier="team",
-        )
+        _assert_durable_billing_dispatch(mock_task)
 
 
 @pytest.mark.asyncio
@@ -713,12 +723,7 @@ async def test_webhook_subscription_updated_sends_changed_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_task.delay.assert_called_once_with(
-            "subscription_changed",
-            "00000000-0000-0000-0000-000000000001",
-            old_tier="team",
-            new_tier="enterprise",
-        )
+        _assert_durable_billing_dispatch(mock_task)
 
 
 @pytest.mark.asyncio

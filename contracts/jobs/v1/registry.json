@@ -9,6 +9,64 @@
   },
   "jobs": [
     {
+      "kind": "operational.billing_notification",
+      "current_version": 1,
+      "supported_versions": [1],
+      "profile": "ops",
+      "queue": "webhooks",
+      "handler_owner": "internal/jobs/operational",
+      "execution_mode": "command",
+      "priority": 2,
+      "timeout_seconds": 120,
+      "max_attempts": 4,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative",
+      "delivery": "guarded_at_least_once",
+      "idempotency": "billing_notification",
+      "concurrency": {
+        "scope": "organization",
+        "limit": 4
+      },
+      "sensitive_fields": [],
+      "domain_link": "billing_notification",
+      "organization_scope": "tenant",
+      "schema_versions": {
+        "1": "schemas/operational.billing_notification.v1.schema.json"
+      },
+      "fixtures": {
+        "1": ["examples/operational.billing_notification.v1.json"]
+      }
+    },
+    {
+      "kind": "operational.webhook_delivery",
+      "current_version": 1,
+      "supported_versions": [1],
+      "profile": "ops",
+      "queue": "webhooks",
+      "handler_owner": "internal/jobs/operational",
+      "execution_mode": "command",
+      "priority": 1,
+      "timeout_seconds": 900,
+      "max_attempts": 4,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative",
+      "delivery": "guarded_at_least_once",
+      "idempotency": "webhook_delivery",
+      "concurrency": {
+        "scope": "organization",
+        "limit": 4
+      },
+      "sensitive_fields": [],
+      "domain_link": "webhook_delivery",
+      "organization_scope": "global",
+      "schema_versions": {
+        "1": "schemas/operational.webhook_delivery.v1.schema.json"
+      },
+      "fixtures": {
+        "1": ["examples/operational.webhook_delivery.v1.json"]
+      }
+    },
+    {
       "kind": "report.execute_on_demand",
       "current_version": 1,
       "supported_versions": [1],

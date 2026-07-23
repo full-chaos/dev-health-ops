@@ -7,6 +7,8 @@ from typing import ClassVar, Protocol, TypeAlias
 
 CONTRACT_VERSION_V1 = 1
 KIND_HEARTBEAT = "system.heartbeat"
+KIND_BILLING_NOTIFICATION = "operational.billing_notification"
+KIND_WEBHOOK_DELIVERY = "operational.webhook_delivery"
 KIND_RETENTION_CLEANUP = "system.retention_cleanup"
 KIND_REPORT_EXECUTE_ON_DEMAND = "report.execute_on_demand"
 KIND_REPORT_EXECUTE_SCHEDULED = "report.execute_scheduled"
@@ -55,6 +57,24 @@ class RetentionCleanupPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class BillingNotificationPayload:
+    KIND: ClassVar[str] = KIND_BILLING_NOTIFICATION
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "billing_notification"
+
+    notification_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookDeliveryPayload:
+    KIND: ClassVar[str] = KIND_WEBHOOK_DELIVERY
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "webhook_delivery"
+
+    delivery_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class OnDemandReportExecutionPayload:
     """Version 1 request to execute one already-created manual ReportRun."""
 
@@ -77,7 +97,9 @@ class ScheduledReportExecutionPayload:
 
 
 JobPayload: TypeAlias = (
-    HeartbeatPayload
+    BillingNotificationPayload
+    | WebhookDeliveryPayload
+    | HeartbeatPayload
     | RetentionCleanupPayload
     | OnDemandReportExecutionPayload
     | ScheduledReportExecutionPayload

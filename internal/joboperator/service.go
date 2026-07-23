@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
@@ -33,16 +34,19 @@ const (
 type Action string
 
 const (
-	ActionInspect      Action = "jobs.inspect"
-	ActionCancel       Action = "jobs.cancel"
-	ActionRetry        Action = "jobs.retry"
-	ActionPauseQueue   Action = "queues.pause"
-	ActionResumeQueue  Action = "queues.resume"
-	ActionDrain        Action = "workers.drain"
-	ActionInspectRoute Action = "routes.inspect"
-	ActionPauseRoute   Action = "routes.pause"
-	ActionDrainRoute   Action = "routes.drain"
-	ActionResumeRoute  Action = "routes.resume"
+	ActionInspect          Action = "jobs.inspect"
+	ActionCancel           Action = "jobs.cancel"
+	ActionRetry            Action = "jobs.retry"
+	ActionPauseQueue       Action = "queues.pause"
+	ActionResumeQueue      Action = "queues.resume"
+	ActionDrain            Action = "workers.drain"
+	ActionInspectRoute     Action = "routes.inspect"
+	ActionPauseRoute       Action = "routes.pause"
+	ActionDrainRoute       Action = "routes.drain"
+	ActionResumeRoute      Action = "routes.resume"
+	ActionInspectJobRoute  Action = "job_routes.inspect"
+	ActionApplyJobRoute    Action = "job_routes.apply_checked_in"
+	ActionRollbackJobRoute Action = "job_routes.rollback"
 )
 
 // JobSummary is intentionally incapable of carrying encoded_args, exception
@@ -155,6 +159,12 @@ type RouteController interface {
 	Resume(context.Context, string, string, time.Duration) (syncroute.RouteState, error)
 }
 
+type JobRouteController interface {
+	Inspect(context.Context, string) (jobroute.State, error)
+	ApplyCheckedIn(context.Context, string) (jobroute.State, error)
+	Rollback(context.Context, string) (jobroute.State, error)
+}
+
 type AuditEvent struct {
 	Principal     Principal
 	Action        Action
@@ -188,13 +198,14 @@ type Clock func() time.Time
 const auditCompletionTimeout = 5 * time.Second
 
 type Dependencies struct {
-	Registry        RuntimeRegistry
-	Backend         Backend
-	Authorizer      Authorizer
-	DomainGuard     DomainGuard
-	Auditor         Auditor
-	Clock           Clock
-	RouteController RouteController
+	Registry           RuntimeRegistry
+	Backend            Backend
+	Authorizer         Authorizer
+	DomainGuard        DomainGuard
+	Auditor            Auditor
+	Clock              Clock
+	RouteController    RouteController
+	JobRouteController JobRouteController
 }
 
 type Service struct {
@@ -205,6 +216,7 @@ type Service struct {
 	auditor     Auditor
 	clock       Clock
 	routes      RouteController
+	jobRoutes   JobRouteController
 }
 
 // RuntimeRegistry is the read-only subset of jobruntime.Registry needed by
@@ -234,7 +246,74 @@ func New(dependencies Dependencies) (*Service, error) {
 		auditor:     dependencies.Auditor,
 		clock:       clock,
 		routes:      dependencies.RouteController,
+		jobRoutes:   dependencies.JobRouteController,
 	}, nil
+}
+
+func (service *Service) InspectJobRoute(ctx context.Context, principal Principal, kind string) (jobroute.State, error) {
+	if err := validatePrincipal(principal); err != nil || kind == "" || service.jobRoutes == nil {
+		return jobroute.State{}, serviceError(CodeInvalid, err)
+	}
+	if err := service.authorize(ctx, principal, ActionInspectJobRoute, "job_route", kind); err != nil {
+		return jobroute.State{}, err
+	}
+	state, err := service.jobRoutes.Inspect(ctx, kind)
+	if err != nil {
+		return jobroute.State{}, mapJobRouteError(err)
+	}
+	return state, nil
+}
+
+func (service *Service) ApplyCheckedInJobRoute(
+	ctx context.Context,
+	principal Principal,
+	kind, reasonCode, correlationID string,
+) (jobroute.State, error) {
+	if err := validateMutationInput(principal, reasonCode, correlationID); err != nil ||
+		kind == "" || service.jobRoutes == nil {
+		return jobroute.State{}, serviceError(CodeInvalid, err)
+	}
+	if err := service.authorize(ctx, principal, ActionApplyJobRoute, "job_route", kind); err != nil {
+		return jobroute.State{}, err
+	}
+	mutation := Mutation{
+		Principal: principal, Action: ActionApplyJobRoute,
+		ResourceType: "job_route", ResourceID: kind,
+		ReasonCode: reasonCode, CorrelationID: correlationID,
+	}
+	var state jobroute.State
+	err := service.mutate(ctx, mutation, func() error {
+		var operationErr error
+		state, operationErr = service.jobRoutes.ApplyCheckedIn(ctx, kind)
+		return operationErr
+	})
+	return state, err
+}
+
+func (service *Service) RollbackJobRoute(
+	ctx context.Context,
+	principal Principal,
+	kind, reasonCode, correlationID string,
+) (jobroute.State, error) {
+	if err := validateMutationInput(principal, reasonCode, correlationID); err != nil ||
+		kind == "" || service.jobRoutes == nil {
+		return jobroute.State{}, serviceError(CodeInvalid, err)
+	}
+	if err := service.authorize(ctx, principal, ActionRollbackJobRoute, "job_route", kind); err != nil {
+		return jobroute.State{}, err
+	}
+	mutation := Mutation{
+		Principal: principal, Action: ActionRollbackJobRoute,
+		ResourceType: "job_route", ResourceID: kind,
+		ReasonCode: reasonCode, CorrelationID: correlationID,
+	}
+	var state jobroute.State
+	err := service.mutate(ctx, mutation, func() error {
+		var operationErr error
+		state, operationErr = service.jobRoutes.Rollback(ctx, kind)
+		return operationErr
+	})
+	return state, err
 }
 
 func (service *Service) InspectRoute(ctx context.Context, principal Principal, kind string) (syncroute.RouteState, error) {
@@ -590,7 +669,9 @@ func (service *Service) mutate(ctx context.Context, mutation Mutation, operation
 	}
 	if err := operation(); err != nil {
 		status := AuditFailed
-		if errors.Is(err, ErrMutationOutcomeUnknown) || errors.Is(err, syncroute.ErrMutationOutcomeUnknown) {
+		if errors.Is(err, ErrMutationOutcomeUnknown) ||
+			errors.Is(err, syncroute.ErrMutationOutcomeUnknown) ||
+			errors.Is(err, jobroute.ErrOutcomeUnknown) {
 			status = AuditOutcomeUnknown
 		}
 		completeErr := completeAudit(ctx, handle, status)
@@ -608,6 +689,9 @@ func (service *Service) mutate(ctx context.Context, mutation Mutation, operation
 			errors.Is(err, syncroute.ErrDrift) ||
 			errors.Is(err, syncroute.ErrInvalidConfiguration) {
 			return mapRouteError(err)
+		}
+		if jobroute.IsPrecondition(err) || errors.Is(err, jobroute.ErrInvalidConfiguration) {
+			return mapJobRouteError(err)
 		}
 		return mapBackendError(err)
 	}
@@ -759,6 +843,22 @@ func mapRouteError(err error) error {
 		return serviceError(CodePrecondition, err)
 	case errors.Is(err, syncroute.ErrInvalidConfiguration):
 		return serviceError(CodeInvalid, err)
+	default:
+		return serviceError(CodeBackend, err)
+	}
+}
+
+func mapJobRouteError(err error) error {
+	switch {
+	case errors.Is(err, jobroute.ErrUnknownRoute):
+		return serviceError(CodeNotFound, err)
+	case errors.Is(err, jobroute.ErrDrift), errors.Is(err, jobroute.ErrPaused),
+		errors.Is(err, jobroute.ErrLiveClaims), errors.Is(err, jobroute.ErrPendingOutbox):
+		return serviceError(CodePrecondition, err)
+	case errors.Is(err, jobroute.ErrInvalidConfiguration):
+		return serviceError(CodeInvalid, err)
+	case errors.Is(err, jobroute.ErrOutcomeUnknown):
+		return serviceError(CodeOutcomeUnknown, err)
 	default:
 		return serviceError(CodeBackend, err)
 	}

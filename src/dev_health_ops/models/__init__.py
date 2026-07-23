@@ -120,6 +120,7 @@ from .work_items import (
     WorkItemStatusTransition,
 )
 from .worker_job_outbox import WorkerJobOutbox
+from .worker_job_route import WorkerJobRoute
 from .worker_job_run import WorkerJobRun
 
 __all__ = [
@@ -228,6 +229,7 @@ __all__ = [
     "WorkItemReopenEvent",
     "WorkItemStatusTransition",
     "WorkerJobOutbox",
+    "WorkerJobRoute",
     "WorkerJobRun",
     "WebhookDelivery",
 ]

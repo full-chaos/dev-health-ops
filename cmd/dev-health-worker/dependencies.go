@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -119,6 +120,7 @@ type workerDependencySources struct {
 	loadDeployment      func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
 	compiledHandlers    func(string) []jobruntime.HandlerSpec
 	newRiverClientID    func() string
+	buildOperational    func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
 	contractRoot        string
 	deploymentProfile   string
 }
@@ -130,6 +132,7 @@ var productionWorkerDependencySources = workerDependencySources{
 	loadDeployment:      deploymentcontract.Load,
 	compiledHandlers:    compiledWorkerHandlers,
 	newRiverClientID:    defaultRiverClientID,
+	buildOperational:    buildOperationalWorker,
 	contractRoot:        defaultContractRoot,
 	deploymentProfile:   defaultDeploymentProfile,
 }
@@ -179,11 +182,21 @@ func configureWorkerDependencies(
 	cfg config.Config,
 	registry *health.Registry,
 ) ([]lifecycle.Component, error) {
+	return configureWorkerDependenciesWithLogger(ctx, cfg, registry, slog.Default())
+}
+
+func configureWorkerDependenciesWithLogger(
+	ctx context.Context,
+	cfg config.Config,
+	registry *health.Registry,
+	logger *slog.Logger,
+) ([]lifecycle.Component, error) {
 	return configureWorkerDependenciesWithSources(
 		ctx,
 		cfg,
 		registry,
 		productionWorkerDependencySources,
+		logger,
 	)
 }
 
@@ -192,7 +205,12 @@ func configureWorkerDependenciesWithSources(
 	cfg config.Config,
 	registry *health.Registry,
 	sources workerDependencySources,
+	loggers ...*slog.Logger,
 ) ([]lifecycle.Component, error) {
+	logger := slog.Default()
+	if len(loggers) > 0 && loggers[0] != nil {
+		logger = loggers[0]
+	}
 	dependencies := buildWorkerDependencies(ctx, cfg, sources)
 	if registry == nil {
 		dependencies.close()
@@ -232,7 +250,23 @@ func configureWorkerDependenciesWithSources(
 	if dependencies.database == nil {
 		return nil, nil
 	}
-	return []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}, nil
+	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
+	if sources.buildOperational != nil {
+		component, handlers, err := sources.buildOperational(
+			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger,
+		)
+		if err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+		if len(handlers) > 0 {
+			dependencies.startup.Handlers = handlers
+		}
+		if component != nil {
+			components = append(components, component)
+		}
+	}
+	return components, nil
 }
 
 type workerMetricsSource struct {

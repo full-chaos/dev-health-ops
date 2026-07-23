@@ -158,7 +158,8 @@ func (r CredentialResolver) Resolve(ctx context.Context, lease LeaseGuard, scope
 	if !record.Active {
 		return Credential{}, ErrCredentialInactive
 	}
-	if record.Provider != scope.Provider || !record.Ciphertext.Configured() {
+	if record.Provider != scope.Provider || !record.Ciphertext.Configured() ||
+		(scope.CredentialID != "" && record.ID != scope.CredentialID) {
 		return Credential{}, ErrCredentialInvalid
 	}
 	if err := lease.Assert(ctx); err != nil {

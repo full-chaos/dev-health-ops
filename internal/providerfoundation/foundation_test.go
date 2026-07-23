@@ -61,6 +61,27 @@ func TestCredentialResolverRequiresLeaseAndDoesNotExposeSecret(t *testing.T) {
 	}
 }
 
+func TestCredentialResolverRejectsDifferentCredentialThanFrozenClaim(t *testing.T) {
+	t.Parallel()
+	key := secrets.NewValue("test-master-key")
+	decryptor, _ := NewFernetDecryptor(key, "salt")
+	resolver := CredentialResolver{
+		Repository: testRepository{cipherText: "v1:" + encryptForTest(t, []byte(`{"token":"secret"}`), key.Reveal(), "salt")},
+		Decryptor:  decryptor,
+	}
+	_, err := resolver.Resolve(
+		context.Background(),
+		LeaseGuardFunc(func(context.Context) error { return nil }),
+		TenantScope{
+			OrgID: "org", Provider: "gitlab", IntegrationID: "integration",
+			CredentialID: "frozen-credential",
+		},
+	)
+	if !errors.Is(err, ErrCredentialInvalid) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestDecodeConfigRejectsMalformedStoredJSON(t *testing.T) {
 	t.Parallel()
 	target := map[string]string{}

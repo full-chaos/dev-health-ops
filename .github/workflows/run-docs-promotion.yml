@@ -1,0 +1,43 @@
+name: Run canonical documentation promotion
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'agent/docs-content-style-remediation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the review branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/docs-content-style-remediation
+          fetch-depth: 0
+
+      - name: Execute and remove the one-time promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          awk '
+            found {
+              sub(/^          /, "")
+              print
+            }
+            /^        run: \|$/ {
+              found = 1
+            }
+          ' .github/workflows/promote-docs-canonical.yml > /tmp/promote-docs.sh
+
+          bash /tmp/promote-docs.sh
+
+          rm -f .github/workflows/run-docs-promotion.yml
+          git add -A
+          git commit -m 'ci: remove one-time documentation promotion runner'
+          git push origin HEAD:agent/docs-content-style-remediation

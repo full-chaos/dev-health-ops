@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 
 from dev_health_ops.workers.job_contracts import (
+    KIND_DAILY_METRICS_DISPATCH,
+    KIND_DAILY_METRICS_FINALIZE,
+    KIND_DAILY_METRICS_PARTITION,
     KIND_HEARTBEAT,
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
@@ -13,6 +16,9 @@ from dev_health_ops.workers.job_contracts import (
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
     ContractDecodeError,
+    DailyMetricsDispatchPayload,
+    DailyMetricsFinalizePayload,
+    DailyMetricsPartitionPayload,
     HeartbeatPayload,
     OnDemandReportExecutionPayload,
     RetentionCleanupPayload,
@@ -56,6 +62,23 @@ from dev_health_ops.workers.job_contracts import (
                 report_id="00000000-0000-4000-8000-000000000004"
             ),
         ),
+        (
+            KIND_DAILY_METRICS_DISPATCH,
+            "metrics.daily_dispatch.v1.json",
+            DailyMetricsDispatchPayload(run_id="00000000-0000-4000-8000-000000000001"),
+        ),
+        (
+            KIND_DAILY_METRICS_PARTITION,
+            "metrics.daily_partition.v1.json",
+            DailyMetricsPartitionPayload(
+                partition_id="00000000-0000-4000-8000-000000000002"
+            ),
+        ),
+        (
+            KIND_DAILY_METRICS_FINALIZE,
+            "metrics.daily_finalize.v1.json",
+            DailyMetricsFinalizePayload(run_id="00000000-0000-4000-8000-000000000001"),
+        ),
     ],
 )
 def test_go_and_python_share_canonical_golden_fixtures(
@@ -78,6 +101,31 @@ def test_registry_fixtures_all_cross_decode() -> None:
             for fixture in fixtures:
                 data = (root / fixture).read_bytes()
                 assert encode_envelope(decode_envelope(job["kind"], data)) == data
+
+
+@pytest.mark.parametrize(
+    ("kind", "fixture", "payload_field"),
+    [
+        (KIND_DAILY_METRICS_DISPATCH, "metrics.daily_dispatch.v1.json", "run_id"),
+        (
+            KIND_DAILY_METRICS_PARTITION,
+            "metrics.daily_partition.v1.json",
+            "partition_id",
+        ),
+        (KIND_DAILY_METRICS_FINALIZE, "metrics.daily_finalize.v1.json", "run_id"),
+    ],
+)
+def test_daily_contracts_require_tenant_and_authoritative_id(
+    kind: str, fixture: str, payload_field: str
+) -> None:
+    document = json.loads((default_contract_root() / "examples" / fixture).read_text())
+    document.pop("organization_id")
+    with pytest.raises(ContractDecodeError):
+        decode_envelope(kind, json.dumps(document))
+    document = json.loads((default_contract_root() / "examples" / fixture).read_text())
+    document["payload"].pop(payload_field)
+    with pytest.raises(ContractDecodeError):
+        decode_envelope(kind, json.dumps(document))
 
 
 def test_transitional_producer_adapter_uses_same_validation() -> None:

@@ -11,6 +11,9 @@ from .codec import ContractDecodeError, load_json_document
 from .models import (
     CONTRACT_VERSION_V1,
     KIND_BILLING_NOTIFICATION,
+    KIND_DAILY_METRICS_DISPATCH,
+    KIND_DAILY_METRICS_FINALIZE,
+    KIND_DAILY_METRICS_PARTITION,
     KIND_HEARTBEAT,
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
@@ -204,6 +207,9 @@ def load_registry(root: Path | None = None) -> Registry:
         KIND_REPORT_EXECUTE_SCHEDULED: (CONTRACT_VERSION_V1,),
         KIND_HEARTBEAT: (CONTRACT_VERSION_V1,),
         KIND_RETENTION_CLEANUP: (CONTRACT_VERSION_V1,),
+        KIND_DAILY_METRICS_DISPATCH: (CONTRACT_VERSION_V1,),
+        KIND_DAILY_METRICS_PARTITION: (CONTRACT_VERSION_V1,),
+        KIND_DAILY_METRICS_FINALIZE: (CONTRACT_VERSION_V1,),
     }
     if {
         contract.kind: contract.supported_versions for contract in contracts

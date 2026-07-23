@@ -12,6 +12,9 @@ KIND_WEBHOOK_DELIVERY = "operational.webhook_delivery"
 KIND_RETENTION_CLEANUP = "system.retention_cleanup"
 KIND_REPORT_EXECUTE_ON_DEMAND = "report.execute_on_demand"
 KIND_REPORT_EXECUTE_SCHEDULED = "report.execute_scheduled"
+KIND_DAILY_METRICS_DISPATCH = "metrics.daily_dispatch"
+KIND_DAILY_METRICS_PARTITION = "metrics.daily_partition"
+KIND_DAILY_METRICS_FINALIZE = "metrics.daily_finalize"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 MAX_ENVELOPE_BYTES = 16 * 1024
 
@@ -96,6 +99,33 @@ class ScheduledReportExecutionPayload:
     report_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class DailyMetricsDispatchPayload:
+    KIND: ClassVar[str] = KIND_DAILY_METRICS_DISPATCH
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "daily_metrics_run"
+
+    run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DailyMetricsPartitionPayload:
+    KIND: ClassVar[str] = KIND_DAILY_METRICS_PARTITION
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "daily_metrics_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DailyMetricsFinalizePayload:
+    KIND: ClassVar[str] = KIND_DAILY_METRICS_FINALIZE
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "daily_metrics_run"
+
+    run_id: str
+
+
 JobPayload: TypeAlias = (
     BillingNotificationPayload
     | WebhookDeliveryPayload
@@ -103,6 +133,9 @@ JobPayload: TypeAlias = (
     | RetentionCleanupPayload
     | OnDemandReportExecutionPayload
     | ScheduledReportExecutionPayload
+    | DailyMetricsDispatchPayload
+    | DailyMetricsPartitionPayload
+    | DailyMetricsFinalizePayload
 )
 
 

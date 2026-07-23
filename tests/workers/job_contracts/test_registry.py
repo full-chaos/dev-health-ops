@@ -39,6 +39,45 @@ def test_python_registry_rejects_envelope_schema_drift(tmp_path: Path) -> None:
         load_registry(candidate)
 
 
+def test_migration_registry_rejects_unknown_route(tmp_path: Path) -> None:
+    candidate = tmp_path / "v1"
+    shutil.copytree(default_contract_root(), candidate)
+    state_path = candidate / "migration-state.json"
+    document = json.loads(state_path.read_text())
+    document["jobs"][0]["route"] = "environment_override"
+    state_path.write_text(json.dumps(document))
+
+    with pytest.raises(ContractDecodeError, match="route is unsupported"):
+        load_migration_jobs(candidate)
+
+
+def test_migration_registry_accepts_terminal_rollback_route(tmp_path: Path) -> None:
+    candidate = tmp_path / "v1"
+    shutil.copytree(default_contract_root(), candidate)
+    state_path = candidate / "migration-state.json"
+    document = json.loads(state_path.read_text())
+    document["jobs"][0].update(
+        {"state": "celery_removed", "route": "river", "rollback_route": "none"}
+    )
+    state_path.write_text(json.dumps(document))
+
+    jobs = load_migration_jobs(candidate)
+
+    assert jobs[0].route == "river"
+
+
+def test_migration_registry_rejects_state_route_mismatch(tmp_path: Path) -> None:
+    candidate = tmp_path / "v1"
+    shutil.copytree(default_contract_root(), candidate)
+    state_path = candidate / "migration-state.json"
+    document = json.loads(state_path.read_text())
+    document["jobs"][0]["route"] = "shadow"
+    state_path.write_text(json.dumps(document))
+
+    with pytest.raises(ContractDecodeError, match="state route is inconsistent"):
+        load_migration_jobs(candidate)
+
+
 def test_rollout_requires_every_live_profile_report() -> None:
     registry = load_registry()
     migration_jobs = load_migration_jobs()

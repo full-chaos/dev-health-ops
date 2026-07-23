@@ -556,6 +556,15 @@ The scheduler repeats a bounded loop:
 
 Multiple scheduler replicas are safe. A singleton deployment is no longer a correctness requirement, although only one process may hold a global advisory lock if that mode is selected.
 
+The current Phase 2 implementation stops before this mutation boundary.
+`internal/scheduler/sync` is an unregistered, read-only shadow: it performs one
+bounded schedule/configuration `SELECT` and evaluates a versioned candidate
+snapshot in memory. It has no advisory lock, row lock, occurrence claim,
+update, enqueue, or command wiring. Celery Beat and
+`dispatch_scheduled_syncs` therefore remain the sole production scheduler
+until the steps above and their duplicate-occurrence tests are implemented
+and approved.
+
 ### 10.2 Simple periodic maintenance
 
 River periodic jobs may be used for process-internal maintenance only when:

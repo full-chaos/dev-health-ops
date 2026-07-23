@@ -102,6 +102,31 @@ func TestRegistryMigrationPairsFailClosed(t *testing.T) {
 	}
 }
 
+func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
+	t.Parallel()
+	registry, err := Load("../../contracts/jobs/v1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	descriptors := registry.Descriptors()
+	if len(descriptors) != 2 || descriptors[0].Kind != jobcontract.KindHeartbeat ||
+		descriptors[1].Kind != jobcontract.KindRetentionCleanup {
+		t.Fatalf("Descriptors() = %#v", descriptors)
+	}
+	for _, descriptor := range descriptors {
+		if descriptor.Route != "celery" || descriptor.Executable() {
+			t.Fatalf("checked-in production policy became executable: %#v", descriptor)
+		}
+	}
+
+	descriptors[0].SupportedVersions[0] = 99
+	descriptors[0].SensitiveFields = append(descriptors[0].SensitiveFields, "secret")
+	again := registry.Descriptors()
+	if again[0].SupportedVersions[0] != 1 || len(again[0].SensitiveFields) != 0 {
+		t.Fatalf("Descriptors() exposed mutable registry state: %#v", again[0])
+	}
+}
+
 func testContractRegistry() jobcontract.Registry {
 	return jobcontract.Registry{
 		SchemaVersion: 1, ContractFamily: "dev-health.jobs", EnvelopeSchema: "envelope.schema.json",

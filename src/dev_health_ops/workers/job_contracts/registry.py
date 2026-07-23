@@ -47,6 +47,18 @@ _MIGRATION_JOB_FIELDS = {
     "rollback_route",
     "evidence",
 }
+_MIGRATION_ROUTES = frozenset({"celery", "shadow", "river_canary", "river", "removed"})
+_MIGRATION_ROLLBACK_ROUTES = frozenset({"celery", "river", "none"})
+_MIGRATION_STATE_ROUTES = {
+    "inventory": ("celery", "celery"),
+    "contract_frozen": ("celery", "celery"),
+    "go_implemented": ("celery", "celery"),
+    "shadow": ("shadow", "celery"),
+    "canary": ("river_canary", "celery"),
+    "go_default": ("river", "celery"),
+    "celery_fallback_only": ("river", "celery"),
+    "celery_removed": ("river", "none"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +104,7 @@ class MigrationJob:
     kind: str
     producer_version: int
     required_profiles: tuple[str, ...]
+    route: str = "celery"
 
 
 def default_contract_root() -> Path:
@@ -210,13 +223,26 @@ def load_migration_jobs(root: Path | None = None) -> tuple[MigrationJob, ...]:
             isinstance(profile, str) and profile for profile in profiles
         ):
             raise ContractDecodeError("required_profiles is invalid")
+        route = _required_string(raw, "route")
+        rollback_route = _required_string(raw, "rollback_route")
+        state = _required_string(raw, "state")
+        if (
+            route not in _MIGRATION_ROUTES
+            or rollback_route not in _MIGRATION_ROLLBACK_ROUTES
+        ):
+            raise ContractDecodeError("migration route is unsupported")
+        if _MIGRATION_STATE_ROUTES.get(state) != (route, rollback_route):
+            raise ContractDecodeError("migration state route is inconsistent")
         jobs.append(
             MigrationJob(
                 kind=_required_string(raw, "kind"),
                 producer_version=_required_int(raw, "producer_version"),
                 required_profiles=tuple(profiles),
+                route=route,
             )
         )
+    if len({job.kind for job in jobs}) != len(jobs):
+        raise ContractDecodeError("migration state contains duplicate kinds")
     return tuple(jobs)
 
 

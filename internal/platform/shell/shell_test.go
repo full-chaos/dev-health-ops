@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -98,6 +99,71 @@ func TestDependencyConfigurationFailureIsCategorizedWithoutLoggingErrorText(t *t
 	}
 	if !strings.Contains(combined, "dependency_configuration_failed") {
 		t.Fatalf("dependency failure omitted safe category: %s", combined)
+	}
+}
+
+func TestLoggerAwareDependencyConfigurationReceivesShellJSONLogger(t *testing.T) {
+	t.Parallel()
+
+	var received *slog.Logger
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{
+		Service: "dev-health-worker",
+		ConfigureDependenciesWithLogger: func(
+			_ context.Context,
+			_ config.Config,
+			_ *health.Registry,
+			logger *slog.Logger,
+		) ([]lifecycle.Component, error) {
+			received = logger
+			logger.Info("dependency logger injected", "logger_injected", true)
+			return nil, errors.New("stop after logger injection")
+		},
+	}, nil, testLookup(nil), IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 || received == nil {
+		t.Fatalf("logger-aware dependency configuration code=%d logger=%v", code, received)
+	}
+	if !strings.Contains(stdout.String(), `"logger_injected":true`) {
+		t.Fatalf("logger-aware callback did not use shell JSON logger: %s", stdout.String())
+	}
+}
+
+func TestShellRejectsAmbiguousDependencyCallbacks(t *testing.T) {
+	t.Parallel()
+
+	legacyCalled := false
+	loggerAwareCalled := false
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{
+		Service: "dev-health-worker",
+		ConfigureDependencies: func(
+			context.Context,
+			config.Config,
+			*health.Registry,
+		) ([]lifecycle.Component, error) {
+			legacyCalled = true
+			return nil, nil
+		},
+		ConfigureDependenciesWithLogger: func(
+			context.Context,
+			config.Config,
+			*health.Registry,
+			*slog.Logger,
+		) ([]lifecycle.Component, error) {
+			loggerAwareCalled = true
+			return nil, nil
+		},
+	}, nil, testLookup(nil), IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 || legacyCalled || loggerAwareCalled {
+		t.Fatalf(
+			"ambiguous callbacks code=%d legacy=%v logger-aware=%v",
+			code,
+			legacyCalled,
+			loggerAwareCalled,
+		)
+	}
+	if !strings.Contains(stdout.String()+stderr.String(), "ambiguous_dependency_configuration") {
+		t.Fatalf("ambiguous callback failure was not categorized: %s", stdout.String()+stderr.String())
 	}
 }
 

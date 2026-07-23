@@ -143,6 +143,9 @@ smoke_target() {
       grep -F "\"${dependency}\"" <<<"${readiness_body}" >/dev/null \
         || die "${target} readiness omitted ${dependency}"
     done
+    if [ "${target}" = "reconciler" ] && grep -F '"job_registry"' <<<"${readiness_body}" >/dev/null; then
+      die "reconciler image could not load its packaged job contract artifacts"
+    fi
   fi
   wait_for_status "http://${published_address}/metrics" 200 \
     || die "${target} metrics endpoint did not become available"

@@ -282,6 +282,59 @@ circular.
 
 ## 6. Phase 2 — first bounded jobs and orchestration infrastructure
 
+Current boundary: the route-safe generic `worker_job_outbox` slice is in
+place. Python now gates enqueue on a valid executable migration state/route
+pair, the Go relay leaves known Celery rows untouched while still terminalizing
+unknown rows, and the reconciler command composes the bounded loop with
+readiness and metrics. Startup is fail-closed until that loop succeeds once,
+and later persistence failures close readiness. Checked-in deployment profiles
+remain `coexistence_disabled` with zero replicas; both registered kinds still
+route to Celery, no producer calls the bridge, and no Go handler is compiled.
+The mutation-capable scheduler and sync-domain transport work in CHAOS-3039
+therefore remains unported and no tandem parity is claimed.
+
+The first sync-domain transport dependency is now frozen independently of
+runtime activation. `contracts/sync-dispatch/v1/transport-routes.json`
+enumerates the four existing wakeup kinds and preserves their current delivery
+semantics. Strict Python and Go loaders consume the same artifact. The dormant
+Go reconciler also runs a bounded, read-only observer over the first due-row
+window in Python claim order and closes readiness on contract or database
+drift. Celery records the same versioned, redacted digest immediately before
+claiming; Go records its initial observation and then at most one per minute.
+It does not lock, claim, update, or publish, and capture failure does not alter
+Celery behavior. Every checked-in route and rollback route remains Celery, so
+the Celery reconciler is still the only mutation owner. The observer supplies
+an autonomous comparison surface, but observations with different cutoffs are
+operational evidence rather than tandem proof. This slice does not authorize
+promotion.
+
+The dormant `internal/scheduler/sync` package adds the corresponding
+read-only schedule-evaluation foundation. It reads at most 101 active
+configuration/job rows to produce a 100-row, deterministically ordered
+snapshot, then evaluates occurrence, manual-only, active-job,
+`is_running`-staleness, and `next_run_at` gates without a transaction, row
+lock, advisory lock, update, enqueue, or process-loop registration. Its
+versioned digest retains candidate identities only in memory. The evaluator
+implements a versioned deterministic five-field Croniter subset, including the
+ordinary list/range/step/name forms and the explicitly tested timezone and DST
+behavior. A valid Croniter form outside that grammar is reported as
+unsupported and can never become timing-eligible; this includes random `R`,
+unported mixed special-day forms, and optional seconds/year fields. Results
+and their digest are labeled `schedule_and_marker_only`; they are not full
+dispatch eligibility because organization existence, entitlement, occurrence
+claiming, and the dispatch transaction are still Celery-owned work below.
+Nothing imports this package from a command or deployment profile, so its
+presence is comparison infrastructure rather than activation.
+
+An opt-in live PostgreSQL test now proves the Python producer's outer rollback
+and dedupe/savepoint path. Before any generic kind is promoted from Celery,
+retain that proof in promotion validation, record evidence for the relay
+batch-size/claim-lease defaults, and exercise pending, claimed, delivered,
+running, and retryable work through the documented stop/drain/restore/restart
+rollback sequence. The generic bridge intentionally does not republish
+deferred rows to Celery; selectable Celery/River transport for the existing
+sync-domain outbox remains part of the work below.
+
 ### CHAOS-3039 — Implement Go scheduler and sync reconciler transport
 
 #### Work

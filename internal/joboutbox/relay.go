@@ -3,8 +3,11 @@ package joboutbox
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 )
+
+const maxRelayPolicyKinds = 1000
 
 type RelayConfig struct {
 	LeaseDuration    time.Duration
@@ -43,23 +46,71 @@ type StepResult struct {
 // Relay is a single bounded reconciliation step. Process lifecycle and polling
 // are intentionally left to the Phase 2 reconciler binary.
 type Relay struct {
-	repository *Repository
-	inserter   *RiverInserter
-	config     RelayConfig
+	repository    *Repository
+	inserter      *RiverInserter
+	config        RelayConfig
+	deferredKinds []string
 }
 
 func NewRelay(repository *Repository, inserter *RiverInserter, config RelayConfig) (*Relay, error) {
 	if repository == nil || inserter == nil || config.validate() != nil {
 		return nil, ErrInvalidConfiguration
 	}
-	return &Relay{repository: repository, inserter: inserter, config: config}, nil
+	registry, ok := inserter.registry.(RelayPolicyRegistry)
+	if !ok {
+		return nil, ErrInvalidConfiguration
+	}
+	deferredKinds, err := deferredRelayKinds(registry)
+	if err != nil {
+		return nil, err
+	}
+	return &Relay{
+		repository:    repository,
+		inserter:      inserter,
+		config:        config,
+		deferredKinds: deferredKinds,
+	}, nil
+}
+
+func deferredRelayKinds(registry RelayPolicyRegistry) ([]string, error) {
+	if registry == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	descriptors := registry.Descriptors()
+	if len(descriptors) < 1 || len(descriptors) > maxRelayPolicyKinds {
+		return nil, ErrInvalidConfiguration
+	}
+	seen := make(map[string]struct{}, len(descriptors))
+	deferred := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		if descriptor.Kind == "" {
+			return nil, ErrInvalidConfiguration
+		}
+		if _, duplicate := seen[descriptor.Kind]; duplicate {
+			return nil, ErrInvalidConfiguration
+		}
+		seen[descriptor.Kind] = struct{}{}
+		resolved, ok := registry.Descriptor(descriptor.Kind)
+		if !ok || resolved.Kind != descriptor.Kind || resolved.Route != descriptor.Route {
+			return nil, ErrInvalidConfiguration
+		}
+		switch descriptor.Route {
+		case "celery":
+			deferred = append(deferred, descriptor.Kind)
+		case "shadow", "river_canary", "river":
+		default:
+			return nil, ErrInvalidConfiguration
+		}
+	}
+	sort.Strings(deferred)
+	return deferred, nil
 }
 
 func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepResult, error) {
 	if relay == nil || now.IsZero() {
 		return StepResult{}, ErrInvalidConfiguration
 	}
-	claims, err := relay.repository.ClaimDue(ctx, now, limit, relay.config.LeaseDuration)
+	claims, err := relay.repository.claimDueExcept(ctx, now, limit, relay.config.LeaseDuration, relay.deferredKinds)
 	if err != nil {
 		return StepResult{}, err
 	}
@@ -74,30 +125,61 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 		case errors.Is(dispatchErr, ErrLeaseLost):
 			result.LeaseLost++
 		case errors.Is(dispatchErr, ErrContractRejected):
-			if relay.record(ctx, claim, now, failureContract) == nil {
+			recorded, recordErr := relay.recordOutcome(ctx, claim, now, failureContract, &result)
+			if recordErr != nil {
+				return result, recordErr
+			}
+			if recorded {
 				result.Dead++
-			} else {
-				result.LeaseLost++
 			}
 		case errors.Is(dispatchErr, ErrPolicyRejected):
-			if relay.record(ctx, claim, now, failurePolicy) == nil {
+			recorded, recordErr := relay.recordOutcome(ctx, claim, now, failurePolicy, &result)
+			if recordErr != nil {
+				return result, recordErr
+			}
+			if recorded {
 				result.Dead++
-			} else {
-				result.LeaseLost++
 			}
 		default:
-			if relay.record(ctx, claim, now, failureRiver) == nil {
+			recorded, recordErr := relay.recordOutcome(ctx, claim, now, failureRiver, &result)
+			if recordErr != nil {
+				return result, recordErr
+			}
+			if recorded {
 				if claim.AttemptCount >= relay.config.MaxRelayAttempts {
 					result.Dead++
 				} else {
 					result.Retried++
 				}
-			} else {
-				result.LeaseLost++
 			}
 		}
 	}
 	return result, nil
+}
+
+// recordOutcome distinguishes an expected stale-lease race from a persistence
+// outage. Only a proven lost lease is counted and tolerated; an unavailable
+// database is fatal so the lifecycle loop closes readiness instead of
+// reporting a successful reconciliation step.
+func (relay *Relay) recordOutcome(
+	ctx context.Context,
+	claim Claim,
+	now time.Time,
+	kind failureKind,
+	result *StepResult,
+) (bool, error) {
+	return classifyRecordOutcome(relay.record(ctx, claim, now, kind), result)
+}
+
+func classifyRecordOutcome(err error, result *StepResult) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, ErrLeaseLost) {
+		result.LeaseLost++
+		return false, nil
+	}
+	return false, err
 }
 
 func (relay *Relay) record(ctx context.Context, claim Claim, now time.Time, kind failureKind) error {

@@ -100,6 +100,9 @@ func prepareRow(registry PolicyRegistry, row Row) (jobruntime.Descriptor, relayA
 	if !ok {
 		return jobruntime.Descriptor{}, relayArgs{}, ErrContractRejected
 	}
+	if !descriptor.Executable() {
+		return jobruntime.Descriptor{}, relayArgs{}, ErrPolicyRejected
+	}
 	if row.ContractVersion < 1 || !containsVersion(descriptor.SupportedVersions, row.ContractVersion) {
 		return jobruntime.Descriptor{}, relayArgs{}, ErrContractRejected
 	}

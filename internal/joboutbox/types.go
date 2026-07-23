@@ -73,6 +73,14 @@ type PolicyRegistry interface {
 	Descriptor(kind string) (jobruntime.Descriptor, bool)
 }
 
+// RelayPolicyRegistry additionally supplies a complete route enumeration.
+// Unknown stored kinds intentionally do not appear in this list: the relay
+// must claim them so contract validation can terminalize them safely.
+type RelayPolicyRegistry interface {
+	PolicyRegistry
+	Descriptors() []jobruntime.Descriptor
+}
+
 type insertFunc func(context.Context, pgx.Tx, Row) (int64, error)
 
 type repositoryFaults struct {

@@ -61,7 +61,7 @@ tests/compatibility/river/record.sh
 ```
 
 The recorder validates the redaction contract before replacing
-`docs/architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json`.
+`.github/docs-legacy/architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json`.
 It leaves the existing evidence untouched when any harness assertion fails.
 
 ## What the runner proves

@@ -37,14 +37,14 @@ const (
 type Decision string
 
 const (
-	DecisionScheduleDue  Decision = "schedule_due"
-	DecisionInactive     Decision = "inactive"
-	DecisionManual       Decision = "manual"
-	DecisionInactiveJob  Decision = "inactive_job"
-	DecisionFreshRunning Decision = "fresh_running"
-	DecisionNotDue       Decision = "not_due"
-	DecisionNextRunGate  Decision = "next_run_gate"
-	DecisionInvalidCron  Decision = "invalid_cron"
+	DecisionScheduleDue     Decision = "schedule_due"
+	DecisionInactive        Decision = "inactive"
+	DecisionManual          Decision = "manual"
+	DecisionInactiveJob     Decision = "inactive_job"
+	DecisionFreshRunning    Decision = "fresh_running"
+	DecisionNotDue          Decision = "not_due"
+	DecisionNextRunGate     Decision = "next_run_gate"
+	DecisionInvalidCron     Decision = "invalid_cron"
 	DecisionUnsupportedCron Decision = "unsupported_cron"
 )
 

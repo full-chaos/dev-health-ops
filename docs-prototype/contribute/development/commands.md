@@ -1,11 +1,12 @@
 ---
 page_id: con-commands
-summary: Run the repository's install, lint, type, test, documentation, migration, fixture, and Compose commands from a source checkout.
+summary: Run the repository's Python, Go, container, documentation, migration, fixture, and validation commands from a source checkout.
 content_type: task-guide
 owner: engineering
 source_of_truth:
   - Makefile
   - pyproject.toml
+  - go.mod
   - compose.yml
   - current CI workflows
 applicability: current
@@ -14,10 +15,10 @@ lifecycle: active
 
 # Common development commands
 
-Run commands from the `dev-health-ops` repository root with the project virtual environment active. Start with the narrowest check that can answer your question, then run the aggregate families required for the change before opening a pull request.
+Run commands from the `dev-health-ops` repository root. Start with the narrowest check that can answer your question, then run the aggregate families required for the changed contracts before opening a pull request.
 {: .fc-page-lede }
 
-## Install the project
+## Install the Python project
 
 ```bash
 python -m pip install --upgrade pip
@@ -31,84 +32,123 @@ dev-hops --help
 python -c "import dev_health_ops; print(dev_health_ops.__file__)"
 ```
 
-## Format and lint Python
-
-Check formatting without changing files:
+## Format, lint, and type-check Python
 
 ```bash
 ruff format --check .
+ruff check .
+mypy
 ```
 
-Format files:
+Apply formatting or safe lint fixes deliberately, then review the diff:
 
 ```bash
 ruff format .
-```
-
-Run the configured lint rules:
-
-```bash
-ruff check .
-```
-
-Apply safe automatic lint fixes, then review the diff:
-
-```bash
 ruff check --fix .
 git diff --check
 ```
 
-## Run static type checking
-
-The repository's `pyproject.toml` defines the Mypy scope and overrides:
-
-```bash
-mypy
-```
-
-When working on a bounded subsystem, you can pass its paths first, but run the repository configuration before requesting review when the change affects shared contracts.
-
-## Run tests
-
-The Make targets call the repository's `ci/run_tests.sh` contract:
+## Run Python tests
 
 ```bash
 make test:unit
 make test:integration
 make test:e2e
 make test:live-e2e
-```
-
-Run the complete CI-oriented test family when the change spans multiple layers:
-
-```bash
 make test:ci
 ```
 
-Use `pytest` directly for a narrow test during development. Keep the path or node ID explicit:
+Use `pytest` directly for a narrow development loop:
 
 ```bash
 pytest tests/path/to/test_module.py -q
 pytest tests/path/to/test_module.py::test_name -q
 ```
 
-A direct `pytest` command is a development shortcut; it does not replace the repository aggregate contract.
+A narrow command does not replace the repository aggregate contract.
+
+## Validate the Go worker foundation
+
+The Go module contains coexistence foundations and versioned job contracts. Current Make targets wrap the checked-in validation scripts:
+
+```bash
+make go:fmt
+make go:vet
+make go:test
+make go:race
+make go:build
+make go:contract
+```
+
+Run the faster local family while iterating:
+
+```bash
+make go:check-fast
+```
+
+Run the complete static Go family:
+
+```bash
+make go:check
+```
+
+Run integration and container checks when the change affects PostgreSQL, River compatibility, process composition, images, or deployment profiles:
+
+```bash
+make go:integration
+make go:container-smoke
+make go:container-reproducible
+make go:container
+make go:verify
+```
+
+`go:verify` includes the static, integration, and container families. Go tests must not mutate or normalize away the Celery baseline when comparing runtimes.
+
+Useful direct commands include:
+
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./cmd/...
+```
+
+Use the Make/CI contract before review because it also validates checked-in job contracts, deployment profiles, and container behavior.
+
+## Inspect job and route contracts
+
+Versioned job envelopes and deployment profiles live under `contracts/jobs/v1/`; sync transport ownership lives under `contracts/sync-dispatch/v1/`.
+
+Run the contract family after changing a job kind, version, route, handler, profile, or migration state:
+
+```bash
+make go:contract
+```
+
+Use the worker contract checker and operator CLI help as the exact command source for the current revision:
+
+```bash
+go run ./cmd/worker-contractcheck --help
+go run ./cmd/dev-health-workerctl --help
+```
+
+Do not change a route from Celery to River without the job-specific shadow, parity, canary, and rollback evidence required by the migration contract.
 
 ## Start and inspect local services
 
-Start only the core stores:
+Start core stores:
 
 ```bash
 docker compose up -d postgres clickhouse valkey
 ```
 
-Build and start the full configured stack:
+Build and start the configured local stack:
 
 ```bash
 docker compose up -d --build
 ```
 
-Inspect service state and logs:
+Inspect state and logs:
 
 ```bash
 docker compose ps
@@ -116,24 +156,28 @@ docker compose logs -f api migrate
 docker compose logs -f clickhouse postgres valkey
 ```
 
-Stop the stack while preserving data volumes:
+Stop while preserving volumes:
 
 ```bash
 docker compose down
 ```
 
+Fresh local PostgreSQL volumes provision the development domain and River queue roles. Existing volumes may need the checked-in role-provisioning script before River migration tests.
+
 ## Run migrations
+
+Python application and analytics migrations:
 
 ```bash
 dev-hops migrate postgres
 dev-hops migrate clickhouse
 ```
 
-Run migrations before sync or analytics work when a branch changes storage contracts. Do not run a production migration from a development shell.
+The Go coexistence foundation requires a distinct direct migration DSN and runtime roles. Use the current migration command and provisioning script documented in [Databases and storage](../../operate/configure/databases-and-storage.md). Do not run a production migration from a development shell.
 
 ## Generate fixtures
 
-Review the current options:
+Review current options:
 
 ```bash
 dev-hops fixtures generate --help
@@ -148,46 +192,43 @@ dev-hops fixtures generate \
   --with-metrics
 ```
 
-Use a disposable local store or an explicitly approved fixture database.
+Use a disposable local store or explicitly approved fixture database.
 
-## Build and validate the v2 documentation
+## Build and preview the v2 documentation
 
-Install the documentation dependencies:
+Install dependencies:
 
 ```bash
 python -m pip install -r requirements-docs.txt
 ```
 
-Run the authoring server:
+Fast authoring server:
 
 ```bash
-python -m mkdocs serve \
-  --strict \
-  --config-file mkdocs.prototype.yml \
-  --dev-addr 127.0.0.1:8000
+make docs:serve
 ```
 
-Run the reader-critical gate:
+Cloudflare-shaped local preview:
 
 ```bash
-mkdir -p .build
-python scripts/validate_docs_v2_publication.py
-python -m mkdocs build --strict --config-file mkdocs.prototype.yml
-python scripts/check_built_site_links.py --site-dir .build/docs-prototype
-python scripts/check_docs_candidate_search.py \
-  --site-dir .build/docs-prototype \
-  --queries .github/documentation-program/phase-10/search-acceptance.json
-python scripts/check_docs_candidate_accessibility.py \
-  --site-dir .build/docs-prototype \
-  --css docs-prototype/stylesheets/extra.css
-python scripts/check_docs_candidate_facts.py
+make docs:preview
 ```
 
-The older `make docs:build` target still builds the legacy documentation tree. Use the v2 configuration above until the legacy tree is retired and the Make targets are promoted.
+Full reader-critical validation:
 
-## Inspect a CLI command before changing state
+```bash
+make docs:check-v2
+```
 
-Use the command's current help as the exact option source:
+Production documentation deployment is intentionally separate:
+
+```bash
+make docs:deploy
+```
+
+The legacy `make docs:build` target still builds the non-prototype documentation tree. Use the v2 targets for the candidate until cutover retires the legacy tree.
+
+## Inspect CLI commands before changing state
 
 ```bash
 dev-hops --help
@@ -196,7 +237,7 @@ dev-hops metrics --help
 dev-hops migrate --help
 ```
 
-Do not copy a state-changing command from an old issue or runbook without checking the current CLI and target environment.
+Bare Python CLI commands run inline. Some provider or job paths are safer and better validated through the API and active Celery workers; check the current command `Requires:` output and [CLI reference](../../reference/cli/index.md).
 
 ## Before committing
 
@@ -206,4 +247,4 @@ git diff --check
 git diff
 ```
 
-Confirm that the diff contains no credentials, local database artifacts, unrelated generated files, or accidental migration output. Then run the checks that match the affected layers and the same aggregate gate CI will enforce.
+Confirm the diff contains no credentials, local database artifacts, unrelated generated files, benchmark captures, or accidental migration output. Then run the checks matching every affected layer and the same aggregate gate CI enforces.

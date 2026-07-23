@@ -25,7 +25,6 @@ import (
 
 const (
 	defaultContractRoot = "contracts/sync-dispatch/v1"
-	defaultPython       = ".venv/bin/python"
 	pythonHelper        = "scripts/worker/observe_sync_dispatch_parity.py"
 	maxHelperOutput     = 32 * 1024
 )
@@ -34,7 +33,6 @@ var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type commandConfig struct {
 	DatabaseURI  string
-	Python       string
 	Cutoff       time.Time
 	CutoffSource string
 	Limit        int
@@ -185,10 +183,9 @@ func execute(
 func parseConfig(args []string, lookup func(string) (string, bool), stderr io.Writer) (commandConfig, error) {
 	flags := flag.NewFlagSet("dev-health-sync-parity", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	python := flags.String("python", defaultPython, "Python executable for the redacted observer helper")
 	cutoff := flags.String("cutoff", "", "UTC RFC3339 cutoff; defaults to the exporter database clock")
 	limit := flags.Int("limit", 0, "required bounded candidate limit (1-100)")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *limit < 1 || *limit > 100 || *python == "" {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *limit < 1 || *limit > 100 {
 		return commandConfig{}, errors.New("invalid configuration")
 	}
 	databaseURI, ok := lookup("POSTGRES_URI")
@@ -201,7 +198,6 @@ func parseConfig(args []string, lookup func(string) (string, bool), stderr io.Wr
 	databaseURI = normalizePostgresURI(databaseURI)
 	config := commandConfig{
 		DatabaseURI:  databaseURI,
-		Python:       *python,
 		Limit:        *limit,
 		CutoffSource: "database_clock",
 	}
@@ -220,7 +216,6 @@ func parseConfig(args []string, lookup func(string) (string, bool), stderr io.Wr
 func printUsage(output io.Writer) {
 	flags := flag.NewFlagSet("dev-health-sync-parity", flag.ContinueOnError)
 	flags.SetOutput(output)
-	flags.String("python", defaultPython, "Python executable for the redacted observer helper")
 	flags.String("cutoff", "", "UTC RFC3339 cutoff; defaults to the exporter database clock")
 	flags.Int("limit", 0, "required bounded candidate limit (1-100)")
 	fmt.Fprintln(output, "Usage: dev-health-sync-parity --limit 1..100 [--cutoff RFC3339 UTC]")
@@ -230,7 +225,7 @@ func printUsage(output io.Writer) {
 func runPythonObserver(ctx context.Context, config commandConfig, snapshotID string) (parityObservation, error) {
 	command := exec.CommandContext(
 		ctx,
-		config.Python,
+		".venv/bin/python",
 		pythonHelper,
 		"--cutoff", canonicalCutoff(config.Cutoff),
 		"--limit", fmt.Sprintf("%d", config.Limit),

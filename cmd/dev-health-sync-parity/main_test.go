@@ -70,6 +70,7 @@ func TestExecuteHelpNeedsNoDatabaseOrPythonRuntime(t *testing.T) {
 	)
 	if code != 0 || !strings.Contains(stdout.String(), "--limit") || stderr.Len() != 0 ||
 		strings.Contains(stdout.String(), "--contract-root") ||
+		strings.Contains(stdout.String(), "--python") ||
 		strings.Contains(stdout.String(), `"status"`) {
 		t.Fatalf("help = code %d stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}

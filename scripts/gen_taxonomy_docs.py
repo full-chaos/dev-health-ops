@@ -8,13 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY_PATH = ROOT / "src" / "dev_health_ops" / "investment_taxonomy.py"
-DOC_PATH = (
-    ROOT
-    / ".github"
-    / "docs-legacy"
-    / "product"
-    / "investment-taxonomy.md"
-)
+DOC_PATH = ROOT / ".github" / "docs-legacy" / "product" / "investment-taxonomy.md"
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"

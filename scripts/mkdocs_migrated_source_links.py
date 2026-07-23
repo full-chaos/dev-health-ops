@@ -18,7 +18,9 @@ MAPPING_PATH = (
     / "migrated-source-pages.json"
 )
 REPOSITORY_BLOB_ORIGIN = "https://github.com/full-chaos/dev-health-ops/blob/main"
-REPOSITORY_RAW_ORIGIN = "https://raw.githubusercontent.com/full-chaos/dev-health-ops/main"
+REPOSITORY_RAW_ORIGIN = (
+    "https://raw.githubusercontent.com/full-chaos/dev-health-ops/main"
+)
 INLINE_LINK_RE = re.compile(
     r"(?P<prefix>!?\[[^\]\n]*\]\()(?P<destination>[^)\n]+)(?P<suffix>\))"
 )
@@ -28,7 +30,7 @@ REFERENCE_LINK_RE = re.compile(
 HTML_ATTR_RE = re.compile(
     r'(?P<prefix>\b(?P<attr>href|src)=(?P<quote>["\']))'
     r'(?P<destination>[^"\']+)'
-    r'(?P<suffix>(?P=quote))',
+    r"(?P<suffix>(?P=quote))",
     re.IGNORECASE,
 )
 EMPTY_ANCHOR_RE = re.compile(
@@ -55,7 +57,7 @@ def _canonical_url(target_path: str) -> str:
     if value == "index.md":
         return "/"
     if value.endswith("/index.md"):
-        return f"/{value[:-len('index.md')]}"
+        return f"/{value[: -len('index.md')]}"
     if value.endswith(".md"):
         value = value[:-3]
     return f"/{value}/"

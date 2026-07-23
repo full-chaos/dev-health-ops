@@ -19,9 +19,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INVENTORY = (
-    ROOT / ".github" / "docs-legacy" / "freshness-inventory.yml"
-)
+DEFAULT_INVENTORY = ROOT / ".github" / "docs-legacy" / "freshness-inventory.yml"
 DEFAULT_DOCS_ROOT = ROOT / ".github" / "docs-legacy"
 REVIEW_CADENCE_DAYS = 180
 

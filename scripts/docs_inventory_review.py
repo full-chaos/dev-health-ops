@@ -256,7 +256,12 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
             notes="Archived pre-cutover build configuration.",
         )
 
-    for pattern in ("wrangler*.toml", "wrangler*.jsonc", "**/*cloudflare*.yml", "**/*cloudflare*.yaml"):
+    for pattern in (
+        "wrangler*.toml",
+        "wrangler*.jsonc",
+        "**/*cloudflare*.yml",
+        "**/*cloudflare*.yaml",
+    ):
         for path in sorted(repo_root.glob(pattern)):
             if path.is_file():
                 _add_file(

@@ -5,9 +5,11 @@ package workgraph
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -77,6 +79,57 @@ func TestPostgresStoreCrashRecoveryReplacesRequestAndLedgerToken(t *testing.T) {
 	}
 }
 
+func TestRequestWriterUsesCanonicalDeferredOutboxPolicyInsideCallerTransaction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createExecutionTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewRequestWriter(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Request{
+		ID:                   testRequestID,
+		OrganizationID:       testOrgID,
+		Kind:                 KindBuild,
+		Scope:                []byte(`{"from_date":"2026-07-01"}`),
+		LLMConcurrency:       1,
+		SpendLimitMicrounits: 5,
+		CorrelationID:        "post-sync:1",
+		IdempotencyKey:       "workgraph:post-sync:1",
+	}
+	if err := writer.WriteTx(ctx, tx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var kind, queue, dedupe string
+	if err := pool.QueryRow(ctx, `SELECT job_kind, queue, dedupe_key FROM worker_job_outbox`).Scan(&kind, &queue, &dedupe); err != nil {
+		t.Fatal(err)
+	}
+	if kind != string(KindBuild) || queue != "workgraph" || dedupe != request.IdempotencyKey {
+		t.Fatalf("outbox policy drift: kind=%s queue=%s dedupe=%s", kind, queue, dedupe)
+	}
+}
+
 func createExecutionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `
@@ -91,6 +144,13 @@ CREATE TABLE work_graph_execution_ledger (
  request_id uuid PRIMARY KEY REFERENCES work_graph_execution_requests(id), claim_token uuid NOT NULL,
  state text NOT NULL, attempt_count integer NOT NULL DEFAULT 1, output_evidence jsonb NULL,
  failure_detail text NULL, last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(), completed_at timestamptz NULL
+);
+CREATE TABLE worker_job_outbox (
+ id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE, job_kind varchar(96) NOT NULL,
+ contract_version integer NOT NULL, args json NOT NULL, payload_hash varchar(71) NOT NULL,
+ queue varchar(96) NOT NULL, priority smallint NOT NULL, max_attempts smallint NOT NULL,
+ scheduled_at timestamptz NOT NULL, status varchar(16) NOT NULL, attempt_count integer NOT NULL,
+ next_attempt_at timestamptz NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
 )`)
 	if err != nil {
 		t.Fatal(err)

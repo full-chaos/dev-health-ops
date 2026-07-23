@@ -18,7 +18,9 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +35,7 @@ class ReportRunStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    CANCELED = "canceled"
 
 
 class SavedReport(Base):
@@ -183,6 +186,14 @@ class ReportRun(Base):
     )
     report: Mapped[SavedReport] = relationship("SavedReport", back_populates="runs")
 
+    scheduled_occurrence_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("scheduled_report_occurrences.occurrence_id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        comment="Stable schedule occurrence when this run was scheduler-triggered",
+    )
+
     status: Mapped[str] = mapped_column(
         Text,
         nullable=False,
@@ -214,6 +225,27 @@ class ReportRun(Base):
 
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_traceback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    artifact_fingerprint: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="SHA-256 identity of the rendered artifact; retries must preserve it",
+    )
+    notification_key: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        unique=True,
+        comment="Stable key used to deduplicate report-ready notifications",
+    )
+    notification_status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="pending",
+        comment="pending, delivering, delivered; retries may notify only from pending",
+    )
+    notification_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     triggered_by: Mapped[str] = mapped_column(
         Text,
@@ -231,6 +263,7 @@ class ReportRun(Base):
     __table_args__ = (
         Index("ix_report_runs_report_created", "report_id", "created_at"),
         Index("ix_report_runs_status", "status"),
+        Index("ix_report_runs_notification_key", "notification_key"),
     )
 
     def __init__(
@@ -244,3 +277,51 @@ class ReportRun(Base):
         self.triggered_by = triggered_by
         self.status = status
         self.created_at = datetime.now(timezone.utc)
+
+
+class ScheduledReportOccurrence(Base):
+    """One immutable scheduled-report occurrence and its authoritative run."""
+
+    __tablename__ = "scheduled_report_occurrences"
+
+    occurrence_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    identity_version: Mapped[str] = mapped_column(Text, nullable=False)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    report_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("saved_reports.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_job_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("scheduled_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    report_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("report_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "report_id",
+            "scheduled_for",
+            name="uq_scheduled_report_occurrence_report_time",
+        ),
+        Index(
+            "ix_scheduled_report_occurrence_org_report_time",
+            "org_id",
+            "report_id",
+            "scheduled_for",
+        ),
+    )

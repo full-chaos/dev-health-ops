@@ -53,6 +53,26 @@ The rendering engine is currently in the planning phase. It will be responsible 
 - **Narrative Generation**: Constructing a grounded narrative based on the `ReportPlan`.
 - **Insight Extraction**: Identifying trends and anomalies to populate `InsightBlock` records.
 
+## Execution handoff and retry contract
+
+`ReportRun` is the authoritative execution record. Creating either an on-demand
+or scheduled run writes a versioned `report.execute_on_demand` or
+`report.execute_scheduled` handoff in `worker_job_outbox` in the same database
+transaction. The payload carries only the report ID; the run ID is the domain
+link, and workers reload the report plan, data, and notification state from the
+semantic store.
+
+Scheduled reports additionally persist a deterministic occurrence identity
+(`report_id + scheduled_for`). Its uniqueness constraint means a duplicate
+scheduler tick can reuse the original run and handoff but cannot create a
+second artifact or notification. Retries reuse the same `ReportRun`; artifact
+fingerprints reject a different rendered result, and notification delivery is
+claimed by a durable per-run key before any external side effect.
+
+The checked-in Go report interfaces cover query, renderer, artifact storage,
+and notification adapters, but no Go handler is registered and both report
+routes remain `celery` in migration state. There is no canary evidence yet.
+
 ## Trust Model
 The architecture is built on a foundation of trust and verifiability.
 - **Data Grounding**: Only persisted metric data is used for report generation. Freeform LLM claims are forbidden.

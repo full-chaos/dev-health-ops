@@ -9,6 +9,8 @@ from .codec import (
 from .models import (
     CONTRACT_VERSION_V1,
     KIND_HEARTBEAT,
+    KIND_REPORT_EXECUTE_ON_DEMAND,
+    KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
@@ -16,7 +18,9 @@ from .models import (
     DomainLink,
     Envelope,
     HeartbeatPayload,
+    OnDemandReportExecutionPayload,
     RetentionCleanupPayload,
+    ScheduledReportExecutionPayload,
 )
 from .registry import (
     CapabilityReport,
@@ -34,6 +38,8 @@ from .registry import (
 __all__ = [
     "CONTRACT_VERSION_V1",
     "KIND_HEARTBEAT",
+    "KIND_REPORT_EXECUTE_ON_DEMAND",
+    "KIND_REPORT_EXECUTE_SCHEDULED",
     "KIND_RETENTION_CLEANUP",
     "MAX_ENVELOPE_BYTES",
     "RETENTION_WORKER_TERMINAL",
@@ -44,10 +50,12 @@ __all__ = [
     "DomainLink",
     "Envelope",
     "HeartbeatPayload",
+    "OnDemandReportExecutionPayload",
     "MigrationJob",
     "RegisteredContract",
     "Registry",
     "RetentionCleanupPayload",
+    "ScheduledReportExecutionPayload",
     "build_envelope",
     "capabilities_for_profile",
     "check_rollout_capabilities",

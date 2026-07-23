@@ -11,6 +11,8 @@ from typing import Any
 from .models import (
     CONTRACT_VERSION_V1,
     KIND_HEARTBEAT,
+    KIND_REPORT_EXECUTE_ON_DEMAND,
+    KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
@@ -19,7 +21,9 @@ from .models import (
     Envelope,
     HeartbeatPayload,
     JobPayload,
+    OnDemandReportExecutionPayload,
     RetentionCleanupPayload,
+    ScheduledReportExecutionPayload,
 )
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
@@ -39,7 +43,12 @@ class ContractDecodeError(ValueError):
 def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     """Decode one known kind without accepting extensions or duplicate keys."""
 
-    if kind not in {KIND_HEARTBEAT, KIND_RETENTION_CLEANUP}:
+    if kind not in {
+        KIND_HEARTBEAT,
+        KIND_RETENTION_CLEANUP,
+        KIND_REPORT_EXECUTE_ON_DEMAND,
+        KIND_REPORT_EXECUTE_SCHEDULED,
+    }:
         raise ContractDecodeError("unknown job kind")
     document = load_json_document(data, max_bytes=MAX_ENVELOPE_BYTES)
     envelope = _expect_object(
@@ -87,10 +96,18 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         if domain_type != HeartbeatPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_heartbeat(envelope["payload"])
-    else:
+    elif kind == KIND_RETENTION_CLEANUP:
         if domain_type != RetentionCleanupPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_retention(envelope["payload"])
+    elif kind == KIND_REPORT_EXECUTE_ON_DEMAND:
+        if domain_type != OnDemandReportExecutionPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_on_demand_report_execution(envelope["payload"])
+    else:
+        if domain_type != ScheduledReportExecutionPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_scheduled_report_execution(envelope["payload"])
 
     return Envelope(
         contract_version=version,
@@ -112,7 +129,15 @@ def build_envelope(
 ) -> Envelope:
     """Build and validate arguments for the transitional outbox producer."""
 
-    if not isinstance(payload, (HeartbeatPayload, RetentionCleanupPayload)):
+    if not isinstance(
+        payload,
+        (
+            HeartbeatPayload,
+            RetentionCleanupPayload,
+            OnDemandReportExecutionPayload,
+            ScheduledReportExecutionPayload,
+        ),
+    ):
         raise ContractDecodeError("unsupported payload type")
     envelope = Envelope(
         contract_version=payload.CONTRACT_VERSION,
@@ -147,6 +172,10 @@ def encode_envelope(envelope: Envelope) -> bytes:
         kind = KIND_HEARTBEAT
     elif isinstance(envelope.payload, RetentionCleanupPayload):
         kind = KIND_RETENTION_CLEANUP
+    elif isinstance(envelope.payload, OnDemandReportExecutionPayload):
+        kind = KIND_REPORT_EXECUTE_ON_DEMAND
+    elif isinstance(envelope.payload, ScheduledReportExecutionPayload):
+        kind = KIND_REPORT_EXECUTE_SCHEDULED
     else:
         raise ContractDecodeError("unsupported payload type")
     decode_envelope(kind, encoded)
@@ -224,6 +253,24 @@ def _decode_retention(value: Any) -> RetentionCleanupPayload:
     )
 
 
+def _decode_on_demand_report_execution(value: Any) -> OnDemandReportExecutionPayload:
+    payload = _expect_object(
+        value, required={"report_id"}, optional=set(), label="report execution payload"
+    )
+    report_id = _expect_string(payload["report_id"], "report_id")
+    _validate_uuid("report_id", report_id)
+    return OnDemandReportExecutionPayload(report_id=report_id)
+
+
+def _decode_scheduled_report_execution(value: Any) -> ScheduledReportExecutionPayload:
+    payload = _expect_object(
+        value, required={"report_id"}, optional=set(), label="report execution payload"
+    )
+    report_id = _expect_string(payload["report_id"], "report_id")
+    _validate_uuid("report_id", report_id)
+    return ScheduledReportExecutionPayload(report_id=report_id)
+
+
 def _payload_document(payload: object) -> dict[str, Any]:
     if isinstance(payload, HeartbeatPayload):
         return {"scheduled_for": payload.scheduled_for}
@@ -233,6 +280,10 @@ def _payload_document(payload: object) -> dict[str, Any]:
             "delete_before": payload.delete_before,
             "retention_policy": payload.retention_policy,
         }
+    if isinstance(payload, OnDemandReportExecutionPayload):
+        return {"report_id": payload.report_id}
+    if isinstance(payload, ScheduledReportExecutionPayload):
+        return {"report_id": payload.report_id}
     raise ContractDecodeError("unsupported payload type")
 
 

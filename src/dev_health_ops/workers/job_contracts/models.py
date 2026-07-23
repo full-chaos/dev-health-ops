@@ -8,6 +8,8 @@ from typing import ClassVar, Protocol, TypeAlias
 CONTRACT_VERSION_V1 = 1
 KIND_HEARTBEAT = "system.heartbeat"
 KIND_RETENTION_CLEANUP = "system.retention_cleanup"
+KIND_REPORT_EXECUTE_ON_DEMAND = "report.execute_on_demand"
+KIND_REPORT_EXECUTE_SCHEDULED = "report.execute_scheduled"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 MAX_ENVELOPE_BYTES = 16 * 1024
 
@@ -52,7 +54,34 @@ class RetentionCleanupPayload:
     retention_policy: str
 
 
-JobPayload: TypeAlias = HeartbeatPayload | RetentionCleanupPayload
+@dataclass(frozen=True, slots=True)
+class OnDemandReportExecutionPayload:
+    """Version 1 request to execute one already-created manual ReportRun."""
+
+    KIND: ClassVar[str] = KIND_REPORT_EXECUTE_ON_DEMAND
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "report_run"
+
+    report_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledReportExecutionPayload:
+    """Version 1 request to execute one already-created scheduled ReportRun."""
+
+    KIND: ClassVar[str] = KIND_REPORT_EXECUTE_SCHEDULED
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "report_run"
+
+    report_id: str
+
+
+JobPayload: TypeAlias = (
+    HeartbeatPayload
+    | RetentionCleanupPayload
+    | OnDemandReportExecutionPayload
+    | ScheduledReportExecutionPayload
+)
 
 
 @dataclass(frozen=True, slots=True)

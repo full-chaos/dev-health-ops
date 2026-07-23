@@ -7,11 +7,18 @@ from typing import Any, cast
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
+from dev_health_ops.models.reports import (
+    ReportRun,
+    ReportRunStatus,
+    SavedReport,
+    ScheduledReportOccurrence,
+)
 from dev_health_ops.models.settings import ScheduledJob
+from dev_health_ops.models.worker_job_outbox import WorkerJobOutbox
 from tests._helpers import tables_of
 
 
@@ -24,7 +31,13 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=tables_of(SavedReport, ReportRun, ScheduledJob),
+                tables=tables_of(
+                    SavedReport,
+                    ReportRun,
+                    ScheduledJob,
+                    ScheduledReportOccurrence,
+                    WorkerJobOutbox,
+                ),
             )
         )
 
@@ -144,6 +157,36 @@ async def test_resolve_report_runs(monkeypatch, session_maker, seeded_reports):
     assert result.total == 1
     assert result.items[0].status == "success"
     assert result.items[0].rendered_markdown == "# Weekly Health\nAll good."
+
+
+@pytest.mark.asyncio
+async def test_trigger_report_creates_atomic_run_and_deferred_handoff(
+    monkeypatch, session_maker, seeded_reports
+):
+    from unittest.mock import MagicMock
+
+    from dev_health_ops.api.graphql.resolvers import reports as reports_mod
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session",
+        _make_mock_session(session_maker),
+    )
+    dispatch = MagicMock()
+    monkeypatch.setattr(
+        "dev_health_ops.workers.report_task.execute_saved_report.apply_async", dispatch
+    )
+
+    run = await reports_mod.resolve_trigger_report(
+        org_id=seeded_reports["org_id"], report_id=seeded_reports["report1_id"]
+    )
+
+    assert run is not None
+    assert run.status == ReportRunStatus.PENDING.value
+    dispatch.assert_called_once()
+    async with session_maker() as session:
+        outbox = await session.scalar(select(WorkerJobOutbox))
+        assert outbox is not None
+        assert outbox.dedupe_key == f"report.run:{run.id}"
 
 
 @pytest.mark.asyncio

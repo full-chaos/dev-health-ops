@@ -57,6 +57,38 @@ type RetentionCleanupArgs struct {
 	EnvelopeArgs[jobcontract.RetentionCleanupPayload]
 }
 
+// OnDemandReportExecutionArgs is the River-facing form of
+// report.execute_on_demand.v1.
+type OnDemandReportExecutionArgs struct {
+	EnvelopeArgs[jobcontract.OnDemandReportExecutionPayload]
+}
+
+func (OnDemandReportExecutionArgs) Kind() string { return jobcontract.KindReportExecuteOnDemand }
+
+func (OnDemandReportExecutionArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args OnDemandReportExecutionArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
+// ScheduledReportExecutionArgs is the River-facing form of
+// report.execute_scheduled.v1.
+type ScheduledReportExecutionArgs struct {
+	EnvelopeArgs[jobcontract.ScheduledReportExecutionPayload]
+}
+
+func (ScheduledReportExecutionArgs) Kind() string { return jobcontract.KindReportExecuteScheduled }
+
+func (ScheduledReportExecutionArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args ScheduledReportExecutionArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 func (RetentionCleanupArgs) Kind() string { return jobcontract.KindRetentionCleanup }
 
 func (RetentionCleanupArgs) SupportedContractVersions() []int {

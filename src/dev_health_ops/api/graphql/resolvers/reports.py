@@ -559,28 +559,28 @@ async def resolve_trigger_report(
     report_id: str,
 ) -> ReportRunType | None:
     from dev_health_ops.db import get_postgres_session
+    from dev_health_ops.reports.execution_trigger import (
+        ReportExecutionIneligibleError,
+        create_on_demand_report_execution,
+    )
 
     async with get_postgres_session() as session:
-        result = await session.execute(
-            select(SavedReport).where(
-                SavedReport.org_id == org_id,
-                SavedReport.id == uuid.UUID(report_id),
-            )
-        )
-        report = result.scalar_one_or_none()
-        if report is None:
-            return None
-
-        report_uuid = _uuid_value(report.id)
-
-        run = ReportRun(
-            report_id=report_uuid,
-            triggered_by="api",
-            status=ReportRunStatus.PENDING.value,
-        )
-        session.add(run)
-        await session.flush()
-        run_id_uuid = _uuid_value(run.id)
+        async with session.begin():
+            try:
+                trigger = await session.run_sync(
+                    lambda sync_session: create_on_demand_report_execution(
+                        sync_session,
+                        uuid.UUID(report_id),
+                        org_id,
+                    )
+                )
+            except (ReportExecutionIneligibleError, ValueError):
+                return None
+        run_id_uuid = uuid.UUID(trigger.run_id)
+        report_uuid = uuid.UUID(trigger.report_id)
+        run = await session.get(ReportRun, run_id_uuid)
+        if run is None:
+            raise ValueError("Report run missing after atomic creation")
 
     try:
         from dev_health_ops.workers.report_task import execute_saved_report

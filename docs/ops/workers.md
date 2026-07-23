@@ -279,7 +279,7 @@ Operators can trigger background operations on-demand through three primary API 
 
 3. **Report Execution Trigger**
    * **Trigger**: GraphQL `triggerReport` mutation or the "Run Now" button in the Report Center UI.
-   * **Flow**: Creates a `ReportRun` record and enqueues `execute_saved_report` onto the `reports` queue.
+   * **Flow**: Atomically creates a `ReportRun` and its versioned durable handoff, then enqueues `execute_saved_report` onto the `reports` queue only after the transaction commits. The current production route remains Celery; the durable handoff is deferred until a separately approved Go route activation.
 
 ### Affected Operations Quick Reference
 

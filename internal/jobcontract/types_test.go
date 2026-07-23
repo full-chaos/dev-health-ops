@@ -18,6 +18,8 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 	}{
 		{KindHeartbeat, "examples/system.heartbeat.v1.json", HeartbeatPayload{ScheduledFor: "2026-07-21T12:00:00Z"}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v1.json", RetentionCleanupPayload{BatchSize: 250, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: RetentionWorkerTerminal}},
+		{KindReportExecuteOnDemand, "examples/report.execute_on_demand.v1.json", OnDemandReportExecutionPayload{ReportID: "00000000-0000-4000-8000-000000000002"}},
+		{KindReportExecuteScheduled, "examples/report.execute_scheduled.v1.json", ScheduledReportExecutionPayload{ReportID: "00000000-0000-4000-8000-000000000004"}},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {

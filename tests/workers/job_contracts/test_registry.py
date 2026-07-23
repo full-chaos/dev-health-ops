@@ -82,7 +82,10 @@ def test_rollout_requires_every_live_profile_report() -> None:
     registry = load_registry()
     migration_jobs = load_migration_jobs()
     current = capabilities_for_profile(registry, "ops")
-    check_rollout_capabilities(migration_jobs, (current, current), (current,))
+    heavy = capabilities_for_profile(registry, "heavy")
+    check_rollout_capabilities(
+        migration_jobs, (current, current, heavy, heavy), (current, heavy)
+    )
 
     stale = CapabilityReport(
         profile="ops",
@@ -96,7 +99,9 @@ def test_rollout_requires_every_live_profile_report() -> None:
         ),
     )
     with pytest.raises(ContractDecodeError, match="lacks producer support"):
-        check_rollout_capabilities(migration_jobs, (current, stale), (current,))
+        check_rollout_capabilities(
+            migration_jobs, (current, stale, heavy, heavy), (current, heavy)
+        )
 
     stale_digest = CapabilityReport(
         profile="ops",
@@ -110,9 +115,11 @@ def test_rollout_requires_every_live_profile_report() -> None:
         ),
     )
     with pytest.raises(ContractDecodeError, match="lacks producer support"):
-        check_rollout_capabilities(migration_jobs, (current, stale_digest), (current,))
+        check_rollout_capabilities(
+            migration_jobs, (current, stale_digest, heavy, heavy), (current, heavy)
+        )
     with pytest.raises(ContractDecodeError, match="no capability report"):
-        check_rollout_capabilities(migration_jobs, (), (current,))
+        check_rollout_capabilities(migration_jobs, (), (current, heavy))
 
 
 def test_rolling_deployment_holds_producer_at_n_minus_one() -> None:

@@ -435,14 +435,19 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		return fmt.Errorf("no compiled schema validator for version %d", version)
 	}
 	expectedFields := map[string][]string{
-		KindHeartbeat:        {"scheduled_for"},
-		KindRetentionCleanup: {"batch_size", "delete_before", "retention_policy"},
+		KindReportExecuteOnDemand:  {"report_id"},
+		KindReportExecuteScheduled: {"report_id"},
+		KindHeartbeat:              {"scheduled_for"},
+		KindRetentionCleanup:       {"batch_size", "delete_before", "retention_policy"},
 	}[kind]
 	if expectedFields == nil || !equalStringSet(stringSet(schema["required"]), expectedFields) || !equalStringSet(keySet(properties), expectedFields) {
 		return errors.New("schema fields drift from compiled payload type")
 	}
 	if kind == KindHeartbeat {
 		return validateTimestampProperty(properties["scheduled_for"])
+	}
+	if kind == KindReportExecuteOnDemand || kind == KindReportExecuteScheduled {
+		return validateUUIDProperty(properties["report_id"])
 	}
 	batch, ok := properties["batch_size"].(map[string]any)
 	if !ok || batch["type"] != "integer" || fmt.Sprint(batch["minimum"]) != "1" || fmt.Sprint(batch["maximum"]) != "1000" {
@@ -458,6 +463,15 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	enum, ok := policy["enum"].([]any)
 	if !ok || len(enum) != 1 || enum[0] != RetentionWorkerTerminal {
 		return errors.New("retention_policy schema drifts from compiled values")
+	}
+	return nil
+}
+
+func validateUUIDProperty(value any) error {
+	property, ok := value.(map[string]any)
+	if !ok || property["type"] != "string" || property["format"] != "uuid" ||
+		property["pattern"] != "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" {
+		return errors.New("UUID schema drifts from compiled type")
 	}
 	return nil
 }

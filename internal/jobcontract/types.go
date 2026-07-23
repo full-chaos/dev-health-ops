@@ -14,10 +14,12 @@ const (
 	// MaxEnvelopeBytes bounds River encoded_args before any job-specific decode.
 	MaxEnvelopeBytes = 16 * 1024
 
-	ContractVersionV1       = 1
-	KindHeartbeat           = "system.heartbeat"
-	KindRetentionCleanup    = "system.retention_cleanup"
-	RetentionWorkerTerminal = "worker_job_terminal"
+	ContractVersionV1          = 1
+	KindHeartbeat              = "system.heartbeat"
+	KindRetentionCleanup       = "system.retention_cleanup"
+	KindReportExecuteOnDemand  = "report.execute_on_demand"
+	KindReportExecuteScheduled = "report.execute_scheduled"
+	RetentionWorkerTerminal    = "worker_job_terminal"
 )
 
 var (
@@ -58,6 +60,19 @@ type RetentionCleanupPayload struct {
 	RetentionPolicy string `json:"retention_policy"`
 }
 
+// OnDemandReportExecutionPayload identifies the authoritative SavedReport for
+// an already-created manual ReportRun. The domain link supplies the run ID.
+type OnDemandReportExecutionPayload struct {
+	ReportID string `json:"report_id"`
+}
+
+// ScheduledReportExecutionPayload identifies the authoritative SavedReport
+// for an already-created scheduled ReportRun. It is deliberately a distinct
+// kind so the two production routes retain independent rollback controls.
+type ScheduledReportExecutionPayload struct {
+	ReportID string `json:"report_id"`
+}
+
 type wireEnvelope struct {
 	ContractVersion int             `json:"contract_version"`
 	OrganizationID  *string         `json:"organization_id,omitempty"`
@@ -88,6 +103,20 @@ var definitions = map[string]contractDefinition{
 		CurrentVersion:    ContractVersionV1,
 		SupportedVersions: []int{ContractVersionV1},
 		DomainLink:        "maintenance_run",
+		OrganizationScope: "global",
+	},
+	KindReportExecuteOnDemand: {
+		Kind:              KindReportExecuteOnDemand,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "report_run",
+		OrganizationScope: "global",
+	},
+	KindReportExecuteScheduled: {
+		Kind:              KindReportExecuteScheduled,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "report_run",
 		OrganizationScope: "global",
 	},
 }
@@ -131,6 +160,24 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindReportExecuteOnDemand:
+		var value OnDemandReportExecutionPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindReportExecuteScheduled:
+		var value ScheduledReportExecutionPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	default:
 		return Envelope{}, fmt.Errorf("job kind %q has no decoder", kind)
 	}
@@ -153,6 +200,10 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindHeartbeat
 	case RetentionCleanupPayload:
 		kind = KindRetentionCleanup
+	case OnDemandReportExecutionPayload:
+		kind = KindReportExecuteOnDemand
+	case ScheduledReportExecutionPayload:
+		kind = KindReportExecuteScheduled
 	default:
 		return nil, errors.New("unsupported payload type")
 	}
@@ -237,6 +288,20 @@ func (payload RetentionCleanupPayload) validate() error {
 	}
 	if payload.RetentionPolicy != RetentionWorkerTerminal {
 		return errors.New("unsupported retention_policy")
+	}
+	return nil
+}
+
+func (payload OnDemandReportExecutionPayload) validate() error {
+	if !uuidPattern.MatchString(payload.ReportID) {
+		return errors.New("report_id must be a lowercase UUID")
+	}
+	return nil
+}
+
+func (payload ScheduledReportExecutionPayload) validate() error {
+	if !uuidPattern.MatchString(payload.ReportID) {
+		return errors.New("report_id must be a lowercase UUID")
 	}
 	return nil
 }

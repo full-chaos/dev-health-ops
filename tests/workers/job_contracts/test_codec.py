@@ -7,12 +7,16 @@ import pytest
 
 from dev_health_ops.workers.job_contracts import (
     KIND_HEARTBEAT,
+    KIND_REPORT_EXECUTE_ON_DEMAND,
+    KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
     ContractDecodeError,
     HeartbeatPayload,
+    OnDemandReportExecutionPayload,
     RetentionCleanupPayload,
+    ScheduledReportExecutionPayload,
     build_envelope,
     decode_envelope,
     default_contract_root,
@@ -36,6 +40,20 @@ from dev_health_ops.workers.job_contracts import (
                 batch_size=250,
                 delete_before="2026-07-14T12:00:00Z",
                 retention_policy=RETENTION_WORKER_TERMINAL,
+            ),
+        ),
+        (
+            KIND_REPORT_EXECUTE_ON_DEMAND,
+            "report.execute_on_demand.v1.json",
+            OnDemandReportExecutionPayload(
+                report_id="00000000-0000-4000-8000-000000000002"
+            ),
+        ),
+        (
+            KIND_REPORT_EXECUTE_SCHEDULED,
+            "report.execute_scheduled.v1.json",
+            ScheduledReportExecutionPayload(
+                report_id="00000000-0000-4000-8000-000000000004"
             ),
         ),
     ],

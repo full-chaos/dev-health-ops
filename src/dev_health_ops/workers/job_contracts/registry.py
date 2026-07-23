@@ -11,6 +11,8 @@ from .codec import ContractDecodeError, load_json_document
 from .models import (
     CONTRACT_VERSION_V1,
     KIND_HEARTBEAT,
+    KIND_REPORT_EXECUTE_ON_DEMAND,
+    KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
 )
 
@@ -194,6 +196,8 @@ def load_registry(root: Path | None = None) -> Registry:
         raise ContractDecodeError("registry contains duplicate kinds")
 
     expected = {
+        KIND_REPORT_EXECUTE_ON_DEMAND: (CONTRACT_VERSION_V1,),
+        KIND_REPORT_EXECUTE_SCHEDULED: (CONTRACT_VERSION_V1,),
         KIND_HEARTBEAT: (CONTRACT_VERSION_V1,),
         KIND_RETENTION_CLEANUP: (CONTRACT_VERSION_V1,),
     }

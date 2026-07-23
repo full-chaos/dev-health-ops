@@ -86,7 +86,7 @@ def _build_default_plan(
 def execute_saved_report(self, report_id: str, run_id: str) -> dict:
     from dev_health_ops.db import get_postgres_session_sync, require_clickhouse_uri
     from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
-    from dev_health_ops.reports.export import persist_report_run
+    from dev_health_ops.reports.export import persist_report_run, start_report_run
 
     report_uuid = uuid.UUID(report_id)
     run_uuid = uuid.UUID(run_id)
@@ -108,8 +108,8 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
             logger.error("ReportRun %s not found", run_id)
             return {"status": "error", "reason": "run_not_found"}
 
-        setattr(run, "status", ReportRunStatus.RUNNING.value)
-        setattr(run, "started_at", datetime.now(timezone.utc))
+        if not start_report_run(session, run_id):
+            return {"status": "ignored", "reason": "run_not_pending", "run_id": run_id}
         session.commit()
 
     try:
@@ -147,7 +147,7 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
         result = asyncio.run(execute_report(plan, chart_specs, clickhouse_dsn))
 
         with get_postgres_session_sync() as session:
-            persist_report_run(
+            persisted = persist_report_run(
                 session=session,
                 run_id=run_id,
                 report_id=report_id,
@@ -162,7 +162,7 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
                 ],
             )
 
-        return {"status": "success", "run_id": run_id}
+        return {"status": "success" if persisted else "ignored", "run_id": run_id}
 
     except Exception as exc:
         logger.exception("Report execution failed for run %s", run_id)
@@ -177,7 +177,7 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
             run = session.execute(
                 select(ReportRun).where(ReportRun.id == run_uuid)
             ).scalar_one_or_none()
-            if run:
+            if run and run.status != ReportRunStatus.CANCELED.value:
                 completed_at = datetime.now(timezone.utc)
                 setattr(run, "status", ReportRunStatus.FAILED.value)
                 setattr(run, "completed_at", completed_at)

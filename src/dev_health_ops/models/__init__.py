@@ -75,6 +75,7 @@ from .reports import (
     ReportRun,
     ReportRunStatus,
     SavedReport,
+    ScheduledReportOccurrence,
 )
 from .retention import (
     OrgRetentionPolicy,
@@ -183,6 +184,7 @@ __all__ = [
     "RefreshToken",
     "ReportRun",
     "ReportRunStatus",
+    "ScheduledReportOccurrence",
     "Repo",
     "RetentionResourceType",
     "Subscription",

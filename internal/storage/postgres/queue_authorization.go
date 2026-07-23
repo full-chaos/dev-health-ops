@@ -34,7 +34,11 @@ WITH river_tables AS (
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 	WHERE namespace.nspname = 'public'
 		AND class.relkind IN ('r', 'p', 'v', 'm', 'f')
-		AND class.relname <> 'worker_job_outbox'
+		AND class.relname NOT IN (
+			'worker_job_outbox',
+			'sync_dispatch_outbox',
+			'sync_dispatch_transport_routes'
+		)
 ), public_sequences AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
@@ -82,6 +86,46 @@ SELECT
 			AND has_table_privilege(current_user, class.oid, 'UPDATE')
 			AND has_table_privilege(current_user, class.oid, 'DELETE')
 			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'sync_dispatch_outbox'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+			AND NOT CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, class.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_class AS class
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'public'
+			AND class.relname = 'sync_dispatch_transport_routes'
+			AND class.relkind IN ('r', 'p')
+			AND has_table_privilege(current_user, class.oid, 'SELECT')
+			AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+			AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+			AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
 			AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
 			AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')

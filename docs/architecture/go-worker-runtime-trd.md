@@ -685,11 +685,19 @@ post-sync quiescence barrier when applicable, deploy the matching
 handler/contract, and unpause the new transport with another generation
 increment. The future River relay must insert the River job and mark the sync
 outbox through one PostgreSQL transaction and therefore needs the corresponding
-semantic-table privileges on that transaction's pool.
+least-privilege queue-control pool: `SELECT` and `UPDATE` on the outbox and
+`SELECT` only on the route table. PostgreSQL row-locking clauses require
+mutation authority on every locked relation, so the River path locks only the
+outbox row. A route change committed before the terminal write fails its
+generation predicate and rolls the claim and River insert back atomically.
+Because the SELECT-only queue role cannot lock the route, a route update after
+that terminal statement but before commit is not serialized by this kernel.
+Route mutation remains absent; any future operator activation must add a
+quiescence or serialization barrier covering that final commit window.
 
 An unregistered sync-reconciler transaction kernel now implements the narrow
 transport boundary: for River-routed at-least-once rows it locks and claims a
-bounded due window, invokes an injected River publisher through the same
+bounded due outbox window, invokes an injected River publisher through the same
 transaction, and marks the outbox dispatched only after the insert succeeds.
 For the at-most-once `post_sync` kind it marks dispatched first and invokes a
 separate transaction-local seam that cannot perform the eventual external

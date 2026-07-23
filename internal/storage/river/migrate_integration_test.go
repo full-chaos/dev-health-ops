@@ -61,6 +61,8 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 		"CREATE TABLE public.domain_runtime_probe (id bigserial PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 		"CREATE FUNCTION public.domain_runtime_forbidden() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
 	} {
 		if _, err := adminPool.Exec(ctx, statement); err != nil {
@@ -410,6 +412,27 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		"INSERT INTO public.worker_job_outbox (id, state) VALUES ('00000000-0000-0000-0000-000000000002', 'forbidden')",
 	); err == nil {
 		t.Fatal("queue role unexpectedly inserts producer-owned outbox state")
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"UPDATE public.sync_dispatch_outbox SET state='claimed' WHERE id='00000000-0000-0000-0000-000000000003'",
+	); err != nil {
+		t.Fatalf("queue role cannot transition sync-dispatch outbox state: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"INSERT INTO public.sync_dispatch_outbox (id, state) VALUES ('00000000-0000-0000-0000-000000000004', 'forbidden')",
+	); err == nil {
+		t.Fatal("queue role unexpectedly inserts sync-dispatch outbox state")
+	}
+	if _, err := queuePool.Exec(ctx, "DELETE FROM public.sync_dispatch_outbox"); err == nil {
+		t.Fatal("queue role unexpectedly deletes sync-dispatch outbox state")
+	}
+	if _, err := queuePool.Exec(ctx, "SELECT generation FROM public.sync_dispatch_transport_routes"); err != nil {
+		t.Fatalf("queue role cannot read sync-dispatch route state: %v", err)
+	}
+	if _, err := queuePool.Exec(ctx, "UPDATE public.sync_dispatch_transport_routes SET generation = generation + 1"); err == nil {
+		t.Fatal("queue role unexpectedly updates sync-dispatch route state")
 	}
 	if _, err := queuePool.Exec(ctx, "CREATE TABLE river.forbidden(id bigint)"); err == nil {
 		t.Fatal("queue role unexpectedly has CREATE on the River schema")

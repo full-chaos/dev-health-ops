@@ -35,6 +35,8 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE TABLE public.runtime_semantic_probe (id bigserial PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SCHEMA river",
 		"CREATE TABLE river.river_job (id bigserial PRIMARY KEY, state text NOT NULL)",
@@ -48,8 +50,11 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.runtime_semantic_probe TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_dispatch_outbox, public.sync_dispatch_transport_routes TO " + runtimeAuthorizationDomainRole,
 		"GRANT USAGE, SELECT, UPDATE ON SEQUENCE public.runtime_semantic_probe_id_seq TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
@@ -70,6 +75,36 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
 		t.Fatalf("queue authorization failed: %v", err)
+	}
+	if _, err := queue.Exec(ctx, "INSERT INTO public.sync_dispatch_outbox (id, state) VALUES ('00000000-0000-4000-8000-000000000001', 'forbidden')"); err == nil {
+		t.Fatal("queue unexpectedly inserts sync-dispatch outbox state")
+	}
+	if _, err := queue.Exec(ctx, "DELETE FROM public.sync_dispatch_outbox"); err == nil {
+		t.Fatal("queue unexpectedly deletes sync-dispatch outbox state")
+	}
+	if _, err := queue.Exec(ctx, "UPDATE public.sync_dispatch_transport_routes SET generation = generation + 1"); err == nil {
+		t.Fatal("queue unexpectedly mutates sync-dispatch routes")
+	}
+	if _, err := admin.Exec(ctx, "GRANT DELETE ON TABLE public.sync_dispatch_outbox TO "+runtimeAuthorizationQueueRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("queue sync-outbox DELETE authorization error = %v, want ErrUnavailable", err)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE DELETE ON TABLE public.sync_dispatch_outbox FROM "+runtimeAuthorizationQueueRole); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT UPDATE ON TABLE public.sync_dispatch_transport_routes TO "+runtimeAuthorizationQueueRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("queue route UPDATE authorization error = %v, want ErrUnavailable", err)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE UPDATE ON TABLE public.sync_dispatch_transport_routes FROM "+runtimeAuthorizationQueueRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
+		t.Fatalf("queue authorization did not recover after revoking sync-dispatch excess grants: %v", err)
 	}
 	if _, err := admin.Exec(ctx, "GRANT UPDATE ON TABLE public.worker_job_outbox TO "+runtimeAuthorizationDomainRole); err != nil {
 		t.Fatal(err)

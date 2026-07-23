@@ -450,10 +450,10 @@ def test_b4_post_sync_continuation_loss_relays_finalize_then_post_sync_once(
     assert units[0].status == SyncRunUnitStatus.SUCCESS.value
 
 
-def test_b4_post_sync_partial_fanout_failure_is_at_most_once_and_lossy(
+def test_b4_post_sync_partial_fanout_failure_is_retried_safely(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Post-sync is at-most-once; publish failure is loss, not re-send."""
+    """Post-sync re-arms after partial fanout failure and safely re-drives."""
     from dev_health_ops.workers import sync_reconciler
 
     run, units = _seed_run(db_session, unit_count=1, status=SyncRunStatus.SUCCESS.value)
@@ -495,27 +495,31 @@ def test_b4_post_sync_partial_fanout_failure_is_at_most_once_and_lossy(
     db_session.refresh(run)
     post_sync_row = _outbox(db_session, run, OUTBOX_KIND_POST_SYNC)
     assert first["relayed_post_sync"] == 0
-    assert first["publish_failures"] == 0
+    assert first["publish_failures"] == 1
     assert len(post_sync) == 1
     assert fanout_attempts == 1
     assert run.status == SyncRunStatus.SUCCESS.value
     assert run.completed_units == 1
     assert units[0].status == SyncRunUnitStatus.SUCCESS.value
-    assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
+    assert post_sync_row.status == OUTBOX_STATUS_PENDING
     assert post_sync_row.attempts == 1
     assert post_sync_row.claim_token is None
-    assert post_sync_row.dispatched_at is not None
-    assert post_sync_row.last_error is None
-    assert _aware(post_sync_row.available_at) <= before
+    assert post_sync_row.dispatched_at is None
+    assert post_sync_row.last_error == "RuntimeError: partial fanout send failure"
+    assert _aware(post_sync_row.available_at) > before
+
+    post_sync_row.available_at = datetime.now(timezone.utc)
+    db_session.commit()
 
     second = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     db_session.refresh(post_sync_row)
-    assert second["relayed_post_sync"] == 0
+    assert second["relayed_post_sync"] == 1
     assert second["publish_failures"] == 0
-    assert len(post_sync) == 1
+    assert len(post_sync) == 2
+    assert fanout_attempts == 2
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
-    assert post_sync_row.attempts == 1
+    assert post_sync_row.attempts == 2
     assert post_sync_row.claim_token is None
     assert post_sync_row.last_error is None
 

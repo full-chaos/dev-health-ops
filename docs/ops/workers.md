@@ -286,6 +286,7 @@ Operators can trigger background operations on-demand through three primary API 
 3. **Report Execution Trigger**
    * **Trigger**: GraphQL `triggerReport` mutation or the "Run Now" button in the Report Center UI.
    * **Flow**: Atomically creates a `ReportRun` and its versioned durable handoff, then enqueues `execute_saved_report` onto the `reports` queue only after the transaction commits. The current production route remains Celery; the durable handoff is deferred until a separately approved Go route activation.
+   * **Dormant Go capability**: The disabled `heavy` profile now compiles separate on-demand and scheduled handlers backed by PostgreSQL run-state/plan adapters, bounded ClickHouse chart queries over the complete Python-owned metric registry, deterministic Markdown/artifact metadata, and the current in-app notification transition. A checked-in language-neutral registry artifact has an exhaustive Python drift guard. Both route and rollback entries remain independently set to `celery`; no Go process is enabled or consuming the queue.
 
 ### Affected Operations Quick Reference
 

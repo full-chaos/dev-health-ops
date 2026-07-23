@@ -3,23 +3,23 @@
   "jobs": [
     {
       "kind": "report.execute_on_demand",
-      "state": "contract_frozen",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden"]
+      "evidence": ["artifact_golden", "contract_schema", "cross_language_golden", "metadata_parity"]
     },
     {
       "kind": "report.execute_scheduled",
-      "state": "contract_frozen",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden"]
+      "evidence": ["artifact_golden", "contract_schema", "cross_language_golden", "metadata_parity"]
     },
     {
       "kind": "system.heartbeat",

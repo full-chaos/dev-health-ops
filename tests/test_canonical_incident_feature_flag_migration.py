@@ -112,7 +112,7 @@ def test_canonical_incident_feature_seed_is_in_single_head_graph() -> None:
 
     assert migration.down_revision == "0041"
     assert migration.revision in revisions
-    assert scripts.get_heads() == ["0052"]
+    assert scripts.get_heads() == ["0054"]
     assert scripts.get_revision("0043").down_revision == "0042"
     assert scripts.get_revision("0044").down_revision == "0043"
     assert scripts.get_revision("0045").down_revision == "0044"
@@ -123,3 +123,5 @@ def test_canonical_incident_feature_seed_is_in_single_head_graph() -> None:
     assert scripts.get_revision("0050").down_revision == "0049"
     assert scripts.get_revision("0051").down_revision == "0050"
     assert scripts.get_revision("0052").down_revision == "0051"
+    assert scripts.get_revision("0053").down_revision == "0052"
+    assert scripts.get_revision("0054").down_revision == "0053"

@@ -69,9 +69,25 @@ second artifact or notification. Retries reuse the same `ReportRun`; artifact
 fingerprints reject a different rendered result, and notification delivery is
 claimed by a durable per-run key before any external side effect.
 
-The checked-in Go report interfaces cover query, renderer, artifact storage,
-and notification adapters, but no Go handler is registered and both report
-routes remain `celery` in migration state. There is no canary evidence yet.
+The checked-in Go implementation includes PostgreSQL `ReportRun` state and
+plan-loading adapters, bounded ClickHouse chart queries over the complete
+Python-owned metric registry, byte-stable Markdown and artifact metadata, and
+the current in-app report-ready notification. The registry is exported as a
+language-neutral JSON artifact and a drift test compares every metric name,
+display name, source table, unit, and dimension before either implementation
+can change independently. Both
+typed River handlers can be composed and registered independently, but the
+on-demand and scheduled routes remain `celery` with `celery` rollback and the
+heavy Go profile remains disabled. Golden parity and integration fixtures are
+implementation evidence only; there is no shadow, canary, or production
+activation evidence yet.
+
+The Go loader treats `chart_specs` as execution metadata adjacent to the
+serialized `ReportPlan`, then validates the plan fields independently. This is
+the intended planner/engine seam exercised by the Python engine fixtures; it
+does not preserve the current Celery task bug that passes `chart_specs` into
+the `ReportPlan` dataclass constructor. Celery remains authoritative until that
+producer shape and live parity are separately corrected and approved.
 
 ## Trust Model
 The architecture is built on a foundation of trust and verifiability.

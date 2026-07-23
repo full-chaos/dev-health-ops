@@ -47,7 +47,11 @@ from dev_health_ops.models.org_invite import OrgInvite
 from dev_health_ops.models.pagerduty_webhook_binding import PagerDutyWebhookBinding
 from dev_health_ops.models.refresh_token import RefreshToken
 from dev_health_ops.models.refunds import Refund
-from dev_health_ops.models.reports import ReportRun, SavedReport
+from dev_health_ops.models.reports import (
+    ReportRun,
+    SavedReport,
+    ScheduledReportOccurrence,
+)
 from dev_health_ops.models.retention import OrgRetentionPolicy
 from dev_health_ops.models.settings import (
     GithubAppInstallation,
@@ -85,6 +89,7 @@ _TABLES = tables_of(
     SyncWatermark,
     SavedReport,
     ReportRun,
+    ScheduledReportOccurrence,
     OrgRetentionPolicy,
     OrgInvite,
     BackfillJob,

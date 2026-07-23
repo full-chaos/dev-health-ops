@@ -138,13 +138,25 @@ func defaultRiverClientID() string {
 	return (&river.Config{}).WithDefaults().ID
 }
 
-// compiledWorkerHandlers is intentionally empty during the Phase 1
-// foundation. The only checked-in job kinds remain routed to Celery, so this
-// process must neither advertise complete River handler coverage nor fetch
-// their queues. Later phases add concrete adapters and return their Spec values
-// here only after the migration state permits River execution.
-func compiledWorkerHandlers(string) []jobruntime.HandlerSpec {
-	return nil
+// compiledWorkerHandlers advertises code capability independently of routing.
+// Report adapters are complete for the disabled heavy profile, but their
+// checked-in routes remain Celery and therefore cannot fetch River work.
+func compiledWorkerHandlers(profile string) []jobruntime.HandlerSpec {
+	if profile != "heavy" {
+		return nil
+	}
+	registry, err := jobruntime.Load(defaultContractRoot)
+	if err != nil {
+		return nil
+	}
+	handlers := registry.Profile(profile)
+	for _, handler := range handlers {
+		if handler.MigrationState != "go_implemented" || handler.Route != "celery" ||
+			handler.RollbackRoute != "celery" {
+			return nil
+		}
+	}
+	return handlers
 }
 
 type workerDependencies struct {

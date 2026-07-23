@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -15,6 +16,7 @@ import (
 var (
 	ErrDependencyUnavailable = errors.New("report execution dependency is unavailable")
 	ErrContractMismatch      = errors.New("report execution contract does not match its run")
+	ErrArtifactConflict      = errors.New("report artifact conflicts with completed run")
 )
 
 // QueryInput contains stable identifiers only. Implementations must load the
@@ -28,15 +30,69 @@ type QueryInput struct {
 // QueryResult is the normalized, renderer-ready report input. It has no
 // serialization contract because it never crosses the queue boundary.
 type QueryResult struct {
-	Plan     any
-	Data     any
+	Plan     Plan
+	Charts   []ChartResult
 	Metadata map[string]string
+}
+
+type Plan struct {
+	PlanID              string
+	ReportType          string
+	Audience            string
+	ScopeTeams          []string
+	ScopeRepos          []string
+	ScopeServices       []string
+	TimeRangeStart      string
+	TimeRangeEnd        string
+	ComparisonPeriod    string
+	Sections            []string
+	RequestedMetrics    []string
+	ConfidenceThreshold string
+	CreatedAt           time.Time
+	OrganizationID      string
+}
+
+type ChartSpec struct {
+	ChartID        string
+	PlanID         string
+	ChartType      string
+	Metric         string
+	GroupBy        string
+	FilterTeams    []string
+	FilterRepos    []string
+	TimeRangeStart string
+	TimeRangeEnd   string
+	Title          string
+	OrganizationID string
+}
+
+type DataPoint struct {
+	X     string
+	Y     float64
+	Group string
+}
+
+type ChartResult struct {
+	Spec        ChartSpec
+	DataPoints  []DataPoint
+	Title       string
+	SourceTable string
+	Unit        string
+}
+
+type ProvenanceRecord struct {
+	ProvenanceID string `json:"provenance_id"`
+	ArtifactType string `json:"artifact_type"`
+	ArtifactID   string `json:"artifact_id"`
+	SourceTable  string `json:"-"`
+	Metric       string `json:"-"`
 }
 
 type Artifact struct {
 	Markdown    string
 	Fingerprint string
 	Metadata    map[string]string
+	Provenance  []ProvenanceRecord
 }
 
 // QueryAdapter, RendererAdapter, ArtifactAdapter, and NotificationAdapter
@@ -59,8 +115,11 @@ type NotificationAdapter interface {
 }
 
 type RunStore interface {
-	// Claim atomically transitions pending -> running. A false claim is an
-	// idempotent no-op for completed, canceled, or concurrently-running runs.
+	// Claim atomically transitions pending/failed -> running. Failed is allowed
+	// so a bounded River retry can reuse the authoritative ReportRun; explicit
+	// Python retries first reset failed -> pending and reach the same CAS.
+	// A false claim is an idempotent no-op for completed, canceled, or
+	// concurrently-running runs.
 	Claim(ctx context.Context, runID, reportID string) (bool, error)
 	// Complete atomically persists the artifact only if it has the same
 	// fingerprint on a retry. It returns false for canceled/already-completed.
@@ -124,7 +183,7 @@ func execute(ctx context.Context, envelope jobcontract.Envelope, reportID string
 		return fmt.Errorf("claim report run: %w", err)
 	}
 	if !claimed {
-		return nil
+		return notify(ctx, dependencies, runID, reportID)
 	}
 	input, err := dependencies.Query.Query(ctx, QueryInput{ReportID: reportID, RunID: runID})
 	if err != nil {
@@ -143,8 +202,12 @@ func execute(ctx context.Context, envelope jobcontract.Envelope, reportID string
 		return fmt.Errorf("complete report run: %w", err)
 	}
 	if !completed {
-		return nil
+		return notify(ctx, dependencies, runID, reportID)
 	}
+	return notify(ctx, dependencies, runID, reportID)
+}
+
+func notify(ctx context.Context, dependencies Dependencies, runID, reportID string) error {
 	key, notify, err := dependencies.Runs.ClaimNotification(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("claim report notification: %w", err)

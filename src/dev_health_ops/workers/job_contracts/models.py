@@ -15,6 +15,11 @@ KIND_REPORT_EXECUTE_SCHEDULED = "report.execute_scheduled"
 KIND_DAILY_METRICS_DISPATCH = "metrics.daily_dispatch"
 KIND_DAILY_METRICS_PARTITION = "metrics.daily_partition"
 KIND_DAILY_METRICS_FINALIZE = "metrics.daily_finalize"
+KIND_WORK_GRAPH_BUILD = "workgraph.build"
+KIND_INVESTMENT_MATERIALIZE = "investment.materialize"
+KIND_INVESTMENT_DISPATCH = "investment.dispatch"
+KIND_INVESTMENT_CHUNK = "investment.chunk"
+KIND_INVESTMENT_FINALIZE = "investment.finalize"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 MAX_ENVELOPE_BYTES = 16 * 1024
 
@@ -126,6 +131,48 @@ class DailyMetricsFinalizePayload:
     run_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class WorkGraphBuildPayload:
+    """Reference to a server-owned work-graph request, never source evidence."""
+
+    KIND: ClassVar[str] = KIND_WORK_GRAPH_BUILD
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "work_graph_request"
+    request_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class InvestmentMaterializePayload:
+    KIND: ClassVar[str] = KIND_INVESTMENT_MATERIALIZE
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "investment_request"
+    request_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class InvestmentDispatchPayload:
+    KIND: ClassVar[str] = KIND_INVESTMENT_DISPATCH
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "investment_request"
+    request_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class InvestmentChunkPayload:
+    KIND: ClassVar[str] = KIND_INVESTMENT_CHUNK
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "investment_chunk"
+    chunk_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class InvestmentFinalizePayload:
+    KIND: ClassVar[str] = KIND_INVESTMENT_FINALIZE
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "investment_run"
+    run_id: str
+
+
 JobPayload: TypeAlias = (
     BillingNotificationPayload
     | WebhookDeliveryPayload
@@ -136,6 +183,11 @@ JobPayload: TypeAlias = (
     | DailyMetricsDispatchPayload
     | DailyMetricsPartitionPayload
     | DailyMetricsFinalizePayload
+    | WorkGraphBuildPayload
+    | InvestmentMaterializePayload
+    | InvestmentDispatchPayload
+    | InvestmentChunkPayload
+    | InvestmentFinalizePayload
 )
 
 

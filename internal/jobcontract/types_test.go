@@ -23,6 +23,11 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 		{KindDailyMetricsDispatch, "examples/metrics.daily_dispatch.v1.json", DailyMetricsDispatchPayload{RunID: "00000000-0000-4000-8000-000000000001"}},
 		{KindDailyMetricsPartition, "examples/metrics.daily_partition.v1.json", DailyMetricsPartitionPayload{PartitionID: "00000000-0000-4000-8000-000000000002"}},
 		{KindDailyMetricsFinalize, "examples/metrics.daily_finalize.v1.json", DailyMetricsFinalizePayload{RunID: "00000000-0000-4000-8000-000000000001"}},
+		{KindWorkGraphBuild, "examples/workgraph.build.v1.json", WorkGraphBuildPayload{RequestID: "00000000-0000-4000-8000-000000000101"}},
+		{KindInvestmentMaterialize, "examples/investment.materialize.v1.json", InvestmentMaterializePayload{RequestID: "00000000-0000-4000-8000-000000000102"}},
+		{KindInvestmentDispatch, "examples/investment.dispatch.v1.json", InvestmentDispatchPayload{RequestID: "00000000-0000-4000-8000-000000000103"}},
+		{KindInvestmentChunk, "examples/investment.chunk.v1.json", InvestmentChunkPayload{ChunkID: "00000000-0000-4000-8000-000000000104"}},
+		{KindInvestmentFinalize, "examples/investment.finalize.v1.json", InvestmentFinalizePayload{RunID: "00000000-0000-4000-8000-000000000105"}},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {

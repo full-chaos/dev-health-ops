@@ -137,6 +137,56 @@ func (DailyMetricsFinalizeArgs) SupportedContractVersions() []int {
 }
 func (args DailyMetricsFinalizeArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
 
+type WorkGraphBuildArgs struct {
+	EnvelopeArgs[jobcontract.WorkGraphBuildPayload]
+}
+
+func (WorkGraphBuildArgs) Kind() string { return jobcontract.KindWorkGraphBuild }
+func (WorkGraphBuildArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args WorkGraphBuildArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
+type InvestmentMaterializeArgs struct {
+	EnvelopeArgs[jobcontract.InvestmentMaterializePayload]
+}
+
+func (InvestmentMaterializeArgs) Kind() string { return jobcontract.KindInvestmentMaterialize }
+func (InvestmentMaterializeArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args InvestmentMaterializeArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
+type InvestmentDispatchArgs struct {
+	EnvelopeArgs[jobcontract.InvestmentDispatchPayload]
+}
+
+func (InvestmentDispatchArgs) Kind() string { return jobcontract.KindInvestmentDispatch }
+func (InvestmentDispatchArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args InvestmentDispatchArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
+type InvestmentChunkArgs struct {
+	EnvelopeArgs[jobcontract.InvestmentChunkPayload]
+}
+
+func (InvestmentChunkArgs) Kind() string { return jobcontract.KindInvestmentChunk }
+func (InvestmentChunkArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args InvestmentChunkArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
+type InvestmentFinalizeArgs struct {
+	EnvelopeArgs[jobcontract.InvestmentFinalizePayload]
+}
+
+func (InvestmentFinalizeArgs) Kind() string { return jobcontract.KindInvestmentFinalize }
+func (InvestmentFinalizeArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args InvestmentFinalizeArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
+
 func (ScheduledReportExecutionArgs) Kind() string { return jobcontract.KindReportExecuteScheduled }
 
 func (ScheduledReportExecutionArgs) SupportedContractVersions() []int {

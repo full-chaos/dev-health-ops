@@ -24,6 +24,11 @@ const (
 	KindDailyMetricsDispatch   = "metrics.daily_dispatch"
 	KindDailyMetricsPartition  = "metrics.daily_partition"
 	KindDailyMetricsFinalize   = "metrics.daily_finalize"
+	KindWorkGraphBuild         = "workgraph.build"
+	KindInvestmentMaterialize  = "investment.materialize"
+	KindInvestmentDispatch     = "investment.dispatch"
+	KindInvestmentChunk        = "investment.chunk"
+	KindInvestmentFinalize     = "investment.finalize"
 	RetentionWorkerTerminal    = "worker_job_terminal"
 )
 
@@ -109,6 +114,25 @@ type DailyMetricsFinalizePayload struct {
 	RunID string `json:"run_id"`
 }
 
+// The P5 contracts deliberately carry only durable identities. Prompts,
+// model configuration, credentials, source evidence, and database URLs are
+// resolved server-side by the reviewed compatibility boundary.
+type WorkGraphBuildPayload struct {
+	RequestID string `json:"request_id"`
+}
+type InvestmentMaterializePayload struct {
+	RequestID string `json:"request_id"`
+}
+type InvestmentDispatchPayload struct {
+	RequestID string `json:"request_id"`
+}
+type InvestmentChunkPayload struct {
+	ChunkID string `json:"chunk_id"`
+}
+type InvestmentFinalizePayload struct {
+	RunID string `json:"run_id"`
+}
+
 type wireEnvelope struct {
 	ContractVersion int             `json:"contract_version"`
 	OrganizationID  *string         `json:"organization_id,omitempty"`
@@ -190,6 +214,11 @@ var definitions = map[string]contractDefinition{
 		DomainLink:        "daily_metrics_run",
 		OrganizationScope: "tenant",
 	},
+	KindWorkGraphBuild:        {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
+	KindInvestmentMaterialize: {Kind: KindInvestmentMaterialize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
+	KindInvestmentDispatch:    {Kind: KindInvestmentDispatch, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
+	KindInvestmentChunk:       {Kind: KindInvestmentChunk, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_chunk", OrganizationScope: "tenant"},
+	KindInvestmentFinalize:    {Kind: KindInvestmentFinalize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_run", OrganizationScope: "tenant"},
 }
 
 // Decode strictly decodes a registered kind. The kind is supplied by River's
@@ -294,6 +323,51 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindWorkGraphBuild:
+		var value WorkGraphBuildPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindInvestmentMaterialize:
+		var value InvestmentMaterializePayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindInvestmentDispatch:
+		var value InvestmentDispatchPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindInvestmentChunk:
+		var value InvestmentChunkPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindInvestmentFinalize:
+		var value InvestmentFinalizePayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	default:
 		return Envelope{}, fmt.Errorf("job kind %q has no decoder", kind)
 	}
@@ -330,6 +404,16 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindDailyMetricsPartition
 	case DailyMetricsFinalizePayload:
 		kind = KindDailyMetricsFinalize
+	case WorkGraphBuildPayload:
+		kind = KindWorkGraphBuild
+	case InvestmentMaterializePayload:
+		kind = KindInvestmentMaterialize
+	case InvestmentDispatchPayload:
+		kind = KindInvestmentDispatch
+	case InvestmentChunkPayload:
+		kind = KindInvestmentChunk
+	case InvestmentFinalizePayload:
+		kind = KindInvestmentFinalize
 	default:
 		return nil, errors.New("unsupported payload type")
 	}
@@ -463,6 +547,29 @@ func (payload DailyMetricsPartitionPayload) validate() error {
 func (payload DailyMetricsFinalizePayload) validate() error {
 	if !uuidPattern.MatchString(payload.RunID) {
 		return errors.New("run_id must be a lowercase UUID")
+	}
+	return nil
+}
+
+func (payload WorkGraphBuildPayload) validate() error {
+	return validateUUID("request_id", payload.RequestID)
+}
+func (payload InvestmentMaterializePayload) validate() error {
+	return validateUUID("request_id", payload.RequestID)
+}
+func (payload InvestmentDispatchPayload) validate() error {
+	return validateUUID("request_id", payload.RequestID)
+}
+func (payload InvestmentChunkPayload) validate() error {
+	return validateUUID("chunk_id", payload.ChunkID)
+}
+func (payload InvestmentFinalizePayload) validate() error {
+	return validateUUID("run_id", payload.RunID)
+}
+
+func validateUUID(name, value string) error {
+	if !uuidPattern.MatchString(value) {
+		return fmt.Errorf("%s must be a lowercase UUID", name)
 	}
 	return nil
 }

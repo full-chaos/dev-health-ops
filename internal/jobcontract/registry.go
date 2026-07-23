@@ -442,6 +442,11 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindDailyMetricsDispatch:   {"run_id"},
 		KindDailyMetricsPartition:  {"partition_id"},
 		KindDailyMetricsFinalize:   {"run_id"},
+		KindWorkGraphBuild:         {"request_id"},
+		KindInvestmentMaterialize:  {"request_id"},
+		KindInvestmentDispatch:     {"request_id"},
+		KindInvestmentChunk:        {"chunk_id"},
+		KindInvestmentFinalize:     {"run_id"},
 		KindHeartbeat:              {"scheduled_for"},
 		KindRetentionCleanup:       {"batch_size", "delete_before", "retention_policy"},
 	}[kind]
@@ -454,11 +459,17 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if kind == KindReportExecuteOnDemand || kind == KindReportExecuteScheduled {
 		return validateUUIDProperty(properties["report_id"])
 	}
-	if kind == KindDailyMetricsDispatch || kind == KindDailyMetricsFinalize {
+	if kind == KindDailyMetricsDispatch || kind == KindDailyMetricsFinalize || kind == KindInvestmentFinalize {
 		return validateUUIDProperty(properties["run_id"])
 	}
 	if kind == KindDailyMetricsPartition {
 		return validateUUIDProperty(properties["partition_id"])
+	}
+	if kind == KindInvestmentChunk {
+		return validateUUIDProperty(properties["chunk_id"])
+	}
+	if kind == KindWorkGraphBuild || kind == KindInvestmentMaterialize || kind == KindInvestmentDispatch {
+		return validateUUIDProperty(properties["request_id"])
 	}
 	if kind == KindBillingNotification {
 		return validateUUIDProperty(properties["notification_id"])

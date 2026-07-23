@@ -15,10 +15,15 @@ from .models import (
     KIND_DAILY_METRICS_FINALIZE,
     KIND_DAILY_METRICS_PARTITION,
     KIND_HEARTBEAT,
+    KIND_INVESTMENT_CHUNK,
+    KIND_INVESTMENT_DISPATCH,
+    KIND_INVESTMENT_FINALIZE,
+    KIND_INVESTMENT_MATERIALIZE,
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
     KIND_WEBHOOK_DELIVERY,
+    KIND_WORK_GRAPH_BUILD,
     MAX_ENVELOPE_BYTES,
     RETENTION_WORKER_TERMINAL,
     BillingNotificationPayload,
@@ -29,11 +34,16 @@ from .models import (
     DomainLink,
     Envelope,
     HeartbeatPayload,
+    InvestmentChunkPayload,
+    InvestmentDispatchPayload,
+    InvestmentFinalizePayload,
+    InvestmentMaterializePayload,
     JobPayload,
     OnDemandReportExecutionPayload,
     RetentionCleanupPayload,
     ScheduledReportExecutionPayload,
     WebhookDeliveryPayload,
+    WorkGraphBuildPayload,
 )
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
@@ -63,6 +73,16 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         KIND_DAILY_METRICS_DISPATCH,
         KIND_DAILY_METRICS_PARTITION,
         KIND_DAILY_METRICS_FINALIZE,
+        KIND_WORK_GRAPH_BUILD,
+        KIND_INVESTMENT_MATERIALIZE,
+        KIND_INVESTMENT_DISPATCH,
+        KIND_INVESTMENT_CHUNK,
+        KIND_INVESTMENT_FINALIZE,
+        KIND_INVESTMENT_CHUNK,
+        KIND_INVESTMENT_DISPATCH,
+        KIND_INVESTMENT_FINALIZE,
+        KIND_INVESTMENT_MATERIALIZE,
+        KIND_WORK_GRAPH_BUILD,
     }:
         raise ContractDecodeError("unknown job kind")
     document = load_json_document(data, max_bytes=MAX_ENVELOPE_BYTES)
@@ -94,6 +114,11 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         KIND_DAILY_METRICS_DISPATCH,
         KIND_DAILY_METRICS_PARTITION,
         KIND_DAILY_METRICS_FINALIZE,
+        KIND_INVESTMENT_CHUNK,
+        KIND_INVESTMENT_DISPATCH,
+        KIND_INVESTMENT_FINALIZE,
+        KIND_INVESTMENT_MATERIALIZE,
+        KIND_WORK_GRAPH_BUILD,
     }
     if tenant_kind and organization_id is None:
         raise ContractDecodeError("organization_id is required for a tenant job")
@@ -147,10 +172,40 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         if domain_type != DailyMetricsPartitionPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_daily_partition(envelope["payload"])
-    else:
+    elif kind == KIND_DAILY_METRICS_FINALIZE:
         if domain_type != DailyMetricsFinalizePayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_daily_finalize(envelope["payload"])
+    elif kind == KIND_WORK_GRAPH_BUILD:
+        if domain_type != WorkGraphBuildPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = WorkGraphBuildPayload(
+            request_id=_decode_reference(envelope["payload"], "request_id")
+        )
+    elif kind == KIND_INVESTMENT_MATERIALIZE:
+        if domain_type != InvestmentMaterializePayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentMaterializePayload(
+            request_id=_decode_reference(envelope["payload"], "request_id")
+        )
+    elif kind == KIND_INVESTMENT_DISPATCH:
+        if domain_type != InvestmentDispatchPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentDispatchPayload(
+            request_id=_decode_reference(envelope["payload"], "request_id")
+        )
+    elif kind == KIND_INVESTMENT_CHUNK:
+        if domain_type != InvestmentChunkPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentChunkPayload(
+            chunk_id=_decode_reference(envelope["payload"], "chunk_id")
+        )
+    else:
+        if domain_type != InvestmentFinalizePayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = InvestmentFinalizePayload(
+            run_id=_decode_reference(envelope["payload"], "run_id")
+        )
 
     return Envelope(
         contract_version=version,
@@ -183,6 +238,11 @@ def build_envelope(
             DailyMetricsDispatchPayload,
             DailyMetricsPartitionPayload,
             DailyMetricsFinalizePayload,
+            WorkGraphBuildPayload,
+            InvestmentMaterializePayload,
+            InvestmentDispatchPayload,
+            InvestmentChunkPayload,
+            InvestmentFinalizePayload,
             WebhookDeliveryPayload,
         ),
     ):
@@ -234,6 +294,16 @@ def encode_envelope(envelope: Envelope) -> bytes:
         kind = KIND_DAILY_METRICS_PARTITION
     elif isinstance(envelope.payload, DailyMetricsFinalizePayload):
         kind = KIND_DAILY_METRICS_FINALIZE
+    elif isinstance(envelope.payload, WorkGraphBuildPayload):
+        kind = KIND_WORK_GRAPH_BUILD
+    elif isinstance(envelope.payload, InvestmentMaterializePayload):
+        kind = KIND_INVESTMENT_MATERIALIZE
+    elif isinstance(envelope.payload, InvestmentDispatchPayload):
+        kind = KIND_INVESTMENT_DISPATCH
+    elif isinstance(envelope.payload, InvestmentChunkPayload):
+        kind = KIND_INVESTMENT_CHUNK
+    elif isinstance(envelope.payload, InvestmentFinalizePayload):
+        kind = KIND_INVESTMENT_FINALIZE
     else:
         raise ContractDecodeError("unsupported payload type")
     decode_envelope(kind, encoded)
@@ -383,6 +453,15 @@ def _decode_daily_finalize(value: Any) -> DailyMetricsFinalizePayload:
     return DailyMetricsFinalizePayload(run_id=run_id)
 
 
+def _decode_reference(value: Any, field: str) -> str:
+    payload = _expect_object(
+        value, required={field}, optional=set(), label="reference payload"
+    )
+    reference = _expect_string(payload[field], field)
+    _validate_uuid(field, reference)
+    return reference
+
+
 def _payload_document(payload: object) -> dict[str, Any]:
     if isinstance(payload, BillingNotificationPayload):
         return {"notification_id": payload.notification_id}
@@ -405,6 +484,16 @@ def _payload_document(payload: object) -> dict[str, Any]:
     if isinstance(payload, DailyMetricsPartitionPayload):
         return {"partition_id": payload.partition_id}
     if isinstance(payload, DailyMetricsFinalizePayload):
+        return {"run_id": payload.run_id}
+    if isinstance(payload, WorkGraphBuildPayload):
+        return {"request_id": payload.request_id}
+    if isinstance(payload, InvestmentMaterializePayload):
+        return {"request_id": payload.request_id}
+    if isinstance(payload, InvestmentDispatchPayload):
+        return {"request_id": payload.request_id}
+    if isinstance(payload, InvestmentChunkPayload):
+        return {"chunk_id": payload.chunk_id}
+    if isinstance(payload, InvestmentFinalizePayload):
         return {"run_id": payload.run_id}
     raise ContractDecodeError("unsupported payload type")
 

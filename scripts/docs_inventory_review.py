@@ -2,8 +2,8 @@
 """Extend the documentation inventory to every review-relevant source and gap.
 
 The existing ``docs_inventory_v2`` module remains the factual scanner for the
-current MkDocs site. This wrapper adds sources that are intentionally outside
-``docs/``—the v2 prototype, internal program evidence, repository entry
+canonical MkDocs site. This wrapper adds sources intentionally outside
+``docs/``—the archived legacy tree, internal program evidence, repository entry
 points, visual assets, and the known runtime publication gap—without turning
 the inventory into a publishing framework.
 
@@ -28,7 +28,7 @@ import yaml
 
 PYTHON_NAME_TAG = "tag:yaml.org,2002:python/name:"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"}
-PROTOTYPE_ASSET_SUFFIXES = IMAGE_SUFFIXES | {".css", ".js"}
+LEGACY_ASSET_SUFFIXES = IMAGE_SUFFIXES | {".css", ".js"}
 ENTRY_POINT_NAMES = {
     "README.md",
     "CONTRIBUTING.md",
@@ -146,23 +146,23 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
     inventory = base.build_inventory(repo_root, repository)
     rows_by_path = {row["source_path"]: row for row in inventory["rows"]}
 
-    prototype_root = repo_root / "docs-prototype"
-    if prototype_root.exists():
-        for path in sorted(prototype_root.rglob("*")):
+    legacy_root = repo_root / ".github" / "docs-legacy"
+    if legacy_root.exists():
+        for path in sorted(legacy_root.rglob("*")):
             if not path.is_file():
                 continue
             suffix = path.suffix.lower()
             if suffix == ".md":
-                artifact_type = "prototype-page"
+                artifact_type = "legacy-page"
                 content_type = base._infer_content_type(
-                    path.relative_to(prototype_root).as_posix(),
+                    path.relative_to(legacy_root).as_posix(),
                     {},
                 )
-            elif suffix in PROTOTYPE_ASSET_SUFFIXES:
-                artifact_type = "prototype-asset"
+            elif suffix in LEGACY_ASSET_SUFFIXES:
+                artifact_type = "legacy-asset"
                 content_type = None
             else:
-                artifact_type = "prototype-support"
+                artifact_type = "legacy-support"
                 content_type = None
             _add_file(
                 rows_by_path,
@@ -170,10 +170,10 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                 repo_root,
                 path,
                 artifact_type,
-                "prototype-wip",
-                product_area="documentation-v2-prototype",
+                "archived-source",
+                product_area="documentation-legacy",
                 content_type=content_type,
-                notes="Review-only v2 prototype; not part of the current public site.",
+                notes="Preserved pre-cutover documentation source; not in the public build.",
             )
 
     program_root = repo_root / ".github" / "documentation-program"
@@ -206,8 +206,7 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                     "supporting-artifact",
                     product_area="documentation-assets",
                     notes=(
-                        "Published or candidate documentation visual; "
-                        "disposition follows its owning page."
+                        "Published documentation visual; disposition follows its owning page."
                     ),
                 )
 
@@ -244,20 +243,20 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                     ),
                 )
 
-    prototype_config = repo_root / "mkdocs.prototype.yml"
-    if prototype_config.is_file():
+    legacy_config = legacy_root / "mkdocs.yml"
+    if legacy_config.is_file():
         _add_file(
             rows_by_path,
             repository,
             repo_root,
-            prototype_config,
+            legacy_config,
             "configuration",
-            "prototype-wip",
-            product_area="documentation-v2-prototype",
-            notes="Prototype-only build configuration.",
+            "archived-source",
+            product_area="documentation-legacy",
+            notes="Archived pre-cutover build configuration.",
         )
 
-    for pattern in ("wrangler*.toml", "**/*cloudflare*.yml", "**/*cloudflare*.yaml"):
+    for pattern in ("wrangler*.toml", "wrangler*.jsonc", "**/*cloudflare*.yml", "**/*cloudflare*.yaml"):
         for path in sorted(repo_root.glob(pattern)):
             if path.is_file():
                 _add_file(
@@ -270,7 +269,7 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                     product_area="documentation-publication",
                     notes=(
                         "Cloudflare/publication configuration requiring an "
-                        "explicit Phase 11 disposition."
+                        "explicit delivery disposition."
                     ),
                 )
 
@@ -285,8 +284,7 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
             product_area="cross-repository-or-runtime",
             notes=(
                 "The live Workers preview requires a URL, header, redirect, "
-                "search, and publication-state crawl outside the repository "
-                "inventory."
+                "search, and publication-state crawl outside the repository inventory."
             ),
         ),
     )

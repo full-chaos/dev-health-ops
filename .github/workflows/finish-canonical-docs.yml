@@ -1,0 +1,830 @@
+name: Finish canonical documentation migration
+
+on:
+  push:
+    branches:
+      - agent/docs-content-style-remediation
+    paths:
+      - '.github/workflows/finish-canonical-docs.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the documentation branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: agent/docs-content-style-remediation
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Merge main, promote canonical docs, and synchronize current sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+
+          work="$(mktemp -d)"
+          cp -a docs "$work/canonical-docs"
+          cp mkdocs.yml "$work/canonical-mkdocs.yml"
+          mkdir -p "$work/main"
+          git archive origin/main docs | tar -x -C "$work/main"
+          git show origin/main:mkdocs.yml > "$work/main-mkdocs.yml"
+
+          set +e
+          git merge --no-commit --no-ff -X ours origin/main
+          merge_status=$?
+          set -e
+
+          if [[ $merge_status -ne 0 ]]; then
+            while IFS= read -r path; do
+              [[ -n "$path" ]] || continue
+              if git checkout --ours -- "$path" 2>/dev/null; then
+                git add "$path"
+              else
+                git rm -f --ignore-unmatch "$path"
+              fi
+            done < <(git diff --name-only --diff-filter=U)
+          fi
+
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo 'Unresolved merge conflicts remain:'
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+          rm -rf docs docs-prototype
+          cp -a "$work/canonical-docs" docs
+          cp "$work/canonical-mkdocs.yml" mkdocs.yml
+          rm -f mkdocs.prototype.yml
+
+          rm -rf .github/docs-legacy
+          mkdir -p .github/docs-legacy
+          cp -a "$work/main/docs/." .github/docs-legacy/
+          cp "$work/main-mkdocs.yml" .github/docs-legacy/mkdocs.yml
+
+          cat > /tmp/finalize_docs.py <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          import shutil
+          from pathlib import Path
+
+          ROOT = Path.cwd()
+          LEGACY = ROOT / ".github" / "docs-legacy"
+          DOCS = ROOT / "docs"
+
+          MIGRATIONS = {
+              "admin/data-sources/incident-response.md": ".github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md",
+              "admin/data-sources/jira-atlassian.md": ".github/docs-legacy/providers/jira-service-management.md",
+              "contribute/architecture/go-worker-migration-plan.md": ".github/docs-legacy/plans/go-worker-migration-implementation-plan.md",
+              "contribute/architecture/go-worker-migration-prd.md": ".github/docs-legacy/product/go-worker-migration-prd.md",
+              "contribute/architecture/go-worker-runtime.md": ".github/docs-legacy/architecture/go-worker-runtime-trd.md",
+              "contribute/architecture/river-compatibility.md": ".github/docs-legacy/decisions/chaos-3034-river-compatibility.md",
+              "integrate/webhooks/pagerduty.md": ".github/docs-legacy/architecture/pagerduty-contract.md",
+              "operate/configure/database-connection-pooling.md": ".github/docs-legacy/ops/database-connection-pooling.md",
+              "operate/run/workers-and-jobs.md": ".github/docs-legacy/ops/workers.md",
+              "reference/cli/index.md": ".github/docs-legacy/ops/cli-reference.md",
+          }
+
+          mapping_path = (
+              ROOT
+              / ".github"
+              / "documentation-program"
+              / "content"
+              / "migrated-source-pages.json"
+          )
+          mapping_path.write_text(
+              json.dumps(MIGRATIONS, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          for target, source in MIGRATIONS.items():
+              source_path = ROOT / source
+              target_path = DOCS / target
+              if not source_path.is_file():
+                  raise FileNotFoundError(f"Missing current source document: {source}")
+              target_path.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source_path, target_path)
+
+          active_roots = [
+              ROOT / "docs",
+              ROOT / "scripts",
+              ROOT / "tests",
+              ROOT / ".github" / "workflows",
+              ROOT / ".github" / "documentation-program" / "content",
+              ROOT / ".github" / "documentation-program" / "phase-9",
+              ROOT / ".github" / "documentation-program" / "phase-10",
+              ROOT / ".github" / "documentation-program" / "phase-11",
+          ]
+          active_files = [ROOT / "Makefile", ROOT / "mkdocs.yml", ROOT / "wrangler.jsonc"]
+          binary_suffixes = {
+              ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip",
+              ".gz", ".pdf", ".woff", ".woff2", ".ttf", ".eot",
+          }
+          excluded = {
+              ROOT / "scripts" / "docs_inventory_review.py",
+          }
+
+          candidates: set[Path] = set(active_files)
+          for root in active_roots:
+              if not root.exists():
+                  continue
+              candidates.update(path for path in root.rglob("*") if path.is_file())
+
+          for path in sorted(candidates):
+              if path in excluded or path.suffix.lower() in binary_suffixes:
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+              updated = (
+                  text.replace(".build/docs-prototype", ".build/docs")
+                  .replace("mkdocs.prototype.yml", "mkdocs.yml")
+                  .replace("docs-prototype", "docs")
+              )
+              lines = updated.splitlines(keepends=True)
+              deduped: list[str] = []
+              for line in lines:
+                  if deduped and line == deduped[-1]:
+                      continue
+                  deduped.append(line)
+              updated = "".join(deduped)
+              if updated != text:
+                  path.write_text(updated, encoding="utf-8")
+
+          # The canonical build uses one source tree and one build directory.
+          makefile = ROOT / "Makefile"
+          text = makefile.read_text(encoding="utf-8")
+          text = text.replace("# Documentation v2 lifecycle:", "# Documentation lifecycle:")
+          text = text.replace(
+              "$(PYTHON) -m mkdocs build --strict --site-dir .build/site",
+              "$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml",
+          )
+          text = text.replace(
+              "$(PYTHON) scripts/check_built_site_links.py --site-dir .build/site",
+              "$(PYTHON) scripts/check_built_site_links.py --site-dir .build/docs",
+          )
+          text = text.replace(
+              "--built-site .build/site --allowlist docs/external-link-allowlist.yml",
+              "--built-site .build/docs --allowlist .github/docs-legacy/external-link-allowlist.yml",
+          )
+          makefile.write_text(text, encoding="utf-8")
+
+          # The old publication manifest remains attached to the archived source corpus.
+          publication = ROOT / "scripts" / "docs_publication.py"
+          text = publication.read_text(encoding="utf-8")
+          text = text.replace(
+              "Classify every ops/docs/**/*.md file as public-nav, public-reference, or\nexcluded-internal per ``docs/publication.yml``.",
+              "Classify every canonical docs/**/*.md file while using the archived\nlegacy publication manifest for compatibility checks.",
+          )
+          text = text.replace(
+              'root / "docs", root / "mkdocs.yml", root / "docs" / "publication.yml"',
+              'root / "docs",\n            root / "mkdocs.yml",\n            root / ".github" / "docs-legacy" / "publication.yml"',
+          )
+          publication.write_text(text, encoding="utf-8")
+
+          inventory = ROOT / "scripts" / "docs_inventory_v2.py"
+          text = inventory.read_text(encoding="utf-8")
+          text = text.replace('"docs/publication.yml"', '".github/docs-legacy/publication.yml"')
+          text = text.replace('"docs/freshness-inventory.yml"', '".github/docs-legacy/freshness-inventory.yml"')
+          text = text.replace('"docs/search-acceptance.json"', '".github/docs-legacy/search-acceptance.json"')
+          text = text.replace(
+              'manifest = _load_yaml(repo_root / "docs" / "publication.yml")',
+              'manifest = _load_yaml(\n        repo_root / ".github" / "docs-legacy" / "publication.yml"\n    )',
+          )
+          text = text.replace(
+              'overrides = repo_root / "docs" / "overrides"',
+              'overrides = repo_root / ".github" / "docs-legacy" / "overrides"',
+          )
+          text = text.replace(
+              'elif rel.startswith("docs/overrides/"):',
+              'elif rel.startswith(".github/docs-legacy/overrides/"):',
+          )
+          inventory.write_text(text, encoding="utf-8")
+
+          freshness = ROOT / "scripts" / "check_freshness_inventory.py"
+          text = freshness.read_text(encoding="utf-8")
+          text = text.replace(
+              '"""Validate docs/freshness-inventory.yml disposition rows.',
+              '"""Validate the archived legacy freshness inventory.',
+          )
+          text = text.replace(
+              'DEFAULT_INVENTORY = ROOT / "docs" / "freshness-inventory.yml"',
+              'DEFAULT_INVENTORY = (\n    ROOT / ".github" / "docs-legacy" / "freshness-inventory.yml"\n)',
+          )
+          text = text.replace(
+              'DEFAULT_DOCS_ROOT = ROOT / "docs"',
+              'DEFAULT_DOCS_ROOT = ROOT / ".github" / "docs-legacy"',
+          )
+          text = text.replace(
+              'description="Validate docs/freshness-inventory.yml"',
+              'description="Validate the archived legacy freshness inventory"',
+          )
+          freshness.write_text(text, encoding="utf-8")
+
+          taxonomy = ROOT / "scripts" / "gen_taxonomy_docs.py"
+          text = taxonomy.read_text(encoding="utf-8")
+          text = text.replace(
+              'DOC_PATH = ROOT / "docs" / "product" / "investment-taxonomy.md"',
+              'DOC_PATH = (\n    ROOT\n    / ".github"\n    / "docs-legacy"\n    / "product"\n    / "investment-taxonomy.md"\n)',
+          )
+          taxonomy.write_text(text, encoding="utf-8")
+
+          drift = ROOT / "scripts" / "check_investment_docs_drift.py"
+          text = drift.read_text(encoding="utf-8")
+          text = text.replace(
+              'TAXONOMY_DOC = ROOT / "docs" / "product" / "investment-taxonomy.md"',
+              'LEGACY_DOCS = ROOT / ".github" / "docs-legacy"\nTAXONOMY_DOC = LEGACY_DOCS / "product" / "investment-taxonomy.md"',
+          )
+          text = text.replace(
+              'LLM_CONTRACT_DOC = ROOT / "docs" / "llm" / "categorization-contract.md"',
+              'LLM_CONTRACT_DOC = LEGACY_DOCS / "llm" / "categorization-contract.md"',
+          )
+          text = text.replace(
+              'INVESTMENT_MIX_DOC = ROOT / "docs" / "user-guide" / "views" / "investment-mix.md"',
+              'INVESTMENT_MIX_DOC = (\n    LEGACY_DOCS / "user-guide" / "views" / "investment-mix.md"\n)',
+          )
+          text = text.replace(
+              'ROOT / "docs", ROOT / "mkdocs.yml", ROOT / "docs" / "publication.yml"',
+              'ROOT / "docs",\n        ROOT / "mkdocs.yml",\n        LEGACY_DOCS / "publication.yml"',
+          )
+          drift.write_text(text, encoding="utf-8")
+
+          links = ROOT / "scripts" / "check_docs_links.py"
+          text = links.read_text(encoding="utf-8")
+          text = text.replace("import re\n", "import json\nimport re\n")
+          text = text.replace(
+              'DOCS_ROOT = ROOT / "docs"\n',
+              'DOCS_ROOT = ROOT / "docs"\nMIGRATED_SOURCE_MAP = (\n    ROOT\n    / ".github"\n    / "documentation-program"\n    / "content"\n    / "migrated-source-pages.json"\n)\n',
+          )
+          text = text.replace(
+              '    for path in sorted(docs_root.rglob("*.md")):\n        for target in iter_links(path):',
+              '    migrated = set(json.loads(MIGRATED_SOURCE_MAP.read_text(encoding="utf-8")))\n    for path in sorted(docs_root.rglob("*.md")):\n        relpath = path.relative_to(docs_root).as_posix()\n        if relpath in migrated:\n            continue\n        for target in iter_links(path):',
+          )
+          links.write_text(text, encoding="utf-8")
+
+          validator = ROOT / "scripts" / "validate_docs_v2_publication.py"
+          text = validator.read_text(encoding="utf-8")
+          text = text.replace(
+              '"""Validate the v2 documentation candidate and emit the Phase 9 publication inventory."""',
+              '"""Validate the canonical documentation tree and emit its publication inventory."""',
+          )
+          text = text.replace(
+              'f"- Public candidate pages: **{len(publication_rows)}**"',
+              'f"- Canonical public pages: **{len(publication_rows)}**"',
+          )
+          text = text.replace(
+              '"The current production documentation remains the WIP baseline. This inventory is the Phase 9 publication candidate for later quality and cutover gates."',
+              '"This inventory describes the canonical documentation tree published from docs/."',
+          )
+          text = text.replace("candidate pages", "canonical pages")
+          validator.write_text(text, encoding="utf-8")
+
+          # Rewrite the source-link hook so directly migrated pages link to other
+          # canonical migrations when possible and to the archived source otherwise.
+          hook = ROOT / "scripts" / "mkdocs_migrated_source_links.py"
+          hook.write_text(
+              '''"""Resolve links for pages copied from the archived legacy source tree."""
+
+from __future__ import annotations
+
+import json
+import posixpath
+import re
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+
+ROOT = Path(__file__).resolve().parents[1]
+MAPPING_PATH = (
+    ROOT
+    / ".github"
+    / "documentation-program"
+    / "content"
+    / "migrated-source-pages.json"
+)
+REPOSITORY_BLOB_ORIGIN = "https://github.com/full-chaos/dev-health-ops/blob/main"
+REPOSITORY_RAW_ORIGIN = "https://raw.githubusercontent.com/full-chaos/dev-health-ops/main"
+INLINE_LINK_RE = re.compile(
+    r"(?P<prefix>!?\\[[^\\]\\n]*\\]\\()(?P<destination>[^)\\n]+)(?P<suffix>\\))"
+)
+REFERENCE_LINK_RE = re.compile(
+    r"^(?P<prefix>\\s*\\[[^\\]]+\\]:\\s*)(?P<destination>\\S+)(?P<suffix>.*)$"
+)
+HTML_ATTR_RE = re.compile(
+    r'(?P<prefix>\\b(?P<attr>href|src)=(?P<quote>["\\']))'
+    r'(?P<destination>[^"\\']+)'
+    r'(?P<suffix>(?P=quote))',
+    re.IGNORECASE,
+)
+EMPTY_ANCHOR_RE = re.compile(
+    r'<a\\s+id=(?P<quote>["\\'])(?P<id>[^"\\']+)(?P=quote)\\s*></a>',
+    re.IGNORECASE,
+)
+
+
+def _load_mapping() -> dict[str, str]:
+    loaded = json.loads(MAPPING_PATH.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Expected an object in {MAPPING_PATH}")
+    return {str(key): str(value) for key, value in loaded.items()}
+
+
+MIGRATED_SOURCE_PAGES = _load_mapping()
+SOURCE_TO_CANONICAL = {
+    source: target for target, source in MIGRATED_SOURCE_PAGES.items()
+}
+
+
+def _canonical_url(target_path: str) -> str:
+    value = target_path.strip("/")
+    if value == "index.md":
+        return "/"
+    if value.endswith("/index.md"):
+        return f"/{value[:-len('index.md')]}"
+    if value.endswith(".md"):
+        value = value[:-3]
+    return f"/{value}/"
+
+
+def _split_destination(value: str) -> tuple[str, str]:
+    stripped = value.strip()
+    if stripped.startswith("<") and ">" in stripped:
+        end = stripped.index(">") + 1
+        return stripped[:end], stripped[end:]
+    parts = stripped.split(maxsplit=1)
+    return parts[0], f" {parts[1]}" if len(parts) == 2 else ""
+
+
+def _rewrite_url(url: str, source_path: str, *, image: bool) -> str:
+    wrapped = url.startswith("<") and url.endswith(">")
+    bare = url[1:-1] if wrapped else url
+    parsed = urlsplit(bare)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or bare.startswith(("#", "/", "mailto:", "tel:"))
+        or not parsed.path
+    ):
+        return url
+
+    resolved = posixpath.normpath(
+        posixpath.join(posixpath.dirname(source_path), parsed.path)
+    )
+    if resolved.startswith("../"):
+        return url
+
+    canonical_target = SOURCE_TO_CANONICAL.get(resolved)
+    if canonical_target:
+        rewritten = urlunsplit(
+            ("", "", _canonical_url(canonical_target), parsed.query, parsed.fragment)
+        )
+    else:
+        origin = REPOSITORY_RAW_ORIGIN if image else REPOSITORY_BLOB_ORIGIN
+        origin_parts = urlsplit(origin)
+        rewritten = urlunsplit(
+            (
+                origin_parts.scheme,
+                origin_parts.netloc,
+                f"{origin_parts.path}/{resolved}",
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+    return f"<{rewritten}>" if wrapped else rewritten
+
+
+def _rewrite_markdown(markdown: str, source_path: str) -> str:
+    output: list[str] = []
+    fence: str | None = None
+
+    for line in markdown.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            marker = stripped[:3]
+            fence = None if fence == marker else marker if fence is None else fence
+            output.append(line)
+            continue
+        if fence is not None:
+            output.append(line)
+            continue
+
+        line = EMPTY_ANCHOR_RE.sub(
+            lambda match: f'<span id="{match.group("id")}"></span>', line
+        )
+
+        reference = REFERENCE_LINK_RE.match(line)
+        if reference:
+            destination, title = _split_destination(reference.group("destination"))
+            rewritten = _rewrite_url(destination, source_path, image=False)
+            output.append(
+                f"{reference.group('prefix')}{rewritten}{title}"
+                f"{reference.group('suffix')}"
+            )
+            continue
+
+        def replace_inline(match: re.Match[str]) -> str:
+            destination, title = _split_destination(match.group("destination"))
+            rewritten = _rewrite_url(
+                destination,
+                source_path,
+                image=match.group("prefix").startswith("!["),
+            )
+            return f"{match.group('prefix')}{rewritten}{title}{match.group('suffix')}"
+
+        line = INLINE_LINK_RE.sub(replace_inline, line)
+
+        def replace_html(match: re.Match[str]) -> str:
+            rewritten = _rewrite_url(
+                match.group("destination"),
+                source_path,
+                image=match.group("attr").lower() == "src",
+            )
+            return f"{match.group('prefix')}{rewritten}{match.group('suffix')}"
+
+        output.append(HTML_ATTR_RE.sub(replace_html, line))
+
+    return "".join(output)
+
+
+def on_page_markdown(
+    markdown: str,
+    page: Any,
+    config: Any,
+    files: Any,
+) -> str:
+    """Rewrite source-relative links for explicitly migrated pages."""
+
+    del config, files
+    source_path = MIGRATED_SOURCE_PAGES.get(page.file.src_path)
+    if not source_path:
+        return markdown
+    return _rewrite_markdown(markdown, source_path)
+''',
+              encoding="utf-8",
+          )
+
+          # The frozen Phase 1 inventory remains evidence, not a live mirror of
+          # the post-cutover tree.
+          inventory_workflow = ROOT / ".github" / "workflows" / "docs-inventory-review.yml"
+          inventory_workflow.write_text(
+              '''name: Documentation inventory archive review
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/documentation-program/inventory/**'
+      - '.github/documentation-program/ia/**'
+      - 'scripts/validate_docs_inventory_review.py'
+      - '.github/workflows/docs-inventory-review.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/documentation-program/inventory/**'
+      - '.github/documentation-program/ia/**'
+      - 'scripts/validate_docs_inventory_review.py'
+      - '.github/workflows/docs-inventory-review.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory-archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install inventory dependency
+        run: python -m pip install 'PyYAML>=6.0.3'
+
+      - name: Validate the frozen Phase 1 inventory and dispositions
+        run: |
+          mkdir -p .build
+          cp .github/documentation-program/inventory/documentation-inventory.json \
+            .build/documentation-inventory.json
+          python scripts/validate_docs_inventory_review.py \
+            --generated-json .build/documentation-inventory.json \
+            --inventory-dir .github/documentation-program/inventory \
+            --ia-dir .github/documentation-program/ia
+''',
+              encoding="utf-8",
+          )
+
+          # Make the current inventory scanner describe both canonical and legacy
+          # sources when run manually, without reclassifying canonical pages as a prototype.
+          review_inventory = ROOT / "scripts" / "docs_inventory_review.py"
+          text = review_inventory.read_text(encoding="utf-8")
+          text = text.replace(
+              "the v2 prototype, internal program evidence, repository entry",
+              "the archived legacy tree, internal program evidence, repository entry",
+          )
+          text = text.replace("PROTOTYPE_ASSET_SUFFIXES", "LEGACY_ASSET_SUFFIXES")
+          start = text.index('    prototype_root = repo_root / "docs"') if '    prototype_root = repo_root / "docs"' in text else text.index('    prototype_root = repo_root / "docs-prototype"')
+          end = text.index("\n    program_root =", start)
+          legacy_block = '''    legacy_root = repo_root / ".github" / "docs-legacy"
+    if legacy_root.exists():
+        for path in sorted(legacy_root.rglob("*")):
+            if not path.is_file():
+                continue
+            suffix = path.suffix.lower()
+            if suffix == ".md":
+                artifact_type = "legacy-page"
+                content_type = base._infer_content_type(
+                    path.relative_to(legacy_root).as_posix(),
+                    {},
+                )
+            elif suffix in LEGACY_ASSET_SUFFIXES:
+                artifact_type = "legacy-asset"
+                content_type = None
+            else:
+                artifact_type = "legacy-support"
+                content_type = None
+            _add_file(
+                rows_by_path,
+                repository,
+                repo_root,
+                path,
+                artifact_type,
+                "archived-source",
+                product_area="documentation-legacy",
+                content_type=content_type,
+                notes="Preserved pre-cutover documentation source; not in the public build.",
+            )
+'''
+          text = text[:start] + legacy_block + text[end:]
+          config_start = text.find('    prototype_config = repo_root / "mkdocs.yml"')
+          if config_start == -1:
+              config_start = text.find('    prototype_config = repo_root / "mkdocs.prototype.yml"')
+          if config_start != -1:
+              config_end = text.index("\n    for pattern in", config_start)
+              legacy_config = '''    legacy_config = repo_root / ".github" / "docs-legacy" / "mkdocs.yml"
+    if legacy_config.is_file():
+        _add_file(
+            rows_by_path,
+            repository,
+            repo_root,
+            legacy_config,
+            "configuration",
+            "archived-source",
+            product_area="documentation-legacy",
+            notes="Archived pre-cutover build configuration.",
+        )
+'''
+              text = text[:config_start] + legacy_config + text[config_end:]
+          review_inventory.write_text(text, encoding="utf-8")
+
+          # Update the old browser-search harness to the retained Phase 10 query set.
+          for path in (
+              ROOT / "docs-qa" / "tests" / "run-search.mjs",
+              ROOT / "docs-qa" / "tests" / "audience-search.search.spec.ts",
+          ):
+              if path.is_file():
+                  text = path.read_text(encoding="utf-8")
+                  text = text.replace(
+                      "../docs/search-acceptance.json",
+                      "../.github/documentation-program/phase-10/search-acceptance.json",
+                  )
+                  text = text.replace(
+                      "docs/search-acceptance.json",
+                      ".github/documentation-program/phase-10/search-acceptance.json",
+                  )
+                  path.write_text(text, encoding="utf-8")
+
+          # Remove obsolete cutover language from the contributor command guide.
+          commands = ROOT / "docs" / "contribute" / "development" / "commands.md"
+          text = commands.read_text(encoding="utf-8")
+          text = text.replace("## Build and preview the v2 documentation", "## Build and preview the documentation")
+          text = text.replace(
+              "The legacy `make docs:build` target still builds the non-prototype documentation tree. Use the v2 targets for the candidate until cutover retires the legacy tree.",
+              "`make docs:build` uses the canonical `mkdocs.yml` configuration. The Cloudflare targets add redirect, header, preview-version, deployment, and rollback behavior around that same build.",
+          )
+          commands.write_text(text, encoding="utf-8")
+
+          # Canonical publication tests supersede the old mixed public/internal docs tree.
+          publication_test = ROOT / "tests" / "docs" / "test_publication_manifest.py"
+          publication_test.write_text(
+              '''from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from scripts.docs_publication import (
+    PublicationClassificationError,
+    classify_all,
+    load_nav_paths,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+DOCS_DIR = ROOT / "docs"
+LEGACY_DOCS_DIR = ROOT / ".github" / "docs-legacy"
+MKDOCS_PATH = ROOT / "mkdocs.yml"
+MANIFEST_PATH = LEGACY_DOCS_DIR / "publication.yml"
+FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "unclassified_page"
+
+
+def test_every_canonical_markdown_file_is_published_in_navigation() -> None:
+    assert DOCS_DIR.is_dir()
+    assert LEGACY_DOCS_DIR.is_dir()
+    assert MANIFEST_PATH.is_file()
+
+    classification = classify_all(DOCS_DIR, MKDOCS_PATH, MANIFEST_PATH)
+    all_files = {
+        path.relative_to(DOCS_DIR).as_posix() for path in DOCS_DIR.rglob("*.md")
+    }
+
+    assert set(classification) == all_files
+    assert set(classification.values()) == {"public-nav"}
+
+
+def test_legacy_internal_material_is_archived_outside_the_public_tree() -> None:
+    for legacy_path in (
+        "plans/dead-code-cleanup-plan.md",
+        "plans/atlassian-client-integration.md",
+        "roadmap.md",
+        "project.md",
+    ):
+        assert (LEGACY_DOCS_DIR / legacy_path).is_file()
+        assert not (DOCS_DIR / legacy_path).exists()
+
+
+def test_home_page_is_public_navigation() -> None:
+    classification = classify_all(DOCS_DIR, MKDOCS_PATH, MANIFEST_PATH)
+    assert classification["index.md"] == "public-nav"
+
+
+def test_navigation_never_points_into_the_legacy_tree() -> None:
+    nav_paths = load_nav_paths(MKDOCS_PATH)
+    assert nav_paths
+    assert all("docs-legacy" not in path for path in nav_paths)
+    assert all((DOCS_DIR / path).is_file() for path in nav_paths)
+
+
+def test_rejects_unclassified_page() -> None:
+    with pytest.raises(PublicationClassificationError) as excinfo:
+        classify_all(
+            FIXTURE_ROOT / "docs",
+            FIXTURE_ROOT / "mkdocs.yml",
+            FIXTURE_ROOT / "publication.yml",
+        )
+
+    assert excinfo.value.path == "mystery.md"
+
+
+def test_strict_build_omits_archived_legacy_pages(tmp_path: Path) -> None:
+    site_dir = tmp_path / "site"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mkdocs",
+            "build",
+            "--strict",
+            "--config-file",
+            "mkdocs.yml",
+            "--site-dir",
+            str(site_dir),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert not (site_dir / "roadmap" / "index.html").exists()
+    assert not (site_dir / "project" / "index.html").exists()
+    assert not (site_dir / "plans" / "dead-code-cleanup-plan" / "index.html").exists()
+''',
+              encoding="utf-8",
+          )
+
+          # Update the scheduled health report's archived allowlist path.
+          health = ROOT / ".github" / "workflows" / "docs-health-report.yml"
+          if health.is_file():
+              text = health.read_text(encoding="utf-8")
+              text = text.replace("Build the canonical candidate", "Build the canonical documentation")
+              text = text.replace(
+                  "--allowlist docs/external-link-allowlist.yml",
+                  "--allowlist .github/docs-legacy/external-link-allowlist.yml",
+              )
+              health.write_text(text, encoding="utf-8")
+          PY
+
+          python /tmp/finalize_docs.py
+
+          rm -f .github/workflows/finish-canonical-docs.yml
+
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-docs.txt
+          python -m pip install ruff pytest
+
+          ruff format \
+            scripts/build_docs_cloudflare.py \
+            scripts/check_docs_links.py \
+            scripts/check_freshness_inventory.py \
+            scripts/check_investment_docs_drift.py \
+            scripts/docs_inventory_review.py \
+            scripts/docs_inventory_v2.py \
+            scripts/docs_publication.py \
+            scripts/gen_taxonomy_docs.py \
+            scripts/mkdocs_migrated_source_links.py \
+            scripts/validate_docs_v2_publication.py \
+            tests/docs/test_publication_manifest.py
+          ruff check \
+            scripts/build_docs_cloudflare.py \
+            scripts/check_docs_links.py \
+            scripts/check_freshness_inventory.py \
+            scripts/check_investment_docs_drift.py \
+            scripts/docs_inventory_review.py \
+            scripts/docs_inventory_v2.py \
+            scripts/docs_publication.py \
+            scripts/gen_taxonomy_docs.py \
+            scripts/mkdocs_migrated_source_links.py \
+            scripts/validate_docs_v2_publication.py \
+            tests/docs/test_publication_manifest.py
+
+          python scripts/validate_docs_v2_publication.py
+          python -m mkdocs build --strict --config-file mkdocs.yml
+          python scripts/check_built_site_links.py --site-dir .build/docs
+          python scripts/check_docs_candidate_search.py \
+            --site-dir .build/docs \
+            --queries .github/documentation-program/phase-10/search-acceptance.json
+          python scripts/check_docs_candidate_accessibility.py \
+            --site-dir .build/docs \
+            --css docs/stylesheets/extra.css
+          python scripts/check_docs_candidate_facts.py
+          python scripts/check_docs_links.py
+          python scripts/check_investment_docs_drift.py
+          python scripts/check_freshness_inventory.py
+          python scripts/docs_publication.py
+
+          mkdir -p .build
+          cp .github/documentation-program/inventory/documentation-inventory.json \
+            .build/documentation-inventory.json
+          python scripts/validate_docs_inventory_review.py \
+            --generated-json .build/documentation-inventory.json \
+            --inventory-dir .github/documentation-program/inventory \
+            --ia-dir .github/documentation-program/ia
+
+          pytest -q \
+            tests/docs/test_publication_manifest.py \
+            tests/docs/test_docs_inventory_v2.py \
+            tests/docs/test_freshness_inventory.py
+
+          test -d docs
+          test -d .github/docs-legacy
+          test -f mkdocs.yml
+          test ! -e docs-prototype
+          test ! -e mkdocs.prototype.yml
+
+          while IFS='=' read -r target source; do
+            cmp "docs/$target" "$source"
+          done < <(python - <<'PY'
+          import json
+          from pathlib import Path
+          mapping = json.loads(Path('.github/documentation-program/content/migrated-source-pages.json').read_text())
+          for target, source in sorted(mapping.items()):
+              print(f"{target}={source}")
+          PY
+          )
+
+          stale=0
+          for root in Makefile mkdocs.yml wrangler.jsonc docs scripts tests .github/workflows \
+            .github/documentation-program/content \
+            .github/documentation-program/phase-9 \
+            .github/documentation-program/phase-10 \
+            .github/documentation-program/phase-11; do
+            [[ -e "$root" ]] || continue
+            if grep -RInE 'docs-prototype|mkdocs\.prototype\.yml' "$root"; then
+              stale=1
+            fi
+          done
+          test "$stale" -eq 0
+
+          git add -A
+          git commit -m 'docs: complete canonical migration and sync current sources'
+          git push origin HEAD:agent/docs-content-style-remediation

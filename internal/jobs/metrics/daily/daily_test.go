@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -23,7 +24,7 @@ func TestPartitionLoadFailureReleasesClaimAndRetries(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003"},
 		loadErr:        ErrUnavailable,
 	}
-	handler, err := NewPartitionHandler(store, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestPartitionScopeMismatchReleasesClaimAndIsPermanent(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003"},
 		run:            Run{ID: testRunID, OrganizationID: "00000000-0000-4000-8000-000000000008", Generation: "v1"},
 	}
-	handler, err := NewPartitionHandler(store, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestPartitionRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
 	compatibility := &blockingCompatibility{partitionDelay: 80 * time.Millisecond}
-	handler, err := NewPartitionHandler(store, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestPartitionLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 		partitionRenewalFailureAt: 1,
 	}
 	compatibility := &blockingCompatibility{waitForCancellation: true}
-	handler, err := NewPartitionHandler(store, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestFinalizerRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 		},
 	}
 	compatibility := &blockingCompatibility{finalizeDelay: 80 * time.Millisecond}
-	handler, err := NewFinalizeHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewFinalizeHandler(store, compatibility)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +129,7 @@ func TestFinalizerLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 		finalizeRenewalFailureAt: 1,
 	}
 	compatibility := &blockingCompatibility{waitForCancellation: true}
-	handler, err := NewFinalizeHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewFinalizeHandler(store, compatibility)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,9 +220,13 @@ func (store *fakeStore) RenewPartition(context.Context, PartitionClaim) error {
 	}
 	return nil
 }
-func (store *fakeStore) CompletePartition(context.Context, PartitionClaim) error {
+func (store *fakeStore) CompletePartition(
+	ctx context.Context,
+	claim PartitionClaim,
+	publisher Publisher,
+) error {
 	store.partitionCompletions++
-	return nil
+	return publisher.PublishFinalizeTx(ctx, nil, store.run)
 }
 func (store *fakeStore) ReleasePartition(context.Context, PartitionClaim) error {
 	store.partitionReleases++
@@ -249,7 +254,7 @@ func (*fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error { return
 type fakePublisher struct{}
 
 func (fakePublisher) PublishPartition(context.Context, Run, Partition) error { return nil }
-func (fakePublisher) PublishFinalize(context.Context, Run) error             { return nil }
+func (fakePublisher) PublishFinalizeTx(context.Context, pgx.Tx, Run) error   { return nil }
 
 type fakeCompatibility struct{}
 

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/jackc/pgx/v5"
 )
 
 var (
@@ -61,7 +62,7 @@ type Store interface {
 	DispatchablePartitions(context.Context, string) ([]Partition, error)
 	ClaimPartition(context.Context, string) (*PartitionClaim, error)
 	RenewPartition(context.Context, PartitionClaim) error
-	CompletePartition(context.Context, PartitionClaim) error
+	CompletePartition(context.Context, PartitionClaim, Publisher) error
 	ReleasePartition(context.Context, PartitionClaim) error
 	ClaimFinalize(context.Context, string) (*FinalizeClaim, error)
 	RenewFinalize(context.Context, FinalizeClaim) error
@@ -73,7 +74,7 @@ type Store interface {
 // the checked-in outbox contract rather than inserting a River job directly.
 type Publisher interface {
 	PublishPartition(context.Context, Run, Partition) error
-	PublishFinalize(context.Context, Run) error
+	PublishFinalizeTx(context.Context, pgx.Tx, Run) error
 }
 
 // CompatibilityExecutor is the only temporary Python seam. Both identities
@@ -133,18 +134,19 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 
 type PartitionHandler struct {
 	store         Store
+	publisher     Publisher
 	compatibility CompatibilityExecutor
 }
 
-func NewPartitionHandler(store Store, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
-	if store == nil || compatibility == nil {
+func NewPartitionHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
+	if store == nil || publisher == nil || compatibility == nil {
 		return nil, ErrUnavailable
 	}
-	return &PartitionHandler{store: store, compatibility: compatibility}, nil
+	return &PartitionHandler{store: store, publisher: publisher, compatibility: compatibility}, nil
 }
 
 func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) error {
-	if handler == nil || handler.store == nil || handler.compatibility == nil || execution == nil {
+	if handler == nil || handler.store == nil || handler.publisher == nil || handler.compatibility == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
 	}
 	partitionID := execution.Args.Payload.PartitionID
@@ -183,7 +185,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		releasePartition(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
-	if err := handler.store.CompletePartition(ctx, *claim); err != nil {
+	if err := handler.store.CompletePartition(ctx, *claim, handler.publisher); err != nil {
 		return jobruntime.Retryable(err)
 	}
 	return nil
@@ -191,19 +193,18 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 
 type FinalizeHandler struct {
 	store         Store
-	publisher     Publisher
 	compatibility CompatibilityExecutor
 }
 
-func NewFinalizeHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*FinalizeHandler, error) {
-	if store == nil || publisher == nil || compatibility == nil {
+func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*FinalizeHandler, error) {
+	if store == nil || compatibility == nil {
 		return nil, ErrUnavailable
 	}
-	return &FinalizeHandler{store: store, publisher: publisher, compatibility: compatibility}, nil
+	return &FinalizeHandler{store: store, compatibility: compatibility}, nil
 }
 
 func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) error {
-	if handler == nil || handler.store == nil || handler.publisher == nil || handler.compatibility == nil || execution == nil {
+	if handler == nil || handler.store == nil || handler.compatibility == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
 	}
 	runID := execution.Args.Payload.RunID

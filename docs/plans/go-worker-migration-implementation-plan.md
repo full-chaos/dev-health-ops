@@ -680,6 +680,22 @@ quiescer/controller plus external-handoff binding remain open.
 
 ### CHAOS-3048 — Establish analytics replay matrix and migrate daily metrics
 
+#### Executable wiring (still Celery-routed)
+
+The heavy worker now compiles the three daily adapters, their fixed
+`/internal/worker/daily-metrics/v1/execute` compatibility client, PostgreSQL
+stores, and generic outbox publisher. The checked-in route remains `celery`,
+so the River component is not constructed and no queue is fetched until all
+three daily route controls move together to an executable route.
+
+Partition completion serializes on the durable run row. The last partition
+success and the deduplicated `metrics.daily_finalize` outbox row commit in the
+same PostgreSQL transaction. A failure after the outbox insert rolls back both
+changes; the partition lease is then reclaimed and the same finalizer identity
+is published exactly once. The live PostgreSQL test exercises this kill
+window. This closes finalizer liveness but does not establish numerical parity
+or authorize promotion.
+
 #### Work
 
 - Inventory every ClickHouse table and reader touched by daily metrics.

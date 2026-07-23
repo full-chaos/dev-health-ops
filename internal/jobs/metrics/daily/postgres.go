@@ -144,8 +144,66 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token
 	return nil
 }
 
-func (store *PostgresStore) CompletePartition(ctx context.Context, claim PartitionClaim) error {
-	return store.transitionPartition(ctx, claim, "succeeded")
+func (store *PostgresStore) CompletePartition(
+	ctx context.Context,
+	claim PartitionClaim,
+	publisher Publisher,
+) error {
+	if !store.valid() || publisher == nil || !validUUID(claim.Partition.ID) ||
+		!validUUID(claim.Partition.RunID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var run Run
+	err = tx.QueryRow(ctx, `
+SELECT id::text, org_id::text, generation, status
+FROM public.daily_metrics_runs
+WHERE id = $1::uuid
+FOR UPDATE`, claim.Partition.RunID).
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrLeaseLost
+	}
+	if err != nil {
+		return ErrUnavailable
+	}
+	if run.Status != "running" {
+		return ErrLeaseLost
+	}
+	now := store.now().UTC()
+	command, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_partitions
+SET status = 'succeeded', claim_token = NULL, lease_expires_at = NULL,
+    completed_at = $1, updated_at = $1
+WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
+  AND claim_token = $4::uuid AND lease_expires_at > $1`,
+		now, claim.Partition.ID, claim.Partition.RunID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	var incomplete int
+	if err := tx.QueryRow(ctx, `
+SELECT count(*)
+FROM public.daily_metrics_partitions
+WHERE run_id = $1::uuid AND status <> 'succeeded'`, run.ID).Scan(&incomplete); err != nil {
+		return ErrUnavailable
+	}
+	if incomplete == 0 {
+		if err := publisher.PublishFinalizeTx(ctx, tx, run); err != nil {
+			return ErrUnavailable
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (store *PostgresStore) ReleasePartition(ctx context.Context, claim PartitionClaim) error {

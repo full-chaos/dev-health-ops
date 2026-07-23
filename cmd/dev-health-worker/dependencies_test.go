@@ -222,21 +222,23 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 	}
 }
 
-func TestHeavyReportHandlersAdvertiseDormantCompiledCapability(t *testing.T) {
+func TestHeavyHandlersAdvertiseDormantCompiledCapability(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	handlers := compiledWorkerHandlers("heavy")
-	if len(handlers) != 2 {
-		t.Fatalf("heavy handlers = %d, want 2", len(handlers))
+	if len(handlers) != 5 {
+		t.Fatalf("heavy handlers = %d, want 5", len(handlers))
 	}
+	kinds := make(map[string]struct{}, len(handlers))
 	for _, handler := range handlers {
 		if handler.Profile != "heavy" || handler.MigrationState != "go_implemented" ||
 			handler.Route != "celery" || handler.RollbackRoute != "celery" ||
 			handler.Executable() {
 			t.Fatalf("handler unexpectedly active: %#v", handler)
 		}
+		kinds[handler.Kind] = struct{}{}
 	}
-	if handlers[0].Kind == handlers[1].Kind {
-		t.Fatalf("report kinds are not independently compiled: %#v", handlers)
+	if len(kinds) != len(handlers) {
+		t.Fatalf("heavy kinds are not independently compiled: %#v", handlers)
 	}
 }
 

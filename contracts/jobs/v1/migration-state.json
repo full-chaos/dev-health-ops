@@ -7,33 +7,33 @@
     {"kind":"investment.materialize","state":"contract_frozen","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory"]},
     {
       "kind": "metrics.daily_dispatch",
-      "state": "contract_frozen",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden", "family_inventory"]
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring"]
     },
     {
       "kind": "metrics.daily_finalize",
-      "state": "contract_frozen",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden", "family_inventory"]
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "finalizer_outbox_kill_window", "handler_wiring"]
     },
     {
       "kind": "metrics.daily_partition",
-      "state": "contract_frozen",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["heavy"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden", "family_inventory"]
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "finalizer_outbox_kill_window", "handler_wiring"]
     },
     {
       "kind": "operational.billing_notification",

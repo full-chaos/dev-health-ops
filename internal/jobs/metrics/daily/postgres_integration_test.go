@@ -5,10 +5,14 @@ package daily
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -26,6 +30,15 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	}
 	defer pool.Close()
 	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := dailyTestRegistry{production: registry}
+	publisher, err := NewPostgresPublisher(pool, routes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	const (
 		runID       = "00000000-0000-4000-8000-000000000001"
@@ -80,7 +93,7 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	if blocked, err := store.ClaimPartition(ctx, partitionID); err != nil || blocked != nil {
 		t.Fatalf("canceled partition claim = %#v, %v", blocked, err)
 	}
-	if err := store.CompletePartition(ctx, *first); err == nil {
+	if err := store.CompletePartition(ctx, *first, publisher); err == nil {
 		t.Fatal("canceled run completed an in-flight partition")
 	}
 	if _, err := pool.Exec(ctx, "UPDATE daily_metrics_runs SET status = 'running' WHERE id = $1::uuid", runID); err != nil {
@@ -90,18 +103,47 @@ func TestPostgresStoreRecoversPartitionClaimAndFinalizesExactlyOnce(t *testing.T
 	if err := store.RenewPartition(ctx, *first); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("expired unreclaimed partition renewed: %v", err)
 	}
-	if err := store.CompletePartition(ctx, *first); !errors.Is(err, ErrLeaseLost) {
+	if err := store.CompletePartition(ctx, *first, publisher); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("expired unreclaimed partition completed: %v", err)
 	}
 	reclaimed, err := store.ClaimPartition(ctx, partitionID)
 	if err != nil || reclaimed == nil || reclaimed.Token == first.Token {
 		t.Fatalf("reclaim = %#v, %v", reclaimed, err)
 	}
-	if err := store.CompletePartition(ctx, *first); err == nil {
+	if err := store.CompletePartition(ctx, *first, publisher); err == nil {
 		t.Fatal("stale partition token completed a reclaimed partition")
 	}
-	if err := store.CompletePartition(ctx, *reclaimed); err != nil {
+	if err := store.CompletePartition(ctx, *reclaimed, failingFinalizePublisher{publisher}); err == nil {
+		t.Fatal("injected crash after finalizer outbox insert unexpectedly committed")
+	}
+	var partitionStatus string
+	var outboxCount int
+	if err := pool.QueryRow(ctx, "SELECT status FROM daily_metrics_partitions WHERE id=$1", partitionID).Scan(&partitionStatus); err != nil {
 		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM worker_job_outbox").Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if partitionStatus != "running" || outboxCount != 0 {
+		t.Fatalf("crash window committed partial state: partition=%s outbox=%d", partitionStatus, outboxCount)
+	}
+	now = now.Add(store.lease + time.Second)
+	recovered, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || recovered == nil || recovered.Token == reclaimed.Token {
+		t.Fatalf("recovery claim = %#v, %v", recovered, err)
+	}
+	if err := store.CompletePartition(ctx, *recovered, publisher); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM worker_job_outbox
+WHERE job_kind=$1 AND dedupe_key=$2`,
+		jobcontract.KindDailyMetricsFinalize, "metrics.daily_finalize:"+runID,
+	).Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if outboxCount != 1 {
+		t.Fatalf("finalizer outbox count = %d, want 1", outboxCount)
 	}
 
 	// Kill between all partition writes and finalize: finalization only claims
@@ -163,8 +205,58 @@ CREATE TABLE daily_metrics_partitions (
  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,
  repo_ids jsonb NOT NULL, status text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
  attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+);
+CREATE TABLE worker_job_outbox (
+ id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE,
+ job_kind varchar(96) NOT NULL, contract_version integer NOT NULL,
+ args json NOT NULL, payload_hash varchar(71) NOT NULL,
+ queue varchar(96) NOT NULL, priority smallint NOT NULL,
+ max_attempts smallint NOT NULL, scheduled_at timestamptz NOT NULL,
+ status varchar(16) NOT NULL, attempt_count integer NOT NULL,
+ next_attempt_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
+ updated_at timestamptz NOT NULL
 )`)
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+type dailyTestRegistry struct {
+	production *jobruntime.Registry
+}
+
+func (registry dailyTestRegistry) Descriptor(kind string) (jobruntime.Descriptor, bool) {
+	descriptor, ok := registry.production.Descriptor(kind)
+	if !ok {
+		return descriptor, false
+	}
+	if kind == jobcontract.KindDailyMetricsPartition ||
+		kind == jobcontract.KindDailyMetricsFinalize {
+		descriptor.MigrationState = "go_default"
+		descriptor.Route = "river"
+	}
+	return descriptor, true
+}
+
+type failingFinalizePublisher struct {
+	delegate Publisher
+}
+
+func (publisher failingFinalizePublisher) PublishPartition(
+	ctx context.Context,
+	run Run,
+	partition Partition,
+) error {
+	return publisher.delegate.PublishPartition(ctx, run, partition)
+}
+
+func (publisher failingFinalizePublisher) PublishFinalizeTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	run Run,
+) error {
+	if err := publisher.delegate.PublishFinalizeTx(ctx, tx, run); err != nil {
+		return err
+	}
+	return errors.New("injected crash after outbox insert")
 }

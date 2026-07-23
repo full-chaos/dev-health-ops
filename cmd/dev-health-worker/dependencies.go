@@ -122,6 +122,7 @@ type workerDependencySources struct {
 	newRiverClientID     func() string
 	buildOperational     func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
 	buildSyncCoordinator func(config.Config, workerDatabase, *slog.Logger) (lifecycle.Component, error)
+	buildDaily           func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
 	contractRoot         string
 	deploymentProfile    string
 }
@@ -135,6 +136,7 @@ var productionWorkerDependencySources = workerDependencySources{
 	newRiverClientID:     defaultRiverClientID,
 	buildOperational:     buildOperationalWorker,
 	buildSyncCoordinator: buildSyncCoordinatorWorker,
+	buildDaily:           buildDailyWorker,
 	contractRoot:         defaultContractRoot,
 	deploymentProfile:    defaultDeploymentProfile,
 }
@@ -144,8 +146,8 @@ func defaultRiverClientID() string {
 }
 
 // compiledWorkerHandlers advertises code capability independently of routing.
-// Report adapters are complete for the disabled heavy profile, but their
-// checked-in routes remain Celery and therefore cannot fetch River work.
+// Report and daily-metrics adapters are complete for the disabled heavy
+// profile, but their checked-in routes remain Celery and cannot fetch work.
 func compiledWorkerHandlers(profile string) []jobruntime.HandlerSpec {
 	if profile != "heavy" {
 		return nil
@@ -262,8 +264,20 @@ func configureWorkerDependenciesWithSources(
 		return nil, nil
 	}
 	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
-	if sources.buildOperational != nil {
-		component, handlers, err := sources.buildOperational(
+	for _, build := range []func(
+		config.Config,
+		workerDatabase,
+		*jobruntime.Registry,
+		jobruntime.Observer,
+		*slog.Logger,
+	) (lifecycle.Component, []jobruntime.HandlerSpec, error){
+		sources.buildOperational,
+		sources.buildDaily,
+	} {
+		if build == nil {
+			continue
+		}
+		component, handlers, err := build(
 			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger,
 		)
 		if err != nil {
@@ -537,14 +551,33 @@ func (dependencies *workerDependencies) profileReady(context.Context) error {
 	if dependencies == nil || dependencies.registryErr != nil || dependencies.runtimeRegistry == nil || dependencies.startupErr != nil {
 		return errWorkerDependencyUnavailable
 	}
+	expected := make(map[string]jobruntime.Descriptor)
+	for _, descriptor := range dependencies.runtimeRegistry.Profile(dependencies.startup.Profile) {
+		if descriptor.Executable() {
+			expected[descriptor.Kind] = descriptor
+		}
+	}
+	if len(expected) == 0 || len(dependencies.startup.Handlers) != len(expected) {
+		return errWorkerDependencyUnavailable
+	}
+	seen := make(map[string]struct{}, len(dependencies.startup.Handlers))
 	for _, handler := range dependencies.startup.Handlers {
-		descriptor, ok := dependencies.runtimeRegistry.Descriptor(handler.Kind)
-		if !ok || !descriptor.Executable() {
+		descriptor, ok := expected[handler.Kind]
+		if !ok || descriptor.Kind == "" {
+			return errWorkerDependencyUnavailable
+		}
+		if _, duplicate := seen[handler.Kind]; duplicate {
+			return errWorkerDependencyUnavailable
+		}
+		seen[handler.Kind] = struct{}{}
+		if err := dependencies.runtimeRegistry.ValidateHandler(handler); err != nil {
 			return errWorkerDependencyUnavailable
 		}
 	}
-	if err := dependencies.runtimeRegistry.ValidateStartup(dependencies.startup); err != nil {
-		return errWorkerDependencyUnavailable
+	for kind := range expected {
+		if _, ok := seen[kind]; !ok {
+			return errWorkerDependencyUnavailable
+		}
 	}
 	return nil
 }

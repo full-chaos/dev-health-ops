@@ -4,7 +4,7 @@ import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from threading import Event
 from unittest.mock import MagicMock
 
@@ -16,6 +16,7 @@ from dev_health_ops.models import (
     Base,
     SyncConfiguration,
     SyncDispatchOutbox,
+    SyncDispatchTransportRoute,
     SyncRun,
     SyncRunStatus,
 )
@@ -23,6 +24,7 @@ from dev_health_ops.models.licensing import OrgFeatureOverride
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     ClaimedOutboxRow,
+    claim_due_outbox_rows,
     lock_outbox_claim_for_publish,
     mark_outbox_dispatched,
 )
@@ -42,6 +44,23 @@ def _seed_claimed_discovery(
     from dev_health_ops.workers import sync_scheduler
 
     with Session(engine) as session:
+        for kind in (
+            "dispatch_sync_run",
+            "finalize_sync_run",
+            "post_sync",
+            "reference_discovery",
+        ):
+            if session.get(SyncDispatchTransportRoute, kind) is None:
+                session.add(
+                    SyncDispatchTransportRoute(
+                        kind=kind,
+                        transport="celery",
+                        generation=1,
+                        paused=False,
+                        paused_at=None,
+                        rollback_transport="celery",
+                    )
+                )
         config_id, override_id = _seed_due_schedule(session)
         config = session.get(SyncConfiguration, config_id)
         assert config is not None
@@ -61,20 +80,13 @@ def _seed_claimed_discovery(
             .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISCOVERY)
             .one()
         )
-        token = str(uuid.uuid4())
-        outbox.claim_token = token
-        outbox.claim_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
-        outbox.attempts = 1
-        session.commit()
-        row = ClaimedOutboxRow(
-            id=outbox.id,
-            org_id=str(outbox.org_id),
-            sync_run_id=outbox.sync_run_id,
-            kind=outbox.kind,
-            attempts=outbox.attempts,
-            available_at=outbox.available_at,
-            claim_token=token,
+        claimed = claim_due_outbox_rows(
+            session,
+            now=datetime.now(timezone.utc),
+            limit=100,
         )
+        row = next(candidate for candidate in claimed if candidate.id == outbox.id)
+        session.commit()
     return ClaimedDiscovery(row=row, override_id=override_id)
 
 
@@ -121,7 +133,7 @@ def test_disable_commit_waits_for_outbox_publish_transaction(
     Base.metadata.create_all(engine)
     claimed = _seed_claimed_discovery(engine, monkeypatch)
     publish_entered = Event()
-    delete_flushing = Event()
+    disable_flushing = Event()
     worker_started = Event()
     disable_committed = Event()
     disable_visible_during_publish: list[bool] = []
@@ -130,7 +142,7 @@ def test_disable_commit_waits_for_outbox_publish_transaction(
 
     def pause_publish(*_args, **_kwargs) -> None:
         publish_entered.set()
-        assert delete_flushing.wait(timeout=10)
+        assert disable_flushing.wait(timeout=10)
         assert worker_started.wait(timeout=10)
         disable_visible_during_publish.append(disable_committed.wait(timeout=2))
 
@@ -143,14 +155,17 @@ def test_disable_commit_waits_for_outbox_publish_transaction(
         with Session(engine) as session:
             override = session.get(OrgFeatureOverride, claimed.override_id)
             assert override is not None
-            session.delete(override)
-            delete_flushing.set()
+            # Canonical incident ingestion is tier-default-on. Deleting the
+            # override restores that default, so denial must be an explicit
+            # false override.
+            override.is_enabled = False
+            disable_flushing.set()
             session.flush()
             session.commit()
         disable_committed.set()
 
     def worker_recheck() -> bool:
-        assert delete_flushing.wait(timeout=10)
+        assert disable_flushing.wait(timeout=10)
         worker_started.set()
         with Session(engine) as session:
             try:
@@ -197,7 +212,7 @@ def test_disable_commit_before_outbox_lock_terminalizes_without_enqueue(
         with Session(engine) as session:
             override = session.get(OrgFeatureOverride, claimed.override_id)
             assert override is not None
-            session.delete(override)
+            override.is_enabled = False
             session.commit()
         with Session(engine) as session:
             assert _publish_discovery(session, claimed.row, discovery) is None

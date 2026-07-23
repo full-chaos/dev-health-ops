@@ -556,6 +556,18 @@ The scheduler repeats a bounded loop:
 
 Multiple scheduler replicas are safe. A singleton deployment is no longer a correctness requirement, although only one process may hold a global advisory lock if that mode is selected.
 
+The coordinator in step 6 is a distinct scheduled-configuration planner
+(`sync.plan_scheduled_config`), not `sync.dispatch_run`.
+`sync.dispatch_run` requires an existing `SyncRun`; it cannot turn a
+`SyncConfiguration` occurrence into the authoritative `JobRun`, `SyncRun`,
+units, and dispatch outbox. The planner coordinator must consume a stable
+occurrence identity idempotently and create that domain state in one
+transaction. Its implementation belongs with sync coordination in Phase 4.
+Until that handler and its route are present, Celery Beat plus
+`dispatch_scheduled_syncs` remains the only mutation owner. A Go scheduler may
+evaluate or failure-test occurrences before then, but it must not advance a
+production marker or claim schedule ownership.
+
 The current Phase 2 implementation stops before this mutation boundary.
 `internal/scheduler/sync` is an unregistered, read-only shadow: it performs one
 bounded schedule/configuration `SELECT` and evaluates a versioned candidate
@@ -629,6 +641,36 @@ sequenceDiagram
 ### 11.3 Outbox coexistence
 
 The existing `sync_dispatch_outbox` stays because it expresses domain-level recovery and distinct delivery semantics. The reconciler changes its transport adapter from Celery publish to River insert.
+
+Migration `0049` introduces the persisted ownership fence
+`sync_dispatch_transport_routes`. It contains exactly the four fixed sync
+wakeup kinds, an active transport, monotonic generation, pause state, and the
+Celery rollback transport. It initially seeds every kind as unpaused Celery at
+generation 1. A claim records its transport and generation. Before a Celery
+dispatch, finalize, or discovery publish, Python locks both the outbox row and
+matching route row in the same transaction held through publish and mark;
+route changes therefore serialize after an in-progress publish. Mark/failure
+updates also require the same active generation. A claim that loses the race
+to a route change cannot publish and becomes reclaimable after its bounded
+lease expires.
+
+`post_sync` remains the deliberate exception: its mark-before-publish commit
+releases the route lock before the broker call. That preserves the current
+at-most-once loss window but means live-claim drain alone cannot prove a safe
+post-sync transport cutover. Before that kind can change route, the operator
+surface must add a bounded quiescence barrier that proves no marked publisher
+from the old generation can still issue its broker call.
+
+The Go reconciler treats the checked-in transport registry and persisted route
+set as one readiness contract. Missing, extra, paused, malformed, or divergent
+routes close readiness. In this phase all routes remain Celery and no operator
+mutation surface is exposed. A future reviewed cutover must pause with a
+generation increment, wait for live claims to drain or expire, satisfy the
+post-sync quiescence barrier when applicable, deploy the matching
+handler/contract, and unpause the new transport with another generation
+increment. The future River relay must insert the River job and mark the sync
+outbox through one PostgreSQL transaction and therefore needs the corresponding
+semantic-table privileges on that transaction's pool.
 
 For dispatch, finalize, and discovery rows, the reconciler inserts the River job and marks the outbox row dispatched in the same PostgreSQL transaction. The River job uses a deterministic unique insertion key derived from the outbox row and kind. An insert or mark failure rolls the transaction back and leaves the row eligible for reconciliation.
 
@@ -1153,6 +1195,7 @@ Rollback does not downgrade database schema or delete River rows.
 | Current task | Target kind/mode | Profile | Key gate |
 |---|---|---|---|
 | `dispatch_scheduled_syncs` | scheduler evaluation | scheduler | schedule row locking parity |
+| scheduled sync planning | `sync.plan_scheduled_config` coordinator | latency/sync coordinator | unique occurrence → one JobRun/SyncRun |
 | `reconcile_sync_dispatch` | sync reconciler loop/job | reconciler | outbox + lease failure injection |
 | `dispatch_sync_run` | `sync.dispatch_run` coordinator | latency/sync coordinator | duplicate wake-up safety |
 | `run_sync_unit` | `sync.run_unit` command | sync provider/cost queue | provider parity + lease CAS |

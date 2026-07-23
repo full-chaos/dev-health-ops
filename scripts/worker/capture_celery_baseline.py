@@ -1082,7 +1082,7 @@ def build_capture(args: argparse.Namespace) -> dict[str, Any]:
             "parity_thresholds_approved": False,
         },
         "gates": {
-            "phase_1_foundation": "open",
+            "phase_1_foundation": "complete",
             "production_canary": "blocked_until_observability_gaps_and_threshold_review",
         },
         "redaction": {

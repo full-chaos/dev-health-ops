@@ -15,6 +15,7 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -105,6 +106,7 @@ type reconcilerDependencySources struct {
 	contractRoot        string
 
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
+	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
 	buildSyncObserver        func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
@@ -118,6 +120,9 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	newLoop:                  joboutbox.NewReconcilerLoop,
 	contractRoot:             defaultReconcilerContractRoot,
 	loadSyncDispatchRegistry: syncdispatchcontract.Load,
+	buildSyncRouteFence: func(pool *pgxpool.Pool, registry *syncdispatchcontract.Registry) (syncroute.Checker, error) {
+		return syncroute.New(pool, registry)
+	},
 	buildSyncObserver: func(pool *pgxpool.Pool, registry *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
 		return syncreconciler.NewObserver(pool, registry)
 	},
@@ -164,6 +169,8 @@ type reconcilerDependencies struct {
 
 	syncDispatchRegistry *syncdispatchcontract.Registry
 	syncRegistryErr      error
+	syncRouteFence       syncroute.Checker
+	syncRouteFenceErr    error
 	syncObserverErr      error
 	syncRecorder         reconcilerObservationRecorder
 	syncRecorderErr      error
@@ -192,6 +199,15 @@ func configureReconcilerDependenciesWithSourcesAndLogger(
 		{name: "queue_postgres", check: dependencies.queueReady},
 		{name: "river_schema", check: dependencies.riverSchemaReady(cfg.RiverDatabaseSchema)},
 		{name: "sync_dispatch_registry", check: dependencies.syncRegistryReady},
+	}
+	// If prerequisite construction failed, the existing domain/registry checks
+	// already close readiness. Once fence construction was attempted, register
+	// its own named check so runtime route drift remains independently visible.
+	if dependencies.syncRouteFence != nil || dependencies.syncRouteFenceErr != nil {
+		checks = append(checks, struct {
+			name  string
+			check health.CheckFunc
+		}{name: "sync_dispatch_route_fence", check: dependencies.syncRouteFenceReady})
 	}
 	for _, check := range checks {
 		if err := registry.RegisterRequired(check.name, check.check); err != nil {
@@ -254,6 +270,7 @@ func buildReconcilerDependencies(
 		dependencies.registryErr != nil || dependencies.runtimeRegistry == nil ||
 		dependencies.syncRegistryErr != nil || dependencies.syncDispatchRegistry == nil ||
 		sources.buildRelay == nil || sources.newLoop == nil ||
+		sources.buildSyncRouteFence == nil ||
 		sources.buildSyncObserver == nil || sources.newSyncRecorder == nil ||
 		sources.newSyncLoop == nil {
 		dependencies.relayErr = errReconcilerDependencyUnavailable
@@ -278,6 +295,13 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	dependencies.loop = loop
+	routeFence, err := sources.buildSyncRouteFence(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
+	if err != nil || routeFence == nil {
+		dependencies.syncRouteFenceErr = errReconcilerDependencyUnavailable
+		dependencies.disableDatabase()
+		return dependencies
+	}
+	dependencies.syncRouteFence = routeFence
 	observer, err := sources.buildSyncObserver(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
 	if err != nil || observer == nil {
 		dependencies.syncObserverErr = errReconcilerDependencyUnavailable
@@ -356,6 +380,16 @@ func (dependencies *reconcilerDependencies) reconcilerReady(context.Context) err
 
 func (dependencies *reconcilerDependencies) syncRegistryReady(context.Context) error {
 	if dependencies == nil || dependencies.syncRegistryErr != nil || dependencies.syncDispatchRegistry == nil {
+		return errReconcilerDependencyUnavailable
+	}
+	return nil
+}
+
+func (dependencies *reconcilerDependencies) syncRouteFenceReady(ctx context.Context) error {
+	if dependencies == nil || dependencies.syncRouteFenceErr != nil || dependencies.syncRouteFence == nil {
+		return errReconcilerDependencyUnavailable
+	}
+	if err := dependencies.syncRouteFence.Check(ctx); err != nil {
 		return errReconcilerDependencyUnavailable
 	}
 	return nil

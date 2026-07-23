@@ -29,6 +29,7 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
+from tests._helpers import seed_sync_dispatch_transport_routes
 
 ORG_ID = "backfill-fanout-org"
 
@@ -38,6 +39,7 @@ def db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        seed_sync_dispatch_transport_routes(session)
         yield session
     engine.dispose()
 

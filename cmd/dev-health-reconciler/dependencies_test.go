@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -376,6 +377,92 @@ func TestReconcilerPoolReadinessErrorsAreCollapsed(t *testing.T) {
 	}
 }
 
+func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	database := &fakeReconcilerDatabase{}
+	sources := reconcilerSourcesForTest(t, database)
+	sources.buildRelay = func(*pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
+			return joboutbox.StepResult{}, nil
+		}), nil
+	}
+	sources.buildSyncRouteFence = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error) {
+		return syncrouteCheckFunc(func(context.Context) error {
+			return errors.New("transport route differs from the checked-in contract")
+		}), nil
+	}
+
+	registry := health.NewRegistry(100 * time.Millisecond)
+	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
+		context.Background(),
+		config.Config{RiverDatabaseSchema: "river"},
+		registry,
+		reconcilerTestLogger(),
+		sources,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) == 0 {
+		t.Fatal("route drift must not prevent the observer from being composed")
+	}
+	for _, component := range components {
+		if err := component.Start(context.Background()); err != nil {
+			t.Fatalf("start %s: %v", component.Name(), err)
+		}
+	}
+	t.Cleanup(func() {
+		for index := len(components) - 1; index >= 0; index-- {
+			if err := components[index].Shutdown(context.Background()); err != nil {
+				t.Errorf("shutdown %s: %v", components[index].Name(), err)
+			}
+		}
+	})
+	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	status := registry.Readiness(context.Background())
+	if status.Ready || !slices.Equal(status.Failed, []string{"sync_dispatch_route_fence"}) {
+		t.Fatalf("readiness = %#v, want only route fence failed", status)
+	}
+}
+
+func TestReconcilerRouteFenceConstructionFailureFailsClosed(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	database := &fakeReconcilerDatabase{}
+	sources := reconcilerSourcesForTest(t, database)
+	sources.buildRelay = func(*pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
+			return joboutbox.StepResult{}, nil
+		}), nil
+	}
+	sources.buildSyncRouteFence = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error) {
+		return nil, errors.New("route fence construction failed")
+	}
+
+	registry := health.NewRegistry(100 * time.Millisecond)
+	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
+		context.Background(),
+		config.Config{RiverDatabaseSchema: "river"},
+		registry,
+		reconcilerTestLogger(),
+		sources,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 0 || !database.closed.Load() {
+		t.Fatalf("components=%d database_closed=%v, want fail closed", len(components), database.closed.Load())
+	}
+	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
+	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
+		t.Fatalf("readiness = %#v, want failed %v", status, want)
+	}
+}
+
 func TestReconcilerRegistryReadinessIsExplicitAndValueFree(t *testing.T) {
 	secret := "contracts/jobs/v1/postgresql://do-not-print"
 	dependencies := &reconcilerDependencies{registryErr: errors.New(secret)}
@@ -396,6 +483,9 @@ func reconcilerSourcesForTest(t *testing.T, database reconcilerDatabase) reconci
 	sources.contractRoot = "contracts/jobs/v1"
 	sources.loadSyncDispatchRegistry = syncdispatchcontract.Load
 	sources.syncDispatchContractRoot = "contracts/sync-dispatch/v1"
+	sources.buildSyncRouteFence = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error) {
+		return syncrouteCheckFunc(func(context.Context) error { return nil }), nil
+	}
 	sources.buildSyncObserver = func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error) {
 		return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
 			return syncreconciler.Observation{}, nil
@@ -428,6 +518,10 @@ type syncStepFunc func(context.Context, time.Time, int) (syncreconciler.Observat
 func (step syncStepFunc) Step(ctx context.Context, now time.Time, limit int) (syncreconciler.Observation, error) {
 	return step(ctx, now, limit)
 }
+
+type syncrouteCheckFunc func(context.Context) error
+
+func (check syncrouteCheckFunc) Check(ctx context.Context) error { return check(ctx) }
 
 type fakeReconcilerRecorder struct {
 	closed atomic.Bool

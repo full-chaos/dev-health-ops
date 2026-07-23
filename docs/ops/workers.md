@@ -103,18 +103,46 @@ policy is loaded at process startup: before a future rollback changes the
 checked-in route, stop new production, drain or classify in-flight River work,
 restore Celery routing, and restart the reconciler. Deferred generic-outbox
 rows remain auditable; the bridge does not silently republish them to Celery.
-The dormant Go foundations now also include bounded read-only sync-outbox
-observation and sync-schedule evaluation. They expose comparison material only:
-the schedule repository performs one limited `SELECT`, and neither package
-locks, claims, updates, publishes, or registers a production loop. The
-schedule result is scoped to schedule/marker timing and does not represent
-organization or feature-entitlement approval. Nondeterministic Croniter `R`
-expressions and other valid forms outside the versioned deterministic grammar
-are reported as unsupported rather than guessed. Unsupported rows are never
-timing-eligible. The
-mutation-capable sync-domain scheduler, organization/entitlement gates, lease
-repair, and selectable Celery/River transport remain unfinished CHAOS-3039
-work.
+The Go foundations now also include bounded read-only sync-outbox observation,
+sync-schedule evaluation, and a database-backed sync-dispatch ownership fence.
+Migration `0049` seeds the four fixed sync wakeup kinds as active Celery routes
+at generation 1. Each Python claim binds the route and generation. For
+dispatch, finalize, and discovery, the publish transaction locks both the
+outbox row and route row through publish and mark; success/failure writes must
+still match that active generation. `post_sync` preserves its existing
+mark-before-publish commit, so its route lock ends at that commit. A future
+route switch therefore needs a separate bounded post-sync quiescence proof in
+addition to draining live claims. Unknown, paused, and River-routed kinds are
+not claimable by Python. The Go reconciler checks the persisted four-row set
+against the checked-in contract and closes readiness on a pause, missing row,
+generation error, or route drift.
+
+This is a fail-closed selector foundation, not River activation. All persisted
+and checked-in routes remain Celery, deployment profiles remain
+`coexistence_disabled` with zero replicas, and no Go sync handler or River
+sync-domain claimant exists. Do not change a route to River: it would strand
+the wakeup. The mutation-capable sync-domain scheduler,
+organization/entitlement gates, lease repair, River insertion, and handlers
+remain unfinished CHAOS-3039 work.
+
+For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`
+and run:
+
+```bash
+go run ./cmd/dev-health-sync-parity --limit 100
+```
+
+The command holds one exported read-only `REPEATABLE READ` snapshot across the
+Python and Go observations and emits only a safe match/mismatch report. It
+does not claim or publish work. See the
+[v2 parity evidence](../architecture/evidence/go-worker-migration/v2-sync-dispatch-parity/README.md).
+
+The Go scheduler also remains blocked on the Phase 4
+`sync.plan_scheduled_config` coordinator. `sync.dispatch_run` starts from an
+existing `SyncRun` and cannot replace scheduled planning. Until the new
+coordinator consumes a stable occurrence identity and creates the scheduled
+domain plan transactionally, Celery Beat and `dispatch_scheduled_syncs` remain
+the sole schedule mutation owners.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target

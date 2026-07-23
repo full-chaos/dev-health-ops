@@ -81,7 +81,7 @@ func TestObserverStepBuildsBoundedClaimOrderSnapshotAndRoutePartitions(t *testin
 		observation.Kinds[2].DuePending != 1 || observation.Kinds[2].Route != syncdispatchcontract.RouteRiver {
 		t.Fatalf("kind observations = %#v", observation.Kinds)
 	}
-	const expectedDigest = "sha256:470a95b9d29c43636664b00b6beb7f192c18b523e41802b7a785cd463eb42218"
+	const expectedDigest = "sha256:6bc27cbf7ac850d910ad225ac42fdafd287b1fb5254333621d6ee32294771545"
 	if observation.CandidateDigest != expectedDigest {
 		t.Fatalf("candidate digest = %s, want %s", observation.CandidateDigest, expectedDigest)
 	}
@@ -236,6 +236,19 @@ func TestObserverRejectsInvalidStepInputs(t *testing.T) {
 	}
 }
 
+func TestObserveSnapshotRejectsNilTransactionBeforeAnyQuery(t *testing.T) {
+	_, err := ObserveSnapshot(
+		context.Background(),
+		nil,
+		testRegistry(t, ""),
+		time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC),
+		1,
+	)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("ObserveSnapshot() error = %v", err)
+	}
+}
+
 func TestObserverPreservesContextCancellationAndDeadlines(t *testing.T) {
 	for name, contextErr := range map[string]error{
 		"canceled": context.Canceled,
@@ -259,8 +272,12 @@ func TestObservationSQLIsReadOnlyAndMatchesPythonClaimWindow(t *testing.T) {
 	upper := strings.ToUpper(observationSQL)
 	for _, required := range []string{
 		"SELECT OUTBOX.ID::TEXT, OUTBOX.KIND, OUTBOX.CLAIM_EXPIRES_AT",
+		"JOIN PUBLIC.SYNC_DISPATCH_TRANSPORT_ROUTES AS ROUTE",
+		"ROUTE.KIND = OUTBOX.KIND",
 		"OUTBOX.STATUS = 'PENDING'",
 		"OUTBOX.AVAILABLE_AT <= $1",
+		"ROUTE.TRANSPORT = 'CELERY'",
+		"ROUTE.PAUSED = FALSE",
 		"OUTBOX.CLAIM_EXPIRES_AT IS NULL OR OUTBOX.CLAIM_EXPIRES_AT <= $1",
 		"ORDER BY OUTBOX.AVAILABLE_AT, OUTBOX.ID",
 		"LIMIT $2",

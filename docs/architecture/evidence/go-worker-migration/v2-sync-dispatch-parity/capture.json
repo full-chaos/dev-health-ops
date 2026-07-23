@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-23T12:46:23.671389000Z",
+  "source_revision": "a1d86deb1610123ed542262c5b273dab5cc090e3",
+  "source_worktree_dirty": true,
+  "environment": "production_equivalent_local",
+  "protocol": {
+    "cutoff": "2026-07-23T12:46:23.671389000Z",
+    "cutoff_source": "database_clock",
+    "limit": 100,
+    "snapshot_mode": "repeatable_read_exported",
+    "predicate_version": "sync_dispatch_active_celery_due_v2",
+    "digest_version": "sync_dispatch_candidate_digest_v1",
+    "python_runtime": "celery_observer",
+    "go_runtime": "go_observer"
+  },
+  "result": {
+    "status": "match",
+    "mismatch_count": 0
+  },
+  "authority": {
+    "parity_harness": true,
+    "mutation_path": false,
+    "production_canary": false
+  },
+  "redaction": {
+    "contains_candidate_ids": false,
+    "contains_database_uri_or_snapshot_id": false,
+    "contains_payloads_or_claim_tokens": false,
+    "contains_tenant_identifiers": false
+  }
+}

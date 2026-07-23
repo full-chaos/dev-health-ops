@@ -17,6 +17,7 @@ from dev_health_ops.models import (
     Integration,
     IntegrationSource,
     SyncDispatchOutbox,
+    SyncDispatchTransportRoute,
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
@@ -41,6 +42,7 @@ def db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        _seed_transport_routes(session)
         yield session
     engine.dispose()
 
@@ -54,6 +56,26 @@ def _fake_session_ctx(session):
         raise
     else:
         session.commit()
+
+
+def _seed_transport_routes(session):
+    for kind in (
+        OUTBOX_KIND_DISPATCH,
+        OUTBOX_KIND_FINALIZE,
+        OUTBOX_KIND_POST_SYNC,
+        OUTBOX_KIND_DISCOVERY,
+    ):
+        session.add(
+            SyncDispatchTransportRoute(
+                kind=kind,
+                transport="celery",
+                generation=1,
+                paused=False,
+                paused_at=None,
+                rollback_transport="celery",
+            )
+        )
+    session.flush()
 
 
 def _patch_db_session(monkeypatch, session):
@@ -1084,6 +1106,10 @@ def test_reconciler_relays_pending_post_sync_row_with_rebuilt_payload(
     }
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
     assert post_sync_row.claim_token is None
+    assert post_sync_row.claim_transport is None
+    assert post_sync_row.claim_route_generation is None
+    assert post_sync_row.dispatched_transport == "celery"
+    assert post_sync_row.dispatched_route_generation == 1
 
 
 def test_reconciler_materializes_missing_post_sync_outbox_for_ledger(
@@ -1262,9 +1288,11 @@ def test_reconciler_post_sync_precondition_noop_marks_outbox_dispatched(
     assert post_sync_dispatches == []
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
     assert post_sync_row.claim_token is None
+    assert post_sync_row.dispatched_transport == "celery"
+    assert post_sync_row.dispatched_route_generation == 1
 
 
-def test_reconciler_unknown_outbox_kind_rearms_without_dispatching(
+def test_reconciler_unknown_outbox_kind_is_not_claimed_or_dispatched(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
@@ -1307,7 +1335,7 @@ def test_reconciler_unknown_outbox_kind_rearms_without_dispatching(
     result = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     unsupported_row = _outbox_row(db_session, run, unsupported_kind)
-    assert result["publish_failures"] == 1
+    assert result["publish_failures"] == 0
     assert result["relayed_dispatch"] == 0
     assert result["relayed_finalize"] == 0
     assert result["relayed_post_sync"] == 0
@@ -1316,9 +1344,9 @@ def test_reconciler_unknown_outbox_kind_rearms_without_dispatching(
     assert post_sync_dispatches == []
     assert unsupported_row.status == OUTBOX_STATUS_PENDING
     assert unsupported_row.claim_token is None
-    assert unsupported_row.attempts == 1
-    assert "unsupported sync dispatch outbox kind" in str(unsupported_row.last_error)
-    assert _aware(unsupported_row.available_at) > before
+    assert unsupported_row.attempts == 0
+    assert unsupported_row.last_error is None
+    assert _aware(unsupported_row.available_at) == before
 
 
 def test_reconciler_two_passes_do_not_double_publish_post_sync(db_session, monkeypatch):

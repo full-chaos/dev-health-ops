@@ -32,6 +32,19 @@ type WorkItemRecord struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// SourceRecord carries provider records that do not have a dedicated semantic
+// model yet but still require a provider-independent, sink-ready identity.
+// EntityType is constrained to the reference/work-item support surfaces used
+// by the dormant GitHub/GitLab executor.
+type SourceRecord struct {
+	Provider   string            `json:"provider"`
+	OrgID      string            `json:"org_id"`
+	EntityType string            `json:"entity_type"`
+	SourceID   string            `json:"source_id"`
+	ObservedAt time.Time         `json:"observed_at"`
+	Attributes map[string]string `json:"attributes"`
+}
+
 // FeatureFlagRecord is the shared subset of Python's FeatureFlagRecord needed
 // by the sink envelope.
 type FeatureFlagRecord struct {
@@ -102,6 +115,14 @@ var canonicalOperationalStatuses = map[string]struct{}{
 	"closed": {}, "suppressed": {},
 }
 
+var sourceRecordEntityTypes = map[string]struct{}{
+	"repository":           {},
+	"work_item_label":      {},
+	"work_item_project":    {},
+	"work_item_transition": {},
+	"work_item_comment":    {},
+}
+
 func NormalizeWorkItem(context NormalizationContext, item WorkItemRecord) (NormalizedEnvelope, error) {
 	if _, ok := workItemProviders[item.Provider]; !ok {
 		return NormalizedEnvelope{}, ErrNormalizationInvalid
@@ -133,6 +154,32 @@ func NormalizeFeatureFlag(context NormalizationContext, flag FeatureFlagRecord) 
 	addOptionalAttribute(attributes, "flag_type", flag.FlagType)
 	addOptionalAttribute(attributes, "project_key", flag.ProjectKey)
 	return normalizedEnvelope(context, flag.Provider, flag.OrgID, "feature_flag", flag.FlagKey, flag.LastSynced, attributes)
+}
+
+func NormalizeSourceRecord(context NormalizationContext, record SourceRecord) (NormalizedEnvelope, error) {
+	if _, ok := workItemProviders[record.Provider]; !ok {
+		return NormalizedEnvelope{}, ErrNormalizationInvalid
+	}
+	if _, ok := sourceRecordEntityTypes[record.EntityType]; !ok ||
+		record.SourceID == "" || record.ObservedAt.IsZero() {
+		return NormalizedEnvelope{}, ErrNormalizationInvalid
+	}
+	attributes := make(map[string]string, len(record.Attributes))
+	for key, value := range record.Attributes {
+		if strings.TrimSpace(key) == "" {
+			return NormalizedEnvelope{}, ErrNormalizationInvalid
+		}
+		attributes[key] = value
+	}
+	return normalizedEnvelope(
+		context,
+		record.Provider,
+		record.OrgID,
+		record.EntityType,
+		record.SourceID,
+		record.ObservedAt,
+		attributes,
+	)
 }
 
 func NormalizeOperationalService(context NormalizationContext, service OperationalServiceRecord) (NormalizedEnvelope, error) {

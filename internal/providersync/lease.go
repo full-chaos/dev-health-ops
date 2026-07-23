@@ -11,9 +11,13 @@ import (
 )
 
 var (
-	ErrInvalidConfiguration = errors.New("provider sync configuration is invalid")
-	ErrUnitNotClaimable     = errors.New("provider sync unit is not claimable")
-	ErrLeaseLost            = errors.New("provider sync unit lease is lost")
+	ErrInvalidConfiguration      = errors.New("provider sync configuration is invalid")
+	ErrUnitNotClaimable          = errors.New("provider sync unit is not claimable")
+	ErrLeaseLost                 = errors.New("provider sync unit lease is lost")
+	ErrCompatibilityRequired     = errors.New("provider sync dataset requires Python compatibility execution")
+	ErrGenerationJournalConflict = errors.New("provider sync generation journal conflicts with persisted state")
+	ErrGenerationBlockAmbiguous  = errors.New("provider sync generation block requires readback reconciliation")
+	ErrShadowMismatch            = errors.New("provider sync native shadow differs from Python compatibility output")
 )
 
 type Unit struct {
@@ -32,6 +36,7 @@ type Unit struct {
 	BeforeAt              *time.Time
 	ProcessorFlags        map[string]bool
 	DatasetOptions        map[string]any
+	Result                map[string]any
 	SourceMetadata        map[string]any
 	IntegrationConfig     map[string]any
 	CredentialID          string

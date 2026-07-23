@@ -59,6 +59,36 @@ func TestNormalizeFeatureFlagDerivesOptionalAttributes(t *testing.T) {
 	}
 }
 
+func TestNormalizeSourceRecordRestrictsEntityFamilyAndCopiesAttributes(t *testing.T) {
+	t.Parallel()
+	observedAt := time.Date(2026, 7, 23, 12, 3, 0, 0, time.UTC)
+	attributes := map[string]string{"name": "acme/api"}
+	envelope, err := NormalizeSourceRecord(
+		NormalizationContext{
+			IntegrationID: "integration-github",
+			Provenance:    Provenance{Source: "github_rest", Confidence: "1.0"},
+		},
+		SourceRecord{
+			Provider: "github", OrgID: "org-acme", EntityType: "repository",
+			SourceID: "github:repo:acme/api", ObservedAt: observedAt, Attributes: attributes,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributes["name"] = "mutated"
+	if envelope.DedupeKey != "github:repository:github:repo:acme/api" ||
+		envelope.Attributes["name"] != "acme/api" {
+		t.Fatalf("unexpected source envelope: %+v", envelope)
+	}
+	if _, err := NormalizeSourceRecord(
+		NormalizationContext{IntegrationID: "integration-github", Provenance: Provenance{Source: "native", Confidence: "1.0"}},
+		SourceRecord{Provider: "github", OrgID: "org-acme", EntityType: "arbitrary", SourceID: "1", ObservedAt: observedAt},
+	); err == nil {
+		t.Fatal("arbitrary source entity family was accepted")
+	}
+}
+
 func TestNormalizeOperationalServiceUsesPythonCanonicalIdentity(t *testing.T) {
 	t.Parallel()
 	observedAt := time.Date(2026, 7, 23, 12, 5, 0, 0, time.UTC)

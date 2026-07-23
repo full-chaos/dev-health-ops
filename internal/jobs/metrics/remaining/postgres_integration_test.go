@@ -49,8 +49,8 @@ func TestPostgresStoreResumesPartitionsAndFencesCancellationAndExpiry(t *testing
 		t.Fatal(err)
 	}
 	runID := run.ID
-	firstID := deterministicPartitionID(runID, 0)
-	secondID := deterministicPartitionID(runID, 1)
+	firstID := deterministicPartitionID(runID, 1)
+	secondID := deterministicPartitionID(runID, 2)
 
 	var before time.Time
 	if err := pool.QueryRow(ctx, "SELECT updated_at FROM remaining_metric_runs WHERE id=$1::uuid", runID).Scan(&before); err != nil {
@@ -197,13 +197,14 @@ func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
 	if err != nil || len(partitions) != 2 {
 		t.Fatalf("partitions=%#v err=%v", partitions, err)
 	}
-	for ordinal, partition := range partitions {
+	for index, partition := range partitions {
+		ordinal := index + 1
 		canonical, err := canonicalJSON(partition.Scope)
 		if err != nil {
 			t.Fatalf("partition %d scope = %q: %v", ordinal, partition.Scope, err)
 		}
 		if partition.ID != deterministicPartitionID(runs[0].ID, ordinal) || partition.Ordinal != ordinal ||
-			string(canonical) != string(request.Scopes[ordinal]) {
+			string(canonical) != string(request.Scopes[index]) {
 			t.Fatalf("partition %d = %#v", ordinal, partition)
 		}
 	}
@@ -217,6 +218,12 @@ func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
 	mismatchedScopes.Scopes = []json.RawMessage{json.RawMessage(`{"team":"one"}`)}
 	if _, err := store.StartRun(ctx, mismatchedScopes); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("mismatched scope replay error = %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM remaining_metric_partitions WHERE run_id=$1::uuid AND ordinal=2`, runs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRun(ctx, request); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("corrupted ordinal replay error = %v", err)
 	}
 	if _, err := store.StartRun(ctx, StartRunRequest{
 		OrganizationID: request.OrganizationID, Family: "dora", Generation: "dora-v1", ScopeKey: "bad-seed",
@@ -248,7 +255,7 @@ func TestPostgresStoreStartRunReplaysAtomically(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 CREATE FUNCTION reject_remaining_partition() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NEW.ordinal = 1 THEN RAISE EXCEPTION 'forced partition failure'; END IF;
+    IF NEW.ordinal = 2 THEN RAISE EXCEPTION 'forced partition failure'; END IF;
     RETURN NEW;
 END;
 $$;
@@ -290,7 +297,7 @@ CREATE TABLE remaining_metric_runs (
  UNIQUE(org_id,family,generation,scope_key)
 );
 CREATE TABLE remaining_metric_partitions (
- id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES remaining_metric_runs(id), ordinal integer NOT NULL,
+ id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES remaining_metric_runs(id), ordinal integer NOT NULL CHECK (ordinal >= 1),
  scope jsonb NOT NULL, status text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
  attempt_count integer NOT NULL, output_evidence text NULL, completed_at timestamptz NULL,
  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, UNIQUE(run_id,ordinal)

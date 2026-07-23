@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -133,7 +132,8 @@ ON CONFLICT DO NOTHING`,
 		return run, nil
 	}
 
-	for ordinal, scope := range request.Scopes {
+	for index, scope := range request.Scopes {
+		ordinal := index + 1
 		_, err := tx.Exec(ctx, `
 INSERT INTO public.remaining_metric_partitions
     (id, run_id, ordinal, scope, status, attempt_count, created_at, updated_at)
@@ -395,9 +395,13 @@ func validateStartRunRequest(request StartRunRequest) error {
 }
 
 func deterministicRunID(request StartRunRequest) string {
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
+	identity, err := json.Marshal([]string{
 		"remaining-metrics-run", request.OrganizationID, request.Family, request.Generation, request.ScopeKey,
-	}, "/"))).String()
+	})
+	if err != nil {
+		panic("remaining metrics run identity cannot be encoded")
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, identity).String()
 }
 
 func deterministicPartitionID(runID string, ordinal int) string {
@@ -468,26 +472,30 @@ WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
 		return ErrUnavailable
 	}
 	defer rows.Close()
-	ordinal := 0
+	expectedCount := 0
+	expectedOrdinal := 1
 	for rows.Next() {
 		var id string
+		var persistedOrdinal int
 		var persisted json.RawMessage
-		if err := rows.Scan(&id, &ordinal, &persisted); err != nil {
+		if err := rows.Scan(&id, &persistedOrdinal, &persisted); err != nil {
 			return ErrUnavailable
 		}
 		canonical, err := canonicalJSON(persisted)
 		if err != nil {
 			return ErrInvalidState
 		}
-		if ordinal >= len(scopes) || id != deterministicPartitionID(runID, ordinal) || !bytes.Equal(canonical, scopes[ordinal]) {
+		if persistedOrdinal != expectedOrdinal || expectedCount >= len(scopes) ||
+			id != deterministicPartitionID(runID, expectedOrdinal) || !bytes.Equal(canonical, scopes[expectedCount]) {
 			return ErrInvalidState
 		}
-		ordinal++
+		expectedCount++
+		expectedOrdinal++
 	}
 	if err := rows.Err(); err != nil {
 		return ErrUnavailable
 	}
-	if ordinal != len(scopes) {
+	if expectedCount != len(scopes) {
 		return fmt.Errorf("%w: partition count mismatch", ErrInvalidState)
 	}
 	return nil

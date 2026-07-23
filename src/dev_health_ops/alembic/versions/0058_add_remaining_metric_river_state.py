@@ -50,7 +50,7 @@ def upgrade() -> None:
         CREATE TABLE remaining_metric_partitions (
             id uuid PRIMARY KEY,
             run_id uuid NOT NULL REFERENCES remaining_metric_runs(id) ON DELETE CASCADE,
-            ordinal integer NOT NULL CHECK (ordinal >= 0),
+            ordinal integer NOT NULL CHECK (ordinal >= 1),
             scope jsonb NOT NULL,
             status text NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending','running','succeeded','failed','canceled')),

@@ -78,7 +78,7 @@ A job or route change that updates code without the matching contract is incompl
 
 ## Documentation boundary
 
-The public candidate lives under `docs-prototype/`. The non-prototype `docs/` tree remains an important source of current product, architecture, provider, deployment, and runbook facts during migration. Useful verified material should be reshaped into one canonical prototype page, not copied into multiple public destinations.
+Canonical public documentation lives under `docs/`. The former documentation corpus is preserved under `.github/docs-legacy/` as source evidence and history; it is not part of the public build. Move verified current material into one canonical page rather than creating parallel public truth.
 
 Planning records, benchmark captures, issue-specific evidence, and internal rollout notes remain source material unless they describe a durable supported contract.
 

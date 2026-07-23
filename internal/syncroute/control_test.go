@@ -36,7 +36,7 @@ func TestCapabilitiesRequireExactConcreteRiverRegistration(t *testing.T) {
 	}
 }
 
-func TestResumeFailsBeforeTransactionWithoutMatchingCapabilityOrPostSyncBarrier(t *testing.T) {
+func TestResumeFailsBeforeTransactionWithoutMatchingRiverCapability(t *testing.T) {
 	t.Parallel()
 	registry := controlRegistry{
 		syncdispatchcontract.KindDispatchSyncRun: {
@@ -64,50 +64,59 @@ func TestResumeFailsBeforeTransactionWithoutMatchingCapabilityOrPostSyncBarrier(
 	if _, err := controller.Resume(context.Background(), syncdispatchcontract.KindDispatchSyncRun, syncdispatchcontract.RouteRiver, time.Second); !errors.Is(err, ErrCapabilityMissing) {
 		t.Fatalf("missing capability error=%v", err)
 	}
-	postCapabilities, err := NewCapabilities([]Capability{{
-		Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	controller, err = newController(begin, registry, postCapabilities, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := controller.Resume(context.Background(), syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteRiver, time.Second); !errors.Is(err, ErrQuiescenceMissing) {
-		t.Fatalf("missing post_sync quiescer error=%v", err)
-	}
 	if begins != 0 {
 		t.Fatalf("unsafe resume opened %d transactions", begins)
 	}
 }
 
-func TestPostSyncQuiescenceTimeoutIsStrictlyBounded(t *testing.T) {
+func TestResumeCapabilityAllowsSameTransportPostSyncAndGuardsCutover(t *testing.T) {
 	t.Parallel()
-	registry := controlRegistry{
-		syncdispatchcontract.KindPostSync: {
-			Kind: syncdispatchcontract.KindPostSync, Delivery: syncdispatchcontract.DeliveryAtMostOnceMarkBefore,
-			Route: syncdispatchcontract.RouteRiver, RollbackRoute: syncdispatchcontract.RouteCelery,
-		},
+	empty, err := NewCapabilities(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	capabilities, err := NewCapabilities([]Capability{{
+	if _, required, err := resumeCapability(
+		empty, syncdispatchcontract.KindPostSync,
+		syncdispatchcontract.RouteCelery, syncdispatchcontract.RouteCelery,
+	); err != nil || required {
+		t.Fatalf("same-transport post_sync capability = required:%t err:%v", required, err)
+	}
+	riverWithoutBarrier, err := NewCapabilities([]Capability{{
+		Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resumeCapability(
+		riverWithoutBarrier, syncdispatchcontract.KindPostSync,
+		syncdispatchcontract.RouteCelery, syncdispatchcontract.RouteRiver,
+	); !errors.Is(err, ErrQuiescenceMissing) {
+		t.Fatalf("Celery-to-River post_sync error=%v", err)
+	}
+	riverWithBarrier, err := NewCapabilities([]Capability{{
 		Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver,
 		Quiescer: quiescerFunc(func(context.Context, QuiescenceRequest) error { return nil }),
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := newController(
-		func(context.Context) (pgx.Tx, error) { return nil, errors.New("must not begin") },
-		registry, capabilities, time.Now,
-	)
-	if err != nil {
-		t.Fatal(err)
+	if _, required, err := resumeCapability(
+		riverWithBarrier, syncdispatchcontract.KindPostSync,
+		syncdispatchcontract.RouteCelery, syncdispatchcontract.RouteRiver,
+	); err != nil || !required {
+		t.Fatalf("registered cutover capability = required:%t err:%v", required, err)
 	}
+}
+
+func TestPostSyncQuiescenceTimeoutIsStrictlyBounded(t *testing.T) {
+	t.Parallel()
 	for _, timeout := range []time.Duration{0, maximumQuiescenceTimeout + time.Nanosecond} {
-		if _, err := controller.Resume(context.Background(), syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteRiver, timeout); !errors.Is(err, ErrInvalidConfiguration) {
-			t.Fatalf("timeout %s error=%v", timeout, err)
+		if validQuiescenceTimeout(timeout) {
+			t.Fatalf("timeout %s was accepted", timeout)
 		}
+	}
+	if !validQuiescenceTimeout(maximumQuiescenceTimeout) {
+		t.Fatal("maximum timeout was rejected")
 	}
 }
 

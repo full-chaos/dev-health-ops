@@ -77,6 +77,25 @@ func TestRouteControlPostgresConcurrencyDrainAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defaultCapabilities, err := NewCapabilities(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultController, err := NewController(pool, registry, defaultCapabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := defaultController.Pause(ctx, syncdispatchcontract.KindPostSync)
+	if err != nil || !state.Paused || state.Generation != 2 {
+		t.Fatalf("default post_sync pause state=%+v err=%v", state, err)
+	}
+	state, err = defaultController.Resume(
+		ctx, syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteCelery, 0,
+	)
+	if err != nil || state.Paused || state.Generation != 3 ||
+		state.Transport != syncdispatchcontract.RouteCelery {
+		t.Fatalf("default same-transport post_sync resume state=%+v err=%v", state, err)
+	}
 
 	celeryTx, err := pool.Begin(ctx)
 	if err != nil {
@@ -152,7 +171,7 @@ SET status = 'pending', claim_token = 'claim-1', claim_expires_at = NOW() + inte
 WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 		t.Fatal(err)
 	}
-	state, err := controller.Drain(ctx, syncdispatchcontract.KindDispatchSyncRun)
+	state, err = controller.Drain(ctx, syncdispatchcontract.KindDispatchSyncRun)
 	if err != nil || state.LiveClaims != 1 {
 		t.Fatalf("live drain state=%+v err=%v", state, err)
 	}
@@ -175,12 +194,27 @@ WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 	postSyncDescriptor := registry[syncdispatchcontract.KindPostSync]
 	postSyncDescriptor.Route = syncdispatchcontract.RouteRiver
 	registry[syncdispatchcontract.KindPostSync] = postSyncDescriptor
+	riverWithoutQuiescer, err := NewCapabilities([]Capability{{
+		Kind: syncdispatchcontract.KindPostSync, Transport: syncdispatchcontract.RouteRiver,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noQuiescerController, err := NewController(pool, registry, riverWithoutQuiescer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := noQuiescerController.Resume(
+		ctx, syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteRiver, time.Second,
+	); !errors.Is(err, ErrQuiescenceMissing) {
+		t.Fatalf("post_sync transport change without quiescer error=%v", err)
+	}
 	quiescer.err = errors.New("old publisher still active")
 	if _, err := controller.Resume(ctx, syncdispatchcontract.KindPostSync, syncdispatchcontract.RouteRiver, time.Second); !errors.Is(err, ErrLiveClaims) {
 		t.Fatalf("post_sync quiescence error=%v", err)
 	}
 	state, err = controller.Inspect(ctx, syncdispatchcontract.KindPostSync)
-	if err != nil || !state.Paused || state.Generation != 2 || quiescer.calls != 1 {
+	if err != nil || !state.Paused || state.Generation != 4 || quiescer.calls != 1 {
 		t.Fatalf("post_sync rollback state=%+v calls=%d err=%v", state, quiescer.calls, err)
 	}
 }

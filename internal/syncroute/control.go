@@ -221,23 +221,10 @@ func (controller *Controller) Resume(
 	if transport != descriptor.Route {
 		return RouteState{}, ErrCapabilityMissing
 	}
-	var capability Capability
-	if transport == syncdispatchcontract.RouteRiver || kind == syncdispatchcontract.KindPostSync {
-		var ok bool
-		capability, ok = controller.capabilities.Lookup(kind, transport)
+	if transport == syncdispatchcontract.RouteRiver {
+		capability, ok := controller.capabilities.Lookup(kind, transport)
 		if !ok || capability.Kind != kind || capability.Transport != transport {
-			if kind == syncdispatchcontract.KindPostSync {
-				return RouteState{}, ErrQuiescenceMissing
-			}
 			return RouteState{}, ErrCapabilityMissing
-		}
-	}
-	if kind == syncdispatchcontract.KindPostSync {
-		if capability.Quiescer == nil {
-			return RouteState{}, ErrQuiescenceMissing
-		}
-		if quiescenceTimeout <= 0 || quiescenceTimeout > maximumQuiescenceTimeout {
-			return RouteState{}, ErrInvalidConfiguration
 		}
 	}
 
@@ -253,9 +240,18 @@ func (controller *Controller) Resume(
 	if state.LiveClaims != 0 {
 		return RouteState{}, ErrLiveClaims
 	}
-	if kind == syncdispatchcontract.KindPostSync {
+	capability, requiresQuiescence, err := resumeCapability(
+		controller.capabilities, kind, state.Transport, transport,
+	)
+	if err != nil {
+		return RouteState{}, err
+	}
+	if requiresQuiescence {
+		if !validQuiescenceTimeout(quiescenceTimeout) {
+			return RouteState{}, ErrInvalidConfiguration
+		}
 		barrierCtx, cancel := context.WithTimeout(ctx, quiescenceTimeout)
-		err := capability.Quiescer.Quiesce(barrierCtx, QuiescenceRequest{
+		err = capability.Quiescer.Quiesce(barrierCtx, QuiescenceRequest{
 			Kind: kind, Transport: state.Transport, Generation: state.Generation - 1,
 		})
 		cancel()
@@ -282,6 +278,40 @@ RETURNING generation`, kind, transport, now, state.Generation)
 		return RouteState{}, ErrMutationOutcomeUnknown
 	}
 	return state, nil
+}
+
+func validQuiescenceTimeout(timeout time.Duration) bool {
+	return timeout > 0 && timeout <= maximumQuiescenceTimeout
+}
+
+func resumeCapability(
+	capabilities Capabilities,
+	kind string,
+	currentTransport string,
+	targetTransport string,
+) (Capability, bool, error) {
+	var capability Capability
+	if targetTransport == syncdispatchcontract.RouteRiver {
+		var ok bool
+		capability, ok = capabilities.Lookup(kind, targetTransport)
+		if !ok || capability.Kind != kind || capability.Transport != targetTransport {
+			return Capability{}, false, ErrCapabilityMissing
+		}
+	}
+	if kind != syncdispatchcontract.KindPostSync || currentTransport == targetTransport {
+		return capability, false, nil
+	}
+	if targetTransport != syncdispatchcontract.RouteRiver {
+		var ok bool
+		capability, ok = capabilities.Lookup(kind, targetTransport)
+		if !ok || capability.Kind != kind || capability.Transport != targetTransport {
+			return Capability{}, false, ErrQuiescenceMissing
+		}
+	}
+	if capability.Quiescer == nil {
+		return Capability{}, false, ErrQuiescenceMissing
+	}
+	return capability, true, nil
 }
 
 // beginRouteMutation follows the producer lock order: route row first, then

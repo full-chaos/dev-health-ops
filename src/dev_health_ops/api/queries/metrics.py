@@ -19,6 +19,10 @@ def _date_params(start_day: date, end_day: date) -> dict[str, Any]:
 # so the table read is wrapped in a per-key argMax(..., computed_at) dedup subquery
 # before aggregating (the FINAL-equivalent for the metric-config read path).
 _DEDUP_BY_COMPUTED_AT: dict[str, tuple[str, ...]] = {
+    "repo_metrics_daily": (
+        "day",
+        "repo_id",
+    ),
     "work_item_state_durations_daily": (
         "day",
         "provider",

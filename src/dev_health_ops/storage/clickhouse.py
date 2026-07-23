@@ -447,8 +447,28 @@ class ClickHouseStore:
         SELECT
           f.repo_id, f.as_of_day, f.ref, f.file_path, f.language, f.loc,
           f.functions_count, f.cyclomatic_total, f.cyclomatic_avg,
-          f.high_complexity_functions, f.very_high_complexity_functions, f.computed_at
-        FROM file_complexity_snapshots AS f
+          f.high_complexity_functions, f.very_high_complexity_functions,
+          f.latest_computed_at AS computed_at
+        FROM (
+          SELECT
+            repo_id,
+            as_of_day,
+            file_path,
+            argMax(ref, computed_at) AS ref,
+            argMax(language, computed_at) AS language,
+            argMax(loc, computed_at) AS loc,
+            argMax(functions_count, computed_at) AS functions_count,
+            argMax(cyclomatic_total, computed_at) AS cyclomatic_total,
+            argMax(cyclomatic_avg, computed_at) AS cyclomatic_avg,
+            argMax(high_complexity_functions, computed_at)
+              AS high_complexity_functions,
+            argMax(very_high_complexity_functions, computed_at)
+              AS very_high_complexity_functions,
+            max(computed_at) AS latest_computed_at
+          FROM file_complexity_snapshots
+          WHERE as_of_day <= {{day:Date}} {repo_filter}
+          GROUP BY repo_id, as_of_day, file_path
+        ) AS f
         INNER JOIN (
           SELECT repo_id, max(as_of_day) AS max_day
           FROM file_complexity_snapshots

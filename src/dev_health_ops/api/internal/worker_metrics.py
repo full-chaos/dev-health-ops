@@ -23,7 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from dev_health_ops.api.dependencies import get_postgres_session_dep
-from dev_health_ops.api.internal.worker_auth import authorize_worker_bridge
+from dev_health_ops.api.internal.worker_auth import (
+    authorize_metric_repair,
+    authorize_worker_bridge,
+)
 from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.metrics.remaining_scope_contract import (
     CapacityScope,
@@ -537,9 +540,7 @@ async def _repair_execution(
         raise HTTPException(
             status_code=409, detail="Execution state or attempt changed"
         )
-    if request.expected_state == "executing" and await _original_claim_is_active(
-        session, row
-    ):
+    if await _original_claim_is_active(session, row):
         raise HTTPException(
             status_code=409, detail="Original execution claim is still active"
         )
@@ -1046,5 +1047,5 @@ async def repair_metric_execution(
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, str]:
-    authorize_worker_bridge(authorization)
+    authorize_metric_repair(authorization)
     return await _repair_execution(session, execution_id, request)

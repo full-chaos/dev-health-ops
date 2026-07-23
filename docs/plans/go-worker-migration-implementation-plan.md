@@ -712,16 +712,23 @@ callable appears in the bridge allowlist.
 Each output identity has one durable execution row. A new row starts at attempt
 one. A completed row returns `skipped`; an `executing` or `ambiguous` row never
 silently re-enters compute. Operators first use the authenticated readback
-endpoint and inspect the output named by the generation/scope digest. They may
-then submit one exact-state repair:
+endpoint and inspect the output named by the generation/scope digest. The
+repair endpoint requires a distinct, operator-only
+`WORKER_METRIC_REPAIR_TOKEN`; the compute/readback bridge token cannot
+authorize repair, and the repair token cannot execute compute. Both secrets
+are bounded, compared in constant time, and fail closed when missing,
+oversized, or configured to the same value. Configure the repair secret
+wherever operator repair is enabled. Rotate it independently with a coordinated
+API/client switch; the old value stops authorizing repairs as soon as the API
+changes. Operators may then submit one exact-state repair:
 
 - `confirm_succeeded` records bounded reviewed output evidence and makes the
   next worker call return `skipped`;
 - `retry_safe` records why no effect exists and moves the row to
   `retry_authorized`; only the next matching durable claim may consume that
   authorization and increment the execution attempt;
-- an `executing` attempt cannot be repaired while its original claim and lease
-  remain active.
+- an `executing` or `ambiguous` attempt cannot be repaired while its original
+  claim and lease remain active.
 
 Repairs require the expected state and attempt count, use a deterministic
 repair identity, and persist an immutable repair audit row. This is the bounded

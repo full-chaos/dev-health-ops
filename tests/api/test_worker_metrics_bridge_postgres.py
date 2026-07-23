@@ -155,9 +155,10 @@ async def test_effect_before_ack_is_never_reexecuted_after_lease_reclaim() -> No
 
 
 @pytest.mark.asyncio
-async def test_executing_repair_waits_for_claim_loss_and_retries_exact_attempt() -> (
-    None
-):
+@pytest.mark.parametrize("expected_state", ["executing", "ambiguous"])
+async def test_repair_waits_for_claim_loss_and_retries_exact_attempt(
+    expected_state: str,
+) -> None:
     assert _TEST_URI is not None
     engine = create_async_engine(_TEST_URI)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -221,8 +222,20 @@ async def test_executing_repair_waits_for_claim_loss_and_retries_exact_attempt()
             assert await worker_metrics._reserve_execution(session, execution) == (
                 "execute"
             )
+            if expected_state == "ambiguous":
+                await session.execute(
+                    text(
+                        """
+                        UPDATE metric_compatibility_executions
+                        SET state = 'ambiguous'
+                        WHERE id = CAST(:id AS uuid)
+                        """
+                    ),
+                    {"id": str(execution.id)},
+                )
+                await session.commit()
             repair = worker_metrics.MetricExecutionRepairRequest(
-                expected_state="executing",
+                expected_state=expected_state,
                 expected_attempt_count=1,
                 resolution="retry_safe",
                 review_evidence="verified no output exists for attempt one",

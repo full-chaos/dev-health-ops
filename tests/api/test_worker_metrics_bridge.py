@@ -24,6 +24,7 @@ CLAIM_TOKEN = uuid.UUID("33333333-3333-4333-8333-333333333333")
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    monkeypatch.setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
 
     async def session_override():
         yield cast(AsyncSession, object())
@@ -85,6 +86,90 @@ def test_metric_bridge_requires_shared_token_before_loading_state(
         )
     assert response.status_code == 401
     load.assert_not_awaited()
+
+
+def test_repair_requires_dedicated_operator_token(client: TestClient) -> None:
+    with patch.object(
+        worker_metrics,
+        "_repair_execution",
+        new=AsyncMock(return_value={"status": "repaired"}),
+    ) as repair:
+        response = client.post(
+            f"/internal/worker/metric-executions/v1/{RUN_ID}/repair",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "expected_state": "ambiguous",
+                "expected_attempt_count": 1,
+                "resolution": "retry_safe",
+                "review_evidence": "verified no output",
+            },
+        )
+    assert response.status_code == 401
+    repair.assert_not_awaited()
+
+
+def test_repair_accepts_only_configured_operator_token(client: TestClient) -> None:
+    with patch.object(
+        worker_metrics,
+        "_repair_execution",
+        new=AsyncMock(
+            return_value={
+                "status": "repaired",
+                "execution_id": str(RUN_ID),
+                "state": "retry_authorized",
+            }
+        ),
+    ) as repair:
+        response = client.post(
+            f"/internal/worker/metric-executions/v1/{RUN_ID}/repair",
+            headers={"Authorization": "Bearer test-repair-token"},
+            json={
+                "expected_state": "ambiguous",
+                "expected_attempt_count": 1,
+                "resolution": "retry_safe",
+                "review_evidence": "verified no output",
+            },
+        )
+    assert response.status_code == 200
+    repair.assert_awaited_once()
+
+
+def test_repair_token_cannot_execute_compute(client: TestClient) -> None:
+    with patch.object(
+        worker_metrics, "_load_remaining_execution", new_callable=AsyncMock
+    ) as load:
+        response = client.post(
+            "/internal/worker/remaining-metrics/v1/execute",
+            headers={"Authorization": "Bearer test-repair-token"},
+            json={
+                "operation": "partition",
+                "run_id": str(RUN_ID),
+                "partition_id": str(PARTITION_ID),
+            },
+        )
+    assert response.status_code == 401
+    load.assert_not_awaited()
+
+
+def test_matching_bridge_and_repair_tokens_fail_closed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WORKER_METRIC_REPAIR_TOKEN", "test-token")
+    with patch.object(
+        worker_metrics, "_repair_execution", new_callable=AsyncMock
+    ) as repair:
+        response = client.post(
+            f"/internal/worker/metric-executions/v1/{RUN_ID}/repair",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "expected_state": "ambiguous",
+                "expected_attempt_count": 1,
+                "resolution": "retry_safe",
+                "review_evidence": "verified no output",
+            },
+        )
+    assert response.status_code == 401
+    repair.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

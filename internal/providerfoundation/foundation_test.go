@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -301,6 +302,75 @@ func TestGenerationReplayGuardRejectsConflictingContent(t *testing.T) {
 	}
 	if err := guard.Remember(conflicting[0]); !errors.Is(err, ErrSinkReplayConflict) {
 		t.Fatalf("conflicting replay error=%v", err)
+	}
+}
+
+func TestGenerationReplayGuardEvictsDeterministicallyAtCapacity(t *testing.T) {
+	t.Parallel()
+	guard, err := NewGenerationReplayGuardWithCapacity(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := func(generation, source string) GenerationBlock {
+		blocks, buildErr := buildGenerationBlocks(
+			generation, "provider_records",
+			[]NormalizedEnvelope{testGenerationEnvelope(source)}, 1, maxGenerationBlockBytes,
+		)
+		if buildErr != nil {
+			t.Fatal(buildErr)
+		}
+		return blocks[0]
+	}
+	first := block("sync-unit:one", "record-1")
+	second := block("sync-unit:two", "record-2")
+	third := block("sync-unit:three", "record-3")
+	for _, value := range []GenerationBlock{first, second, third} {
+		if err := guard.Remember(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if guard.Size() != 2 {
+		t.Fatalf("guard size=%d", guard.Size())
+	}
+	secondConflict := block("sync-unit:two", "changed-while-retained")
+	if err := guard.Remember(secondConflict); !errors.Is(err, ErrSinkReplayConflict) {
+		t.Fatalf("retained conflict error=%v", err)
+	}
+	firstConflict := block("sync-unit:one", "changed-after-eviction")
+	if err := guard.Remember(firstConflict); err != nil {
+		t.Fatalf("oldest key was not evicted: %v", err)
+	}
+}
+
+func TestGenerationReplayGuardIsRaceSafeAndBounded(t *testing.T) {
+	t.Parallel()
+	guard, err := NewGenerationReplayGuardWithCapacity(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	for index := 0; index < 64; index++ {
+		index := index
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			blocks, buildErr := buildGenerationBlocks(
+				fmt.Sprintf("sync-unit:%d", index), "provider_records",
+				[]NormalizedEnvelope{testGenerationEnvelope(fmt.Sprintf("record-%d", index))},
+				1, maxGenerationBlockBytes,
+			)
+			if buildErr != nil {
+				t.Errorf("build block: %v", buildErr)
+				return
+			}
+			if rememberErr := guard.Remember(blocks[0]); rememberErr != nil {
+				t.Errorf("remember block: %v", rememberErr)
+			}
+		}()
+	}
+	wait.Wait()
+	if guard.Size() != 8 {
+		t.Fatalf("guard size=%d", guard.Size())
 	}
 }
 

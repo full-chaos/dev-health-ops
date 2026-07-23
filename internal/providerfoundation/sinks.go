@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	maxGenerationBlockRows  = 500
-	maxGenerationBlockBytes = 4 << 20
+	maxGenerationBlockRows     = 500
+	maxGenerationBlockBytes    = 4 << 20
+	defaultReplayGuardCapacity = 4096
+	maxReplayGuardCapacity     = 100_000
 )
 
 // Sink is the only persistence boundary for normalized provider output. A
@@ -280,26 +282,64 @@ func generationContentDigest(batch []NormalizedEnvelope) (string, error) {
 }
 
 type GenerationReplayGuard struct {
-	mu      sync.Mutex
-	digests map[string]string
+	mu       sync.Mutex
+	digests  map[string]string
+	order    []string
+	next     int
+	capacity int
 }
 
 func NewGenerationReplayGuard() *GenerationReplayGuard {
-	return &GenerationReplayGuard{digests: map[string]string{}}
+	return &GenerationReplayGuard{
+		digests:  make(map[string]string, defaultReplayGuardCapacity),
+		order:    make([]string, 0, defaultReplayGuardCapacity),
+		capacity: defaultReplayGuardCapacity,
+	}
+}
+
+func NewGenerationReplayGuardWithCapacity(capacity int) (*GenerationReplayGuard, error) {
+	if capacity < 1 || capacity > maxReplayGuardCapacity {
+		return nil, ErrSinkGenerationUnsafe
+	}
+	return &GenerationReplayGuard{
+		digests:  make(map[string]string, capacity),
+		order:    make([]string, 0, capacity),
+		capacity: capacity,
+	}, nil
 }
 
 func (guard *GenerationReplayGuard) Remember(block GenerationBlock) error {
-	if guard == nil {
+	if guard == nil || guard.capacity < 1 || guard.capacity > maxReplayGuardCapacity {
 		return ErrSinkGenerationUnsafe
 	}
 	key := strings.Join([]string{block.generation, block.destination, strconv.Itoa(block.index)}, "\x00")
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
-	if existing, ok := guard.digests[key]; ok && existing != block.contentDigest {
-		return ErrSinkReplayConflict
+	if existing, ok := guard.digests[key]; ok {
+		if existing != block.contentDigest {
+			return ErrSinkReplayConflict
+		}
+		return nil
+	}
+	if len(guard.order) < guard.capacity {
+		guard.order = append(guard.order, key)
+	} else {
+		evicted := guard.order[guard.next]
+		delete(guard.digests, evicted)
+		guard.order[guard.next] = key
+		guard.next = (guard.next + 1) % guard.capacity
 	}
 	guard.digests[key] = block.contentDigest
 	return nil
+}
+
+func (guard *GenerationReplayGuard) Size() int {
+	if guard == nil {
+		return 0
+	}
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+	return len(guard.digests)
 }
 
 type ClickHouseDeduplicationVerifier interface {

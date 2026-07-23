@@ -156,10 +156,12 @@ The Go scheduler also remains blocked on the Phase 4
 existing `SyncRun` and cannot replace scheduled planning. Until the new
 coordinator consumes a stable occurrence identity and creates the scheduled
 domain plan transactionally, Celery Beat and `dispatch_scheduled_syncs` remain
-the sole schedule mutation owners. The dormant transaction kernel supplies the
-atomic handoff boundary, but the planner, organization/entitlement decisions,
-missing-marker materialization, catch-up policy, and command loop remain
-unimplemented.
+the sole schedule mutation owners by default. An operator may separately set
+`SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED=true` to let the bounded Celery
+consumer materialize pre-existing Go-authored identities; it does not own
+timing or activate the Go command loop. The dormant transaction kernel still
+needs the planner, organization/entitlement decisions, missing-marker
+materialization, catch-up policy, and command loop.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target
@@ -294,6 +296,7 @@ The bundled Docker Compose, Kubernetes, and Helm deployments already declare the
 | `SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS` | `60` | Backoff added to `available_at` when an eligible expired-lease unit is flipped to `RETRYING` before redispatch. |
 | `SYNC_DISPATCH_REDISPATCH_COUNTDOWN` | `60` | Delay used when redispatching sync-run work. |
 | `SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS` | `300` | Dispatch outbox claim lease duration. |
+| `SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED` | `false` | Enables the bounded scheduled-occurrence consumer task and its Beat entry. Keep disabled until the Go occurrence producer and operational hand-off are ready. |
 | `SYNC_WATERMARK_OVERLAP` | `0` | Subtracts this many seconds from incremental watermark reads to intentionally re-read a lookback margin. |
 
 Provider budget limits are abstract reservation units derived from the estimated shape of a sync unit. They are not the provider's raw request or GraphQL cost counters. Jira emits separate route-family buckets for REST/JQL listing (`jira:search:jira_jql`), REST issue enrichment (`jira:rest_core:jira_issue_enrichment`), optional worklog fetching (`jira:rest_core:jira_worklogs` when `JIRA_FETCH_WORKLOGS=true`), and Atlassian GraphQL enrichment (`jira:graphql_cost:jira_gql_enrichment` when `ATLASSIAN_GQL_ENABLED=true`). LaunchDarkly feature-flag sync emits `launchdarkly:*` buckets for the `flags`, `audit_log`, and `code_refs` route families (see [LaunchDarkly sync budgeting](../architecture/launchdarkly-sync-budgeting.md)). Leaving `SYNC_BUDGET_BUCKET_LIMITS` unset disables enforcement; setting it enables deferrals when the reservation would exceed a configured bucket.
@@ -352,7 +355,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 | `execute_saved_report` | None | `reports` | Executes a SavedReport plan and persists markdown. Source: `report_task.py`. |
 | `dispatch_scheduled_reports` | None | `default` | Fans out scheduled report executions. Source: `report_scheduler.py`. |
 | ~~`run_backfill`~~ | `backfill run` | — | **Removed in CHAOS-2647.** The API backfill path now plans a backfill-mode `SyncRun` and fans out through `dispatch_sync_run` → `run_sync_unit` → `finalize_sync_run`; the standalone `backfill`-queue task and `sync_backfill.py` are deleted. |
-| `dispatch_scheduled_syncs` | None | `default` | Fans out organization sync configurations. Source: `sync_scheduler.py`. |
+| `dispatch_scheduled_syncs` | None | `scheduler` | Fans out organization sync configurations. Source: `sync_scheduler.py`. |
+| `consume_pending_scheduled_sync_occurrences` | None | `scheduler` | Default-off bounded materialization of Go-authored scheduled occurrences. Enabled only with `SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED=true`. Source: `sync_scheduler.py`. |
 | `dispatch_scheduled_metrics` | None | `default` | Fans out scheduled metrics. Source: `metrics_daily.py`. |
 | `monitor_queue_depths` | None | `monitoring` | Monitors queue depths. Source: `queue_monitor.py`. |
 ---
@@ -361,7 +365,8 @@ The system registers Celery tasks under the `workers/` directory. The primary re
 
 | Schedule | Task | Interval | Queue |
 |----------|------|----------|-------|
-| `dispatch-scheduled-syncs` | `dispatch_scheduled_syncs` | Every 300 seconds (5 minutes) | `default` |
+| `dispatch-scheduled-syncs` | `dispatch_scheduled_syncs` | Every 300 seconds (5 minutes) | `scheduler` |
+| `consume-pending-scheduled-sync-occurrences` | `consume_pending_scheduled_sync_occurrences` | Every 300 seconds (5 minutes), only when enabled | `scheduler` |
 | `dispatch-scheduled-metrics` | `dispatch_scheduled_metrics` | Every 300 seconds (5 minutes) | `default` |
 | `run-complexity-daily` | `dispatch_complexity_job` | Daily at 00:45 UTC | `default` |
 | `run-daily-metrics` | `dispatch_daily_metrics_for_all_orgs` | Daily at 01:00 UTC | `default` |

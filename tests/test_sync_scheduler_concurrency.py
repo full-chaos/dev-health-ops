@@ -367,11 +367,20 @@ def test_postgres_pending_occurrence_consumer_skips_locked_replica(monkeypatch):
             assert first.result(timeout=30) == {
                 "scanned": 1,
                 "completed": 1,
-                "skipped": 0,
+                "retried": 0,
+                "quarantined": 0,
+                "already_completed": 0,
                 "errors": 0,
             }
 
-        assert second == {"scanned": 1, "completed": 0, "skipped": 1, "errors": 0}
+        assert second == {
+            "scanned": 0,
+            "completed": 0,
+            "retried": 0,
+            "quarantined": 0,
+            "already_completed": 0,
+            "errors": 0,
+        }
         with _session_scope(session_factory) as verify:
             occurrence = verify.get(ScheduledSyncOccurrence, occurrence_id)
             assert occurrence is not None
@@ -390,6 +399,115 @@ def test_postgres_pending_occurrence_consumer_skips_locked_replica(monkeypatch):
                 cleanup.delete(job)
             if config is not None:
                 cleanup.delete(config)
+            cleanup.commit()
+        engine.dispose()
+
+
+@pytest.mark.skipif(
+    not os.environ.get("POSTGRES_SYNC_SCHEDULER_TEST_URL"),
+    reason="POSTGRES_SYNC_SCHEDULER_TEST_URL is not set",
+)
+def test_postgres_occurrence_consumer_skips_locked_pair_and_poison_prefix(monkeypatch):
+    """A locked earliest pair and poison prefix cannot starve later work."""
+    pytest.importorskip("psycopg2")
+    from sqlalchemy.orm import sessionmaker
+
+    url = os.environ["POSTGRES_SYNC_SCHEDULER_TEST_URL"]
+    engine = create_engine(url)
+    Base.metadata.create_all(engine)
+    _ensure_postgres_sync_marker_constraint(engine)
+    session_factory = sessionmaker(bind=engine)
+    now = datetime.now(timezone.utc)
+    org_id = f"scheduler-forward-progress-{uuid.uuid4()}"
+    monkeypatch.setattr(
+        "dev_health_ops.workers.org_guard.organization_exists_sync", lambda *_: True
+    )
+
+    with _session_scope(session_factory) as setup:
+        locked_config = _make_config(
+            setup, name="locked", last_sync_at=now - 4 * HOUR, org_id=org_id
+        )
+        later_config = _make_config(
+            setup, name="later", last_sync_at=now - 4 * HOUR, org_id=org_id
+        )
+        locked_job = _make_job(locked_config, next_run_at=now + HOUR)
+        later_job = _make_job(later_config, next_run_at=now + HOUR)
+        setup.add_all([locked_job, later_job])
+        setup.flush()
+        locked_occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(
+                locked_config.id, now - 3 * HOUR
+            ),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=org_id,
+            sync_config_id=locked_config.id,
+            scheduled_job_id=locked_job.id,
+            scheduled_for=now - 3 * HOUR,
+        )
+        poisoned_occurrence = ScheduledSyncOccurrence(
+            occurrence_id="sha256:poisoned-postgres-prefix",
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=org_id,
+            sync_config_id=later_config.id,
+            scheduled_job_id=later_job.id,
+            scheduled_for=now - 2 * HOUR,
+        )
+        eligible_occurrence = ScheduledSyncOccurrence(
+            occurrence_id=scheduled_sync_occurrence_identity(
+                later_config.id, now - HOUR
+            ),
+            identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+            org_id=org_id,
+            sync_config_id=later_config.id,
+            scheduled_job_id=later_job.id,
+            scheduled_for=now - HOUR,
+        )
+        setup.add_all([locked_occurrence, poisoned_occurrence, eligible_occurrence])
+        setup.commit()
+        locked_config_id = locked_config.id
+        later_config_id = later_config.id
+        locked_job_id = locked_job.id
+        poisoned_occurrence_id = poisoned_occurrence.occurrence_id
+        eligible_occurrence_id = eligible_occurrence.occurrence_id
+
+    holder = session_factory()
+    try:
+        holder.query(SyncConfiguration).filter_by(
+            id=locked_config_id
+        ).with_for_update().one()
+        holder.query(ScheduledJob).filter_by(id=locked_job_id).with_for_update().one()
+
+        with _session_scope(session_factory) as worker_session:
+            result = sync_scheduler.reconcile_pending_scheduled_sync_occurrences(
+                worker_session, limit=1
+            )
+            worker_session.commit()
+
+        assert result == {
+            "scanned": 2,
+            "completed": 1,
+            "retried": 0,
+            "quarantined": 1,
+            "already_completed": 0,
+            "errors": 0,
+        }
+        with _session_scope(session_factory) as verify:
+            poisoned = verify.get(ScheduledSyncOccurrence, poisoned_occurrence_id)
+            eligible = verify.get(ScheduledSyncOccurrence, eligible_occurrence_id)
+            locked = verify.get(
+                ScheduledSyncOccurrence, locked_occurrence.occurrence_id
+            )
+            assert poisoned is not None and poisoned.reconcile_status == "quarantined"
+            assert eligible is not None and eligible.sync_run_id is not None
+            assert locked is not None and locked.sync_run_id is None
+    finally:
+        holder.rollback()
+        holder.close()
+        with _session_scope(session_factory) as cleanup:
+            for config_id in (locked_config_id, later_config_id):
+                config = cleanup.get(SyncConfiguration, config_id)
+                if config is not None:
+                    cleanup.delete(config)
             cleanup.commit()
         engine.dispose()
 

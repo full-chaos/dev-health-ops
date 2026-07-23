@@ -5,6 +5,8 @@ from typing import Any
 
 from celery.schedules import crontab
 
+from dev_health_ops.providers.utils import env_flag
+
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -284,6 +286,16 @@ beat_schedule = {
         "options": {"queue": "sync"},
     },
 }
+
+# The occurrence consumer is a default-off rollout seam for materializing
+# Go-authored schedule identities. It shares the existing scheduler queue;
+# activating it does not require a queue, compose, or worker-topology change.
+if env_flag("SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED", default=False):
+    beat_schedule["consume-pending-scheduled-sync-occurrences"] = {
+        "task": "dev_health_ops.workers.tasks.consume_pending_scheduled_sync_occurrences",
+        "schedule": 300.0,
+        "options": {"queue": "scheduler"},
+    }
 
 # Result settings
 result_expires = 86400  # Results expire after 24 hours

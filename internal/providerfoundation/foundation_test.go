@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -215,6 +216,32 @@ func TestEnvelopeDedupeRejectsConflictingContent(t *testing.T) {
 	changed.SourceID = "2"
 	if err := validateBatch([]NormalizedEnvelope{first, changed}); err != ErrSinkDuplicate {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestClickHouseGenerationTokenIsStableAndOpaque(t *testing.T) {
+	t.Parallel()
+	first, err := clickHouseGenerationContext(context.Background(), "sync-unit:11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := clickHouseGenerationContext(context.Background(), "sync-unit:11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := clickHouseGenerationToken(first)
+	if token == "" || token != clickHouseGenerationToken(second) ||
+		strings.Contains(token, "11111111") || len(token) != sha256.Size*2 {
+		t.Fatalf("generation token=%q", token)
+	}
+}
+
+func TestClickHouseGenerationRejectsUnboundedOrEmptyKeys(t *testing.T) {
+	t.Parallel()
+	for _, generation := range []string{"", " ", strings.Repeat("x", 257)} {
+		if _, err := clickHouseGenerationContext(context.Background(), generation); !errors.Is(err, ErrCredentialInvalid) {
+			t.Fatalf("generation length=%d error=%v", len(generation), err)
+		}
 	}
 }
 

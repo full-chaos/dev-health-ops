@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5"
 )
@@ -17,6 +18,14 @@ import (
 // sync unit only after it returns successfully.
 type Sink interface {
 	WriteBatch(context.Context, []NormalizedEnvelope) error
+}
+
+// GenerationSink is the only sink accepted by a recoverable sync-unit
+// executor. Its generation key must remain stable across attempts so a worker
+// killed after ClickHouse accepted a block cannot produce a second logical
+// generation when its lease is recovered.
+type GenerationSink interface {
+	WriteGeneration(context.Context, string, []NormalizedEnvelope) error
 }
 
 // PostgresSink runs the supplied writer in one real pgx transaction. It does
@@ -78,6 +87,52 @@ func (s ClickHouseSink) WriteBatch(ctx context.Context, batch []NormalizedEnvelo
 		return err
 	}
 	return WriteClickHouseBatch(ctx, s.Conn, s.Table, batch, DefaultClickHouseBatch)
+}
+
+// WriteGeneration sends exactly one ClickHouse block with a stable
+// insert_deduplication_token. The token is a digest of the sync-unit generation
+// rather than tenant/provider data and is identical for expired-lease retries.
+func (s ClickHouseSink) WriteGeneration(ctx context.Context, generation string, batch []NormalizedEnvelope) error {
+	if s.Conn == nil || s.Table == "" || s.Lease == nil {
+		return ErrCredentialInvalid
+	}
+	if err := s.Lease.Assert(ctx); err != nil {
+		return err
+	}
+	generationContext, err := clickHouseGenerationContext(ctx, generation)
+	if err != nil {
+		return err
+	}
+	if !validClickHouseTable(s.Table) {
+		return ErrCredentialInvalid
+	}
+	if err := s.Lease.Assert(generationContext); err != nil {
+		return err
+	}
+	return WriteClickHouseBatch(generationContext, s.Conn, s.Table, batch, DefaultClickHouseBatch)
+}
+
+type clickHouseGenerationContextKey struct{}
+
+func clickHouseGenerationContext(ctx context.Context, generation string) (context.Context, error) {
+	generation = strings.TrimSpace(generation)
+	if ctx == nil || generation == "" || len(generation) > 256 {
+		return nil, ErrCredentialInvalid
+	}
+	digest := sha256.Sum256([]byte(generation))
+	token := hex.EncodeToString(digest[:])
+	ctx = context.WithValue(ctx, clickHouseGenerationContextKey{}, token)
+	return clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
+		"insert_deduplication_token": token,
+	})), nil
+}
+
+func clickHouseGenerationToken(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	token, _ := ctx.Value(clickHouseGenerationContextKey{}).(string)
+	return token
 }
 
 // BatchAppender is implemented by clickhouse-go's prepared batch and is kept
@@ -177,3 +232,5 @@ func canonicalAttributes(input map[string]string) (string, error) {
 	encoded, err := json.Marshal(ordered)
 	return string(encoded), err
 }
+
+var _ GenerationSink = ClickHouseSink{}

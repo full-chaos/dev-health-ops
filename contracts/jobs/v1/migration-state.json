@@ -135,13 +135,13 @@
     },
     {
       "kind": "sync.team_autoimport",
-      "state": "go_default",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["sync"],
-      "route": "river",
+      "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery", "handler_wiring"]
     },
     {
       "kind": "system.heartbeat",

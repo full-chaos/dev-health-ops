@@ -171,16 +171,22 @@ var compiledHeavyHandlerKinds = []string{
 	jobcontract.KindReportExecuteScheduled,
 }
 
+var compiledHandlerKinds = map[string][]string{
+	"heavy": compiledHeavyHandlerKinds,
+	"sync":  {jobcontract.KindTeamAutoimport},
+}
+
 func compiledWorkerHandlersFromRoot(profile, contractRoot string) []jobruntime.HandlerSpec {
-	if profile != "heavy" {
+	kinds := compiledHandlerKinds[profile]
+	if len(kinds) == 0 {
 		return nil
 	}
 	registry, err := jobruntime.Load(contractRoot)
 	if err != nil {
 		return nil
 	}
-	handlers := make([]jobruntime.HandlerSpec, 0, len(compiledHeavyHandlerKinds))
-	for _, kind := range compiledHeavyHandlerKinds {
+	handlers := make([]jobruntime.HandlerSpec, 0, len(kinds))
+	for _, kind := range kinds {
 		handler, ok := registry.Descriptor(kind)
 		if !ok || handler.Profile != profile ||
 			handler.MigrationState != "go_implemented" || handler.Route != "celery" ||

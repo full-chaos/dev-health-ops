@@ -85,7 +85,7 @@ func buildDatasetCapabilities() map[string]map[string]DatasetCapability {
 			add(provider, capability.dataset, capability.cost, capability.watermark, []string{capability.target}, capability.flags)
 		}
 	}
-	add("gitlab", "incidents", CostMedium, WatermarkIncremental, []string{"incidents"}, map[string]bool{"sync_incidents": true})
+	add("gitlab", "incidents", CostLight, WatermarkIncremental, []string{"incidents"}, map[string]bool{"sync_incidents": true})
 	add("gitlab", "feature-flags", CostMedium, WatermarkIncremental, []string{"feature-flags"}, nil)
 	return registry
 }

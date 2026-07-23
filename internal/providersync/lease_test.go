@@ -95,6 +95,54 @@ func TestLeaseSessionGuardRejectsTerminalRunBeforeProviderBoundary(t *testing.T)
 	}
 }
 
+func TestLeaseSessionRunRejectsUnsafeHeartbeatIntervals(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	repository := newMemoryLeaseRepository(testUnit(), "dispatching")
+	claim, err := repository.Claim(context.Background(), ClaimRequest{
+		UnitID: firstUnitID, Owner: uuid.NewString(), Now: now, LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &LeaseSession{
+		Repository: repository, Claim: claim, LeaseDuration: time.Minute,
+		Deadline: now.Add(time.Hour), Now: func() time.Time { return now },
+	}
+	work := func(context.Context, providerfoundation.LeaseGuard) error {
+		t.Fatal("work ran with an unsafe heartbeat interval")
+		return nil
+	}
+	for _, interval := range []time.Duration{0, 30*time.Second + time.Nanosecond, time.Minute} {
+		if err := session.Run(context.Background(), interval, work); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("interval=%s error=%v", interval, err)
+		}
+	}
+}
+
+func TestLeaseSessionRunAcceptsHalfLeaseHeartbeatInterval(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	repository := newMemoryLeaseRepository(testUnit(), "dispatching")
+	claim, err := repository.Claim(context.Background(), ClaimRequest{
+		UnitID: firstUnitID, Owner: uuid.NewString(), Now: now, LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &LeaseSession{
+		Repository: repository, Claim: claim, LeaseDuration: time.Minute,
+		Deadline: now.Add(time.Hour), Now: func() time.Time { return now },
+	}
+	ran := false
+	if err := session.Run(context.Background(), 30*time.Second, func(context.Context, providerfoundation.LeaseGuard) error {
+		ran = true
+		return nil
+	}); err != nil || !ran {
+		t.Fatalf("run error=%v ran=%v", err, ran)
+	}
+}
+
 const (
 	firstUnitID        = "11111111-1111-4111-8111-111111111111"
 	firstRunID         = "22222222-2222-4222-8222-222222222222"

@@ -199,7 +199,12 @@ func (session *LeaseSession) Run(
 	interval time.Duration,
 	work func(context.Context, providerfoundation.LeaseGuard) error,
 ) error {
-	if !session.valid() || ctx == nil || interval <= 0 || work == nil {
+	// A heartbeat at or near the lease duration can arrive after the lease has
+	// already expired under scheduler or network jitter. Requiring at least
+	// two renewal opportunities per lease keeps expiry from becoming the
+	// worker's normal cancellation mechanism.
+	if !session.valid() || ctx == nil || interval <= 0 ||
+		interval > session.LeaseDuration/2 || work == nil {
 		return ErrInvalidConfiguration
 	}
 	workContext, cancel := context.WithCancel(ctx)

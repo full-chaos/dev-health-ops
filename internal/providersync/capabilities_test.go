@@ -1,39 +1,74 @@
 package providersync
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"sort"
 	"testing"
 )
 
 func TestCapabilitiesMatchPythonGitHubAndGitLabRegistry(t *testing.T) {
-	t.Parallel()
-	want := map[string][]string{
-		"github": {
-			"blame", "cicd", "commit-stats", "commits", "deployments", "files",
-			"pr-comments", "pr-reviews", "prs", "repo-metadata", "security", "tests",
-			"work-item-comments", "work-item-history", "work-item-labels",
-			"work-item-projects", "work-items",
-		},
-		"gitlab": {
-			"blame", "cicd", "commit-stats", "commits", "deployments",
-			"feature-flags", "files", "incidents", "pr-comments", "pr-reviews",
-			"prs", "repo-metadata", "security", "tests", "work-item-comments",
-			"work-item-history", "work-item-labels", "work-item-projects", "work-items",
-		},
+	python := pythonExecutable(t)
+	_, currentFile, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(currentFile)
+	datasetsSource := filepath.Join(packageDir, "..", "..", "src", "dev_health_ops", "sync", "datasets.py")
+	oracleScript := filepath.Join(packageDir, "testdata", "python_registry_oracle.py")
+	output, err := exec.Command(python, oracleScript, datasetsSource).CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute Python registry oracle: %v: %s", err, output)
 	}
-	for provider, datasets := range want {
-		capabilities := Capabilities(provider)
-		got := make([]string, 0, len(capabilities))
-		for _, capability := range capabilities {
-			got = append(got, capability.Dataset)
-			if capability.Provider != provider {
-				t.Fatalf("%s capability provider=%q", capability.Dataset, capability.Provider)
-			}
-		}
-		if fmt.Sprint(got) != fmt.Sprint(datasets) {
-			t.Fatalf("%s datasets=%v want=%v", provider, got, datasets)
+	var want map[string][]registryEntry
+	if err := json.Unmarshal(output, &want); err != nil {
+		t.Fatalf("decode Python registry oracle: %v: %s", err, output)
+	}
+	got := map[string][]registryEntry{}
+	for _, provider := range []string{"github", "gitlab"} {
+		sort.Slice(want[provider], func(left, right int) bool {
+			return want[provider][left].Dataset < want[provider][right].Dataset
+		})
+		for _, capability := range Capabilities(provider) {
+			targets := append([]string(nil), capability.LegacyTargets...)
+			sort.Strings(targets)
+			got[provider] = append(got[provider], registryEntry{
+				Provider:       capability.Provider,
+				Dataset:        capability.Dataset,
+				CostClass:      string(capability.CostClass),
+				Watermark:      string(capability.Watermark),
+				LegacyTargets:  targets,
+				ProcessorFlags: capability.ProcessorFlags,
+			})
 		}
 	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.Marshal(got)
+		t.Fatalf("Go registry drifted from live Python registry:\ngot  %s\nwant %s", gotJSON, output)
+	}
+}
+
+type registryEntry struct {
+	Provider       string          `json:"provider"`
+	Dataset        string          `json:"dataset"`
+	CostClass      string          `json:"cost_class"`
+	Watermark      string          `json:"watermark"`
+	LegacyTargets  []string        `json:"legacy_targets"`
+	ProcessorFlags map[string]bool `json:"processor_flags"`
+}
+
+func pythonExecutable(t *testing.T) string {
+	t.Helper()
+	if configured := os.Getenv("PYTHON"); configured != "" {
+		return configured
+	}
+	if path, err := exec.LookPath("python3"); err == nil {
+		return path
+	}
+	t.Fatal("python3 is required for the cross-language dataset registry freshness check")
+	return ""
 }
 
 func TestCapabilityCostWatermarkAndFlagsAreExact(t *testing.T) {
@@ -47,7 +82,7 @@ func TestCapabilityCostWatermarkAndFlagsAreExact(t *testing.T) {
 		{"github", "repo-metadata", CostLight, WatermarkNone, map[string]bool{}},
 		{"github", "commits", CostMedium, WatermarkIncremental, map[string]bool{"sync_git": true, "sync_commits": true}},
 		{"github", "commit-stats", CostHeavy, WatermarkIncremental, map[string]bool{"sync_git": true, "sync_commit_stats": true}},
-		{"gitlab", "incidents", CostMedium, WatermarkIncremental, map[string]bool{"sync_incidents": true}},
+		{"gitlab", "incidents", CostLight, WatermarkIncremental, map[string]bool{"sync_incidents": true}},
 		{"gitlab", "feature-flags", CostMedium, WatermarkIncremental, map[string]bool{}},
 	}
 	for _, test := range tests {

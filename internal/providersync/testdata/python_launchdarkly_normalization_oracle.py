@@ -14,8 +14,19 @@ FIXED_NOW = datetime(2026, 7, 23, 12, 34, 56, 789000, tzinfo=timezone.utc)
 
 class FixedDateTime(datetime):
     @classmethod
-    def now(cls, tz: Any = None) -> datetime:
-        return FIXED_NOW if tz is not None else FIXED_NOW.replace(tzinfo=None)
+    def now(cls, tz: Any = None) -> FixedDateTime:
+        value = FIXED_NOW if tz is not None else FIXED_NOW.replace(tzinfo=None)
+        return cls(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+            tzinfo=value.tzinfo,
+            fold=value.fold,
+        )
 
 
 FeatureFlagRecord = make_dataclass(

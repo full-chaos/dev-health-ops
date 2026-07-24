@@ -259,6 +259,14 @@ func configureWorkerDependenciesWithSources(
 		return nil, nil
 	}
 	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
+	// Native replacement for the monitor-queue-depths Beat task. It reads the
+	// same River telemetry the readiness and metrics paths use, so queue depth
+	// and age come from the authoritative queue-control tables.
+	if monitor := newQueueHealthMonitor(
+		dependencies.queueTelemetry, logger, cfg.Profile,
+	); monitor != nil {
+		components = append(components, monitor)
+	}
 	var active workerFamily
 	build := func(family workerFamily, err error) error {
 		if err != nil {

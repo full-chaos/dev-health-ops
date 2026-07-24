@@ -321,8 +321,9 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
 	}
-	if len(components) != 1 || components[0].Name() != "postgres-runtime-pools" {
-		t.Fatalf("components = %#v, want PostgreSQL pool lifecycle", components)
+	if len(components) != 2 || components[0].Name() != "postgres-runtime-pools" ||
+		components[1].Name() != "queue-health-monitor" {
+		t.Fatalf("components = %#v, want pool lifecycle and queue health monitor", components)
 	}
 	if err := components[0].Start(context.Background()); err != nil {
 		t.Fatalf("start pool lifecycle: %v", err)
@@ -420,8 +421,8 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 3 || components[1].Name() != "reports" ||
-		components[2].Name() != "daily" {
+	if len(components) != 4 || components[2].Name() != "reports" ||
+		components[3].Name() != "daily" {
 		t.Fatalf("composed components = %#v", components)
 	}
 }
@@ -533,8 +534,8 @@ func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 2 || components[0].Name() != "postgres-runtime-pools" ||
-		components[1].Name() != "river-heavy-metrics-worker" {
+	if len(components) != 3 || components[0].Name() != "postgres-runtime-pools" ||
+		components[2].Name() != "river-heavy-metrics-worker" {
 		t.Fatalf("production components = %#v", components)
 	}
 	if err := components[0].Shutdown(ctx); err != nil {

@@ -65,11 +65,18 @@ GETATTR_INDIRECTION_RE = re.compile(
 )
 # `chord(`/`chain(`/`group(` invoked bare (no `.apply_async()`/`.delay()`
 # suffix -- the canvas object itself is called, e.g. `chord([...], cb)()`).
-# Anchors to the opening line of a multi-line canvas literal; single-line
-# forms like `chain(a, b).apply_async()` are already matched by
-# CALL_SITE_LITERAL_RE on that same line, so this only needs the
-# "nothing else on the opening line" shape to avoid double-counting.
-CANVAS_BARE_INVOCATION_RE = re.compile(r"^\s*(?:chord|chain|group)\(\s*$")
+# Two shapes: the opening line of a multi-line canvas literal (nothing else
+# on that line), and a complete single-line bare invocation
+# (`chain(a, b)()`) -- single-line forms WITH a `.apply_async()`/`.delay()`
+# suffix are already matched by CALL_SITE_LITERAL_RE on that same line, so
+# this is only for the bare-call-with-no-method-suffix shape. The per-file
+# bare/qualified name sets built by `_scan_celery_canvas` extend both shapes
+# to aliased (`c = chord; c(...)()`) and qualified (`canvas.chord(...)()`)
+# invocations too -- see discover_call_sites and _bare_invocation_re_for.
+CANVAS_BARE_INVOCATION_RE = re.compile(
+    r"^\s*(?:chord|chain|group)\(\s*$"
+    r"|^\s*(?:chord|chain|group)\(.*\)\(\s*\)\s*$"
+)
 # Aliasing a dispatch method to a new name (`enqueue = task.apply_async`) --
 # a *reference*, not a call: nothing may follow the method name but
 # whitespace/comment. An actual call (`x = task.apply_async(...)`) has a `(`
@@ -81,9 +88,32 @@ BOUND_ALIAS_RE = re.compile(
 PARTIAL_ALIAS_RE = re.compile(
     r"\bpartial\(\s*[A-Za-z_][\w.]*\.(?:apply_async|delay|send_task)\b"
 )
-CELERY_CANVAS_IMPORT_RE = re.compile(r"^from celery(?:\.canvas)?\s+import\s+(.+)$")
 _CANVAS_NAMES = {"chain", "chord", "group"}
+# `from celery import chain, chord`, `from celery.canvas import chain as c`,
+# or `from celery import canvas` (binds the *module*, not the functions --
+# handled specially in _scan_celery_canvas). Operates on a logically-joined
+# import line (see _join_logical_import_lines) so a parenthesized multi-line
+# import list is seen whole regardless of wrapping.
+CELERY_FROM_IMPORT_RE = re.compile(r"^from celery(?:\.canvas)?\s+import\s+(.+)$")
+# `import celery.canvas` / `import celery.canvas as X`.
+CELERY_IMPORT_CANVAS_MODULE_RE = re.compile(
+    r"^import\s+celery\.canvas(?:\s+as\s+(\w+))?\s*$"
+)
+# `canvas = importlib.import_module("celery.canvas")` (or unassigned) -- only
+# the static-string-literal form is checkable; a non-literal argument (e.g.
+# `importlib.import_module(name_from_config)`) is undecidable at this level
+# and is a documented known limitation.
+IMPORTLIB_CANVAS_IMPORT_RE = re.compile(
+    r"^(?:(\w+)\s*=\s*)?importlib\.import_module\(\s*[\"']celery\.canvas[\"']\s*\)\s*$"
+)
+# A bare `name = other_name` assignment, used to propagate a canvas binding
+# through a simple local alias (`c = chord` or `cv = canvas`).
+_BARE_NAME_ALIAS_RE = re.compile(r"^(\w+)\s*=\s*(\w+)\s*$")
 ROUTER_DECORATOR_RE = re.compile(r"^\s*@router\.(get|post|put|patch|delete)\(")
+# Loose (alias-agnostic) shape check used only for content-drift re-validation
+# of an already-discovered add_api_route/add_route row; discovery itself uses
+# the alias-exact `_add_route_re_for`.
+_ADD_ROUTE_ANCHOR_RE = re.compile(r"^\s*\w+\.(?:add_api_route|add_route)\(")
 DEF_RE = re.compile(r"^\s*(async\s+def|def)\s+\w+\(")
 DEF_NAME_RE = re.compile(r"^\s*(?:async\s+def|def)\s+(\w+)\(")
 CONSUMER_GROUP_VALUE_RE = re.compile(r'^CONSUMER_GROUP\s*=\s*"([^"]+)"')
@@ -149,6 +179,132 @@ def _iter_code_lines_from(lines: list[str]):
 
 def _iter_code_lines(path: Path):
     yield from _iter_code_lines_from(path.read_text().splitlines())
+
+
+def _docstring_safe_lines(lines: list[str]) -> list[str]:
+    """Same length/positions as `lines`, but any line inside a multi-line
+    triple-quoted block is blanked out. Lets line-number-sensitive scanners
+    (import joining, decorator/def mapping) ignore documentation prose
+    without shifting anything's line number."""
+    safe = list(lines)
+    in_docstring = False
+    for i, line in enumerate(lines):
+        starts_in_docstring = in_docstring
+        triple_count = line.count('"""') + line.count("'''")
+        if triple_count % 2 == 1:
+            in_docstring = not in_docstring
+        if starts_in_docstring:
+            safe[i] = ""
+    return safe
+
+
+def _join_logical_import_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Join a parenthesized multi-line `from X import (...)` (or a plain
+    `import ...`) into one logical (start_line, text) entry, so the
+    celery-canvas-import scanner sees the whole name list regardless of how
+    it's wrapped."""
+    out: list[tuple[int, str]] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        stripped = lines[i].strip()
+        if stripped.startswith("from ") or stripped.startswith("import "):
+            start = i
+            text = stripped
+            depth = stripped.count("(") - stripped.count(")")
+            j = i
+            while depth > 0 and j + 1 < n:
+                j += 1
+                text += " " + lines[j].strip()
+                depth += lines[j].count("(") - lines[j].count(")")
+            out.append((start + 1, text))
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
+def _scan_celery_canvas(lines: list[str]) -> tuple[list[int], set[str], set[str]]:
+    """Per-file celery-canvas binding scan. Returns:
+
+    - import_lines: line numbers that are themselves a celery-canvas import
+      surface (fail-closed guard row required).
+    - direct_names: local names that are themselves canvas callables
+      (`chain`/`chord`/`group`, an `as`-aliased import of one, or a simple
+      `c = chord`-style local alias) -- invoked bare as `name(...)`.
+    - module_aliases: local names that refer to the celery.canvas *module*
+      (`from celery import canvas`, `import celery.canvas as X`,
+      `importlib.import_module("celery.canvas")`, or a simple alias of any
+      of those) -- invoked qualified as `alias.chord(...)`.
+
+    Known limitation: `importlib.import_module(some_variable)` with a
+    non-literal argument is undecidable statically and is not detected (see
+    docs/architecture/transitional-workload-inventory.md).
+    """
+    safe_lines = _docstring_safe_lines(lines)
+    import_lines: list[int] = []
+    direct_names: set[str] = set()
+    module_aliases: set[str] = set()
+
+    for line_no, text in _join_logical_import_lines(safe_lines):
+        m = CELERY_FROM_IMPORT_RE.match(text)
+        if m:
+            saw_canvas = False
+            body = m.group(1).strip()
+            if body.startswith("("):
+                body = body[1:]
+            body = body.rstrip(")").rstrip(",")
+            for part in body.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                original, _, alias = part.partition(" as ")
+                original = original.strip()
+                local = alias.strip() or original
+                if original in _CANVAS_NAMES:
+                    direct_names.add(local)
+                    saw_canvas = True
+                elif original == "canvas":
+                    module_aliases.add(local)
+                    saw_canvas = True
+            if saw_canvas:
+                import_lines.append(line_no)
+            continue
+        m = CELERY_IMPORT_CANVAS_MODULE_RE.match(text)
+        if m:
+            module_aliases.add(m.group(1) or "canvas")
+            import_lines.append(line_no)
+            continue
+
+    # importlib.import_module("celery.canvas") isn't an `import`/`from`
+    # statement lexically, so it isn't found by the joiner above -- it can
+    # appear as a bare call or (commonly) assigned to a variable anywhere in
+    # the module.
+    for i, line in enumerate(safe_lines, start=1):
+        m = IMPORTLIB_CANVAS_IMPORT_RE.match(line.strip())
+        if m:
+            module_aliases.add(m.group(1) or "canvas")
+            import_lines.append(i)
+
+    # Propagate through simple bare-name aliases (`c = chord`, `cv = canvas`,
+    # or a chain of those) to a fixed point.
+    for _ in range(4):
+        changed = False
+        for line in safe_lines:
+            m = _BARE_NAME_ALIAS_RE.match(line.strip())
+            if not m:
+                continue
+            target, source = m.group(1), m.group(2)
+            if source in direct_names and target not in direct_names:
+                direct_names.add(target)
+                changed = True
+            if source in module_aliases and target not in module_aliases:
+                module_aliases.add(target)
+                changed = True
+        if not changed:
+            break
+
+    return import_lines, direct_names, module_aliases
 
 
 def _is_code_line(line: str) -> bool:
@@ -239,12 +395,34 @@ def discover_beat_entries(root: Path) -> list[Surface]:
 _CONTINUATION_RE = re.compile(r"^\s*\)+\s*\.(delay|apply_async|signature)\(")
 
 
+def _qualified_canvas_bare_invocation_re(module_aliases: set[str]) -> re.Pattern | None:
+    if not module_aliases:
+        return None
+    alt = "|".join(re.escape(a) for a in sorted(module_aliases))
+    return re.compile(
+        rf"^\s*(?:{alt})\.(?:chord|chain|group)\(\s*$"
+        rf"|^\s*(?:{alt})\.(?:chord|chain|group)\(.*\)\(\s*\)\s*$"
+    )
+
+
+def _aliased_canvas_bare_invocation_re(direct_names: set[str]) -> re.Pattern | None:
+    extra = direct_names - _CANVAS_NAMES
+    if not extra:
+        return None
+    alt = "|".join(re.escape(a) for a in sorted(extra))
+    return re.compile(rf"^\s*(?:{alt})\(\s*$|^\s*(?:{alt})\(.*\)\(\s*\)\s*$")
+
+
 def discover_call_sites(root: Path) -> tuple[list[Surface], list[Surface]]:
     literal, getattr_indirection = [], []
     for path in _iter_py_files(root / "src/dev_health_ops"):
         relpath = _relpath(root, path)
+        lines = path.read_text().splitlines()
+        _, direct_names, module_aliases = _scan_celery_canvas(lines)
+        qualified_re = _qualified_canvas_bare_invocation_re(module_aliases)
+        aliased_re = _aliased_canvas_bare_invocation_re(direct_names)
         last_match_line = -10
-        for i, line in _iter_code_lines(path):
+        for i, line in _iter_code_lines_from(lines):
             if not _is_code_line(line):
                 continue
             code = _strip_line_noise(line)
@@ -254,7 +432,11 @@ def discover_call_sites(root: Path) -> tuple[list[Surface], list[Surface]]:
                 getattr_indirection.append(Surface(CLASS_CALL_SITE_GETATTR, relpath, i))
                 last_match_line = i
                 continue
-            if CANVAS_BARE_INVOCATION_RE.match(code):
+            if (
+                CANVAS_BARE_INVOCATION_RE.match(code)
+                or (qualified_re is not None and qualified_re.match(code))
+                or (aliased_re is not None and aliased_re.match(code))
+            ):
                 literal.append(Surface(CLASS_CALL_SITE_LITERAL, relpath, i))
                 last_match_line = i
                 continue
@@ -275,23 +457,21 @@ def discover_call_sites(root: Path) -> tuple[list[Surface], list[Surface]]:
 
 
 def discover_celery_canvas_imports(root: Path) -> list[Surface]:
-    """Fail-closed guard: importing chain/chord/group from celery anywhere in
-    the application means *some* canvas dispatch exists in that module, even
-    where the specific invocation shape (bare call, stored then invoked
-    later, passed to a helper, etc.) can't be statically enumerated. Every
-    such import must have its own inventory row."""
+    """Fail-closed guard: importing chain/chord/group from celery (directly,
+    via the celery.canvas submodule, module-qualified, or via a static
+    importlib.import_module("celery.canvas") literal) anywhere in the
+    application means *some* canvas dispatch exists in that module, even
+    where the specific invocation shape (bare call, qualified call, aliased
+    call, stored then invoked later, passed to a helper, etc.) can't be
+    statically enumerated. Every such import must have its own inventory
+    row."""
     out = []
     for path in _iter_py_files(root / "src/dev_health_ops"):
         relpath = _relpath(root, path)
-        for i, line in _iter_code_lines(path):
-            m = CELERY_CANVAS_IMPORT_RE.match(line)
-            if not m:
-                continue
-            names = {
-                part.strip().split(" as ")[0].strip() for part in m.group(1).split(",")
-            }
-            if names & _CANVAS_NAMES:
-                out.append(Surface(CLASS_CANVAS_IMPORT, relpath, i))
+        lines = path.read_text().splitlines()
+        import_lines, _, _ = _scan_celery_canvas(lines)
+        for i in import_lines:
+            out.append(Surface(CLASS_CANVAS_IMPORT, relpath, i))
     return out
 
 
@@ -337,6 +517,40 @@ def _decorators_by_def_line(text: list[str]) -> dict[int, list[int]]:
     return result
 
 
+def _router_aliases(lines: list[str]) -> set[str]:
+    """Local names that refer to the module's APIRouter instance. Seeded
+    with the repo-wide convention `router`, extended through simple bare
+    aliasing (`r = router`) to a fixed point. Known limitation: an alias
+    introduced any other way (a function return value, a container/dict
+    lookup, an attribute on another object) is not tracked -- see
+    docs/architecture/transitional-workload-inventory.md."""
+    aliases = {"router"}
+    safe_lines = _docstring_safe_lines(lines)
+    for _ in range(4):
+        changed = False
+        for line in safe_lines:
+            m = _BARE_NAME_ALIAS_RE.match(line.strip())
+            if not m:
+                continue
+            target, source = m.group(1), m.group(2)
+            if source in aliases and target not in aliases:
+                aliases.add(target)
+                changed = True
+        if not changed:
+            break
+    return aliases
+
+
+def _router_decorator_re_for(aliases: set[str]) -> re.Pattern:
+    alt = "|".join(re.escape(a) for a in sorted(aliases))
+    return re.compile(rf"^\s*@(?:{alt})\.(get|post|put|patch|delete)\(")
+
+
+def _add_route_re_for(aliases: set[str]) -> re.Pattern:
+    alt = "|".join(re.escape(a) for a in sorted(aliases))
+    return re.compile(rf"^\s*(?:{alt})\.(?:add_api_route|add_route)\(")
+
+
 def discover_api_trigger_endpoints(
     root: Path, dispatch_surfaces: list[Surface]
 ) -> list[Surface]:
@@ -346,8 +560,8 @@ def discover_api_trigger_endpoints(
     endpoints (verified against all 7 REST rows: the anchor is the decorator
     line itself, not the def line or the call site).
 
-    Two fallbacks match the two shapes that aren't "call site directly inside
-    a @router-decorated function":
+    Three fallbacks/extensions cover shapes that aren't "call site directly
+    inside a @router-decorated function":
 
     - GraphQL resolver modules (src/dev_health_ops/api/graphql/resolvers/)
       have no per-function route decorator at all -- strawberry wires
@@ -359,6 +573,15 @@ def discover_api_trigger_endpoints(
       One hop of same-file call-graph lookup finds those callers; the
       lowest-line caller's decorator represents the shared dispatch path,
       matching the audit's choice to inventory that fan-in as one row.
+    - `router.add_api_route(...)`/`.add_route(...)` register an endpoint
+      without a decorator at all. Every such call, in every api/ module (not
+      only ones already holding a discovered dispatch call site), is its own
+      directly-discovered api_trigger_endpoint surface -- registering an
+      already-inventoried helper this way must still force a new row.
+
+    Both the decorator and the add_api_route/add_route forms are aliasing-
+    aware: `r = router; @r.post(...)` and `r.add_api_route(...)` are
+    recognized via `_router_aliases`, not just the literal name `router`.
     """
     by_file: dict[str, list[int]] = {}
     for s in dispatch_surfaces:
@@ -366,10 +589,13 @@ def discover_api_trigger_endpoints(
             by_file.setdefault(s.file, []).append(s.line)
 
     def _router_anchor(
-        decorators_by_def: dict[int, list[int]], text: list[str], def_line: int
+        decorators_by_def: dict[int, list[int]],
+        text: list[str],
+        def_line: int,
+        router_re: re.Pattern,
     ) -> int | None:
         for d in decorators_by_def.get(def_line, []):
-            if ROUTER_DECORATOR_RE.match(text[d - 1]):
+            if router_re.match(text[d - 1]):
                 return d
         return None
 
@@ -378,6 +604,8 @@ def discover_api_trigger_endpoints(
     for relfile, lines in sorted(by_file.items()):
         path = root / relfile
         text = path.read_text().splitlines()
+        aliases = _router_aliases(text)
+        router_re = _router_decorator_re_for(aliases)
         decorators_by_def = _decorators_by_def_line(text)
         # Only module-level (column-zero) defs qualify as an endpoint/resolver
         # boundary -- FastAPI routes and GraphQL resolvers are always
@@ -395,7 +623,7 @@ def discover_api_trigger_endpoints(
             if own_def is None:
                 continue
 
-            anchor = _router_anchor(decorators_by_def, text, own_def)
+            anchor = _router_anchor(decorators_by_def, text, own_def, router_re)
 
             if anchor is None and is_graphql_resolver:
                 anchor = target_line
@@ -415,7 +643,7 @@ def discover_api_trigger_endpoints(
                         if caller_def is None:
                             continue
                         caller_anchor = _router_anchor(
-                            decorators_by_def, text, caller_def
+                            decorators_by_def, text, caller_def, router_re
                         )
                         if caller_anchor is not None:
                             caller_anchors.append(caller_anchor)
@@ -428,6 +656,21 @@ def discover_api_trigger_endpoints(
                 continue
             seen.add((relfile, anchor))
             out.append(Surface(CLASS_API_TRIGGER, relfile, anchor))
+
+    # add_api_route/add_route registrations: scanned across every api/ module,
+    # independent of whether that module already holds a discovered dispatch
+    # call site, since the registration itself is the surface being missed.
+    for path in _iter_py_files(root / "src/dev_health_ops/api"):
+        relfile = _relpath(root, path)
+        text = path.read_text().splitlines()
+        aliases = _router_aliases(text)
+        add_route_re = _add_route_re_for(aliases)
+        for i, line in _iter_code_lines_from(text):
+            if add_route_re.match(_strip_line_noise(line)):
+                if (relfile, i) in seen:
+                    continue
+                seen.add((relfile, i))
+                out.append(Surface(CLASS_API_TRIGGER, relfile, i))
     return out
 
 
@@ -495,77 +738,200 @@ def load_inventory(path: Path) -> dict:
 
 # ---------------------------------------------------------------------------
 # Staleness / content-drift validation: per-class "does this anchored line
-# still look like the kind of surface this row claims to be" checks.
+# still look like the kind of surface this row claims to be, AND does it
+# still name the SAME specific task/target the row records" checks. Every
+# checker has the signature (lines, line_no, row) -> bool so it can look
+# beyond the single anchor line (a multi-line statement's identifying token
+# is often a few lines below the anchor) and compare against the row's own
+# recorded identity, not just re-derive the same shape regex that let the
+# row through discovery in the first place.
 # ---------------------------------------------------------------------------
 
+# How many lines forward of the anchor to search for a call site's specific
+# task-name token -- covers the multi-line-statement shapes actually present
+# in this codebase (e.g. `celery_app.signature(\n    "name", ...\n)`).
+_TOKEN_WINDOW = 6
 
-def _call_site_literal_content_ok(line: str) -> bool:
+_SKIP_TOKEN_SURFACE_MARKERS = (
+    "chain(",
+    "chord(",
+    "group(",
+    "dynamic",
+    "unclear",
+    "Go bridge",
+    "signature (",
+)
+_QUOTED_SIGNATURE_TOKEN_RE = re.compile(r"signature\(\s*['\"]([\w.]+)['\"]")
+_GETATTR_TOKEN_RE = re.compile(r"getattr\(\s*([A-Za-z_]\w*)")
+_DOTTED_CALL_TOKEN_RE = re.compile(
+    r"^([A-Za-z_]\w*)\.(?:delay|apply_async|signature)\b"
+)
+
+
+def _expected_dispatch_token(row: dict) -> str | None:
+    """Best-effort extraction of the specific task/target identifier a
+    call_site_literal/call_site_getattr_indirection row's `surface` records,
+    so content-drift can check for that specific name rather than only the
+    generic dispatch shape. Returns None for surfaces that don't name a
+    single concrete target (chain/chord/group compound descriptions, or a
+    genuinely dynamic/unclear dispatch) -- those keep the shape-only check,
+    a documented known limitation."""
+    surface = row.get("surface", "")
+    if any(marker in surface for marker in _SKIP_TOKEN_SURFACE_MARKERS):
+        return None
+    m = _QUOTED_SIGNATURE_TOKEN_RE.search(surface)
+    if m:
+        return m.group(1)
+    m = _GETATTR_TOKEN_RE.search(surface)
+    if m:
+        return m.group(1)
+    m = _DOTTED_CALL_TOKEN_RE.match(surface)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _celery_task_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    if not CELERY_TASK_DECORATOR_RE.match(lines[line_no - 1]):
+        return False
+    expected = row.get("surface")
+    if not expected:
+        return True
+    return _task_name_after_decorator(lines, line_no) == expected
+
+
+def _beat_entry_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    m = BEAT_ENTRY_RE.match(lines[line_no - 1])
+    if not m:
+        return False
+    expected = row.get("surface")
+    return not expected or m.group(1) == expected
+
+
+def _beat_entry_conditional_content_ok(
+    lines: list[str], line_no: int, row: dict
+) -> bool:
+    m = BEAT_ENTRY_CONDITIONAL_RE.match(lines[line_no - 1])
+    if not m:
+        return False
+    expected = row.get("surface")
+    return not expected or m.group(1) == expected
+
+
+def _dispatch_token_present(lines: list[str], line_no: int, row: dict) -> bool:
+    token = _expected_dispatch_token(row)
+    if token is None:
+        return True
+    window = "\n".join(lines[line_no - 1 : line_no - 1 + _TOKEN_WINDOW])
+    return token in window
+
+
+def _call_site_literal_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    line = lines[line_no - 1]
     code = _strip_line_noise(line)
-    return bool(
+    shape_ok = bool(
         CALL_SITE_LITERAL_RE.search(code)
         or CANVAS_BARE_INVOCATION_RE.match(code)
         or BOUND_ALIAS_RE.match(code)
         or PARTIAL_ALIAS_RE.search(code)
     )
-
-
-def _api_trigger_content_ok(line: str) -> bool:
-    code = _strip_line_noise(line)
-    return bool(
-        ROUTER_DECORATOR_RE.match(line)
-        or CALL_SITE_LITERAL_RE.search(code)
-        or GETATTR_INDIRECTION_RE.search(code)
-    )
-
-
-def _kind_content_ok(line: str, expected_name: str) -> bool:
-    m = JSON_KIND_RE.search(line)
-    return bool(m and m.group(1) == expected_name)
-
-
-def _stream_content_ok(line: str) -> bool:
-    return bool(CONSUMER_GROUP_VALUE_RE.match(line) or PAGERDUTY_ENQUEUE_RE.match(line))
-
-
-def _canvas_import_content_ok(line: str) -> bool:
-    m = CELERY_CANVAS_IMPORT_RE.match(line)
-    if not m:
+    if not shape_ok:
         return False
-    names = {part.strip().split(" as ")[0].strip() for part in m.group(1).split(",")}
-    return bool(names & _CANVAS_NAMES)
+    return _dispatch_token_present(lines, line_no, row)
+
+
+def _call_site_getattr_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    if not GETATTR_INDIRECTION_RE.search(_strip_line_noise(lines[line_no - 1])):
+        return False
+    return _dispatch_token_present(lines, line_no, row)
+
+
+def _api_trigger_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    line = lines[line_no - 1]
+    code = _strip_line_noise(line)
+    if ROUTER_DECORATOR_RE.match(line) or _ADD_ROUTE_ANCHOR_RE.match(line):
+        # REST registration (decorator or add_api_route/add_route): the HTTP
+        # method/registration shape is verified; the specific path string is
+        # not cross-checked here (documented known limitation -- see
+        # docs/architecture/transitional-workload-inventory.md).
+        return True
+    if CALL_SITE_LITERAL_RE.search(code) or GETATTR_INDIRECTION_RE.search(code):
+        # GraphQL-resolver-anchored row: the anchor line IS the dispatch call
+        # site, so the same specific-name check applies.
+        return _dispatch_token_present(lines, line_no, row)
+    return False
+
+
+def _kind_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    m = JSON_KIND_RE.search(lines[line_no - 1])
+    return bool(m and m.group(1) == row.get("surface"))
+
+
+def _stream_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    line = lines[line_no - 1]
+    m = CONSUMER_GROUP_VALUE_RE.match(line)
+    if m:
+        tkid = row.get("target_kind_id") or ""
+        expected = tkid.partition(":")[2] if tkid.startswith("stream:") else None
+        return not expected or m.group(1) == expected
+    return bool(PAGERDUTY_ENQUEUE_RE.match(line))
+
+
+def _canvas_import_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
+    import_lines, _, _ = _scan_celery_canvas(lines)
+    return line_no in import_lines
 
 
 _CONTENT_CHECKERS = {
-    CLASS_CELERY_TASK: lambda line, name: bool(CELERY_TASK_DECORATOR_RE.match(line)),
-    CLASS_BEAT_ENTRY: lambda line, name: bool(BEAT_ENTRY_RE.match(line)),
-    CLASS_BEAT_ENTRY_CONDITIONAL: lambda line, name: bool(
-        BEAT_ENTRY_CONDITIONAL_RE.match(line)
-    ),
-    CLASS_CALL_SITE_LITERAL: lambda line, name: _call_site_literal_content_ok(line),
-    CLASS_CALL_SITE_GETATTR: lambda line, name: bool(
-        GETATTR_INDIRECTION_RE.search(_strip_line_noise(line))
-    ),
-    CLASS_API_TRIGGER: lambda line, name: _api_trigger_content_ok(line),
-    CLASS_REGISTRY_KIND: lambda line, name: _kind_content_ok(line, name),
-    CLASS_TRANSPORT_ROUTE: lambda line, name: _kind_content_ok(line, name),
-    CLASS_STREAM_SURFACE: lambda line, name: _stream_content_ok(line),
-    CLASS_CANVAS_IMPORT: lambda line, name: _canvas_import_content_ok(line),
+    CLASS_CELERY_TASK: _celery_task_content_ok,
+    CLASS_BEAT_ENTRY: _beat_entry_content_ok,
+    CLASS_BEAT_ENTRY_CONDITIONAL: _beat_entry_conditional_content_ok,
+    CLASS_CALL_SITE_LITERAL: _call_site_literal_content_ok,
+    CLASS_CALL_SITE_GETATTR: _call_site_getattr_content_ok,
+    CLASS_API_TRIGGER: _api_trigger_content_ok,
+    CLASS_REGISTRY_KIND: _kind_content_ok,
+    CLASS_TRANSPORT_ROUTE: _kind_content_ok,
+    CLASS_STREAM_SURFACE: _stream_content_ok,
+    CLASS_CANVAS_IMPORT: _canvas_import_content_ok,
 }
+
+# A closed, curated allowlist of task names that may legitimately be the
+# exclusive ("primary") owner of a `task:` target_kind_id -- these are the
+# six standalone Celery tasks the TRD gap analysis calls out as needing
+# their own native/removal decision with no Beat entry, registry kind, or
+# transport route already claiming them (see STANDALONE_PRIMARY in the
+# inventory generator). Deliberately NOT derived from "every discovered
+# Celery task name": that set has 46 members today, and an unclaimed one
+# (e.g. run_complexity_job) is not automatically a valid primary-ownership
+# target just because it happens to exist (Codex round-2 MED-1).
+TRD_MAPPED_TASK_TARGETS = frozenset(
+    {
+        "health_check",
+        "sync_team_drift",
+        "process_pagerduty_webhook_event",
+        "flush_external_ingest_recompute",
+        "run_daily_metrics",
+        "dispatch_external_ingest_recompute_bridge",
+    }
+)
 
 
 def _closed_vocabulary(discovered: list[Surface]) -> dict[str, set[str]]:
     """Real, source-derived vocabulary for each target_kind_id namespace,
     built from the same discovery pass already used for the unowned-surface
-    check -- not a hand-maintained allowlist. A row can't dodge duplicate-
-    primary detection by renaming its target_kind_id to an unregistered
-    variant (e.g. `kind:metrics.remaining.capacity-v2`) since that name would
-    never appear in this vocabulary."""
+    check -- not a hand-maintained allowlist, EXCEPT `task`, which is
+    deliberately the curated TRD_MAPPED_TASK_TARGETS allowlist rather than
+    every discovered Celery task name (see its docstring). A row can't dodge
+    duplicate-primary detection by renaming its target_kind_id to an
+    unregistered variant (e.g. `kind:metrics.remaining.capacity-v2`, or an
+    arbitrary other discovered-but-unclaimed task name) since that name
+    would never appear in this vocabulary."""
     vocab: dict[str, set[str]] = {
         "kind": set(),
         "beat": set(),
         "stream": set(),
         "route": set(),
-        "task": set(),
+        "task": set(TRD_MAPPED_TASK_TARGETS),
     }
     for s in discovered:
         if not s.name:
@@ -578,8 +944,8 @@ def _closed_vocabulary(discovered: list[Surface]) -> dict[str, set[str]]:
             vocab["stream"].add(s.name)
         elif s.cls == CLASS_TRANSPORT_ROUTE:
             vocab["route"].add(s.name)
-        elif s.cls == CLASS_CELERY_TASK:
-            vocab["task"].add(s.name)
+        # NOTE: CLASS_CELERY_TASK is intentionally NOT folded in here -- see
+        # TRD_MAPPED_TASK_TARGETS above.
     return vocab
 
 
@@ -590,13 +956,26 @@ def check(root: Path, inventory_path: Path) -> list[str]:
 
     row_keys = {(r["class"], r["source"]["file"], r["source"]["line"]) for r in rows}
 
-    # 1. every discovered surface must have an inventory row.
+    # 1. bidirectional row/discovery-key identity, per class. Both a missed
+    #    surface (discovered, no row) and a phantom row (row, nothing
+    #    discovered there) are errors -- comparing only totals or one
+    #    direction lets a miss and a phantom net to zero (Codex round-2
+    #    MED-3).
     discovered = discover_all(root)
+    discovered_keys = {s.key() for s in discovered}
     for s in discovered:
         if s.key() not in row_keys:
             errors.append(
                 f"UNOWNED SURFACE: {s.cls} at {s.file}:{s.line} has no row in "
                 f"{inventory_path.name}. Add an owning row or an explicit_removal row."
+            )
+    for r in rows:
+        rk = (r["class"], r["source"]["file"], r["source"]["line"])
+        if rk not in discovered_keys:
+            errors.append(
+                f"PHANTOM ROW: row {r['id']} claims a {r['class']} surface at "
+                f"{r['source']['file']}:{r['source']['line']} that independent "
+                "discovery did not find there. Fix the anchor or remove the row."
             )
 
     # 2. every row must have a non-empty target owner.
@@ -624,6 +1003,9 @@ def check(root: Path, inventory_path: Path) -> list[str]:
             primary_by_kind[tkid] = r["id"]
 
     # 4. closed-vocabulary check: target_kind_id must name something real.
+    #    An unrecognized *prefix* is itself an error (not silently skipped)
+    #    -- a row can't invent a new namespace to dodge validation
+    #    (Codex round-2 MED-1).
     vocabulary = _closed_vocabulary(discovered)
     for r in rows:
         tkid = r.get("target_kind_id")
@@ -636,8 +1018,14 @@ def check(root: Path, inventory_path: Path) -> list[str]:
                 "(expected 'prefix:name' shape)"
             )
             continue
-        allowed = vocabulary.get(prefix)
-        if allowed is not None and name not in allowed:
+        if prefix not in vocabulary:
+            errors.append(
+                f"UNKNOWN target_kind_id PREFIX: row {r['id']} claims {tkid!r} "
+                f"but {prefix!r} is not a recognized target_kind_id namespace "
+                f"(expected one of {sorted(vocabulary)!r})"
+            )
+            continue
+        if name not in vocabulary[prefix]:
             errors.append(
                 f"UNKNOWN target_kind_id: row {r['id']} claims {tkid!r} but "
                 f"{name!r} was not discovered as a real {prefix} in source "
@@ -645,7 +1033,8 @@ def check(root: Path, inventory_path: Path) -> list[str]:
             )
 
     # 5. staleness guard: anchor must exist, be in range, and its current
-    #    line content must still look like the row's declared class.
+    #    line content must still look like the row's declared class AND
+    #    still name the same specific task/target the row records.
     for r in rows:
         src = r["source"]
         path = root / src["file"]
@@ -662,15 +1051,13 @@ def check(root: Path, inventory_path: Path) -> list[str]:
             )
             continue
         checker = _CONTENT_CHECKERS.get(r["class"])
-        if checker is not None:
-            content = lines[src["line"] - 1]
-            if not checker(content, r.get("surface", "")):
-                errors.append(
-                    f"STALE ANCHOR: row {r['id']} references {src['file']}:"
-                    f"{src['line']} but that line no longer matches a "
-                    f"{r['class']} surface (content drift -- re-anchor or "
-                    "remove this row)"
-                )
+        if checker is not None and not checker(lines, src["line"], r):
+            errors.append(
+                f"STALE ANCHOR: row {r['id']} references {src['file']}:"
+                f"{src['line']} but that line no longer matches a "
+                f"{r['class']} surface, or no longer names the same target "
+                "(content drift -- re-anchor or remove this row)"
+            )
 
     return errors
 

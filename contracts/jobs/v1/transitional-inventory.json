@@ -3550,12 +3550,12 @@
       "owner_role": "contributor",
       "target_owner": {
         "type": "native_kind",
-        "value": "metrics.daily_partition"
+        "value": "metrics.daily_partition + metrics.daily_finalize"
       },
       "target_kind_id": null,
       "current_implementation_state": "celery_only",
       "verification_status": "verified",
-      "compatibility_dependency": "Celery canvas primitive; the actual fan-out is the bare chord(...)() invocation this import enables at metrics_partitioned.py:91.",
+      "compatibility_dependency": "Celery canvas primitive; the actual fan-out is the bare chord(...)() invocation this import enables at metrics_partitioned.py:91, whose chord header dispatches metrics.daily_partition (run_daily_metrics_batch, per batch) and whose chord callback dispatches metrics.daily_finalize (run_daily_metrics_finalize_task).",
       "deletion_evidence_requirement": "Deleted once dispatch_daily_metrics_partitioned's fan-out no longer imports celery canvas primitives (a native Go dispatcher replaces the chord).",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed guard -- any celery canvas (chain/chord/group) import requires its own row so a future new canvas-based dispatch can't be added without CI forcing an ownership decision, even where the invocation shape can't be statically parsed."
@@ -3574,12 +3574,12 @@
       "owner_role": "contributor",
       "target_owner": {
         "type": "native_kind",
-        "value": "metrics.daily_partition"
+        "value": "metrics.daily_partition + metrics.daily_finalize"
       },
       "target_kind_id": null,
       "current_implementation_state": "celery_only",
       "verification_status": "verified",
-      "compatibility_dependency": "Dispatch site only: a bare chord(...)() invocation (no .apply_async() suffix) inside dispatch_daily_metrics_partitioned's per-day fan-out loop.",
+      "compatibility_dependency": "Dispatch site only: a bare chord(...)() invocation (no .apply_async() suffix) inside dispatch_daily_metrics_partitioned's per-day fan-out loop -- the chord header dispatches metrics.daily_partition (run_daily_metrics_batch, one task per batch) and the chord callback dispatches metrics.daily_finalize (run_daily_metrics_finalize_task); both registry kinds are owned by this one row (Codex round-2 MED-4: the row previously named only metrics.daily_partition, dropping the callback kind).",
       "deletion_evidence_requirement": "Deleted once dispatch_daily_metrics_partitioned's per-day fan-out is replaced by a native Go dispatcher for metrics.daily_partition/metrics.daily_finalize.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": "Added CUT-01 round-2 (Codex HIGH-1): a live chord(...)() dispatch the original scanner missed -- it only recognized .delay/.apply_async/.signature/send_task, not a bare celery-canvas invocation. Fans out to the same registry kinds (metrics.daily_partition, metrics.daily_finalize) already owned by the run_daily_metrics_batch/run_daily_metrics_finalize_task celery_task rows."
@@ -3598,12 +3598,12 @@
       "owner_role": "contributor",
       "target_owner": {
         "type": "native_kind",
-        "value": "investment.chunk"
+        "value": "investment.chunk + investment.finalize + workgraph.build + metrics.remaining.membership_backfill"
       },
       "target_kind_id": null,
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
-      "compatibility_dependency": "Celery canvas primitives backing the already-inventoried chord/chain .apply_async() call sites at lines 654 and 809 in this file.",
+      "compatibility_dependency": "Celery canvas primitives backing two already-inventoried call sites in this file: the investment chord at line 654 (chord(header,callback).apply_async(), header dispatches investment.chunk via run_investment_materialize_chunk, callback dispatches investment.finalize via finalize_investment_materialize_partitioned), and the membership-backfill chain at line 809 (chain(build_sig,backfill_sig).apply_async(), dispatching workgraph.build via run_work_graph_build then metrics.remaining.membership_backfill via run_membership_backfill -- TRD sec 6.1 assigns run-daily-metrics and run-membership-backfill-daily to the Go scheduler + heavy worker flow at go-worker-cutover-trd.md:156 and :170).",
       "deletion_evidence_requirement": "Deleted once work_graph_tasks.py no longer imports celery canvas primitives (investment.* and membership-backfill fan-out both natively owned).",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the two invocation call sites this import backs are already separately inventoried (call_site_literal rows at lines 654 and 809)."

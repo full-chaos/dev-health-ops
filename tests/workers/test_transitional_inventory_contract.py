@@ -60,19 +60,31 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     assert inventory["row_count"] == 152
 
 
-def test_discovered_surface_count_equals_inventory_row_count():
+def test_discovered_keys_and_row_keys_are_identical_sets():
     """The acceptance criterion is that the inventory *equals* independent
-    code discovery -- not merely that every discovered surface has a row.
-    Assert exact parity per class so an intentionally-consolidated row (e.g.
-    one API-trigger row representing three sibling routes that share a
-    dispatch helper) can't silently mask a real gap in a different class."""
+    code discovery -- not merely that totals match. Comparing only
+    `Counter(class)` totals (or total row counts) lets a missed surface in
+    one spot net against an unrelated scanner phantom in the same class and
+    silently pass (Codex round-2 MED-3: e.g. a missed qualified canvas call
+    balanced by a false-positive literal match elsewhere). Compare the
+    actual (class, file, line) key SETS in both directions instead: nothing
+    discovered may be missing from the inventory, and no inventory row may
+    reference a (class, file, line) that discovery didn't independently
+    find there."""
     inventory = checker.load_inventory(_INVENTORY_PATH)
     discovered = checker.discover_all(_REPO_ROOT)
-    from collections import Counter
 
-    discovered_counts = Counter(s.cls for s in discovered)
-    inventory_counts = Counter(r["class"] for r in inventory["rows"])
-    assert discovered_counts == inventory_counts
+    discovered_keys = {s.key() for s in discovered}
+    row_keys = {
+        (r["class"], r["source"]["file"], r["source"]["line"])
+        for r in inventory["rows"]
+    }
+
+    missed = discovered_keys - row_keys
+    phantom = row_keys - discovered_keys
+    assert missed == set(), f"discovered but not inventoried: {missed}"
+    assert phantom == set(), f"inventoried but not (re)discovered: {phantom}"
+    assert discovered_keys == row_keys
     assert len(discovered) == inventory["row_count"]
 
 
@@ -166,8 +178,8 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
         "from dev_health_ops.workers.celery_app import celery_app\n"
         "\n"
         "\n"
-        '@celery_app.task(bind=True, name="dev_health_ops.workers.tasks.owned_task")\n'
-        "def owned_task(self):\n"
+        '@celery_app.task(bind=True, name="dev_health_ops.workers.tasks.health_check")\n'
+        "def health_check(self):\n"
         "    return {}\n",
     )
     inventory = {
@@ -176,7 +188,7 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
         "rows": [
             {
                 "id": "celery_task:src/dev_health_ops/workers/example_task.py:6",
-                "surface": "owned_task",
+                "surface": "health_check",
                 "class": "celery_task",
                 "source": {
                     "file": "src/dev_health_ops/workers/example_task.py",
@@ -185,7 +197,7 @@ def _minimal_valid_root(tmp_path: Path) -> Path:
                 "dispatch_mechanism": "celery_task_decorator",
                 "owner_role": "primary",
                 "target_owner": {"type": "native_process", "value": "Go ops profile"},
-                "target_kind_id": "task:owned_task",
+                "target_kind_id": "task:health_check",
                 "current_implementation_state": "celery_only",
                 "verification_status": "verified",
                 "compatibility_dependency": None,
@@ -308,7 +320,7 @@ def test_gate_catches_a_stale_anchor_with_content_drift(tmp_path):
         "\n"
         "\n"
         "# the decorator that used to live here was deleted\n"
-        "def owned_task(self):\n"
+        "def health_check(self):\n"
         "    return {}\n",
     )
     inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
@@ -668,3 +680,340 @@ def test_discovery_finds_an_aliased_celery_task_decorator(tmp_path):
     )
     surfaces = checker.discover_celery_tasks(root)
     assert [(s.line, s.name) for s in surfaces] == [(4, "aliased_task")]
+
+
+# ---------------------------------------------------------------------------
+# Round-2 hardening (Codex round-2 review): qualified/aliased celery-canvas
+# forms, router-alias/add_api_route API registration, the phantom-row half
+# of bidirectional parity, the hard-error unknown-prefix closed-vocabulary
+# check, and the curated (not "any discovered task") task: vocabulary.
+# ---------------------------------------------------------------------------
+
+
+def test_discovery_finds_import_celery_canvas_as_alias(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "import celery.canvas as canvas\n"
+        "\n"
+        "def trigger():\n"
+        "    canvas.chord(\n"
+        "        [x.s() for x in ()],\n"
+        "        y.s(),\n"
+        "    )()\n",
+    )
+    imports = checker.discover_celery_canvas_imports(root)
+    assert [s.line for s in imports] == [1]
+    literal, _ = checker.discover_call_sites(root)
+    assert [s.line for s in literal] == [4]
+
+
+def test_discovery_finds_from_celery_import_canvas_module(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "from celery import canvas\n\ndef trigger():\n    canvas.chain(a, b)()\n",
+    )
+    imports = checker.discover_celery_canvas_imports(root)
+    assert [s.line for s in imports] == [1]
+    literal, _ = checker.discover_call_sites(root)
+    assert [s.line for s in literal] == [4]
+
+
+def test_discovery_finds_importlib_import_module_celery_canvas(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "import importlib\n\n"
+        'canvas = importlib.import_module("celery.canvas")\n\n'
+        "def trigger():\n"
+        "    canvas.group(\n"
+        "        a,\n"
+        "        b,\n"
+        "    )()\n",
+    )
+    imports = checker.discover_celery_canvas_imports(root)
+    assert [s.line for s in imports] == [3]
+    literal, _ = checker.discover_call_sites(root)
+    assert [s.line for s in literal] == [6]
+
+
+def test_discovery_finds_a_parenthesized_multiline_canvas_import(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "from celery import (\n    chain,\n    chord,\n)\n",
+    )
+    imports = checker.discover_celery_canvas_imports(root)
+    assert [s.line for s in imports] == [1]
+
+
+def test_discovery_finds_an_aliased_bare_canvas_invocation(tmp_path):
+    """`c = chord` then a later bare `c(...)()` -- a second invocation in an
+    already-inventoried module must still be independently discoverable
+    (Codex round-2 HIGH-1)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "from celery import chord\n"
+        "\n"
+        "c = chord\n"
+        "\n"
+        "def trigger():\n"
+        "    c(\n"
+        "        [x.s() for x in ()],\n"
+        "        y.s(),\n"
+        "    )()\n",
+    )
+    literal, _ = checker.discover_call_sites(root)
+    assert [s.line for s in literal] == [6]
+
+
+def test_discovery_finds_a_router_alias_decorator(tmp_path):
+    """`r = router; @r.post(...)` must be discovered, not just the literal
+    `router` name (Codex round-2 HIGH-2)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "from dev_health_ops.workers.tasks import some_task\n"
+        "\n"
+        "r = router\n"
+        "\n"
+        "\n"
+        '@r.post("/example")\n'
+        "async def trigger_example():\n"
+        "    some_task.apply_async()\n",
+    )
+    literal, getattr_indirection = checker.discover_call_sites(root)
+    endpoints = checker.discover_api_trigger_endpoints(
+        root, literal + getattr_indirection
+    )
+    assert [(s.file, s.line) for s in endpoints] == [
+        ("src/dev_health_ops/api/routers/example.py", 6)
+    ]
+
+
+def test_discovery_finds_an_add_api_route_registration(tmp_path):
+    """`router.add_api_route(path, helper)` registers an endpoint with no
+    decorator at all -- must be its own discovered surface even when the
+    helper it registers has no other detected dispatch call site in the
+    same module (Codex round-2 HIGH-2)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "async def helper():\n"
+        "    return None\n"
+        "\n"
+        "\n"
+        'router.add_api_route("/example", helper, methods=["POST"])\n',
+    )
+    endpoints = checker.discover_api_trigger_endpoints(root, [])
+    assert [(s.file, s.line) for s in endpoints] == [
+        ("src/dev_health_ops/api/routers/example.py", 5)
+    ]
+
+
+def test_discovery_finds_an_add_route_alias_registration(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "r = router\n"
+        "\n"
+        "\n"
+        "async def helper():\n"
+        "    return None\n"
+        "\n"
+        "\n"
+        'r.add_route("/example", helper, methods=["POST"])\n',
+    )
+    endpoints = checker.discover_api_trigger_endpoints(root, [])
+    assert [(s.file, s.line) for s in endpoints] == [
+        ("src/dev_health_ops/api/routers/example.py", 8)
+    ]
+
+
+def test_gate_catches_a_phantom_row(tmp_path):
+    """A row referencing a (class, file, line) that independent discovery
+    does NOT find there must fail -- the reverse direction of parity, so a
+    missed surface elsewhere can't net against a phantom row and pass
+    (Codex round-2 MED-3)."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    inventory = checker.load_inventory(inventory_path)
+    # Point the row at a line that has no Celery task decorator at all.
+    inventory["rows"][0]["source"]["line"] = 3
+    _write(inventory_path, json.dumps(inventory, indent=2))
+
+    errors = checker.check(root, inventory_path)
+    assert any("PHANTOM ROW" in e for e in errors), errors
+
+
+def test_gate_treats_an_unrecognized_target_kind_id_prefix_as_an_error(tmp_path):
+    """An unrecognized target_kind_id namespace must be a hard error, not
+    silently skipped (Codex round-2 MED-1 -- `vocabulary.get(prefix)`
+    returning None used to let `bogus:anything` pass)."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    inventory = checker.load_inventory(inventory_path)
+    inventory["rows"][0]["target_kind_id"] = "bogus:anything"
+    _write(inventory_path, json.dumps(inventory, indent=2))
+
+    errors = checker.check(root, inventory_path)
+    assert any("UNKNOWN target_kind_id PREFIX" in e for e in errors), errors
+
+
+def test_gate_rejects_an_unclaimed_discovered_task_as_a_target(tmp_path):
+    """The `task:` vocabulary is curated (TRD_MAPPED_TASK_TARGETS), not
+    "every discovered Celery task name" -- an unrelated but real, discovered
+    task must NOT self-validate as a target just because some other row
+    (or a renamed version of this one) also exists in the tree (Codex
+    round-2 MED-1)."""
+    root = _minimal_valid_root(tmp_path)
+    _write(
+        root / "src/dev_health_ops/workers/rogue_task.py",
+        "from dev_health_ops.workers.celery_app import celery_app\n"
+        "\n"
+        "\n"
+        '@celery_app.task(name="dev_health_ops.workers.tasks.some_other_task")\n'
+        "def some_other_task():\n"
+        "    return None\n",
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    inventory = checker.load_inventory(inventory_path)
+    # Retarget the existing primary row at the newly-discovered (but
+    # unclaimed/uncurated) task name instead of the curated health_check.
+    inventory["rows"][0]["target_kind_id"] = "task:some_other_task"
+    inventory["rows"].append(
+        {
+            "id": "celery_task:src/dev_health_ops/workers/rogue_task.py:4",
+            "surface": "some_other_task",
+            "class": "celery_task",
+            "source": {
+                "file": "src/dev_health_ops/workers/rogue_task.py",
+                "line": 4,
+            },
+            "dispatch_mechanism": "celery_task_decorator",
+            "owner_role": "contributor",
+            "target_owner": {"type": "native_process", "value": "n/a"},
+            "target_kind_id": None,
+            "current_implementation_state": "celery_only",
+            "verification_status": "verified",
+            "compatibility_dependency": None,
+            "deletion_evidence_requirement": "n/a (fixture)",
+            "acceptance_test_id": "tests/workers/test_transitional_inventory_contract.py",
+            "notes": "",
+        }
+    )
+    inventory["row_count"] = len(inventory["rows"])
+    _write(inventory_path, json.dumps(inventory, indent=2))
+
+    errors = checker.check(root, inventory_path)
+    assert any("UNKNOWN target_kind_id" in e for e in errors), errors
+
+
+def test_gate_catches_content_drift_when_the_dispatched_task_is_swapped(tmp_path):
+    """Replacing the dispatched task at an anchored call-site line with a
+    *different* task's dispatch must fail even though the line still has the
+    right shape (`.apply_async(`) -- content drift must check the specific
+    recorded name, not only the class shape (Codex round-2 MED-2)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/billing/router.py",
+        "\n" * 130 + "    a_completely_different_task.apply_async()\n",
+    )
+    inventory = {
+        "schema_version": 1,
+        "row_count": 1,
+        "rows": [
+            {
+                "id": "call_site_literal:src/dev_health_ops/api/billing/router.py:131",
+                "surface": "send_billing_notification.delay",
+                "class": "call_site_literal",
+                "source": {
+                    "file": "src/dev_health_ops/api/billing/router.py",
+                    "line": 131,
+                },
+                "dispatch_mechanism": "literal_dispatch_call",
+                "owner_role": "contributor",
+                "target_owner": {"type": "native_process", "value": "Go ops profile"},
+                "target_kind_id": None,
+                "current_implementation_state": "celery_only",
+                "verification_status": "verified",
+                "compatibility_dependency": None,
+                "deletion_evidence_requirement": "n/a (fixture)",
+                "acceptance_test_id": "tests/workers/test_transitional_inventory_contract.py",
+                "notes": "",
+            }
+        ],
+    }
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _write(inventory_path, json.dumps(inventory, indent=2))
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_gate_catches_content_drift_when_a_beat_entry_key_is_swapped(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/workers/config.py",
+        "beat_schedule = {\n"
+        '    "a-totally-different-entry": {\n'
+        '        "task": "dev_health_ops.workers.tasks.something_else",\n'
+        "    },\n"
+        "}\n",
+    )
+    inventory = {
+        "schema_version": 1,
+        "row_count": 1,
+        "rows": [
+            {
+                "id": "beat_entry:src/dev_health_ops/workers/config.py:2",
+                "surface": "dispatch-scheduled-syncs",
+                "class": "beat_entry",
+                "source": {
+                    "file": "src/dev_health_ops/workers/config.py",
+                    "line": 2,
+                },
+                "dispatch_mechanism": "beat_schedule_entry",
+                "owner_role": "primary",
+                "target_owner": {
+                    "type": "native_process",
+                    "value": "Go scheduler + sync planner",
+                },
+                "target_kind_id": "beat:dispatch-scheduled-syncs",
+                "current_implementation_state": "celery_only",
+                "verification_status": "verified",
+                "compatibility_dependency": None,
+                "deletion_evidence_requirement": "n/a (fixture)",
+                "acceptance_test_id": "tests/workers/test_transitional_inventory_contract.py",
+                "notes": "",
+            }
+        ],
+    }
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _write(inventory_path, json.dumps(inventory, indent=2))
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_gate_catches_content_drift_when_a_celery_task_name_is_swapped(tmp_path):
+    """Replacing the decorated function's name at an anchored celery_task
+    row (while keeping the `@celery_app.task(` decorator itself intact)
+    must fail (Codex round-2 MED-2)."""
+    root = _minimal_valid_root(tmp_path)
+    _write(
+        root / "src/dev_health_ops/workers/example_task.py",
+        '"""Example worker module."""\n'
+        "\n"
+        "from dev_health_ops.workers.celery_app import celery_app\n"
+        "\n"
+        "\n"
+        '@celery_app.task(bind=True, name="dev_health_ops.workers.tasks.renamed")\n'
+        "def a_completely_different_function_name(self):\n"
+        "    return {}\n",
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors

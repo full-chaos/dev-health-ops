@@ -233,6 +233,81 @@ since fixed:
   regression test for it, and added a check that any `acceptance_test_id`
   naming a specific test (`path.py::test_name`) actually defines that test.
 
+### Round-3 hardening (Codex adversarial review, round 2)
+
+A second Codex review returned **BLOCK** again with two more HIGH findings and
+four MED findings, all fixed. This is the final hardening round; the
+[Known limitations](#known-limitations) section below documents what
+remains a deliberate, judged trade-off rather than an oversight.
+
+- **Qualified/aliased celery-canvas forms still evaded discovery (HIGH):**
+  `import celery.canvas as canvas`, `from celery import canvas`,
+  `importlib.import_module("celery.canvas")` (static-string form), a
+  parenthesized multi-line `from celery import (...)`, and a qualified bare
+  invocation (`canvas.chord(...)()`) all produced no surface; an aliased bare
+  invocation (`c = chord; c(...)()`) added no new row in an already-inventoried
+  module. Fixed by `_scan_celery_canvas`, a per-file binding scanner that
+  tracks both "direct" canvas names (through `as`-aliasing and simple
+  `c = chord`-style local aliases) and "module" aliases (through
+  `import celery.canvas as X`, `from celery import canvas`, or
+  `importlib.import_module`), and matches qualified/aliased bare invocations
+  in both their multi-line-opening and complete-single-line shapes.
+- **API registration by router alias or `add_api_route`/`add_route` evaded
+  discovery (HIGH):** `r = router; @r.post(...)` and
+  `router.add_api_route(path, helper)` (registering an already-dispatching
+  helper with no decorator at all) produced no api_trigger_endpoint surface.
+  Fixed by `_router_aliases` (the same simple-bare-alias tracking as canvas
+  names, seeded with the repo convention `router`) feeding an alias-aware
+  decorator pattern, plus a dedicated scan for `add_api_route`/`add_route`
+  calls across every api/ module -- not only ones that already hold another
+  discovered dispatch call site, since the registration itself is the missed
+  surface.
+- **Closed vocabulary silently skipped unknown prefixes, and self-validated
+  against any discovered task (MED, the most serious of the four):** renaming
+  a `target_kind_id` to `bogus:anything` returned zero errors
+  (`vocabulary.get(prefix)` returning `None` was treated as "no constraint"),
+  and renaming it to an unrelated *discovered-but-unclaimed* task name (40
+  such names exist) also passed, since the old `task:` vocabulary was "every
+  discovered Celery task." Fixed by making an unrecognized prefix itself an
+  error, and by replacing the `task:` vocabulary with
+  `TRD_MAPPED_TASK_TARGETS`, a closed, curated allowlist of exactly the six
+  standalone tasks the TRD gap analysis calls out (matching
+  `STANDALONE_PRIMARY` in the inventory generator) -- an arbitrary other
+  discovered task name is no longer automatically a valid claim.
+- **Content drift was class-shape-only for eight of ten classes (MED):**
+  swapping the dispatched task at a `call_site_literal` row's anchor line for
+  a *different* task's `.apply_async(...)`, or changing `send_task("old")` to
+  `send_task(other_var)`, still passed as long as the line still had a
+  `.apply_async(`/`.delay(`/`send_task(` shape -- only registry/transport rows
+  compared the discovered name against the row. Fixed by
+  `_expected_dispatch_token` (best-effort extraction of the specific task
+  name a row's `surface` records) plus per-class re-verification: `celery_task`
+  re-derives the decorated function's name and compares it to `surface`;
+  `beat_entry`/`beat_entry_conditional` compare the schedule key;
+  `call_site_literal`/`call_site_getattr_indirection` search a forward window
+  (multi-line statements put the identifying token a few lines below the
+  anchor) for the extracted token; `stream_surface` compares the captured
+  `CONSUMER_GROUP` value to the row's own `target_kind_id`.
+- **Per-class parity compared only `Counter(class)` totals in one direction
+  (MED):** a missed surface and an unrelated scanner phantom in the same
+  class could net to zero, and the runtime gate itself only checked
+  discovered→row, never the reverse. Fixed in both places: the test now
+  compares the full `(class, file, line)` key sets in both directions, and
+  `check()` itself gained a **PHANTOM ROW** check (a row whose anchor
+  independent discovery does not find) alongside the existing
+  **UNOWNED SURFACE** check (a discovered surface with no row) -- true
+  bidirectional identity, not count-matching.
+- **Three of the five round-2 rows had incomplete structured owners:** the
+  metrics-chord import and invocation rows named only
+  `metrics.daily_partition`, dropping the chord callback's
+  `metrics.daily_finalize`; the work-graph canvas-import row named only
+  `investment.chunk`, dropping `investment.finalize` (the same chord's
+  callback) and the separately-owned `workgraph.build` +
+  `metrics.remaining.membership_backfill` chain it also backs (TRD §6.1,
+  `go-worker-cutover-trd.md:156` and `:170`). Fixed by updating all three
+  rows' `target_owner.value` to name every kind the row's dispatch actually
+  reaches.
+
 ## Update procedure
 
 When you add, remove, or re-home a legacy surface:
@@ -254,6 +329,51 @@ When the whole inventory is finally decommissioned (TRD §8.3: "removed with
 the final Celery cleanup after CI proves no legacy surface remains"), delete
 this document, the contract file, the CI script, and its test module in the
 same PR that removes the last Celery surface.
+
+## Known limitations
+
+`ci/check_transitional_inventory.py` is a regex/line-based static scanner, not
+a Python interpreter or a full AST-with-type-inference tool. Two full rounds
+of adversarial review (see "Round-2/Round-3 hardening" above) closed every
+concrete evasion found against *this* codebase's actual patterns. The
+following exotic forms remain theoretically possible and are **deliberately
+not chased further** -- the goal is that an ordinary code change can't slip
+through unnoticed, not that the gate is evasion-complete against a
+hypothetically adversarial contributor. Reviewers: treat any of these shapes
+appearing in a PR as a reason to ask for an explicit inventory row by hand.
+
+- **Non-literal dynamic imports.** `importlib.import_module(some_variable)`
+  (the module name comes from a variable, config value, or computed
+  expression rather than a string literal) is undecidable statically and is
+  not detected, for celery-canvas imports or anything else.
+- **Aliasing beyond a simple bare `name = other_name` assignment.** A router
+  or canvas-primitive alias introduced through a function return value, a
+  container/dict lookup (`routers["v1"]`), a class attribute, or a decorator
+  wrapper is not tracked by `_router_aliases`/`_scan_celery_canvas`'s bare-name
+  alias propagation (capped at 4 fixed-point iterations, which comfortably
+  covers realistic short alias chains but not an arbitrarily long or
+  indirect one).
+- **API registration two or more call-graph hops away.** The shared-helper
+  fan-in fallback in `discover_api_trigger_endpoints` resolves exactly one
+  hop (a dispatch call inside an undecorated helper, called directly by a
+  `@router`-decorated function). A helper called by another helper called by
+  a route is not resolved, nor is any cross-file relationship between a
+  `router.add_api_route(...)` registration and the handler it registers.
+- **Dynamically constructed decorators.** `@getattr(router, method_name)(...)`
+  or building the HTTP verb from a variable is not recognized -- only a
+  literal `.get`/`.post`/`.put`/`.patch`/`.delete` (or `add_api_route`/
+  `add_route`) method name is.
+- **REST endpoint path strings and non-primitive content-drift identity.**
+  Content-drift re-verification confirms the decorator/registration *shape*
+  still exists at a `api_trigger_endpoint` row's anchor line, but does not
+  cross-check the specific route path string against the row (a REST
+  endpoint's path is often on a different line than the anchor in a
+  multi-line decorator). Similarly, `celery_canvas_import` content-drift
+  confirms the line is still some celery-canvas import, not that it still
+  imports the *same* names the row recorded.
+- **Bound-alias/partial forms combined with getattr or double indirection**
+  (e.g. `partial(getattr(task, "apply_async"), ...)`) are not recognized by
+  either the alias or the getattr-indirection pattern individually.
 
 ## What CUT-01 does **not** cover
 

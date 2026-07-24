@@ -32,6 +32,7 @@ const (
 // because live parity evidence has not been captured.
 var providerExecutorRegistry = map[string]ExecutorKind{
 	"launchdarkly/feature-flags": ExecutorNativeGo,
+	"github/repo-metadata":       ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -149,6 +150,12 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = launchDarklyRouteDestinations()
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.LaunchDarklyFeatureFlags
+	case (provider == "github" || provider == "gitlab") && dataset == "repo-metadata":
+		// GitHub has a native complete-route handler and a repos effect sink,
+		// but the route stays closed until live non-empty parity evidence
+		// exists (plan §9 CUT-09 acceptance). GitLab has fixture fetch code
+		// only and no complete-route handler at all.
+		descriptor.Destinations = []string{"repos"}
 	}
 	return descriptor, true
 }

@@ -221,10 +221,12 @@
         "git"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": true,
       "route_dataset": "repo-metadata",
-      "route_destinations": [],
+      "route_destinations": [
+        "repos"
+      ],
       "route_ready": false,
       "credential_modes": [
         "personal_access_token",
@@ -621,7 +623,9 @@
       "go_executor": "none",
       "native_shadow": true,
       "route_dataset": "repo-metadata",
-      "route_destinations": [],
+      "route_destinations": [
+        "repos"
+      ],
       "route_ready": false,
       "credential_modes": [
         "personal_access_token"

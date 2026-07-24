@@ -131,6 +131,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 	t.Parallel()
 	handlers := map[string]CompleteRouteHandler{
 		"launchdarkly/feature-flags": LaunchDarklyRouteHandler{},
+		"github/repo-metadata":       GitHubRepositoryRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

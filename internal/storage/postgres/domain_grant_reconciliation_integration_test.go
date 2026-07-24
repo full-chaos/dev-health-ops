@@ -366,9 +366,23 @@ ORDER BY class.relname`, grantDomainRole)
 			t.Errorf("%s is exercised by production code but the grants give the domain role nothing on it", table.name)
 		}
 	}
+	// required_table_privileges' and column_scoped_privileges' manifests are
+	// domainPosture's Go-side data now (rolePostureQuery itself is
+	// role-agnostic since the Phase 2 posture parameterization), so the same
+	// "granted but not required" check reads that data instead of grep-ing
+	// SQL text that no longer contains it. Both fields count: a table
+	// granted only at column scope (worker_job_completion_fences) is exactly
+	// as "required" as a table-wide one for this check's purpose.
+	requiredTableNames := map[string]struct{}{}
+	for _, table := range domainPosture().RequiredTables {
+		requiredTableNames[table.TableName] = struct{}{}
+	}
+	for _, column := range domainPosture().ColumnScoped {
+		requiredTableNames[column.TableName] = struct{}{}
+	}
 	missing := make([]string, 0)
 	for name := range granted {
-		if !strings.Contains(domainAuthorizationQuery, "('"+name+"',") {
+		if _, ok := requiredTableNames[name]; !ok {
 			missing = append(missing, name)
 		}
 	}

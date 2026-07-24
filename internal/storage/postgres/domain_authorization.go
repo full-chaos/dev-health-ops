@@ -6,52 +6,30 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// domainAuthorizationQuery proves the configured domain identity has exactly
-// the semantic runtime posture. The expected role and River schema are query
-// parameters, never interpolated identifiers. Catalog predicates use
-// effective privileges so inherited administrator or DDL access closes
+// rolePostureQuery proves the connected identity holds exactly ONE role's
+// declared semantic-runtime posture: the required_table_privileges and
+// column_scoped_privileges manifests are query parameters (unnest-bound
+// arrays), never literal VALUES lists, so the same ~230 lines of hardened
+// predicate logic below run once per role rather than being copy-pasted per
+// role. The expected role, River schema, and both manifests are query
+// parameters, never interpolated identifiers or SQL text. Catalog predicates
+// use effective privileges so inherited administrator or DDL access closes
 // readiness as well as direct grants.
-const domainAuthorizationQuery = `
+//
+// Running this once per role, each with that role's own accurate manifest,
+// establishes both directions of the property a multi-role deployment
+// depends on: this role holds exactly its declared set (the checks below),
+// and — because every predicate that walks "other relations"
+// (other_public_relations, river_relations, and the rest) asserts zero
+// privilege of any kind on anything outside the CALLING role's own
+// manifest — it holds none of any other role's exclusive privileges either.
+// A privilege landing on the wrong role therefore fails closed the same way
+// an excess privilege on the right role does; no separate "and the other
+// role does not hold it" check is needed, as long as each role's manifest
+// omits tables/columns that belong exclusively to another role.
+const rolePostureQuery = `
 WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
-	VALUES
-		('integrations', false, false),
-		('integration_sources', false, false),
-		('integration_datasets', false, false),
-		('integration_credentials', false, false),
-		('sync_runs', false, false),
-		('worker_job_routes', false, false),
-		('sync_dispatch_transport_routes', false, false),
-		('sync_run_units', false, true),
-		('sync_watermarks', true, true),
-		('sync_dispatch_outbox', true, true),
-		('worker_job_outbox', true, false),
-		-- Scheduler and fixed-schedule surface. sync_configurations and
-		-- scheduled_jobs both carry allow_update: PostgreSQL's row-locking
-		-- clause, FOR UPDATE, requires the same table-level privilege as a
-		-- write, and SELECT alone is not enough (confirmed against a live
-		-- server; see domain_grant_reconciliation_integration_test.go). A
-		-- second, genuine writer also lands on sync_configurations: the
-		-- CUT-10 finalize path stamps last_sync_* columns, already covered
-		-- by the same allow_update.
-		('sync_configurations', false, true),
-		('scheduled_jobs', false, true),
-		('scheduled_sync_occurrences', true, true),
-		('fixed_schedule_occurrences', true, true),
-		('organizations', false, false),
-		-- Remaining-metrics and work-graph stores reached from the worker's
-		-- post-sync fanout. These are genuine read-modify-write callers
-		-- (claim/renew/complete/cancel/finalize transitions), not just row
-		-- locking, so the true writes here are what set allow_update.
-		('remaining_metric_runs', true, true),
-		('remaining_metric_partitions', true, true),
-		('work_graph_execution_requests', true, true),
-		-- Ledger half of the same Claim transaction as
-		-- work_graph_execution_requests: an upsert keyed on request_id
-		-- (internal/jobs/workgraph/postgres.go Claim/transition). The upsert's
-		-- conflict-target arm re-reads the existing row, so SELECT is a real
-		-- requirement here, not just this assertion's insert-without-select
-		-- limitation.
-		('work_graph_execution_ledger', true, true)
+	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[])
 ), required_tables AS (
 	SELECT
 		class.oid,
@@ -71,9 +49,7 @@ WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
 -- column-scoped instead of table-scoped, and required_table_privileges has
 -- no way to express "this column only" — hence the separate CTEs below.
 ), column_scoped_privileges(table_name, column_name, privilege) AS (
-	VALUES
-		('worker_job_completion_fences', 'completion_key', 'SELECT'),
-		('worker_job_completion_fences', 'completion_key', 'INSERT')
+	SELECT * FROM unnest($6::text[], $7::text[], $8::text[])
 ), column_scoped_relations AS (
 	SELECT DISTINCT class.oid, class.relname
 	FROM pg_catalog.pg_class AS class
@@ -430,17 +406,147 @@ SELECT
 		WHERE has_function_privilege(current_user, oid, 'EXECUTE')
 	)`
 
-// CheckDomainAuthorization is a read-only readiness check for the semantic
-// PostgreSQL pool. It binds the active login to the declared domain role and
-// never exposes catalog or driver details that could contain connection
-// material.
-func CheckDomainAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
+// TablePrivilege declares the exact table-level privileges one role's
+// posture requires for one table. SELECT is always implied and always
+// required; AllowInsert/AllowUpdate state whether INSERT/UPDATE must
+// additionally be held. Every other table-level privilege (DELETE,
+// TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) must always be absent, and
+// rolePostureQuery checks that unconditionally — it is never expressible as
+// "allowed" through this type.
+type TablePrivilege struct {
+	TableName   string
+	AllowInsert bool
+	AllowUpdate bool
+}
+
+// ColumnPrivilege declares a single column-scoped privilege one role's
+// posture requires, for a table that is deliberately NOT granted at the
+// table level — see worker_job_completion_fences below for why: a
+// server-owned column must never become reachable through a table-wide
+// grant just because some other column on the same table legitimately
+// needs one.
+type ColumnPrivilege struct {
+	TableName  string
+	ColumnName string
+	Privilege  string
+}
+
+// RolePosture is the complete, declared semantic-runtime privilege manifest
+// one role is expected to hold: exactly this, at both table and column
+// granularity, and — via rolePostureQuery's own catch-all predicates —
+// nothing else in the public or River schema. A role's manifest must omit
+// every table and column that belongs exclusively to another role in the
+// same deployment; see the package doc on rolePostureQuery for why that is
+// what makes cross-role attribution hold without a separate check.
+type RolePosture struct {
+	RequiredTables []TablePrivilege
+	ColumnScoped   []ColumnPrivilege
+}
+
+// domainPosture is the domain runtime role's declared manifest. Flags are
+// the minimum each caller's real statement shapes require, not a guess:
+//
+//   - sync_configurations, scheduled_jobs: AllowUpdate despite neither having
+//     a genuine domain-side write of its own columns. PostgreSQL requires the
+//     UPDATE table privilege for SELECT ... FOR UPDATE / FOR KEY SHARE
+//     row-locking, confirmed empirically against a live server in
+//     TestPostgreSQLPrivilegeRequirementsThisChangesetRelinesOn — SELECT
+//     alone denies both clauses with 42501. scheduled_jobs additionally has a
+//     genuine UPDATE. A second, genuine writer also lands on
+//     sync_configurations: the CUT-10 finalize path stamps last_sync_*
+//     columns, already covered by the same AllowUpdate.
+//   - remaining_metric_runs, remaining_metric_partitions,
+//     work_graph_execution_requests: genuine read-modify-write callers
+//     (claim/renew/complete/cancel/finalize transitions) reached from the
+//     worker's post-sync fanout, not just row locking, so the true writes
+//     here are what set AllowUpdate.
+//   - work_graph_execution_ledger: the ledger half of the same Claim
+//     transaction as work_graph_execution_requests (an upsert keyed on
+//     request_id; see internal/jobs/workgraph/postgres.go Claim/transition).
+//     The upsert's conflict-target arm re-reads the existing row, so SELECT
+//     is a real requirement here, not just rolePostureQuery's
+//     insert-without-select limitation.
+//
+// worker_job_completion_fences is deliberately NOT in RequiredTables:
+// completed_at is server-owned (DEFAULT statement_timestamp()) and no domain
+// statement ever reads or writes it (joboutbox.MarkCompletionTx only inserts
+// completion_key; deletion is queue-side, queue_authorization.go). A
+// table-wide privilege would let the domain role forge completed_at and mint
+// a fence retention never reaps, so its posture is column-scoped instead —
+// hence ColumnScoped below rather than a RequiredTables row.
+func domainPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"integrations", false, false},
+			{"integration_sources", false, false},
+			{"integration_datasets", false, false},
+			{"integration_credentials", false, false},
+			{"sync_runs", false, false},
+			{"worker_job_routes", false, false},
+			{"sync_dispatch_transport_routes", false, false},
+			{"sync_run_units", false, true},
+			{"sync_watermarks", true, true},
+			{"sync_dispatch_outbox", true, true},
+			{"worker_job_outbox", true, false},
+			{"sync_configurations", false, true},
+			{"scheduled_jobs", false, true},
+			{"scheduled_sync_occurrences", true, true},
+			{"fixed_schedule_occurrences", true, true},
+			{"organizations", false, false},
+			{"remaining_metric_runs", true, true},
+			{"remaining_metric_partitions", true, true},
+			{"work_graph_execution_requests", true, true},
+			{"work_graph_execution_ledger", true, true},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"worker_job_completion_fences", "completion_key", "SELECT"},
+			{"worker_job_completion_fences", "completion_key", "INSERT"},
+		},
+	}
+}
+
+// CheckRolePosture is a read-only readiness check proving the active login
+// holds exactly the declared posture: no more, no less, by any route
+// (direct grant, PUBLIC, role membership, column-level, table-level, with
+// or without grant option, or ownership). It never exposes catalog or
+// driver details that could contain connection material.
+func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, posture RolePosture) error {
 	if pool == nil || !validRuntimeIdentifier(expectedRole) || !validRuntimeIdentifier(riverSchema) {
 		return ErrUnavailable
 	}
+	tableNames := make([]string, len(posture.RequiredTables))
+	allowInserts := make([]bool, len(posture.RequiredTables))
+	allowUpdates := make([]bool, len(posture.RequiredTables))
+	for i, table := range posture.RequiredTables {
+		tableNames[i] = table.TableName
+		allowInserts[i] = table.AllowInsert
+		allowUpdates[i] = table.AllowUpdate
+	}
+	columnTables := make([]string, len(posture.ColumnScoped))
+	columnNames := make([]string, len(posture.ColumnScoped))
+	columnPrivileges := make([]string, len(posture.ColumnScoped))
+	for i, column := range posture.ColumnScoped {
+		columnTables[i] = column.TableName
+		columnNames[i] = column.ColumnName
+		columnPrivileges[i] = column.Privilege
+	}
 	var authorized bool
-	if err := pool.QueryRow(ctx, domainAuthorizationQuery, expectedRole, riverSchema).Scan(&authorized); err != nil || !authorized {
+	if err := pool.QueryRow(
+		ctx, rolePostureQuery,
+		expectedRole, riverSchema,
+		tableNames, allowInserts, allowUpdates,
+		columnTables, columnNames, columnPrivileges,
+	).Scan(&authorized); err != nil || !authorized {
 		return ErrUnavailable
 	}
 	return nil
+}
+
+// CheckDomainAuthorization is a read-only readiness check for the semantic
+// PostgreSQL pool. It binds the active login to the declared domain role and
+// never exposes catalog or driver details that could contain connection
+// material. It is domainPosture's manifest run through CheckRolePosture; the
+// domain role is not special-cased anywhere in rolePostureQuery itself.
+func CheckDomainAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, domainPosture())
 }

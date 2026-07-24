@@ -57,15 +57,15 @@ func TestDomainAuthorizationRejectsMissingOrUnavailablePool(t *testing.T) {
 	}
 }
 
-func TestDomainAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T) {
+func TestRolePostureQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T) {
 	t.Parallel()
 
-	upperQuery := strings.ToUpper(domainAuthorizationQuery)
+	upperQuery := strings.ToUpper(rolePostureQuery)
 	mutatingScanQuery := sqlLineComment.ReplaceAllString(upperQuery, "")
 	mutatingScanQuery = singleQuotedLiteral.ReplaceAllString(mutatingScanQuery, "")
 	for _, forbidden := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM", "CREATE ", "ALTER ", "DROP ", "GRANT ", "REVOKE "} {
 		if strings.Contains(mutatingScanQuery, forbidden) {
-			t.Fatalf("domain authorization query contains mutating SQL %q", forbidden)
+			t.Fatalf("role posture query contains mutating SQL %q", forbidden)
 		}
 	}
 	for _, required := range []string{
@@ -96,10 +96,27 @@ func TestDomainAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *te
 		"'USAGE'",
 		"'CREATE'",
 		"'TEMPORARY'",
+		"UNNEST($3::TEXT[], $4::BOOLEAN[], $5::BOOLEAN[])",
+		"UNNEST($6::TEXT[], $7::TEXT[], $8::TEXT[])",
 	} {
 		if !strings.Contains(upperQuery, required) {
-			t.Fatalf("domain authorization query omits %q", required)
+			t.Fatalf("role posture query omits %q", required)
 		}
+	}
+}
+
+// The table manifest moved out of rolePostureQuery's text and into
+// domainPosture's Go-side data once the query became role-agnostic (Phase 2
+// posture parameterization); this is the successor to the old
+// "each table name appears in the query exactly once" scan, now checking the
+// data the query is actually parameterized with rather than literal SQL
+// text that no longer contains it.
+func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	counts := map[string]int{}
+	for _, table := range domainPosture().RequiredTables {
+		counts[table.TableName]++
 	}
 	for _, table := range []string{
 		"integrations",
@@ -114,8 +131,8 @@ func TestDomainAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *te
 		"sync_dispatch_outbox",
 		"worker_job_outbox",
 	} {
-		if strings.Count(domainAuthorizationQuery, "'"+table+"'") != 1 {
-			t.Fatalf("domain authorization query must inventory %q exactly once", table)
+		if counts[table] != 1 {
+			t.Fatalf("domain posture must inventory %q exactly once, got %d", table, counts[table])
 		}
 	}
 }

@@ -157,6 +157,7 @@ var productionWorkerDependencySources = workerDependencySources{
 	buildOperational:     buildOperationalWorker,
 	buildSyncCoordinator: buildSyncCoordinatorWorker,
 	buildDaily:           buildDailyWorker,
+	buildReports:         buildReportWorker,
 	buildProviderSync:    buildProviderSyncWorker,
 	buildWorkgraph:       buildWorkgraphWorker,
 	contractRoot:         defaultContractRoot,

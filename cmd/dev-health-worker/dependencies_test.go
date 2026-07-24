@@ -393,6 +393,10 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 		jobcontract.KindDailyMetricsPartition: true,
 		jobcontract.KindDailyMetricsFinalize:  true,
 	}
+	// The real report builder is replaced by a fake here so the composition
+	// rules are tested without a ClickHouse dependency; the production builder
+	// has its own coverage.
+	sources.buildReports = nil
 	sources.buildOperational = fakeHandlerBuilder(
 		"reports", selectSpecs(runtimeRegistry.Profile("heavy"), reportKinds),
 		jobruntime.QueueBudget{Queue: "reports", MaxWorkers: 2},
@@ -465,6 +469,7 @@ func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
 			sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 				return runtimeRegistry, nil
 			}
+			sources.buildReports = nil
 			sources.buildOperational = fakeHandlerBuilder(
 				"first", selectNamedSpecs(runtimeRegistry, test.first),
 				jobruntime.QueueBudget{Queue: "reports", MaxWorkers: 2},

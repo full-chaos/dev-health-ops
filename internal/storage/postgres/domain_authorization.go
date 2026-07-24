@@ -32,13 +32,14 @@ import (
 // other role does not hold it" check needs to exist in this query itself —
 // but no single invocation of it proves that property alone, either.
 const rolePostureQuery = `
-WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
-	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[])
+WITH required_table_privileges(table_name, allow_insert, allow_update, allow_delete) AS (
+	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[], $9::boolean[])
 ), required_tables AS (
 	SELECT
 		class.oid,
 		required.allow_insert,
-		required.allow_update
+		required.allow_update,
+		required.allow_delete
 	FROM required_table_privileges AS required
 	JOIN pg_catalog.pg_class AS class ON class.relname = required.table_name
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -329,7 +330,16 @@ SELECT
 					OR has_any_column_privilege(current_user, oid, 'UPDATE WITH GRANT OPTION')
 				)
 			)
-			OR has_table_privilege(current_user, oid, 'DELETE')
+			-- DELETE is not column-grantable in PostgreSQL (only SELECT,
+			-- INSERT, UPDATE, REFERENCES can be), so unlike the two checks
+			-- above there is no column-level or has_any_column_privilege
+			-- route to guard here — a table-level mismatch or option check
+			-- is the whole surface.
+			OR has_table_privilege(current_user, oid, 'DELETE') <> allow_delete
+			OR (
+				allow_delete
+				AND has_table_privilege(current_user, oid, 'DELETE WITH GRANT OPTION')
+			)
 			OR has_table_privilege(current_user, oid, 'TRUNCATE')
 			OR has_table_privilege(current_user, oid, 'REFERENCES')
 			OR has_any_column_privilege(current_user, oid, 'REFERENCES')
@@ -412,15 +422,16 @@ SELECT
 
 // TablePrivilege declares the exact table-level privileges one role's
 // posture requires for one table. SELECT is always implied and always
-// required; AllowInsert/AllowUpdate state whether INSERT/UPDATE must
-// additionally be held. Every other table-level privilege (DELETE,
-// TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) must always be absent, and
+// required; AllowInsert/AllowUpdate/AllowDelete state whether INSERT/UPDATE/
+// DELETE must additionally be held. Every other table-level privilege
+// (TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) must always be absent, and
 // rolePostureQuery checks that unconditionally — it is never expressible as
 // "allowed" through this type.
 type TablePrivilege struct {
 	TableName   string
 	AllowInsert bool
 	AllowUpdate bool
+	AllowDelete bool
 }
 
 // ColumnPrivilege declares a single column-scoped privilege one role's
@@ -447,29 +458,47 @@ type RolePosture struct {
 	ColumnScoped   []ColumnPrivilege
 }
 
-// domainPosture is the domain runtime role's declared manifest. Flags are
-// the minimum each caller's real statement shapes require, not a guess:
+// domainPosture is the domain runtime role's declared manifest under the
+// Option B two-role split. Table set and flags come from
+// docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91
+// (grant-deriver tool derivation + hand-verified Go source), the sole
+// authority for role/privilege attribution — not this comment, and not any
+// earlier revision of it.
 //
-//   - sync_configurations, scheduled_jobs: AllowUpdate despite neither having
-//     a genuine domain-side write of its own columns. PostgreSQL requires the
-//     UPDATE table privilege for SELECT ... FOR UPDATE / FOR KEY SHARE
-//     row-locking, confirmed empirically against a live server in
-//     TestPostgreSQLPrivilegeRequirementsThisChangesetRelinesOn — SELECT
-//     alone denies both clauses with 42501. scheduled_jobs additionally has a
-//     genuine UPDATE. A second, genuine writer also lands on
-//     sync_configurations: the CUT-10 finalize path stamps last_sync_*
-//     columns, already covered by the same AllowUpdate.
+//   - worker_job_routes, scheduled_jobs, scheduled_sync_occurrences,
+//     fixed_schedule_occurrences moved OUT of this posture entirely: the
+//     manifest attributes all four exclusively to the coordinator role (see
+//     coordinatorPosture below). None has a domain-side SQL site.
+//   - sync_configurations tightens from {SELECT, UPDATE} to {SELECT} only:
+//     the domain-side site (internal/syncdispatchruntime/native_post_sync.go:263)
+//     is a plain SELECT with no lock clause. The genuine row-locking write
+//     this table used to need UPDATE for belongs to the coordinator-side
+//     scheduler code, not the domain worker.
+//   - sync_runs tightens from {SELECT} to {SELECT, UPDATE}: it is one of the
+//     six dual-grant ("both") tables — the domain side genuinely holds
+//     UPDATE via Fanout's `FOR SHARE` and the providersync hot path, not just
+//     an implied SELECT.
+//   - organizations, sync_dispatch_transport_routes, sync_dispatch_outbox,
+//     sync_run_units, worker_job_runs are the remaining five of the six
+//     dual-grant tables: each is declared here with the domain role's own
+//     flags, and again in coordinatorPosture with the coordinator's — see
+//     CheckRolePosture's doc comment for why a table required by two roles is
+//     not a leak as long as each role's own manifest states it accurately.
 //   - remaining_metric_runs, remaining_metric_partitions,
-//     work_graph_execution_requests: genuine read-modify-write callers
-//     (claim/renew/complete/cancel/finalize transitions) reached from the
-//     worker's post-sync fanout, not just row locking, so the true writes
-//     here are what set AllowUpdate.
+//     work_graph_execution_requests, daily_metrics_partitions,
+//     daily_metrics_runs: genuine read-modify-write callers reached from the
+//     worker's post-sync fanout, not just row locking.
 //   - work_graph_execution_ledger: the ledger half of the same Claim
 //     transaction as work_graph_execution_requests (an upsert keyed on
 //     request_id; see internal/jobs/workgraph/postgres.go Claim/transition).
 //     The upsert's conflict-target arm re-reads the existing row, so SELECT
 //     is a real requirement here, not just rolePostureQuery's
 //     insert-without-select limitation.
+//   - external_ingest_batch_payloads, external_ingest_batches,
+//     provider_rate_limit_observations: the three tables needing AllowDelete
+//     — all domain-role retention/cleanup callers
+//     (internal/streamhandlers/external_postgres.go,
+//     internal/jobs/system/retention_postgres.go).
 //
 // worker_job_completion_fences is deliberately NOT in RequiredTables:
 // completed_at is server-owned (DEFAULT statement_timestamp()) and no domain
@@ -477,34 +506,116 @@ type RolePosture struct {
 // completion_key; deletion is queue-side, queue_authorization.go). A
 // table-wide privilege would let the domain role forge completed_at and mint
 // a fence retention never reaps, so its posture is column-scoped instead —
-// hence ColumnScoped below rather than a RequiredTables row.
+// hence ColumnScoped below rather than a RequiredTables row. The manifest's
+// "possible 2nd reacher" flag on this table (a coordinator-side call into
+// the same helper, unresolved by the grant-deriver tool) was independently
+// run down by hand: internal/scheduler/fixed/producers.go only calls
+// joboutbox.CompletionKey(...), a pure function computing a string stored in
+// a DIFFERENT table's column (worker_job_outbox.prerequisite_completion_key)
+// — it never touches worker_job_completion_fences itself. Confirmed via
+// grep for MarkCompletionTx/worker_job_completion_fences across
+// internal/scheduler/fixed: zero hits. This is a false positive, not an
+// unresolved gap — coordinatorPosture has no row for this table.
 func domainPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
-			{"integrations", false, false},
-			{"integration_sources", false, false},
-			{"integration_datasets", false, false},
-			{"integration_credentials", false, false},
-			{"sync_runs", false, false},
-			{"worker_job_routes", false, false},
-			{"sync_dispatch_transport_routes", false, false},
-			{"sync_run_units", false, true},
-			{"sync_watermarks", true, true},
-			{"sync_dispatch_outbox", true, true},
-			{"worker_job_outbox", true, false},
-			{"sync_configurations", false, true},
-			{"scheduled_jobs", false, true},
-			{"scheduled_sync_occurrences", true, true},
-			{"fixed_schedule_occurrences", true, true},
-			{"organizations", false, false},
-			{"remaining_metric_runs", true, true},
-			{"remaining_metric_partitions", true, true},
-			{"work_graph_execution_requests", true, true},
-			{"work_graph_execution_ledger", true, true},
+			{"integrations", false, false, false},
+			{"integration_sources", false, false, false},
+			{"integration_datasets", false, false, false},
+			{"integration_credentials", false, false, false},
+			{"sync_runs", false, true, false},
+			{"sync_dispatch_transport_routes", false, false, false},
+			{"sync_run_units", false, true, false},
+			{"sync_watermarks", true, true, false},
+			{"sync_dispatch_outbox", true, true, false},
+			{"worker_job_outbox", true, false, false},
+			{"sync_configurations", false, false, false},
+			{"organizations", false, false, false},
+			{"remaining_metric_runs", true, true, false},
+			{"remaining_metric_partitions", true, true, false},
+			{"work_graph_execution_requests", true, true, false},
+			{"work_graph_execution_ledger", true, true, false},
+			{"billing_notifications", false, false, false},
+			{"daily_metrics_partitions", true, true, false},
+			{"daily_metrics_runs", true, true, false},
+			{"external_ingest_batch_payloads", false, false, true},
+			{"external_ingest_batches", false, true, true},
+			{"external_ingest_recompute_jobs", true, false, false},
+			{"external_ingest_rejections", true, false, false},
+			{"external_ingest_sources", false, false, false},
+			{"feature_flags", false, false, false},
+			{"org_feature_overrides", false, false, false},
+			{"org_licenses", false, false, false},
+			{"provider_rate_limit_observations", false, true, true},
+			{"report_runs", false, true, false},
+			{"saved_reports", false, true, false},
+			{"webhook_deliveries", false, false, false},
+			{"worker_job_runs", true, true, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
+		},
+	}
+}
+
+// coordinatorPosture is the coordinator runtime role's declared manifest
+// under the Option B two-role split, per
+// docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91 — the
+// same sole authority domainPosture defers to.
+//
+//   - internal_service_credentials, worker_operator_audits,
+//     sync_run_reference_discoveries, sync_run_post_dispatches,
+//     worker_job_routes: coordinator-exclusive, verified confidence (workerctl
+//     and/or reconciler call sites, no domain-hot-path site for any of them).
+//   - scheduled_jobs, scheduled_sync_occurrences, fixed_schedule_occurrences:
+//     coordinator-exclusive but manifest confidence is "unverified-shape" —
+//     the grant-deriver tool cannot trace reachability through a
+//     closure-typed struct field here. Flags below are independently derived
+//     by hand, not carried over blind: confirmed via
+//     internal/scheduler/fixed/organizations.go (SELECT-only shape reasoning
+//     applied to the same package) and by reading
+//     internal/scheduler/sync/transaction.go's `FOR UPDATE OF config, job
+//     SKIP LOCKED` (which requires UPDATE on scheduled_jobs for the locking
+//     clause, matching the {false, true} already used pre-split) and
+//     internal/scheduler/fixed/*.go's genuine INSERT+UPDATE occurrence
+//     writers for the other two.
+//   - sync_dispatch_outbox, sync_run_units, sync_runs,
+//     sync_dispatch_transport_routes, worker_job_runs, organizations: the
+//     coordinator side of the six dual-grant tables also declared in
+//     domainPosture — see that function's doc comment.
+//
+// NOT included, pending confirmation: sync_configurations. The manifest
+// attributes it to the domain role only (SELECT). While independently
+// deriving the scheduled_jobs shape above, internal/scheduler/sync/
+// transaction.go's schedulerHandoffCandidatesSQL was found to lock this
+// table too — `FOR UPDATE OF config, job SKIP LOCKED` where `config` is
+// public.sync_configurations, joined with scheduled_jobs — via the same
+// closure-typed-struct-field blind spot the manifest already documents for
+// scheduled_jobs itself. That would make sync_configurations a SEVENTH
+// dual-grant table (coordinator: SELECT, UPDATE), not the domain-only table
+// the manifest states. This is flagged, not applied: the manifest is
+// authoritative over this comment's own reasoning, and this specific
+// contradiction (a "verified"-confidence row, not an "unverified-shape" one)
+// needs sign-off before the row changes. See the implementation report for
+// full evidence.
+func coordinatorPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"internal_service_credentials", false, true, false},
+			{"worker_operator_audits", true, true, false},
+			{"sync_run_reference_discoveries", false, false, false},
+			{"sync_run_post_dispatches", false, false, false},
+			{"worker_job_routes", false, true, false},
+			{"scheduled_jobs", false, true, false},
+			{"scheduled_sync_occurrences", true, true, false},
+			{"fixed_schedule_occurrences", true, true, false},
+			{"sync_dispatch_outbox", false, true, false},
+			{"sync_run_units", false, false, false},
+			{"sync_runs", false, true, false},
+			{"sync_dispatch_transport_routes", false, true, false},
+			{"worker_job_runs", false, true, false},
+			{"organizations", false, false, false},
 		},
 	}
 }
@@ -542,10 +653,12 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	tableNames := make([]string, len(posture.RequiredTables))
 	allowInserts := make([]bool, len(posture.RequiredTables))
 	allowUpdates := make([]bool, len(posture.RequiredTables))
+	allowDeletes := make([]bool, len(posture.RequiredTables))
 	for i, table := range posture.RequiredTables {
 		tableNames[i] = table.TableName
 		allowInserts[i] = table.AllowInsert
 		allowUpdates[i] = table.AllowUpdate
+		allowDeletes[i] = table.AllowDelete
 	}
 	columnTables := make([]string, len(posture.ColumnScoped))
 	columnNames := make([]string, len(posture.ColumnScoped))
@@ -563,14 +676,15 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	// unequal-length parallel arrays here would not raise an error either —
 	// it would either read as a mystery 42501-shaped readiness failure or,
 	// worse, let a required row's flag silently read NULL. These lengths
-	// cannot actually differ from the loops immediately above (each triple
-	// is built from one shared source slice), so this can never fire today;
-	// it exists so a future refactor of that construction — the allow_delete
-	// column slotting in is the concrete case in view — fails loudly here
-	// instead of silently at the SQL layer if it ever breaks that
-	// invariant. See TestCheckRolePostureRejectsRaggedParallelArrays.
+	// cannot actually differ from the loop immediately above (each quadruple
+	// is built from one shared source slice — allow_delete joined allow_insert
+	// and allow_update in that same loop, not as a bolted-on parallel array),
+	// so this can never fire today; it exists so a future refactor of that
+	// construction fails loudly here instead of silently at the SQL layer if
+	// it ever breaks that invariant. See
+	// TestCheckRolePostureRejectsRaggedParallelArrays.
 	if err := validateParallelArrayLengths(
-		"required table privileges", len(tableNames), len(allowInserts), len(allowUpdates),
+		"required table privileges", len(tableNames), len(allowInserts), len(allowUpdates), len(allowDeletes),
 	); err != nil {
 		return err
 	}
@@ -585,6 +699,7 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
+		allowDeletes,
 	).Scan(&authorized); err != nil || !authorized {
 		return ErrUnavailable
 	}
@@ -618,4 +733,15 @@ func validateParallelArrayLengths(context string, lengths ...int) error {
 // deployment to independently check its own posture too.
 func CheckDomainAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
 	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, domainPosture())
+}
+
+// CheckCoordinatorAuthorization is the coordinator role's counterpart to
+// CheckDomainAuthorization: a read-only readiness check binding the active
+// login to the declared coordinator role and running it through
+// coordinatorPosture. Coordinator-role workers (workerctl, reconciler,
+// scheduler) gate their own readiness on this at startup — see
+// CheckRolePosture's doc comment for why the cross-role attribution property
+// depends on every role checking itself this way, not on either check alone.
+func CheckCoordinatorAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, coordinatorPosture())
 }

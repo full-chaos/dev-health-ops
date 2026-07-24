@@ -96,7 +96,7 @@ func TestRolePostureQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T)
 		"'USAGE'",
 		"'CREATE'",
 		"'TEMPORARY'",
-		"UNNEST($3::TEXT[], $4::BOOLEAN[], $5::BOOLEAN[])",
+		"UNNEST($3::TEXT[], $4::BOOLEAN[], $5::BOOLEAN[], $9::BOOLEAN[])",
 		"UNNEST($6::TEXT[], $7::TEXT[], $8::TEXT[])",
 	} {
 		if !strings.Contains(upperQuery, required) {
@@ -124,7 +124,6 @@ func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
 		"integration_datasets",
 		"integration_credentials",
 		"sync_runs",
-		"worker_job_routes",
 		"sync_dispatch_transport_routes",
 		"sync_run_units",
 		"sync_watermarks",

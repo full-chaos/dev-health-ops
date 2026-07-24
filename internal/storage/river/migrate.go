@@ -237,17 +237,24 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.worker_job_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.worker_job_routes TO " + domainRole + "; END IF; END $$",
+		// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences, and
+		// fixed_schedule_occurrences are coordinator-exclusive under the
+		// Option B two-role split
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @
+		// eda2d6b91) and deliberately have no domain-role GRANT here.
+		// sync_configurations is SELECT-only for the domain role: its
+		// coordinator-side FOR UPDATE row-locking use does not make the
+		// domain role's own posture require UPDATE. sync_runs, by contrast,
+		// is one of the six dual-grant ("both") tables and genuinely needs
+		// UPDATE on the domain side (Fanout's FOR SHARE + the providersync
+		// hot path).
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_configurations TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.scheduled_sync_occurrences') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.scheduled_sync_occurrences TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.fixed_schedule_occurrences') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.fixed_schedule_occurrences TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_configurations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO " + domainRole + "; END IF; END $$",
@@ -258,6 +265,24 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// domain role forge completed_at and mint a fence retention never
 		// reaps.
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + domainRole + "; END IF; END $$",
+		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		"DO $$ BEGIN IF to_regclass('public.billing_notifications') IS NOT NULL THEN GRANT SELECT ON TABLE public.billing_notifications TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.daily_metrics_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_partitions TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.daily_metrics_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_runs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.external_ingest_batch_payloads') IS NOT NULL THEN GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.external_ingest_batches') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.external_ingest_batches TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.external_ingest_recompute_jobs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.external_ingest_recompute_jobs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.external_ingest_rejections') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.external_ingest_rejections TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.external_ingest_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.external_ingest_sources TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.feature_flags') IS NOT NULL THEN GRANT SELECT ON TABLE public.feature_flags TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.org_feature_overrides') IS NOT NULL THEN GRANT SELECT ON TABLE public.org_feature_overrides TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.org_licenses') IS NOT NULL THEN GRANT SELECT ON TABLE public.org_licenses TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.provider_rate_limit_observations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.provider_rate_limit_observations TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.report_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.report_runs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.saved_reports') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.saved_reports TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.webhook_deliveries') IS NOT NULL THEN GRANT SELECT ON TABLE public.webhook_deliveries TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.worker_job_runs TO " + domainRole + "; END IF; END $$",
 		"GRANT USAGE ON SCHEMA public TO " + queueRole,
 		"REVOKE CREATE ON SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + queueRole,

@@ -4,6 +4,8 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,5 +312,170 @@ func TestCheckRolePostureAllowsATableRequiredByBothRoles(t *testing.T) {
 	}
 	if err := CheckRolePosture(ctx, connB, roleB, schema, postureB); err != nil {
 		t.Fatalf("role B did not recover after revoking the misattributed exclusive table: %v", err)
+	}
+}
+
+// grantStatementsForPosture derives GRANT statements directly from a
+// RolePosture's own data — never a hand-maintained parallel list — so this
+// test cannot silently drift from whatever domainPosture()/coordinatorPosture()
+// actually declare. Table-wide privileges only ever include SELECT plus
+// whichever of INSERT/UPDATE/DELETE the posture allows, matching
+// TablePrivilege's own contract that every other table-level privilege must
+// stay absent.
+func grantStatementsForPosture(role string, posture RolePosture) []string {
+	statements := make([]string, 0, len(posture.RequiredTables)+len(posture.ColumnScoped))
+	for _, table := range posture.RequiredTables {
+		privileges := []string{"SELECT"}
+		if table.AllowInsert {
+			privileges = append(privileges, "INSERT")
+		}
+		if table.AllowUpdate {
+			privileges = append(privileges, "UPDATE")
+		}
+		if table.AllowDelete {
+			privileges = append(privileges, "DELETE")
+		}
+		statements = append(statements, fmt.Sprintf(
+			"GRANT %s ON TABLE public.%s TO %s", strings.Join(privileges, ", "), table.TableName, role,
+		))
+	}
+	for _, column := range posture.ColumnScoped {
+		statements = append(statements, fmt.Sprintf(
+			"GRANT %s (%s) ON TABLE public.%s TO %s", column.Privilege, column.ColumnName, column.TableName, role,
+		))
+	}
+	return statements
+}
+
+// TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest
+// proves the cross-role attribution property
+// TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges and
+// TestCheckRolePostureAllowsATableRequiredByBothRoles already established for
+// arbitrary and synthetic postures holds for the ACTUAL production partition:
+// domainPosture() and coordinatorPosture(), per
+// docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91. Every
+// one of the manifest's six dual-grant ("both") tables — sync_dispatch_outbox,
+// sync_run_units, sync_runs, worker_job_runs, sync_dispatch_transport_routes,
+// organizations — is exercised here with each role's real flags side by
+// side, not a single stand-in shared table. The two postures' own grant
+// statements (derived from their own data, not copy-pasted) are what get
+// applied, so a future manifest change that adds, removes, or reflags a
+// table is exercised by this test without any hand-maintained list here to
+// fall out of sync.
+func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+
+	const (
+		domainRole      = "manifest_domain_role"
+		coordinatorRole = "manifest_coordinator_role"
+		domainPassword  = "manifest_domain_role_password"
+		coordinatorPass = "manifest_coordinator_role_password"
+		schema          = "manifest_attribution_river"
+		domainExclusive = "integrations"
+		coordinatorOnly = "worker_job_routes"
+	)
+	domain := domainPosture()
+	coordinator := coordinatorPosture()
+
+	// Union of every table either posture requires, generically shaped: the
+	// exact production column shapes are exercised separately in
+	// domain_grant_reconciliation_integration_test.go. worker_job_completion_fences
+	// is the one exception, since its ColumnScoped grant needs both columns
+	// to actually exist.
+	tableNames := map[string]struct{}{}
+	for _, table := range domain.RequiredTables {
+		tableNames[table.TableName] = struct{}{}
+	}
+	for _, table := range coordinator.RequiredTables {
+		tableNames[table.TableName] = struct{}{}
+	}
+	for _, column := range domain.ColumnScoped {
+		tableNames[column.TableName] = struct{}{}
+	}
+
+	setup := []string{
+		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainPassword + "'",
+		"CREATE ROLE " + coordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + coordinatorPass + "'",
+		"GRANT CONNECT ON DATABASE worker_test TO " + domainRole + ", " + coordinatorRole,
+		"GRANT USAGE ON SCHEMA public TO " + domainRole + ", " + coordinatorRole,
+		"CREATE SCHEMA " + schema,
+	}
+	for name := range tableNames {
+		if name == "worker_job_completion_fences" {
+			setup = append(setup, "CREATE TABLE public.worker_job_completion_fences "+
+				"(completion_key text PRIMARY KEY, completed_at timestamptz NOT NULL DEFAULT now())")
+			continue
+		}
+		setup = append(setup, "CREATE TABLE public."+name+" (id bigint PRIMARY KEY)")
+	}
+	setup = append(setup, grantStatementsForPosture(domainRole, domain)...)
+	setup = append(setup, grantStatementsForPosture(coordinatorRole, coordinator)...)
+	for _, statement := range setup {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+
+	domainConn := connectAs(t, ctx, instance.URI, domainRole, domainPassword)
+	coordinatorConn := connectAs(t, ctx, instance.URI, coordinatorRole, coordinatorPass)
+
+	if err := CheckRolePosture(ctx, domainConn, domainRole, schema, domain); err != nil {
+		t.Fatalf("domain role rejected the real manifest's own declared posture: %v", err)
+	}
+	if err := CheckRolePosture(ctx, coordinatorConn, coordinatorRole, schema, coordinator); err != nil {
+		t.Fatalf("coordinator role rejected the real manifest's own declared posture: %v", err)
+	}
+
+	// Direction one: a table exclusive to domain (never declared in
+	// coordinatorPosture) wrongly granted to the coordinator role must be
+	// caught by the coordinator's OWN check — the same distributed property
+	// TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges proved for
+	// synthetic tables, now against the actual manifest.
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public."+domainExclusive+" TO "+coordinatorRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, coordinatorConn, coordinatorRole, schema, coordinator); err == nil {
+		t.Fatalf("coordinator role unexpectedly authorized while also holding domain-exclusive %s", domainExclusive)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public."+domainExclusive+" FROM "+coordinatorRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, coordinatorConn, coordinatorRole, schema, coordinator); err != nil {
+		t.Fatalf("coordinator role did not recover after revoking the misattributed %s: %v", domainExclusive, err)
+	}
+
+	// Direction two, the exact mirror: a table exclusive to the coordinator
+	// (never declared in domainPosture) wrongly granted to domain must be
+	// caught by domain's own check.
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public."+coordinatorOnly+" TO "+domainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, domainConn, domainRole, schema, domain); err == nil {
+		t.Fatalf("domain role unexpectedly authorized while also holding coordinator-exclusive %s", coordinatorOnly)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public."+coordinatorOnly+" FROM "+domainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, domainConn, domainRole, schema, domain); err != nil {
+		t.Fatalf("domain role did not recover after revoking the misattributed %s: %v", coordinatorOnly, err)
 	}
 }

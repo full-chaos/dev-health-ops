@@ -51,65 +51,28 @@ type domainTable struct {
 func reconciliationTables() []domainTable {
 	return []domainTable{
 		{
+			// Tightened under the Option B two-role split
+			// (docs/architecture/chaos-3033-role-partition-manifest.md @
+			// eda2d6b91): the domain-side call
+			// (internal/syncdispatchruntime/native_post_sync.go:263) is a
+			// plain SELECT with no lock clause. The FOR UPDATE row-locking
+			// requirement this table used to carry belongs to the
+			// coordinator-side scheduler code, not the domain worker — see
+			// coordinatorPosture's doc comment for the still-open question of
+			// whether that makes this table a seventh dual-grant table.
 			name: "sync_configurations",
 			ddl: `CREATE TABLE public.sync_configurations (
 				id uuid PRIMARY KEY, org_id text NOT NULL, is_active boolean NOT NULL,
 				sync_options jsonb NOT NULL, last_sync_at timestamptz, created_at timestamptz NOT NULL)`,
-			// Row locking, not writing. SELECT alone fails here with 42501.
 			exercise: []string{
 				"SELECT id FROM public.sync_configurations WHERE is_active",
-				"SELECT id FROM public.sync_configurations WHERE is_active FOR UPDATE SKIP LOCKED",
 			},
 		},
 		{
-			name: "scheduled_jobs",
-			ddl: `CREATE TABLE public.scheduled_jobs (
-				id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,
-				job_type text NOT NULL, next_run_at timestamptz, updated_at timestamptz)`,
-			exercise: []string{
-				"SELECT id FROM public.scheduled_jobs WHERE job_type = 'sync' FOR UPDATE SKIP LOCKED",
-				"UPDATE public.scheduled_jobs SET next_run_at = now(), updated_at = now() WHERE id = gen_random_uuid()",
-			},
-		},
-		{
-			name: "scheduled_sync_occurrences",
-			ddl: `CREATE TABLE public.scheduled_sync_occurrences (
-				occurrence_id text PRIMARY KEY, identity_version text NOT NULL, org_id text NOT NULL,
-				sync_config_id uuid NOT NULL, scheduled_job_id uuid NOT NULL,
-				scheduled_for timestamptz NOT NULL, job_run_id uuid, sync_run_id uuid,
-				reconcile_attempt_count integer NOT NULL DEFAULT 0,
-				reconcile_next_attempt_at timestamptz, reconcile_error_code varchar(64),
-				reconcile_error_at timestamptz, reconcile_status varchar(16) NOT NULL DEFAULT 'pending',
-				created_at timestamptz NOT NULL DEFAULT now())`,
-			// INSERT ... RETURNING needs SELECT as well as INSERT.
-			exercise: []string{
-				`INSERT INTO public.scheduled_sync_occurrences
-					(occurrence_id, identity_version, org_id, sync_config_id, scheduled_job_id, scheduled_for)
-				 VALUES ('k','v','o',gen_random_uuid(),gen_random_uuid(),now())
-				 ON CONFLICT DO NOTHING RETURNING occurrence_id`,
-				"SELECT identity_version FROM public.scheduled_sync_occurrences WHERE occurrence_id = 'k' FOR UPDATE",
-				"UPDATE public.scheduled_sync_occurrences SET reconcile_status = 'retry' WHERE occurrence_id = 'k'",
-			},
-		},
-		{
-			name: "fixed_schedule_occurrences",
-			ddl: `CREATE TABLE public.fixed_schedule_occurrences (
-				occurrence_key text PRIMARY KEY, identity_version text NOT NULL, schedule_id text NOT NULL,
-				target_kind text NOT NULL, scheduled_for timestamptz NOT NULL, observed_at timestamptz NOT NULL,
-				status varchar(16) NOT NULL DEFAULT 'claimed', handoff_count integer NOT NULL DEFAULT 0,
-				skip_reason varchar(64), completed_at timestamptz,
-				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
-			exercise: []string{
-				`INSERT INTO public.fixed_schedule_occurrences
-					(occurrence_key, identity_version, schedule_id, target_kind, scheduled_for, observed_at, created_at, updated_at)
-				 VALUES ('k','v','s','kind',now(),now(),now(),now())
-				 ON CONFLICT DO NOTHING RETURNING occurrence_key`,
-				"SELECT identity_version FROM public.fixed_schedule_occurrences WHERE occurrence_key = 'k' FOR UPDATE",
-				"UPDATE public.fixed_schedule_occurrences SET status = 'skipped' WHERE occurrence_key = 'k'",
-				"SELECT scheduled_for, observed_at FROM public.fixed_schedule_occurrences WHERE schedule_id = 's' ORDER BY scheduled_for DESC LIMIT 1",
-			},
-		},
-		{
+			// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences,
+			// and fixed_schedule_occurrences moved to coordinatorPosture
+			// entirely under the Option B split and no longer appear here —
+			// the domain role has no grant on any of them.
 			name: "organizations",
 			ddl:  "CREATE TABLE public.organizations (id uuid PRIMARY KEY, is_active boolean NOT NULL)",
 			exercise: []string{
@@ -199,6 +162,47 @@ func reconciliationTables() []domainTable {
 				"INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ('d:1') ON CONFLICT (completion_key) DO NOTHING",
 			},
 		},
+		// The three tables below are the only domain-role AllowDelete rows in
+		// domainPosture — chaos-3033-role-partition-manifest.md's
+		// "schema-level blocker" section, resolved by adding the allow_delete
+		// column. Each is a real retention/cleanup deletion, not a synthetic
+		// probe: internal/streamhandlers/external_postgres.go for the two
+		// external_ingest_* tables, internal/jobs/system/retention_postgres.go
+		// (a FOR UPDATE SKIP LOCKED chunked delete-read) for
+		// provider_rate_limit_observations.
+		{
+			name: "external_ingest_batch_payloads",
+			ddl: `CREATE TABLE public.external_ingest_batch_payloads (
+				id uuid PRIMARY KEY, batch_id uuid NOT NULL, received_at timestamptz NOT NULL)`,
+			exercise: []string{
+				"SELECT id FROM public.external_ingest_batch_payloads WHERE batch_id = gen_random_uuid()",
+				"DELETE FROM public.external_ingest_batch_payloads WHERE id = gen_random_uuid()",
+			},
+		},
+		{
+			name: "external_ingest_batches",
+			ddl: `CREATE TABLE public.external_ingest_batches (
+				id uuid PRIMARY KEY, source_id uuid NOT NULL, status text NOT NULL,
+				created_at timestamptz NOT NULL)`,
+			exercise: []string{
+				"SELECT id FROM public.external_ingest_batches WHERE status = 'pending'",
+				"UPDATE public.external_ingest_batches SET status = 'processed' WHERE id = gen_random_uuid()",
+				"DELETE FROM public.external_ingest_batches WHERE id = gen_random_uuid()",
+			},
+		},
+		{
+			name: "provider_rate_limit_observations",
+			ddl: `CREATE TABLE public.provider_rate_limit_observations (
+				id uuid PRIMARY KEY, provider text NOT NULL, observed_at timestamptz NOT NULL)`,
+			// FOR UPDATE SKIP LOCKED chunked delete-read, the real shape
+			// (internal/jobs/system/retention_postgres.go): a locking SELECT
+			// followed by a keyed DELETE, not a bare unconditional one.
+			exercise: []string{
+				"SELECT id FROM public.provider_rate_limit_observations WHERE provider = 'github' FOR UPDATE SKIP LOCKED",
+				"UPDATE public.provider_rate_limit_observations SET observed_at = now() WHERE id = gen_random_uuid()",
+				"DELETE FROM public.provider_rate_limit_observations WHERE id = gen_random_uuid()",
+			},
+		},
 	}
 }
 
@@ -231,21 +235,37 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	for _, table := range reconciliationTables() {
 		setup = append(setup, table.ddl)
 	}
-	// The eleven relations that were already granted, so the assertion's
-	// required set is complete and this suite tests the delta rather than
-	// re-testing the baseline.
+	// The relations that were already granted with no interesting exercise
+	// shape of their own, so the assertion's required set is complete and
+	// this suite tests the delta rather than re-testing the baseline.
+	// worker_job_routes is deliberately absent: it moved to
+	// coordinatorPosture entirely under the Option B split
+	// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91)
+	// and the domain role no longer has any grant on it.
 	for _, ddl := range []string{
 		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.worker_job_routes (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 	} {
 		setup = append(setup, ddl)
 	}
@@ -634,6 +654,52 @@ func TestDomainAuthorizationRejectsPrivilegeHeldWithGrantOption(t *testing.T) {
 			t.Fatalf("domain role lost its base SELECT on completion_key: %v", err)
 		}
 	})
+}
+
+// external_ingest_batches is one of the three domain-role AllowDelete rows
+// (the schema-level gap the manifest's "Schema-level blocker" section
+// flagged, closed by adding the allow_delete column). DELETE is not
+// column-grantable in PostgreSQL, so unlike INSERT/UPDATE there is no
+// column-level or has_any_column_privilege route for this check to miss —
+// but the plain has_table_privilege(..., 'DELETE') <> allow_delete
+// comparison alone would still pass a role holding DELETE WITH GRANT OPTION
+// unnoticed (holding the option always implies holding the plain privilege),
+// letting it re-delegate deletion rights on a retention/cleanup table to
+// another role or to PUBLIC. This mirrors
+// TestDomainAuthorizationRejectsPrivilegeHeldWithGrantOption's table-level
+// case for the one privilege type that check does not cover.
+func TestDomainAuthorizationRejectsDeleteHeldWithGrantOption(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+
+	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
+	}
+	if _, err := admin.Exec(
+		ctx,
+		"GRANT DELETE ON TABLE public.external_ingest_batches TO "+grantDomainRole+" WITH GRANT OPTION",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+		t.Fatal("domain role unexpectedly authorized: DELETE WITH GRANT OPTION on external_ingest_batches went undetected")
+	}
+	// Revoking only the option, not the underlying privilege, proves the
+	// check is reacting to the option specifically.
+	if _, err := admin.Exec(
+		ctx,
+		"REVOKE GRANT OPTION FOR DELETE ON TABLE public.external_ingest_batches FROM "+grantDomainRole,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		t.Fatalf("authorization did not recover after revoking the DELETE option, base privilege intact: %v", err)
+	}
+	if _, err := domain.Exec(ctx, "DELETE FROM public.external_ingest_batches WHERE id = gen_random_uuid()"); err != nil {
+		t.Fatalf("domain role lost its base DELETE on external_ingest_batches: %v", err)
+	}
 }
 
 // TestDomainRoleCanRunEveryProductionStatementShape proves each statement

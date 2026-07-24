@@ -131,7 +131,8 @@ hand, not grant blind.
 | remaining_metric_runs | domain | SELECT, INSERT, UPDATE | verified | same |
 | report_runs | domain | SELECT, UPDATE | verified | `internal/jobs/report/{postgres,query}.go` (heavy) |
 | saved_reports | domain | SELECT, UPDATE | verified | same |
-| sync_configurations | domain | SELECT | verified | `internal/syncdispatchruntime/native_post_sync.go:263` (sync, Fanout) |
+| sync_configurations | **both** | domain: SELECT | verified | `internal/syncdispatchruntime/native_post_sync.go:263` (sync, Fanout) |
+| sync_configurations | **both** | coordinator: SELECT, UPDATE | verified | `internal/scheduler/sync/transaction.go:351,366`: `schedulerHandoffCandidatesSQL` — `FROM public.sync_configurations AS config ... FOR UPDATE OF config, job SKIP LOCKED`. The `FOR UPDATE OF config` clause names `sync_configurations` explicitly, so it needs UPDATE (row-locking semantics, same rule as `scheduled_jobs`'s claim query in the same statement). Wired from `cmd/dev-health-scheduler` through the same closure-typed `sources.newRepository`/`tx pgx.Tx`-parameter indirection that hid `scheduled_jobs` — this table slipped past the same blind spot the manifest already flagged, caught by a direct source read, not the automated tool. |
 | webhook_deliveries | domain | SELECT | verified | `internal/jobs/operational/postgres.go:34` (ops) |
 | work_graph_execution_ledger | domain | INSERT, UPDATE | verified | `internal/jobs/workgraph/postgres.go` (heavy + sync) |
 | work_graph_execution_requests | domain | SELECT, INSERT, UPDATE | verified | `internal/jobs/workgraph/{postgres,publisher}.go` |
@@ -178,12 +179,44 @@ belongs to, not a formal proof. Full list: `go run ./cmd/dev-health-grantcheck
 tool's files copied in (see the handoff README's "Integration-branch
 re-run" section for the exact procedure).
 
+## Closure-typed-field sweep (`internal/scheduler/{sync,fixed}`)
+
+`sync_configurations` was missed in the first two manifest passes because
+its coordinator-side reachability goes through the same
+`sources.newRepository(database.DomainPool())`-style closure-typed struct
+field that already hid `scheduled_jobs` from the automated tool trace —
+same blind spot, second instance. To close the class rather than find a
+third instance at deploy time, I grepped every `FROM public.<table>` /
+`JOIN public.<table>` and every `INSERT INTO|UPDATE|DELETE FROM public.<table>`
+in `internal/scheduler/sync/*.go` and `internal/scheduler/fixed/*.go`
+(excluding `_test.go`) at `cd7aa8a8e` and cross-checked the distinct table
+set against the manifest:
+
+- Read tables: `fixed_schedule_occurrences`, `organizations`,
+  `scheduled_sync_occurrences`, `sync_configurations`, `scheduled_jobs`.
+- Write tables: `fixed_schedule_occurrences`, `scheduled_sync_occurrences`,
+  `sync_configurations` (via `FOR UPDATE OF`), `scheduled_jobs`.
+- No bare/unqualified table references found (all schema-qualified with
+  `public.`).
+- No SQL directly in `cmd/dev-health-scheduler/*.go` itself (all SQL lives
+  in the `internal/scheduler/{sync,fixed}` packages, as expected).
+- One false alarm: an unfiltered pass initially surfaced `scheduler_handoffs`
+  — that reference is exclusively inside `_test.go` files (`repository_test.go`
+  presumably seeds a legacy/shadow table for comparison), not production code;
+  confirmed via a re-run that excludes test files. Not a real gap.
+
+**Result: `sync_configurations` was the only miss. Every other table this
+sweep found was already correctly in the manifest with correct privileges.**
+Nothing else to add.
+
 ## Dual-grant ("both") whitelist for the attribution test
 
 `sync_dispatch_outbox`, `sync_run_units`, `sync_runs`, `worker_job_runs`,
-`sync_dispatch_transport_routes`, `organizations` — **6 tables**, updated
-from the prior 4-table list now that `sync_dispatch_transport_routes` and
-`organizations` are confirmed dual-grant. This is the whitelist
-`TestDomainGrantSurfaceMatchesQuerySurface`'s future role-attribution
-extension and grants-finisher2's posture manifest must both reference —
-coordinate before either side hard-codes it independently.
+`sync_dispatch_transport_routes`, `organizations`, `sync_configurations` —
+**7 tables**, updated from the prior 6-table list now that
+`sync_configurations` is confirmed dual-grant (the closure-typed-field
+blind spot's second and, per the sweep above, final instance). This is the
+whitelist `TestDomainGrantSurfaceMatchesQuerySurface`'s future
+role-attribution extension and grants-finisher2's posture manifest must
+both reference — coordinate before either side hard-codes it
+independently.

@@ -33,6 +33,11 @@ def _source(relative_path: str) -> Path:
 _BUDGET_TYPES_SOURCE = _source("dev_health_ops/sync/budget_types.py")
 _DATASETS_SOURCE = _source("dev_health_ops/sync/datasets.py")
 _USAGE_SOURCE = _source("dev_health_ops/providers/usage.py")
+_LAUNCHDARKLY_PROCESSOR_SOURCE = _source("dev_health_ops/processors/launchdarkly.py")
+_LINEAR_BUDGET_SOURCE = _source("dev_health_ops/providers/linear/budget.py")
+_JIRA_BUDGET_SOURCE = _source("dev_health_ops/providers/jira/budget.py")
+_LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/budget.py")
+_DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
 
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
@@ -98,25 +103,30 @@ def _target_dataset_adapters() -> None:
     )
 
 
-ALLOWED_MODULES: dict[Path, tuple[str, Callable[[], None]]] = {
-    _source("dev_health_ops/processors/launchdarkly.py"): (
+ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
+    _LAUNCHDARKLY_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.launchdarkly",
+        _LAUNCHDARKLY_PROCESSOR_SOURCE,
         _target_launchdarkly_processor,
     ),
-    _source("dev_health_ops/providers/linear/budget.py"): (
+    _LINEAR_BUDGET_SOURCE: (
         "dev_health_ops.providers.linear.budget",
+        _LINEAR_BUDGET_SOURCE,
         _target_budget,
     ),
-    _source("dev_health_ops/providers/jira/budget.py"): (
+    _JIRA_BUDGET_SOURCE: (
         "dev_health_ops.providers.jira.budget",
+        _JIRA_BUDGET_SOURCE,
         _target_budget,
     ),
-    _source("dev_health_ops/providers/launchdarkly/budget.py"): (
+    _LAUNCHDARKLY_BUDGET_SOURCE: (
         "dev_health_ops.providers.launchdarkly.budget",
+        _LAUNCHDARKLY_BUDGET_SOURCE,
         _target_budget,
     ),
-    _source("dev_health_ops/processors/dataset_adapters.py"): (
+    _DATASET_ADAPTERS_SOURCE: (
         "dev_health_ops.processors.dataset_adapters",
+        _DATASET_ADAPTERS_SOURCE,
         _target_dataset_adapters,
     ),
 }
@@ -132,8 +142,7 @@ def _purge_dev_health_modules() -> None:
 def _install_package(name: str) -> ModuleType:
     module = ModuleType(name)
     module.__package__ = name
-    package_path = SOURCE_ROOT.joinpath(*name.split(".")).resolve(strict=True)
-    module.__path__ = [str(package_path)]
+    module.__path__ = []
     _register_module(name, module)
     return module
 
@@ -194,17 +203,17 @@ def load_live_module(source: Path) -> Any:
     allowed = ALLOWED_MODULES.get(expected)
     if allowed is None:
         raise ValueError(f"unexpected oracle source: {source}")
-    module_name, configure = allowed
+    module_name, canonical_source, configure = allowed
 
     _purge_dev_health_modules()
     _install_namespace()
     importlib.invalidate_caches()
     configure()
-    module = _load_source_module(module_name, expected)
+    module = _load_source_module(module_name, canonical_source)
     spec = module.__spec__
     if spec is None or spec.origin is None:
         raise RuntimeError(f"oracle module {module_name} has no import origin")
     origin = Path(spec.origin).resolve(strict=True)
-    if origin != expected:
-        raise RuntimeError(f"oracle imported {origin}, expected {expected}")
+    if origin != canonical_source:
+        raise RuntimeError(f"oracle imported {origin}, expected {canonical_source}")
     return module

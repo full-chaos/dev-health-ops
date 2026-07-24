@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -148,14 +149,17 @@ func TestPythonOracleLoaderPurgesForgedAndHostilePreloads(t *testing.T) {
 		t.Fatalf("execute Python oracle loader probe: %v: %s", err, output)
 	}
 	var result struct {
-		Canonical      bool     `json:"canonical"`
-		HostileTouches []string `json:"hostile_touches"`
-		Origin         string   `json:"origin"`
+		Canonical        bool     `json:"canonical"`
+		HostileTouches   []string `json:"hostile_touches"`
+		Origin           string   `json:"origin"`
+		PreloadedModules []string `json:"preloaded_modules"`
+		ReusedModules    []string `json:"reused_modules"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
 		t.Fatalf("decode Python oracle loader probe: %v: %s", err, output)
 	}
-	if !result.Canonical || len(result.HostileTouches) != 0 {
+	if !result.Canonical || len(result.HostileTouches) != 0 ||
+		len(result.PreloadedModules) != 21 || len(result.ReusedModules) != 0 {
 		t.Fatalf("unsafe Python oracle resolution: %+v", result)
 	}
 	expectedOrigin, err := filepath.EvalSymlinks(adapterSource)
@@ -174,8 +178,12 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 	packageDir := filepath.Dir(currentFile)
 	root := filepath.Join(packageDir, "..", "..")
 
-	withoutSite := func(args ...string) *exec.Cmd {
-		command := exec.Command(python, append([]string{"-S"}, args...)...)
+	pythonCommand := func(withoutSite bool, args ...string) *exec.Cmd {
+		commandArgs := args
+		if withoutSite {
+			commandArgs = append([]string{"-S"}, args...)
+		}
+		command := exec.Command(python, commandArgs...)
 		command.Env = make([]string, 0, len(os.Environ()))
 		for _, value := range os.Environ() {
 			if !strings.HasPrefix(value, "PYTHONPATH=") &&
@@ -186,7 +194,8 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 		return command
 	}
 
-	output, err := withoutSite(
+	output, err := pythonCommand(
+		true,
 		"-c",
 		"import importlib.util; assert importlib.util.find_spec('sqlalchemy') is None",
 	).CombinedOutput()
@@ -228,15 +237,32 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 				[]string{filepath.Join(packageDir, "testdata", test.script)},
 				test.source...,
 			)
-			output, err := withoutSite(args...).CombinedOutput()
+			defaultOutput, err := pythonCommand(false, args...).CombinedOutput()
 			if err != nil {
-				t.Fatalf("execute minimal-Python oracle: %v: %s", err, output)
+				t.Fatalf("execute default-Python oracle: %v: %s", err, defaultOutput)
+			}
+			if len(bytes.TrimSpace(defaultOutput)) == 0 || !json.Valid(defaultOutput) {
+				t.Fatalf("default-Python oracle returned invalid JSON: %s", defaultOutput)
+			}
+			minimalOutput, err := pythonCommand(true, args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("execute minimal-Python oracle: %v: %s", err, minimalOutput)
+			}
+			if len(bytes.TrimSpace(minimalOutput)) == 0 || !json.Valid(minimalOutput) {
+				t.Fatalf("minimal-Python oracle returned invalid JSON: %s", minimalOutput)
+			}
+			if !bytes.Equal(minimalOutput, defaultOutput) {
+				t.Fatalf(
+					"minimal-Python oracle output differs from default:\nminimal=%s\ndefault=%s",
+					minimalOutput,
+					defaultOutput,
+				)
 			}
 		})
 	}
 }
 
-func TestPythonOracleLoaderHasNoDynamicExecutionOrSubprocess(t *testing.T) {
+func TestPythonOracleLoaderHasNoCallerControlledExecutionOrSubprocess(t *testing.T) {
 	_, currentFile, _, _ := runtime.Caller(0)
 	loaderPath := filepath.Join(filepath.Dir(currentFile), "testdata", "python_oracle_loader.py")
 	contents, err := os.ReadFile(loaderPath)

@@ -3,8 +3,24 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PROVIDER_DOC = ROOT / "docs" / "providers" / "jira-service-management.md"
-MODEL_DOC = ROOT / "docs" / "architecture" / "canonical-operational-model.md"
+PUBLIC_GUIDE = ROOT / "docs" / "admin" / "data-sources" / "jira-atlassian.md"
+PROVIDER_DOC = (
+    ROOT / ".github" / "docs-legacy" / "providers" / "jira-service-management.md"
+)
+# The canonical operational model is preserved source evidence, not a public page.
+MODEL_DOC = (
+    ROOT / ".github" / "docs-legacy" / "architecture" / "canonical-operational-model.md"
+)
+
+
+def test_jsm_internal_contract_is_archived_and_public_guide_is_task_oriented() -> None:
+    assert PROVIDER_DOC.is_file(), f"missing archived JSM contract: {PROVIDER_DOC}"
+    public = PUBLIC_GUIDE.read_text(encoding="utf-8")
+    assert "page_id: admin-jira" in public
+    assert "Connect and verify Jira" in public
+    assert "not yet a supported\nadministrator workflow" in public
+    assert "Jira Service Management provider contract" not in public
+    assert "api.atlassian.com/jsm/incidents" not in public
 
 
 def test_jsm_matrix_uses_only_canonical_outcomes() -> None:

@@ -335,7 +335,7 @@ web:
 # DIRECTLY at Postgres. Legacy POSTGRES_URI / DATABASE_URI values remain
 # Alembic-only compatible. Every migration DSN must point
 # (port 5432), never at a transaction-mode pooler (PgBouncer/RDS Proxy) —
-# migrations run raw DDL. See docs/ops/database-connection-pooling.md.
+# migrations run raw DDL. See docs/operate/configure/databases-and-storage.md.
 migrations:
   hook:
     enabled: true

@@ -7,7 +7,7 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 HARNESS="${ROOT}/tests/compatibility/river/run.sh"
 RECORDER="${ROOT}/tests/compatibility/river/record.sh"
 COMPOSE_FILE="${ROOT}/tests/compatibility/river/compose.compatibility.yml"
-RESULTS="${ROOT}/docs/architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
+RESULTS="${ROOT}/.github/docs-legacy/architecture/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
 
 for command_name in bash docker jq shellcheck; do
   command -v "${command_name}" >/dev/null 2>&1 || {
@@ -28,9 +28,9 @@ docker compose \
   --file "${COMPOSE_FILE}" \
   config --quiet
 jq empty \
-  "${ROOT}/docs/architecture/evidence/go-worker-migration/v0-celery-baseline/capture.json" \
-  "${ROOT}/docs/architecture/evidence/go-worker-migration/v0-celery-baseline/local-resource-snapshot.json" \
-  "${ROOT}/docs/architecture/evidence/go-worker-migration/v1-river-spike/compatibility-matrix.json" \
+  "${ROOT}/.github/docs-legacy/architecture/evidence/go-worker-migration/v0-celery-baseline/capture.json" \
+  "${ROOT}/.github/docs-legacy/architecture/evidence/go-worker-migration/v0-celery-baseline/local-resource-snapshot.json" \
+  "${ROOT}/.github/docs-legacy/architecture/evidence/go-worker-migration/v1-river-spike/compatibility-matrix.json" \
   "${RESULTS}"
 jq -e '
   .schema_version == 1

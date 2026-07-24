@@ -179,7 +179,7 @@ CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
   dev-hops workers start-worker --queues default metrics sync reports
 ```
 
-Phase 1 of the [Go worker migration plan](docs/plans/go-worker-migration-implementation-plan.md)
+Phase 1 of the [Go worker migration plan](.github/docs-legacy/plans/go-worker-migration-implementation-plan.md)
 adds the Go runtime, River migration, dual-pool, job-contract, middleware, and
 operator foundations for future worker, scheduler, reconciler, and
 stream-runner processes. Every Go deployment profile remains disabled and all
@@ -192,8 +192,8 @@ Go River processes use `POSTGRES_URI` for domain state and the separate,
 least-privilege `WORKER_DATABASE_URI` for direct queue control. The latter is a
 Go runtime setting, not a replacement Python database alias. River schema is
 applied only by the one-shot migration path when `MIGRATION_DATABASE_URI` and
-the two runtime role names are supplied. See [Workers](docs/ops/workers.md) and
-the [Go worker runtime TRD](docs/architecture/go-worker-runtime-trd.md) for the
+the two runtime role names are supplied. See [Workers](docs/operate/run/workers-and-jobs.md) and
+the [Go worker runtime TRD](.github/docs-legacy/architecture/go-worker-runtime-trd.md) for the
 coexistence boundary.
 
 ## Test tiers

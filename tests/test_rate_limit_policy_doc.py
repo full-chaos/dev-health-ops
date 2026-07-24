@@ -1,12 +1,18 @@
-"""Doc-drift guards for docs/providers/rate-limit-policy.md (CHAOS-2757).
+"""Rate-limit / provider-limit doc-drift guards (CHAOS-2757).
 
-There is no CI docs build, so the page's existence, nav wiring, and the
-accuracy of its per-provider route-family catalog are enforced here instead.
-``test_documented_route_families_match_estimators`` runs the real per-provider
-budget estimators and fails if code emits a route family the doc does not
-document, keeping the rate-limit policy page from silently drifting from the
-``providers/<provider>/budget.py`` estimators (per CHAOS-2742's
-docs-referenced-by-tests acceptance criterion).
+There is no CI docs build, so two contracts are enforced here instead:
+
+1. The canonical public Reference page
+   ``docs/reference/limits-and-compatibility/provider-limits.md`` exists and is wired into
+   the accepted Reference section of ``mkdocs.yml`` nav.
+2. The detailed per-provider route-family catalog is an internal/source contract preserved
+   under ``.github/docs-legacy/providers/rate-limit-policy.md`` (moved out of the public tree
+   during the canonical/legacy split). ``test_documented_route_families_match_estimators``
+   runs the real per-provider budget estimators and fails if code emits a route family the
+   preserved catalog does not document, keeping the rate-limit policy source from silently
+   drifting from the ``providers/<provider>/budget.py`` estimators (per CHAOS-2742's
+   docs-referenced-by-tests acceptance criterion). The calibrated-language invariant
+   "Credentials are not capacity" is pinned against that same preserved source.
 """
 
 from __future__ import annotations
@@ -20,9 +26,20 @@ from dev_health_ops.sync.datasets import supported_datasets
 from dev_health_ops.workers.sync_bootstrap import SyncTaskContext
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DOC_PATH = _REPO_ROOT / "docs" / "providers" / "rate-limit-policy.md"
+# Canonical public Reference page that must stay reachable in the accepted nav.
+_CANONICAL_DOC_PATH = (
+    _REPO_ROOT
+    / "docs"
+    / "reference"
+    / "limits-and-compatibility"
+    / "provider-limits.md"
+)
+# Preserved internal/source contract carrying the per-provider route-family catalog.
+_SOURCE_DOC_PATH = (
+    _REPO_ROOT / ".github" / "docs-legacy" / "providers" / "rate-limit-policy.md"
+)
 _MKDOCS_PATH = _REPO_ROOT / "mkdocs.yml"
-_DOC_NAV_TARGET = "providers/rate-limit-policy.md"
+_DOC_NAV_TARGET = "reference/limits-and-compatibility/provider-limits.md"
 
 # Providers whose estimators are dispatched by ``estimate_provider_budget``.
 _PROVIDERS = ("github", "gitlab", "jira", "linear", "launchdarkly")
@@ -78,7 +95,7 @@ def _emitted_route_families(provider: str) -> set[str]:
 def _documented_route_families() -> dict[str, set[str]]:
     documented: dict[str, set[str]] = defaultdict(set)
     current: str | None = None
-    for line in _DOC_PATH.read_text().splitlines():
+    for line in _SOURCE_DOC_PATH.read_text().splitlines():
         stripped = line.strip()
         marker = _MARKER_RE.match(stripped)
         if marker:
@@ -95,19 +112,27 @@ def _documented_route_families() -> dict[str, set[str]]:
     return documented
 
 
-def test_rate_limit_policy_doc_exists_and_in_nav():
-    assert _DOC_PATH.is_file(), f"missing rate-limit policy doc: {_DOC_PATH}"
-
-    body = _DOC_PATH.read_text()
-    # The invariant and the phrase the epic requires must be present verbatim.
-    assert "Credentials are not capacity" in body
-    assert "credentials are not capacity" in body.lower()
+def test_canonical_provider_limits_page_exists_and_in_nav():
+    assert _CANONICAL_DOC_PATH.is_file(), (
+        f"missing canonical provider limits page: {_CANONICAL_DOC_PATH}"
+    )
 
     nav = _MKDOCS_PATH.read_text()
     assert _DOC_NAV_TARGET in nav, (
         f"{_DOC_NAV_TARGET} is not wired into mkdocs.yml nav; the page would be "
         "unreachable (nav is fully explicit and there is no CI docs build)."
     )
+
+
+def test_preserved_rate_limit_policy_source_keeps_calibrated_language():
+    assert _SOURCE_DOC_PATH.is_file(), (
+        f"missing preserved rate-limit policy source: {_SOURCE_DOC_PATH}"
+    )
+
+    body = _SOURCE_DOC_PATH.read_text()
+    # The invariant and the phrase the epic requires must be present verbatim.
+    assert "Credentials are not capacity" in body
+    assert "credentials are not capacity" in body.lower()
 
 
 def test_documented_route_families_match_estimators():
@@ -117,7 +142,8 @@ def test_documented_route_families_match_estimators():
     # subset check below would vacuously pass on an empty documented set.
     for provider in _PROVIDERS:
         assert documented.get(provider), (
-            f"no `<!-- route-families:{provider} -->` table found in the doc"
+            f"no `<!-- route-families:{provider} -->` table found in the "
+            "preserved rate-limit policy source"
         )
 
     for provider in _PROVIDERS:
@@ -126,7 +152,7 @@ def test_documented_route_families_match_estimators():
         missing = emitted - documented[provider]
         assert not missing, (
             f"{provider} budget estimator emits route families that "
-            f"docs/providers/rate-limit-policy.md does not document: "
+            f".github/docs-legacy/providers/rate-limit-policy.md does not document: "
             f"{sorted(missing)}. Add them to the "
             f"`<!-- route-families:{provider} -->` table."
         )

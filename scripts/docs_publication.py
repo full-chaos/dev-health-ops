@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Classify every ops/docs/**/*.md file as public-nav, public-reference, or
-excluded-internal per ``docs/publication.yml``.
+"""Classify canonical Markdown pages for publication.
+
+The canonical public tree lives under ``docs/`` and is navigated by ``mkdocs.yml``.
+The former mixed public/internal corpus and its publication patterns are preserved
+under ``.github/docs-legacy/`` for compatibility checks and historical evidence.
 
 Classification algorithm (order matters):
 
 1. A path reachable from ``mkdocs.yml``'s ``nav:`` tree is ``public-nav``.
    It is an error for a nav-reachable path to also match an
-   ``excluded_internal`` pattern (a page cannot be both published in the
-   navigation and marked internal-only).
-2. A path matching an ``excluded_internal`` glob (checked before
-   ``public_reference`` so a narrow exclusion wins over a broad reference
-   directory glob) is ``excluded-internal``.
+   ``excluded_internal`` pattern.
+2. A path matching an ``excluded_internal`` glob is ``excluded-internal``.
 3. A path matching a ``public_reference`` glob is ``public-reference``.
-4. Anything else is unclassified: this is a hard error, not a silent
-   default, so every new doc file must be given an explicit disposition.
+4. Anything else is unclassified and fails closed.
 """
 
 from __future__ import annotations
@@ -30,8 +29,7 @@ Classification = Literal["public-nav", "public-reference", "excluded-internal"]
 
 
 class PublicationClassificationError(Exception):
-    """Raised when a docs page has no publication disposition, or a
-    contradictory one (both nav-published and excluded-internal)."""
+    """Raised when a page has no publication disposition or a contradiction."""
 
     def __init__(self, path: str, reason: str) -> None:
         super().__init__(f"{path}: {reason}")
@@ -73,9 +71,7 @@ def _string_list(
 
 
 class _NavOnlyLoader(yaml.SafeLoader):
-    """A SafeLoader that tolerates mkdocs.yml's plugin-specific Python tags
-    (e.g. pymdownx.superfences' ``!!python/name:...`` format callback)
-    without resolving them, since only the plain ``nav:`` tree is read."""
+    """SafeLoader that tolerates inert MkDocs plugin-specific Python tags."""
 
 
 def _ignore_unknown_tag(
@@ -92,7 +88,7 @@ _NavOnlyLoader.add_multi_constructor(
 
 def load_nav_paths(mkdocs_yml_path: Path) -> frozenset[str]:
     raw = (
-        yaml.load(  # noqa: S506 - _NavOnlyLoader is SafeLoader plus one inert tag
+        yaml.load(  # noqa: S506 - SafeLoader plus one inert tag constructor
             mkdocs_yml_path.read_text(encoding="utf-8"), Loader=_NavOnlyLoader
         )
         or {}
@@ -159,7 +155,9 @@ def main(argv: list[str]) -> int:
     root = Path(__file__).resolve().parents[1]
     try:
         classification = classify_all(
-            root / "docs", root / "mkdocs.yml", root / "docs" / "publication.yml"
+            root / "docs",
+            root / "mkdocs.yml",
+            root / ".github" / "docs-legacy" / "publication.yml",
         )
     except PublicationClassificationError as error:
         print(f"publication classification error: {error}", file=sys.stderr)

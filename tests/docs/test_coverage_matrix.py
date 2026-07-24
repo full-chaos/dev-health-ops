@@ -1,7 +1,15 @@
+"""Coverage-matrix scope guard for the unified documentation initiative (archived program evidence).
+
+The coverage matrix is program evidence, not public product documentation. It was moved out of
+the public ``docs/`` tree and is preserved under ``.github/docs-legacy/coverage-matrix.md``. These
+tests keep protecting the approved forty-issue scope and per-row completeness against that
+archived program-evidence source.
+"""
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MATRIX_PATH = ROOT / "docs" / "coverage-matrix.md"
+ARCHIVED_MATRIX_PATH = ROOT / ".github" / "docs-legacy" / "coverage-matrix.md"
 EXPECTED_ISSUES = {
     *(f"CHAOS-{number}" for number in range(2310, 2327)),
     *(f"CHAOS-{number}" for number in range(2329, 2347)),
@@ -29,10 +37,12 @@ def matrix_rows(document: str) -> list[tuple[str, str, str, str, str]]:
     return rows
 
 
-def test_coverage_matrix_matches_the_approved_forty_issue_scope() -> None:
-    assert MATRIX_PATH.is_file(), f"missing coverage matrix: {MATRIX_PATH}"
+def test_archived_coverage_matrix_matches_the_approved_forty_issue_scope() -> None:
+    assert ARCHIVED_MATRIX_PATH.is_file(), (
+        f"missing archived coverage matrix: {ARCHIVED_MATRIX_PATH}"
+    )
 
-    rows = matrix_rows(MATRIX_PATH.read_text(encoding="utf-8"))
+    rows = matrix_rows(ARCHIVED_MATRIX_PATH.read_text(encoding="utf-8"))
     issues = [row[0] for row in rows]
 
     assert len(rows) == len(EXPECTED_ISSUES)
@@ -40,10 +50,14 @@ def test_coverage_matrix_matches_the_approved_forty_issue_scope() -> None:
     assert coverage_errors(set(issues)) == []
 
 
-def test_every_coverage_row_has_disposition_owner_proof_and_completion_action() -> None:
-    assert MATRIX_PATH.is_file(), f"missing coverage matrix: {MATRIX_PATH}"
+def test_every_archived_coverage_row_has_disposition_owner_proof_and_completion_action() -> (
+    None
+):
+    assert ARCHIVED_MATRIX_PATH.is_file(), (
+        f"missing archived coverage matrix: {ARCHIVED_MATRIX_PATH}"
+    )
 
-    rows = matrix_rows(MATRIX_PATH.read_text(encoding="utf-8"))
+    rows = matrix_rows(ARCHIVED_MATRIX_PATH.read_text(encoding="utf-8"))
 
     assert rows
     for issue, disposition, owner_path, proof, completion_action in rows:

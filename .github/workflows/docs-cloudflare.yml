@@ -3,10 +3,12 @@ name: Documentation Cloudflare delivery
 on:
   pull_request:
     paths:
-      - 'docs-prototype/**'
-      - 'mkdocs.prototype.yml'
+      - 'docs/**'
+      - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - 'Makefile'
       - 'wrangler.jsonc'
+      - 'scripts/build_docs_cloudflare.py'
       - 'scripts/validate_docs_v2_publication.py'
       - 'scripts/check_built_site_links.py'
       - 'scripts/check_docs_candidate_search.py'
@@ -15,6 +17,8 @@ on:
       - 'scripts/prepare_docs_cloudflare.py'
       - 'scripts/read_wrangler_output.py'
       - 'scripts/check_docs_cloudflare_host.py'
+      - 'scripts/mkdocs_migrated_source_links.py'
+      - '.github/documentation-program/content/migrated-source-pages.json'
       - '.github/documentation-program/phase-9/**'
       - '.github/documentation-program/phase-10/**'
       - '.github/documentation-program/phase-11/**'
@@ -61,36 +65,26 @@ jobs:
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
-      - name: Validate and build the candidate
+      - name: Build and prepare validated preview assets
         run: |
           mkdir -p .build
-          python scripts/validate_docs_v2_publication.py
-          mkdocs build --strict --config-file mkdocs.prototype.yml
-          python scripts/check_built_site_links.py --site-dir .build/docs-prototype
-          python scripts/check_docs_candidate_search.py \
-            --site-dir .build/docs-prototype \
-            --queries .github/documentation-program/phase-10/search-acceptance.json
-          python scripts/check_docs_candidate_accessibility.py \
-            --site-dir .build/docs-prototype \
-            --css docs-prototype/stylesheets/extra.css
-          python scripts/check_docs_candidate_facts.py
+          set -o pipefail
+          python scripts/build_docs_cloudflare.py --mode preview --full-check \
+            2>&1 | tee .build/docs-cloudflare-build.log
 
-      - name: Prepare preview assets
-        run: |
-          python scripts/prepare_docs_cloudflare.py \
-            --source .build/docs-prototype \
-            --output .build/docs-cloudflare \
-            --mode preview \
-            --redirects .github/documentation-program/phase-9/redirects.tsv \
-            --source-revision "$GITHUB_SHA"
-
-      - name: Upload build evidence
+      - name: Upload build evidence and diagnostics
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docs-cloudflare-preview-${{ github.sha }}
-          path: .build/docs-cloudflare
+          path: |
+            .build/docs-cloudflare/**
+            .build/docs-cloudflare-build.log
+            .build/docs-*.log
+            .build/docs-*.tsv
+            .build/docs-*.md
           include-hidden-files: true
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Check Cloudflare preview credentials
@@ -186,25 +180,8 @@ jobs:
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
-      - name: Validate and build production assets
-        run: |
-          mkdir -p .build
-          python scripts/validate_docs_v2_publication.py
-          mkdocs build --strict --config-file mkdocs.prototype.yml
-          python scripts/check_built_site_links.py --site-dir .build/docs-prototype
-          python scripts/check_docs_candidate_search.py \
-            --site-dir .build/docs-prototype \
-            --queries .github/documentation-program/phase-10/search-acceptance.json
-          python scripts/check_docs_candidate_accessibility.py \
-            --site-dir .build/docs-prototype \
-            --css docs-prototype/stylesheets/extra.css
-          python scripts/check_docs_candidate_facts.py
-          python scripts/prepare_docs_cloudflare.py \
-            --source .build/docs-prototype \
-            --output .build/docs-cloudflare \
-            --mode production \
-            --redirects .github/documentation-program/phase-9/redirects.tsv \
-            --source-revision "$GITHUB_SHA"
+      - name: Build and prepare validated production assets
+        run: python scripts/build_docs_cloudflare.py --mode production
 
       - name: Deploy the production Worker
         id: deploy
@@ -216,7 +193,6 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
           npx --yes wrangler@4.112.0 deploy \
             --config wrangler.jsonc \
-            --strict \
             --message "Documentation production deployment at $GITHUB_SHA" \
             --tag "docs-${GITHUB_SHA::12}"
           python scripts/read_wrangler_output.py \

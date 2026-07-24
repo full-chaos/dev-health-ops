@@ -12,7 +12,7 @@ Backend: ingest → metrics → API → jobs. The versioned platform contract (W
 | Provider pattern | [`docs/architecture/adr-001-canonical-provider-pattern.md`](docs/architecture/adr-001-canonical-provider-pattern.md) |
 | LLM categorization contract | [`docs/llm/categorization-contract.md`](docs/llm/categorization-contract.md) |
 | API surface | [`docs/api/graphql-overview.md`](docs/api/graphql-overview.md), [`docs/api/view-mapping.md`](docs/api/view-mapping.md) |
-| CLI & workers | [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md), [`docs/ops/workers.md`](docs/ops/workers.md) |
+| CLI & workers | [`docs/reference/cli/index.md`](docs/reference/cli/index.md), [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) |
 | How to run / test tiers | [`README.md`](README.md), [`ci/run_tests.sh`](ci/run_tests.sh) |
 
 ## Source layout (`src/dev_health_ops/`)
@@ -49,7 +49,7 @@ CLICKHOUSE_URI=… dev-hops fixtures generate --sink "$CLICKHOUSE_URI" --days 30
 CLICKHOUSE_URI=… dev-hops metrics daily
 ```
 
-**Interim (CHAOS-2475):** bare CLI runs inline and skips credential preflight. Prefer triggering the equivalent Celery job (sync-config/backfill endpoints, `triggerReport` mutation) so workers supply tokens/LLM/Stripe keys. Worker: `dev-hops workers start-worker --queues default metrics sync reports`. See [`docs/ops/workers.md`](docs/ops/workers.md).
+**Interim (CHAOS-2475):** bare CLI runs inline and skips credential preflight. Prefer triggering the equivalent Celery job (sync-config/backfill endpoints, `triggerReport` mutation) so workers supply tokens/LLM/Stripe keys. Worker: `dev-hops workers start-worker --queues default metrics sync reports`. See [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md).
 
 ## Tests & hooks
 

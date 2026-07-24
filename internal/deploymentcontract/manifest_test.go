@@ -33,7 +33,8 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.DirectQueueControlConnections != 18 {
 		t.Fatalf("direct queue-control connections = %d", summary.DirectQueueControlConnections)
 	}
-	if summary.DomainClientConnections != 42 {
+	// stream-pagerduty adds two replicas of a four-connection domain pool.
+	if summary.DomainClientConnections != 50 {
 		t.Fatalf("domain client connections = %d", summary.DomainClientConnections)
 	}
 	if summary.ServerConnectionFootprint != 83 {

@@ -231,6 +231,27 @@
       ]
     },
     {
+      "name": "stream-pagerduty",
+      "binary": "dev-health-stream-runner",
+      "runtime": "stream",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 2,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 0,
+      "domain_max_connections": 4,
+      "requires_clickhouse": true,
+      "requires_valkey": true,
+      "secret_env": [
+        "CLICKHOUSE_URI",
+        "POSTGRES_URI",
+        "VALKEY_URI",
+        "WORKER_OPERATIONAL_BRIDGE_TOKEN"
+      ]
+    },
+    {
       "name": "sync",
       "binary": "dev-health-worker",
       "runtime": "river",

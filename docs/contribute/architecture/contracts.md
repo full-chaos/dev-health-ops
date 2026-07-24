@@ -5,8 +5,8 @@ content_type: architecture
 owner: engineering
 source_of_truth:
   - docs/contributing/platform-contract.md
-  - docs/architecture/pagerduty-contract.md
-  - docs/decisions/chaos-3034-river-compatibility.md
+  - .github/docs-legacy/architecture/pagerduty-contract.md
+  - .github/docs-legacy/decisions/chaos-3034-river-compatibility.md
   - contracts/jobs/v1/
   - contracts/sync-dispatch/v1/
   - current ADRs and canonical registries

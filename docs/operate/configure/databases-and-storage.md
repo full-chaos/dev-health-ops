@@ -4,7 +4,7 @@ summary: Configure Postgres semantic state, direct River queue control, ClickHou
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - docs/ops/database-connection-pooling.md
+  - .github/docs-legacy/ops/database-connection-pooling.md
   - docs/architecture/data-pipeline.md
   - docs/architecture/dispatch-outbox.md
   - current migration and storage implementation

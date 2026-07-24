@@ -78,7 +78,7 @@ spec:
           # must point DIRECTLY at Postgres (5432), never at a transaction-mode
           # pooler. The dedicated URI opts into the River step; the legacy
           # aliases remain Alembic-only compatible. See
-          # docs/ops/database-connection-pooling.md.
+          # docs/operate/configure/databases-and-storage.md.
           command:
             - sh
             - -c

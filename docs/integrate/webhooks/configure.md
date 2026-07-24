@@ -97,7 +97,7 @@ PagerDuty uses an opaque persisted binding rather than a shared environment rout
 https://YOUR_HOST/api/v1/webhooks/pagerduty/{binding_id}
 ```
 
-The authenticated `pagey.ping` event verifies a candidate binding without creating an incident. Activate the replacement binding before revoking an old one. See [PagerDuty provider and webhook contract](pagerduty.md) for the accepted event set, signature, replay, identity, and rotation rules.
+The authenticated `pagey.ping` event verifies a candidate binding without creating an incident. Activate the replacement binding before revoking an old one. See [Connect supported incident-response sources](../../admin/data-sources/incident-response.md) for the supported PagerDuty setup and verification flow.
 
 ## Verify delivery
 

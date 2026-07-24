@@ -5,7 +5,7 @@ content_type: reference
 owner: platform-operations
 source_of_truth:
   - current API and worker health implementation
-  - docs/ops/workers.md
+  - .github/docs-legacy/ops/workers.md
 applicability: current
 lifecycle: active
 ---

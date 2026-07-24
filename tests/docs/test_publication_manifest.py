@@ -3,9 +3,11 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+from scripts.docs_inventory_v2 import build_inventory
 from scripts.docs_publication import (
     PublicationClassificationError,
     classify_all,
@@ -32,6 +34,17 @@ def test_every_canonical_markdown_file_is_published_in_navigation() -> None:
 
     assert set(classification) == all_files
     assert set(classification.values()) == {"public-nav"}
+
+
+def test_factual_inventory_uses_canonical_navigation_as_publication_truth() -> None:
+    inventory = build_inventory(ROOT, "full-chaos/dev-health-ops")
+    rows = cast(list[dict[str, Any]], inventory["rows"])
+    canonical_pages = [row for row in rows if row["artifact_type"] == "markdown-page"]
+
+    assert canonical_pages
+    assert {row["publication_classification"] for row in canonical_pages} == {
+        "public-nav"
+    }
 
 
 def test_legacy_internal_material_is_archived_outside_the_public_tree() -> None:

@@ -4,7 +4,7 @@ summary: Diagnose provider identity, OAuth callback, scope, discovery, mapping, 
 content_type: troubleshooting
 owner: platform-product
 source_of_truth:
-  - docs/user-guide/pagerduty-oauth-app-setup.md
+  - .github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md
   - current provider credential-validation and discovery behavior
 applicability: current
 lifecycle: active

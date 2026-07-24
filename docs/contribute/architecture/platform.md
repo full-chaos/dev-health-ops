@@ -6,8 +6,8 @@ owner: engineering
 source_of_truth:
   - docs/architecture.md
   - docs/architecture/canonical-operational-model.md
-  - docs/architecture/go-worker-runtime-trd.md
-  - docs/architecture/pagerduty-contract.md
+  - .github/docs-legacy/architecture/go-worker-runtime-trd.md
+  - .github/docs-legacy/architecture/pagerduty-contract.md
   - current deployment and service entry points
 applicability: current
 lifecycle: active

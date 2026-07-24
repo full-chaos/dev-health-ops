@@ -60,7 +60,7 @@ services:
   #
   # POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
   # transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.
-  # See docs/ops/database-connection-pooling.md.
+  # See docs/operate/configure/databases-and-storage.md.
   #
   # OPERATOR RECOVERY — failed migrate run: with restart: "no", a failed
   # migrate is NOT retried, and api/billing-edge/worker stay gated (Created,
@@ -200,7 +200,7 @@ services:
     environment:
       POSTGRES_URI: ${POSTGRES_URI:-}
       # CHAOS-2065: set true when POSTGRES_URI points at a transaction-mode
-      # pooler (PgBouncer/RDS Proxy/etc). See docs/ops/database-connection-pooling.md.
+      # pooler (PgBouncer/RDS Proxy/etc). See docs/operate/configure/databases-and-storage.md.
       PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
@@ -387,7 +387,7 @@ services:
     # Then point Postgres consumers at it and flip the app flag:
     #   POSTGRES_URI=postgresql+asyncpg://USER:PASS@pgbouncer:6432/DB
     #   PGBOUNCER_TRANSACTION_MODE=true
-    # See docs/ops/database-connection-pooling.md
+    # See docs/operate/configure/databases-and-storage.md
     profiles: ["pooler"]
     image: edoburu/pgbouncer:latest
     container_name: dev-health-pgbouncer

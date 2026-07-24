@@ -7,7 +7,7 @@ source_of_truth:
   - docs/architecture/database-architecture.md
   - docs/architecture/data-pipeline.md
   - docs/architecture/dispatch-outbox.md
-  - docs/ops/database-connection-pooling.md
+  - .github/docs-legacy/ops/database-connection-pooling.md
   - current migrations and sink code
 applicability: current
 lifecycle: active

@@ -4,10 +4,10 @@ summary: Monitor API, Celery, Go worker foundations, provider delivery, synchron
 content_type: reference
 owner: platform-operations
 source_of_truth:
-  - docs/architecture/platform-sync-observability.md
-  - docs/architecture/sync-usage-actuals.md
-  - docs/ops/observability-tooling.md
-  - docs/ops/workers.md
+  - .github/docs-legacy/architecture/platform-sync-observability.md
+  - .github/docs-legacy/architecture/sync-usage-actuals.md
+  - .github/docs-legacy/ops/observability-tooling.md
+  - .github/docs-legacy/ops/workers.md
   - deploy/grafana/dashboards/go-workers.json
 applicability: current
 lifecycle: active

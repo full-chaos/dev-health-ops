@@ -5,7 +5,7 @@ content_type: task-guide
 owner: platform-api
 source_of_truth:
   - current provider webhook handlers
-  - docs/architecture/pagerduty-contract.md
+  - .github/docs-legacy/architecture/pagerduty-contract.md
 applicability: current
 lifecycle: active
 ---

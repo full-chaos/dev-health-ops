@@ -4,7 +4,7 @@ summary: Configure active Celery queues and schedules while keeping dormant Go w
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - docs/ops/workers.md
+  - .github/docs-legacy/ops/workers.md
   - deploy/go-workers/profiles.json
   - contracts/jobs/v1/
   - contracts/sync-dispatch/v1/

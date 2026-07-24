@@ -70,7 +70,7 @@ Notes:
   `POSTGRES_URI` in `dev-health-migration-secrets`. Without the elevated
   migration DSN, the River step is skipped. ClickHouse migrations always run.
   See
-  `docs/ops/database-connection-pooling.md`.
+  `docs/operate/configure/databases-and-storage.md`.
 
 ## Additive Go/River topology (CHAOS-3052)
 

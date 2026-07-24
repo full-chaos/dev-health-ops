@@ -5,7 +5,7 @@ content_type: reference
 owner: platform-operations
 source_of_truth:
   - docs/architecture/worker-scaling-readiness.md
-  - docs/ops/database-connection-pooling.md
+  - .github/docs-legacy/ops/database-connection-pooling.md
   - deploy/go-workers/profiles.json
   - current worker and synchronization implementation
 applicability: current

@@ -131,6 +131,26 @@ func (handler *Handler) Handle(ctx context.Context, message streamrunner.Message
 	return nil
 }
 
+// parseUTC accepts any RFC3339 timestamp whose offset is zero.
+//
+// It compares the offset rather than the location identity because the producer
+// is Python: datetime.now(UTC).isoformat() emits "+00:00", and Go parses a
+// numeric zero offset into a fixed-offset location that is never == time.UTC.
+// An identity comparison therefore rejected every real delivery and quarantined
+// it as schema-invalid before it ever reached the bridge. Contract envelopes
+// stay strict elsewhere -- their schemas pin a "Z$" pattern and the Python codec
+// enforces it -- but these are raw producer stream fields, not envelopes.
+func parseUTC(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if _, offset := parsed.Zone(); offset != 0 {
+		return time.Time{}, errors.New("timestamp is not UTC")
+	}
+	return parsed.UTC(), nil
+}
+
 func parse(message streamrunner.Message) (Event, error) {
 	bindingID := strings.TrimSpace(message.Fields["binding_id"])
 	payload := strings.TrimSpace(message.Fields["payload"])
@@ -138,8 +158,8 @@ func parse(message streamrunner.Message) (Event, error) {
 	if bindingID == "" || payload == "" || receivedAt == "" {
 		return Event{}, errors.New("required stream field missing")
 	}
-	received, err := time.Parse(time.RFC3339, receivedAt)
-	if err != nil || received.Location() != time.UTC || !json.Valid([]byte(payload)) {
+	received, err := parseUTC(receivedAt)
+	if err != nil || !json.Valid([]byte(payload)) {
 		return Event{}, errors.New("invalid stream payload")
 	}
 	var body struct {

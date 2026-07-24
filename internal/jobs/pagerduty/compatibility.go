@@ -81,7 +81,7 @@ func (reconciler *HTTPCompatibilityReconciler) Reconcile(ctx context.Context, ev
 		BindingID:  event.BindingID,
 		EventID:    event.EventID,
 		ReceiptID:  event.ReceiptID,
-		ReceivedAt: event.Received.UTC().Format(time.RFC3339),
+		ReceivedAt: event.Received.UTC().Format(time.RFC3339Nano),
 		Payload:    event.Payload,
 	})
 	if err != nil {

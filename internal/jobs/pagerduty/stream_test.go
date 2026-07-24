@@ -77,8 +77,26 @@ func TestHandlerRejectsMalformedPayloadPermanently(t *testing.T) {
 	}
 }
 
+// producerReceivedAt is what the Python ingress actually writes:
+// datetime.now(UTC).isoformat(), which yields a numeric "+00:00" offset and
+// microsecond precision -- never the "Z" the original fixture used. Go parses a
+// numeric zero offset into a fixed-offset location that is never == time.UTC,
+// so a fixture using "Z" passed while every real delivery was quarantined.
+const producerReceivedAt = "2026-07-23T00:00:00.123456+00:00"
+
 func validMessage() streamrunner.Message {
-	return streamrunner.Message{Stream: "pagerduty-webhooks:binding", ID: "1-0", Fields: map[string]string{"binding_id": "binding", "received_at": "2026-07-23T00:00:00Z", "payload": `{"event":{"id":"evt-1"}}`}}
+	return messageWithReceivedAt(producerReceivedAt)
+}
+
+func messageWithReceivedAt(receivedAt string) streamrunner.Message {
+	return streamrunner.Message{
+		Stream: "pagerduty-webhooks:binding", ID: "1-0",
+		Fields: map[string]string{
+			"binding_id":  "binding",
+			"received_at": receivedAt,
+			"payload":     `{"event":{"id":"evt-1"}}`,
+		},
+	}
 }
 
 type receiptStore struct {
@@ -104,3 +122,58 @@ type reconciler struct {
 }
 
 func (r *reconciler) Reconcile(context.Context, Event) error { r.called = true; return r.err }
+
+// TestParseAcceptsEveryZeroOffsetTimestampTheProducerCanEmit is the codex
+// round-2 HIGH-1 regression. The accepted set is defined by what a zero UTC
+// offset can look like on the wire, not by one convenient spelling.
+func TestParseAcceptsEveryZeroOffsetTimestampTheProducerCanEmit(t *testing.T) {
+	t.Parallel()
+	// 2026-07-23T00:00:00Z. Every accepted spelling must resolve to it.
+	const wantInstant = int64(1784764800)
+	for _, test := range []struct {
+		name       string
+		receivedAt string
+		wantErr    bool
+	}{
+		{name: "python isoformat with microseconds", receivedAt: "2026-07-23T00:00:00.123456+00:00"},
+		{name: "python isoformat at a whole second", receivedAt: "2026-07-23T00:00:00+00:00"},
+		{name: "zulu spelling", receivedAt: "2026-07-23T00:00:00Z"},
+		{name: "zulu with microseconds", receivedAt: "2026-07-23T00:00:00.123456Z"},
+		{name: "non-zero offset is not UTC", receivedAt: "2026-07-23T00:00:00+02:00", wantErr: true},
+		{name: "negative offset is not UTC", receivedAt: "2026-07-23T00:00:00-05:00", wantErr: true},
+		{name: "naive timestamp has no offset", receivedAt: "2026-07-23T00:00:00", wantErr: true},
+		{name: "not a timestamp", receivedAt: "yesterday", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			event, err := parse(messageWithReceivedAt(test.receivedAt))
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("%q was accepted", test.receivedAt)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%q was rejected: %v", test.receivedAt, err)
+			}
+			if instant := event.Received.UTC().Unix(); instant != wantInstant {
+				t.Fatalf("%q parsed to the wrong instant: %d", test.receivedAt, instant)
+			}
+		})
+	}
+}
+
+// TestParsePreservesProducerSubSecondPrecision keeps the canonical timestamps
+// the bridge writes identical to the ones Celery writes. Truncating to whole
+// seconds would silently diverge observed_at and last_synced between the two
+// runtimes during coexistence.
+func TestParsePreservesProducerSubSecondPrecision(t *testing.T) {
+	t.Parallel()
+	event, err := parse(messageWithReceivedAt(producerReceivedAt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := event.Received.UTC().Nanosecond(); got != 123456000 {
+		t.Fatalf("sub-second precision lost: %d", got)
+	}
+}

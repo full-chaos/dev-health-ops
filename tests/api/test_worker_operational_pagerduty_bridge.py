@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from dev_health_ops.api.main import app
@@ -54,6 +55,22 @@ def _delivery(**overrides: Any) -> dict[str, Any]:
 
 def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_TOKEN}"}
+
+
+def _hydration_validation_error() -> ValidationError:
+    """A ValidationError of the shape a bad PagerDuty REST response raises.
+
+    ``PagerDutyRestClient._one`` validates the hydration response through the
+    same pydantic machinery as the webhook payload, so the exception type alone
+    cannot tell the two apart — only where it was raised can.
+    """
+    from dev_health_ops.providers.pagerduty.models import Incident
+
+    try:
+        Incident.model_validate({"not": "an incident"})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("expected the hydration model to reject this response")
 
 
 @pytest.fixture
@@ -278,6 +295,36 @@ def test_pagerduty_bridge_surfaces_a_dependency_failure_as_retryable(
     # Then: 5xx keeps the delivery in the Go pending list instead of
     # quarantining it as a permanent rejection.
     assert response.status_code >= 500
+
+
+def test_pagerduty_bridge_surfaces_a_hydration_validation_error_as_retryable(
+    monkeypatch: pytest.MonkeyPatch, reconcile: AsyncMock
+) -> None:
+    # Given: the webhook itself is valid; one upstream REST response is not.
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", _TOKEN)
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://localhost:9000/dev_health")
+    monkeypatch.setattr(
+        webhook_worker,
+        "resolve_pagerduty_webhook_binding",
+        AsyncMock(return_value=_CONTEXT),
+    )
+    monkeypatch.setattr(
+        system_webhooks,
+        "_canonical_incident_ingestion_allowed",
+        MagicMock(return_value=True),
+    )
+    reconcile.side_effect = _hydration_validation_error()
+
+    # When
+    response = TestClient(app, raise_server_exceptions=False).post(
+        _BRIDGE_PATH, headers=_headers(), json=_delivery()
+    )
+
+    # Then: a transient upstream condition must not be quarantined as
+    # permanent; 5xx keeps the delivery pending for the retries the Celery
+    # path performs.
+    assert response.status_code >= 500
+    assert response.json().get("status") != "malformed"
 
 
 def test_pagerduty_bridge_treats_unconfigured_persistence_as_retryable(

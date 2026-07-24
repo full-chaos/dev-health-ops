@@ -172,6 +172,9 @@ async def _reconcile_pagerduty_delivery(delivery: PagerDutyDelivery) -> str:
     try:
         webhook = PagerDutyV3Webhook.model_validate(delivery.payload)
     except ValidationError:
+        # ``malformed`` is scoped to this step alone. Only the webhook payload
+        # is immutable bad data that a redelivery can never repair, so only its
+        # validation may be classified permanent.
         return "malformed"
     if delivery.event_id and delivery.event_id != webhook.event.id:
         # Go's receipt identity is derived from the stream's event id. A payload
@@ -201,6 +204,12 @@ async def _reconcile_pagerduty_delivery(delivery: PagerDutyDelivery) -> str:
             raise HTTPException(
                 status_code=503, detail="Operational persistence unconfigured"
             )
+        # Reconciliation hydrates from the PagerDuty REST API, so a
+        # ``ValidationError`` raised in here describes a bad *upstream response*,
+        # not the webhook. That is a transient provider condition: it is left to
+        # propagate as 5xx, which the Go client classifies as retryable, so a
+        # valid webhook keeps the retries the Celery path performs instead of
+        # being dead-lettered on one bad hydration.
         processed = await reconcile_pagerduty_webhook_with_locked_graph(
             binding_id=binding_id,
             expected_context=context,
@@ -210,8 +219,4 @@ async def _reconcile_pagerduty_delivery(delivery: PagerDutyDelivery) -> str:
         )
     except CanonicalIncidentIngestionDisabledError:
         return "feature_disabled"
-    except ValidationError:
-        # A well-formed envelope whose event data fails provider validation can
-        # never be repaired by a redelivery.
-        return "malformed"
     return "processed" if processed else "skipped"

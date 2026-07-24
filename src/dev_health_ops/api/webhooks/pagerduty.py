@@ -16,7 +16,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, assert_never
@@ -29,6 +28,15 @@ from valkey.exceptions import ValkeyError
 
 from dev_health_ops.api.ingest.streams import get_redis_client
 from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.providers.pagerduty.webhook_transport import (
+    WEBHOOK_TRANSPORT_ENV as WEBHOOK_TRANSPORT_ENV,
+)
+from dev_health_ops.providers.pagerduty.webhook_transport import (
+    WebhookTransport as WebhookTransport,
+)
+from dev_health_ops.providers.pagerduty.webhook_transport import (
+    resolve_webhook_transport as _webhook_transport,
+)
 from dev_health_ops.workers.system_webhooks import process_pagerduty_webhook_event
 
 from .pagerduty_models import PagerDutyEventType, PagerDutyV3Webhook
@@ -45,7 +53,6 @@ MAX_SIGNATURE_CANDIDATES = 8
 REPLAY_RETENTION_SECONDS = 30 * 24 * 60 * 60
 PENDING_REPLAY_CLAIM_TTL_SECONDS = 5 * 60
 RECEIVER_STREAM_MAXLEN = 10_000
-WEBHOOK_TRANSPORT_ENV = "PAGERDUTY_WEBHOOK_TRANSPORT"
 router = APIRouter(prefix="/pagerduty")
 
 _FEATURE_DISABLED_DETAIL = (
@@ -59,29 +66,6 @@ class ReplayClaimOutcome(StrEnum):
     CLAIMED = "claimed"
     PENDING = "pending"
     REPLAYED = "replayed"
-
-
-class WebhookTransport(StrEnum):
-    CELERY = "celery"
-    RIVER = "river"
-
-
-def _webhook_transport() -> WebhookTransport:
-    """Resolve which runtime owns the PagerDuty stream for this deployment.
-
-    Exactly one consumer may drain a stream entry: the Celery task deletes the
-    entry it processed, which would strip entries the Go River consumer still
-    holds in its pending list. This gate keeps them from racing rather than
-    letting both reconcile. Anything unset, empty, or unrecognised resolves to
-    ``celery`` so a misconfiguration falls back to today's behaviour instead of
-    silently handing the stream to a runtime that may not be deployed.
-    """
-    value = os.getenv(WEBHOOK_TRANSPORT_ENV, "").strip().lower()
-    return (
-        WebhookTransport.RIVER
-        if value == WebhookTransport.RIVER
-        else WebhookTransport.CELERY
-    )
 
 
 async def _canonical_incident_ingestion_allowed(org_id: str) -> bool:

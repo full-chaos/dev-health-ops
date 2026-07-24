@@ -88,13 +88,20 @@ func (store *PostgresReceiptStore) Begin(ctx context.Context, receiptID string) 
 // instead of reading the abandoned lease as in-flight work. It is fenced on the
 // claim token, so a reconciler whose lease was already stolen cannot clear the
 // new holder's claim.
+//
+// The status literal is constrained by ck_worker_job_run_status in migration
+// 0052 to running|retryable|succeeded|terminal. "retryable" is both the only
+// legal value for a released claim and the accurate one: the receipt is
+// available again. Clearing claim_token and lease_expires_at while setting
+// finished_at is likewise required by ck_worker_job_run_claim_state, and result
+// and error_category must be set together per ck_worker_job_run_result_state.
 func (store *PostgresReceiptStore) Release(ctx context.Context, claim ReceiptClaim) error {
 	if store == nil || store.pool == nil || store.now == nil ||
 		claim.ReceiptID == "" || claim.Token == "" {
 		return errUnavailable
 	}
 	now := store.now().UTC()
-	command, err := store.pool.Exec(ctx, `UPDATE public.worker_job_runs SET status='failed',claim_token=NULL,lease_expires_at=NULL,finished_at=$1,result='failure',error_category='retryable',updated_at=$1 WHERE job_kind=$2 AND idempotency_key=$3 AND status='running' AND claim_token=$4::uuid`, now, receiptKind, claim.ReceiptID, claim.Token)
+	command, err := store.pool.Exec(ctx, `UPDATE public.worker_job_runs SET status='retryable',claim_token=NULL,lease_expires_at=NULL,finished_at=$1,result='failure',error_category='retryable',updated_at=$1 WHERE job_kind=$2 AND idempotency_key=$3 AND status='running' AND claim_token=$4::uuid`, now, receiptKind, claim.ReceiptID, claim.Token)
 	if err != nil {
 		return errUnavailable
 	}

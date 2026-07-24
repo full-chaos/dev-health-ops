@@ -92,9 +92,12 @@ func TestHTTPCompatibilityReconcilerPostsDurableIdentityAndPayload(t *testing.T)
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatal(err)
 	}
+	// The producer's microseconds must survive the hop. Truncating to whole
+	// seconds would make the canonical observed_at/last_synced this path writes
+	// differ from the ones Celery writes for the same event.
 	if decoded.BindingID != "binding" || decoded.EventID != "evt-1" ||
 		decoded.ReceiptID != "pagerduty:binding:evt-1" ||
-		decoded.ReceivedAt != "2026-07-23T00:00:00Z" ||
+		decoded.ReceivedAt != "2026-07-23T00:00:00.123456Z" ||
 		string(decoded.Payload) != `{"event":{"id":"evt-1"}}` {
 		t.Fatalf("bridge request = %s", body)
 	}

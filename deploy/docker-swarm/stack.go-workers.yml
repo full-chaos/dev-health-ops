@@ -21,6 +21,11 @@ x-go-worker: &go-worker
     # cannot open readiness without both values.
     WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
     WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
+    # The default endpoint above is a plaintext Swarm service-discovery name,
+    # which the runtime rejects unless this opt-in is set: without it the
+    # PagerDuty runner can never construct its bridge handler. Override to
+    # "false" once the bridge is reachable over an internal HTTPS origin.
+    WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
     # Exactly one runtime owns the PagerDuty webhook stream. Celery keeps
     # it until the route flips at cutover (CUT-14/18).
     PAGERDUTY_WEBHOOK_TRANSPORT: ${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}

@@ -20,9 +20,19 @@ import (
 // prove the query is genuinely parameterized rather than coincidentally
 // correct for the one shape it happened to be built against, and it cannot
 // prove the cross-role attribution property a multi-role deployment
-// depends on: this role holds exactly its declared set, and the other role
-// does not hold it. Both are exercised here, independently of whatever the
-// real two-role partition turns out to be.
+// depends on. That property is distributed, not a single predicate: one
+// CheckRolePosture call only ever proves ITS OWN role is clean (see
+// CheckRolePosture's doc comment), so a test exercising only one leak
+// direction — role A wrongly holding role B's table — would itself be the
+// same half-guarantee trap in test form. This suite exercises the query
+// against synthetic, non-production table names, independently of whatever
+// the real two-role partition turns out to be, and checks:
+//
+//   - genuine parameterization (an arbitrary posture, not domainPosture's),
+//   - both leak directions (A-into-B and B-into-A), and
+//   - that a table legitimately required by both roles is not mistaken for
+//     a leak, without loosening the check for tables that actually are
+//     exclusive to one role.
 
 func TestCheckRolePostureAcceptsAnArbitrarySyntheticPosture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -168,13 +178,13 @@ func TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges(t *testing.T)
 		t.Fatal("role B unexpectedly satisfied role A's posture: it must not hold attribution_a_only")
 	}
 
-	// The failure mode this property exists to catch: a privilege granted to
-	// the WRONG role by mistake. Grant role A's exclusive table to role B
-	// too, and role B's own posture check (still only declaring
-	// attribution_b_only) must now fail — other_public_relations' catch-all
-	// makes any table outside a role's own manifest illegal for that role to
-	// hold at all, so a misattributed grant cannot hide behind "some role
-	// has this privilege somewhere."
+	// The failure mode this property exists to catch, direction one: a
+	// privilege granted to the WRONG role by mistake. Grant role A's
+	// exclusive table to role B too, and role B's own posture check (still
+	// only declaring attribution_b_only) must now fail —
+	// other_public_relations' catch-all makes any table outside a role's own
+	// manifest illegal for that role to hold at all, so a misattributed
+	// grant cannot hide behind "some role has this privilege somewhere."
 	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public.attribution_a_only TO "+roleB); err != nil {
 		t.Fatal(err)
 	}
@@ -186,5 +196,119 @@ func TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges(t *testing.T)
 	}
 	if err := CheckRolePosture(ctx, connB, roleB, schema, postureB); err != nil {
 		t.Fatalf("role B did not recover after revoking the misattributed privilege: %v", err)
+	}
+
+	// Direction two, the exact mirror: a check that only exercised A-into-B
+	// would itself be the "half-guarantee" trap — it would prove role B's
+	// check catches a leak but say nothing about whether role A's check
+	// does. Grant role B's exclusive table to role A and confirm role A's
+	// own (unchanged) posture check fails the same way.
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public.attribution_b_only TO "+roleA); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, connA, roleA, schema, postureA); err == nil {
+		t.Fatal("role A unexpectedly authorized while also holding role B's exclusive table — misattributed privilege went undetected")
+	}
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public.attribution_b_only FROM "+roleA); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, connA, roleA, schema, postureA); err != nil {
+		t.Fatalf("role A did not recover after revoking the misattributed privilege: %v", err)
+	}
+}
+
+// A table two roles both legitimately need (the concrete production case:
+// internal/syncreconciler/materializer.go's Materializer.Step runs one
+// transaction, as the coordinator role, spanning tables the domain role also
+// needs elsewhere, because a transaction cannot cross pools) is not a leak.
+// Nothing in RolePosture needs a distinct "shared" flag for this to work:
+// declaring the same table in both roles' own RequiredTables/ColumnScoped is
+// sufficient, because each role's check only ever asks "is this table in MY
+// manifest," never "does any other role also have it." This test proves
+// that composability holds — both roles pass with the shared table present
+// in both manifests — while confirming the exclusive-table leak check from
+// TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges still fires
+// for a table that is NOT shared, so sharing one table doesn't accidentally
+// widen what counts as "the other role's, so it's fine."
+func TestCheckRolePostureAllowsATableRequiredByBothRoles(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+
+	const (
+		roleA     = "shared_table_role_a"
+		roleB     = "shared_table_role_b"
+		passwordA = "shared_table_role_a_password"
+		passwordB = "shared_table_role_b_password"
+		schema    = "shared_table_river"
+	)
+	for _, statement := range []string{
+		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+		"CREATE ROLE " + roleA + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + passwordA + "'",
+		"CREATE ROLE " + roleB + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + passwordB + "'",
+		"GRANT CONNECT ON DATABASE worker_test TO " + roleA + ", " + roleB,
+		"GRANT USAGE ON SCHEMA public TO " + roleA + ", " + roleB,
+		"CREATE SCHEMA " + schema,
+		"CREATE TABLE public.shared_dual_granted (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.exclusive_a_only (id uuid PRIMARY KEY)",
+		"GRANT SELECT ON TABLE public.shared_dual_granted TO " + roleA + ", " + roleB,
+		"GRANT SELECT ON TABLE public.exclusive_a_only TO " + roleA,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+
+	// Both manifests declare the shared table; only role A also declares its
+	// own exclusive table.
+	postureA := RolePosture{RequiredTables: []TablePrivilege{
+		{TableName: "shared_dual_granted"},
+		{TableName: "exclusive_a_only"},
+	}}
+	postureB := RolePosture{RequiredTables: []TablePrivilege{
+		{TableName: "shared_dual_granted"},
+	}}
+
+	connA := connectAs(t, ctx, instance.URI, roleA, passwordA)
+	connB := connectAs(t, ctx, instance.URI, roleB, passwordB)
+
+	if err := CheckRolePosture(ctx, connA, roleA, schema, postureA); err != nil {
+		t.Fatalf("role A rejected a posture including the legitimately shared table: %v", err)
+	}
+	if err := CheckRolePosture(ctx, connB, roleB, schema, postureB); err != nil {
+		t.Fatalf("role B rejected a posture including the legitimately shared table: %v", err)
+	}
+
+	// The exclusive-table leak check must still fire even though a shared
+	// table exists in this same deployment: granting role A's EXCLUSIVE
+	// table to role B is still a real misattribution, not a second
+	// legitimately shared table.
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public.exclusive_a_only TO "+roleB); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, connB, roleB, schema, postureB); err == nil {
+		t.Fatal("role B unexpectedly authorized while also holding role A's exclusive (non-shared) table")
+	}
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public.exclusive_a_only FROM "+roleB); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRolePosture(ctx, connB, roleB, schema, postureB); err != nil {
+		t.Fatalf("role B did not recover after revoking the misattributed exclusive table: %v", err)
 	}
 }

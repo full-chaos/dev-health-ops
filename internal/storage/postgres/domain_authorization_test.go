@@ -136,3 +136,34 @@ func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
 		}
 	}
 }
+
+// unnest() does not error on mismatched array-parameter lengths; it silently
+// NULL-pads the shorter ones instead (confirmed empirically against a live
+// server — see CheckRolePosture's comment). This pins the Go-side guard that
+// exists because the SQL layer cannot be relied on to catch this itself: a
+// ragged set of lengths must be rejected loudly and distinctly from
+// ErrUnavailable, since it signals a broken RolePosture construction, not an
+// unready role.
+func TestCheckRolePostureRejectsRaggedParallelArrays(t *testing.T) {
+	t.Parallel()
+
+	if err := validateParallelArrayLengths("test set", 3, 3, 3); err != nil {
+		t.Fatalf("validateParallelArrayLengths(3, 3, 3) = %v, want nil", err)
+	}
+	if err := validateParallelArrayLengths("test set", 0); err != nil {
+		t.Fatalf("validateParallelArrayLengths(0) = %v, want nil", err)
+	}
+	err := validateParallelArrayLengths("required table privileges", 3, 3, 2)
+	if err == nil {
+		t.Fatal("validateParallelArrayLengths(3, 3, 2) = nil, want a mismatch error")
+	}
+	if errors.Is(err, ErrUnavailable) {
+		t.Fatalf(
+			"validateParallelArrayLengths error must be distinct from ErrUnavailable so a construction bug "+
+				"is never confused with an unready role, got %v", err,
+		)
+	}
+	if !strings.Contains(err.Error(), "required table privileges") {
+		t.Fatalf("validateParallelArrayLengths error = %q, want it to name the posture it was checking", err.Error())
+	}
+}

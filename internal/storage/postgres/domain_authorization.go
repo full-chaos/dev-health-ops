@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -16,17 +17,20 @@ import (
 // use effective privileges so inherited administrator or DDL access closes
 // readiness as well as direct grants.
 //
-// Running this once per role, each with that role's own accurate manifest,
-// establishes both directions of the property a multi-role deployment
-// depends on: this role holds exactly its declared set (the checks below),
-// and — because every predicate that walks "other relations"
+// One call proves one direction only: THIS role holds exactly its declared
+// set, because every predicate that walks "other relations"
 // (other_public_relations, river_relations, and the rest) asserts zero
-// privilege of any kind on anything outside the CALLING role's own
-// manifest — it holds none of any other role's exclusive privileges either.
-// A privilege landing on the wrong role therefore fails closed the same way
-// an excess privilege on the right role does; no separate "and the other
-// role does not hold it" check is needed, as long as each role's manifest
-// omits tables/columns that belong exclusively to another role.
+// privilege of any kind, by any route, on anything outside the CALLING
+// role's own manifest. It says nothing about any other role. The full
+// cross-role property a multi-role deployment depends on — role A does not
+// hold role B's exclusive privileges, AND role B does not hold role A's —
+// only emerges from calling this once per role, each against that role's own
+// accurate manifest: a privilege wrongly granted to the wrong role is caught
+// exclusively by that WRONG role's own check finding an undeclared,
+// unshared table, never by the role it was meant for. See CheckRolePosture's
+// doc comment for the runtime story this depends on. No separate "and the
+// other role does not hold it" check needs to exist in this query itself —
+// but no single invocation of it proves that property alone, either.
 const rolePostureQuery = `
 WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
 	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[])
@@ -510,6 +514,27 @@ func domainPosture() RolePosture {
 // (direct grant, PUBLIC, role membership, column-level, table-level, with
 // or without grant option, or ownership). It never exposes catalog or
 // driver details that could contain connection material.
+//
+// In a deployment with more than one runtime role, the cross-role
+// attribution property — this role does not hold the OTHER role's exclusive
+// privileges — is NOT proven by any single call to this function. It is
+// proven by the UNION of calling it once per role, each against that role's
+// own posture: rolePostureQuery's "everything outside my own manifest is
+// illegal for me to hold" catch-all only ever inspects the CALLING role's
+// privileges, so checking role A only ever proves role A is clean, never
+// that role B is. A privilege wrongly granted to role B instead of role A is
+// caught exclusively by role B's own readiness check finding an
+// undeclared, unshared table in its grant set — role A's check has no way
+// to see it. The runtime story this depends on: every role's own workers
+// gate their own readiness on their own posture at startup (domain workers
+// call CheckDomainAuthorization, coordinator workers call the coordinator's
+// equivalent), so the full property holds across the deployment as a whole,
+// not within any one process. A table legitimately required by more than
+// one role (a multi-table transaction that must co-reside — see
+// internal/syncreconciler/materializer.go for the concrete case driving
+// this) is not a leak: it is simply declared in each such role's own
+// RequiredTables/ColumnScoped, and each role's own check passes because the
+// table is, correctly, in its own manifest.
 func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, posture RolePosture) error {
 	if pool == nil || !validRuntimeIdentifier(expectedRole) || !validRuntimeIdentifier(riverSchema) {
 		return ErrUnavailable
@@ -530,6 +555,30 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 		columnNames[i] = column.ColumnName
 		columnPrivileges[i] = column.Privilege
 	}
+	// unnest() does not error on mismatched array-parameter lengths — it
+	// silently NULL-pads the shorter ones (confirmed empirically against a
+	// live server: unnest(ARRAY['a','b','c'], ARRAY[true,false]) produces a
+	// third row with a NULL flag, not an error). has_table_privilege(...) <>
+	// NULL is NULL, not true or false, so a construction bug that produced
+	// unequal-length parallel arrays here would not raise an error either —
+	// it would either read as a mystery 42501-shaped readiness failure or,
+	// worse, let a required row's flag silently read NULL. These lengths
+	// cannot actually differ from the loops immediately above (each triple
+	// is built from one shared source slice), so this can never fire today;
+	// it exists so a future refactor of that construction — the allow_delete
+	// column slotting in is the concrete case in view — fails loudly here
+	// instead of silently at the SQL layer if it ever breaks that
+	// invariant. See TestCheckRolePostureRejectsRaggedParallelArrays.
+	if err := validateParallelArrayLengths(
+		"required table privileges", len(tableNames), len(allowInserts), len(allowUpdates),
+	); err != nil {
+		return err
+	}
+	if err := validateParallelArrayLengths(
+		"column-scoped privileges", len(columnTables), len(columnNames), len(columnPrivileges),
+	); err != nil {
+		return err
+	}
 	var authorized bool
 	if err := pool.QueryRow(
 		ctx, rolePostureQuery,
@@ -542,11 +591,31 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	return nil
 }
 
+// validateParallelArrayLengths reports a descriptive, non-ErrUnavailable
+// error if the given lengths are not all equal. It is deliberately louder
+// than ErrUnavailable's opaque "not ready": a length mismatch means the
+// CALLER built an internally inconsistent RolePosture, which is a
+// programming bug to surface and fix, not a legitimate readiness state to
+// report and retry.
+func validateParallelArrayLengths(context string, lengths ...int) error {
+	for _, length := range lengths[1:] {
+		if length != lengths[0] {
+			return fmt.Errorf("postgres: %s: mismatched parallel array lengths %v", context, lengths)
+		}
+	}
+	return nil
+}
+
 // CheckDomainAuthorization is a read-only readiness check for the semantic
 // PostgreSQL pool. It binds the active login to the declared domain role and
 // never exposes catalog or driver details that could contain connection
 // material. It is domainPosture's manifest run through CheckRolePosture; the
 // domain role is not special-cased anywhere in rolePostureQuery itself.
+//
+// This alone proves only that the domain role holds nothing beyond its own
+// declared posture — see CheckRolePosture's doc comment for why the full
+// cross-role attribution property requires every other role in the
+// deployment to independently check its own posture too.
 func CheckDomainAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
 	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, domainPosture())
 }

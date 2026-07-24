@@ -178,17 +178,56 @@ def _kubernetes_container_env(container: dict) -> set[str]:
     return names
 
 
+def _kubernetes_container_profile(container: dict) -> str | None:
+    """The DEV_HEALTH_PROFILE this container actually runs with.
+
+    Inline env wins; otherwise the value is inherited from a referenced
+    ConfigMap. A label is metadata and does not reach the process, so it can
+    never stand in for this.
+    """
+    for item in container.get("env") or []:
+        if item["name"] == "DEV_HEALTH_PROFILE":
+            return item.get("value")
+    config = _load_yaml(_KUBERNETES_CONFIGMAP).get("data") or {}
+    for source in container.get("envFrom") or []:
+        reference = source.get("configMapRef")
+        if reference and "DEV_HEALTH_PROFILE" in config:
+            return config["DEV_HEALTH_PROFILE"]
+    return None
+
+
 def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
+    """Deployments that run the PagerDuty profile, by effective env not label.
+
+    Discovering by `dev-health.io/profile` alone proved nothing: the label is
+    metadata, so a Deployment labelled pagerduty whose container ran a different
+    DEV_HEALTH_PROFILE passed every assertion here while, at cutover, running
+    the wrong profile and leaving PagerDuty entries unconsumed after Celery
+    stood down. Discovery follows the env; label agreement is asserted
+    separately so a mismatch in either direction fails.
+    """
     containers = {}
     for document in _load_yaml_documents(path):
         if document.get("kind") != "Deployment":
             continue
-        labels = document["metadata"].get("labels") or {}
-        if labels.get("dev-health.io/profile") != _PAGERDUTY_PROCESS:
+        pod = ((document.get("spec") or {}).get("template") or {}).get("spec") or {}
+        pod_containers = pod.get("containers") or []
+        if not pod_containers:
             continue
-        containers[document["metadata"]["name"]] = document["spec"]["template"]["spec"][
-            "containers"
-        ][0]
+        container = pod_containers[0]
+        labelled = (document["metadata"].get("labels") or {}).get(
+            "dev-health.io/profile"
+        ) == _PAGERDUTY_PROCESS
+        runs_profile = (
+            _kubernetes_container_profile(container) == _PAGERDUTY_RUNTIME_PROFILE
+        )
+        name = document["metadata"]["name"]
+        assert labelled == runs_profile, (
+            f"{name}: label says pagerduty={labelled} but the container runs "
+            f"DEV_HEALTH_PROFILE={_kubernetes_container_profile(container)!r}"
+        )
+        if runs_profile:
+            containers[name] = container
     return containers
 
 
@@ -792,6 +831,18 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
         if profile.get("runtimeProfile") == _PAGERDUTY_RUNTIME_PROFILE
     ]
     assert len(profiles) == 1
+
+    # values.runtimeProfile only controls the rendered process if the template
+    # actually binds DEV_HEALTH_PROFILE to it. Asserting the values alone let a
+    # template edit change the profile every pod runs while this test stayed
+    # green, so the binding is pinned too.
+    workers_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "{name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}"
+        in workers_template
+    ), "the chart must render DEV_HEALTH_PROFILE from $profile.runtimeProfile"
 
     # Every Go profile inherits the shared ConfigMap and Secret, so the chart's
     # value surface is what decides whether the runner is wired.

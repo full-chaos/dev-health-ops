@@ -247,12 +247,17 @@ func TestShellStartsEndpointsAndTerminatesCleanly(t *testing.T) {
 		if requestErr == nil {
 			_, _ = io.Copy(io.Discard, response.Body)
 			_ = response.Body.Close()
-			if response.StatusCode != http.StatusOK {
+			if response.StatusCode == http.StatusOK {
+				break
+			}
+			if response.StatusCode != http.StatusServiceUnavailable {
 				t.Fatalf("expected ready endpoint, got %d", response.StatusCode)
 			}
-			break
 		}
 		if time.Now().After(deadline) {
+			if requestErr == nil {
+				t.Fatalf("shell did not become ready: status=%d logs=%s stderr=%s", response.StatusCode, stdout.String(), stderr.String())
+			}
 			t.Fatalf("shell did not start: %v logs=%s stderr=%s", requestErr, stdout.String(), stderr.String())
 		}
 		time.Sleep(10 * time.Millisecond)

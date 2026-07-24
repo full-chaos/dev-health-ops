@@ -74,3 +74,29 @@ func TestHTTPBridgeRejectsUnsafeOrUnsuccessfulDelivery(t *testing.T) {
 		t.Fatalf("Finalize() error=%v", err)
 	}
 }
+
+func TestHTTPBridgeConnectionBudgetDoesNotCapWholeRequest(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	bridge, err := NewHTTPBridge(HTTPBridgeConfig{
+		BaseURL: server.URL, BearerToken: "token", Timeout: 100 * time.Millisecond, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bridge.client.Timeout != 0 {
+		t.Fatalf("bridge whole-request timeout=%v want=0", bridge.client.Timeout)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	args := DispatchSyncRunArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: testOrg, RunID: testRun, DispatchOutbox: testOutbox, RouteGeneration: 7,
+	}}
+	if err := bridge.Dispatch(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+}

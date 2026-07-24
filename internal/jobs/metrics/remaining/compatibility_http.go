@@ -27,7 +27,7 @@ type HTTPCompatibilityExecutor struct {
 }
 
 func NewHTTPCompatibilityExecutor(client *http.Client, config HTTPCompatibilityConfig) (*HTTPCompatibilityExecutor, error) {
-	if client == nil || client.Timeout < 100*time.Millisecond || client.Timeout > 30*time.Second ||
+	if client == nil || (client.Timeout != 0 && (client.Timeout < 100*time.Millisecond || client.Timeout > 30*time.Second)) ||
 		strings.TrimSpace(config.BearerToken) == "" || !validCompatibilityEndpoint(config.Endpoint) {
 		return nil, ErrUnavailable
 	}

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -56,7 +57,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 	compatibility, err := workgraph.NewHTTPCompatibilityExecutor(
-		workgraphCompatibilityHTTPClient(),
+		workgraphCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 		workgraph.HTTPCompatibilityConfig{
 			Endpoint:    strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute",
 			BearerToken: cfg.OperationalBridgeToken.Reveal(),
@@ -85,12 +86,12 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	return workgraphWorkerComponent{client: client}, registered, nil
 }
 
-func workgraphCompatibilityHTTPClient() *http.Client {
+func workgraphCompatibilityHTTPClient(connectTimeout time.Duration) *http.Client {
 	// Work-graph and investment handler contracts have substantially different
 	// execution budgets. The River execution context is the authoritative
 	// deadline; the shared 30-second operational bridge timeout would abort a
 	// healthy synchronous investment materialization.
-	return &http.Client{}
+	return contractDeadlineHTTPClient(connectTimeout)
 }
 
 func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies) error {

@@ -795,10 +795,12 @@ an already-terminal deterministic stage restores a pruned fence. The legacy
 Celery route keeps its existing partitioned chord unchanged.
 
 For every long compatibility operation, the API releases its read transaction
-before execution so the Go worker can renew the lease. The dedicated HTTP
-client takes its deadline from the River execution context, while the API runs
-legacy work in a fixed child process and, on POSIX, terminates its process
-group, kills it if needed, and reaps it on cancellation or disconnect. The
+before execution so the Go worker can renew the lease. Compatibility clients
+take their whole-request deadlines from the River execution context; the shared
+short bridge budget is connection/TLS setup only. The API runs legacy metric
+and work-graph effects in fixed child processes and, on POSIX, terminates their
+process groups, kills them if needed, and reaps them on cancellation or
+disconnect. The
 standalone `investment.dispatch` descriptor remains at contract version `1`
 with a 7,200-second execution budget and a checked-in Celery route; native
 post-sync no longer depends on that combined effect.

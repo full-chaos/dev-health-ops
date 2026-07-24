@@ -1,6 +1,7 @@
 package remaining
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,5 +108,37 @@ func TestHTTPCompatibilityExecutorRejectsAmbiguousResponse(t *testing.T) {
 	)
 	if err != ErrUnavailable {
 		t.Fatalf("error = %v, want %v", err, ErrUnavailable)
+	}
+}
+
+func TestHTTPCompatibilityExecutorAllowsContractOwnedDeadlineBeyondThirtySeconds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"status":"success"}`))
+	}))
+	defer server.Close()
+	executor, err := NewHTTPCompatibilityExecutor(
+		&http.Client{},
+		HTTPCompatibilityConfig{
+			Endpoint:    server.URL + "/internal/worker/remaining-metrics/v1/execute",
+			BearerToken: "token",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 31*time.Second)
+	defer cancel()
+	run := Run{
+		ID:             "11111111-1111-4111-8111-111111111111",
+		OrganizationID: "22222222-2222-4222-8222-222222222222",
+		Family:         "complexity",
+		Generation:     "post-sync:generation",
+		Status:         "running",
+	}
+	if err := executor.ComputePartition(ctx, run, Partition{
+		ID:    "33333333-3333-4333-8333-333333333333",
+		RunID: run.ID,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -260,6 +260,11 @@ async def test_effect_then_exception_is_fenced_as_ambiguous_on_retry() -> None:
         effects.append("append-output")
         raise RuntimeError("killed after effect")
 
+    async def disconnected_effect(
+        _connection: object, current: worker_metrics._Execution
+    ) -> dict[str, Any]:
+        return await effect_then_crash(current)
+
     with (
         patch.object(
             worker_metrics,
@@ -267,12 +272,17 @@ async def test_effect_then_exception_is_fenced_as_ambiguous_on_retry() -> None:
             new=AsyncMock(return_value="execute"),
         ),
         patch.object(
+            worker_metrics,
+            "_run_until_client_disconnect",
+            new=AsyncMock(side_effect=disconnected_effect),
+        ),
+        patch.object(
             worker_metrics, "_mark_ambiguous", new_callable=AsyncMock
         ) as mark_ambiguous,
     ):
         with pytest.raises(HTTPException) as first:
             await worker_metrics._execute(
-                cast(AsyncSession, object()), execution, effect_then_crash
+                cast(AsyncSession, object()), execution, cast(Any, object())
             )
     assert first.value.status_code == 503
     mark_ambiguous.assert_awaited_once()
@@ -282,19 +292,31 @@ async def test_effect_then_exception_is_fenced_as_ambiguous_on_retry() -> None:
         effects.append("duplicate-output")
         return {}
 
-    with patch.object(
-        worker_metrics,
-        "_reserve_execution",
-        new=AsyncMock(
-            side_effect=HTTPException(
-                status_code=409,
-                detail={"execution_id": str(execution.id), "state": "ambiguous"},
-            )
+    async def disconnected_duplicate(
+        _connection: object, current: worker_metrics._Execution
+    ) -> dict[str, Any]:
+        return await must_not_repeat(current)
+
+    with (
+        patch.object(
+            worker_metrics,
+            "_reserve_execution",
+            new=AsyncMock(
+                side_effect=HTTPException(
+                    status_code=409,
+                    detail={"execution_id": str(execution.id), "state": "ambiguous"},
+                )
+            ),
+        ),
+        patch.object(
+            worker_metrics,
+            "_run_until_client_disconnect",
+            new=AsyncMock(side_effect=disconnected_duplicate),
         ),
     ):
         with pytest.raises(HTTPException) as retry:
             await worker_metrics._execute(
-                cast(AsyncSession, object()), execution, must_not_repeat
+                cast(AsyncSession, object()), execution, cast(Any, object())
             )
     assert retry.value.status_code == 409
     assert effects == ["append-output"]

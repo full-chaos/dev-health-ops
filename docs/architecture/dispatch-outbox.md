@@ -247,12 +247,14 @@ terminal domain state when necessary. The legacy Celery post-sync path retains
 its partitioned chord while its route remains Celery.
 
 Before each long compatibility operation, the API closes its PostgreSQL read
-transaction so Go lease renewal is never blocked by a held row lock. The
-dedicated work-graph HTTP client uses the River execution context as its
-deadline instead of the shared short operational-bridge timeout. The API
-contains the legacy work in a fixed child process and, on POSIX, terminates its
-process group, kills it if needed, and reaps it on context cancellation or
-client disconnect. The standalone `investment.dispatch` descriptor retains
+transaction so Go lease renewal is never blocked by a held row lock. Metric,
+work-graph, investment, and sync-coordinator HTTP clients use the River
+execution context as their whole-request deadline; the shared short
+operational-bridge budget applies only to connection and TLS-handshake setup.
+The API contains legacy metric and work-graph effects in fixed child processes
+and, on POSIX, terminates their process groups, kills them if needed, and reaps
+them on context cancellation or client disconnect. The standalone
+`investment.dispatch` descriptor retains
 its 7,200-second execution budget, contract version `1`, and checked-in Celery
 route, but native post-sync uses the separately fenced stages above.
 

@@ -201,16 +201,15 @@ The operational effect bridge is an authenticated internal API. Set
 `WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
 `WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the
 optional `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` is bounded from 100ms to 30s and
-defaults to 10s for the bounded operational-effect, coordinator, and metric
-compatibility calls. Long-running work-graph and investment compatibility
-calls are the exception: their dedicated client has no independent wall-clock
-timeout and is canceled by the River handler execution context, whose
-contract-specific deadline remains authoritative. The API runs those legacy
-Python calls in a fixed, killable child process with bounded JSON input/output
-(stdout is the protocol; diagnostics retain inherited stderr). On POSIX the
-child has its own process group, which River cancellation or client disconnect
-terminates, kills if needed, and reaps before the fenced execution becomes
-ambiguous. Plain HTTP defaults to
+defaults to 10s. For River compatibility clients it limits connection and TLS
+handshake setup only; it never caps the whole request. The River handler
+execution context and its contract-specific budget remain authoritative for
+daily, remaining-metric, work-graph, and investment execution. The API runs
+those legacy Python calls in fixed, killable child processes with bounded JSON
+input/output (stdout is the protocol; diagnostics retain inherited stderr). On
+POSIX each child has its own process group, which River cancellation or client
+disconnect terminates, kills if needed, and reaps before the fenced execution
+becomes ambiguous. Plain HTTP defaults to
 loopback-only. Local container stacks may explicitly set
 `WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
 permits only private IPs and single-label/`.internal`/`.local` service-discovery

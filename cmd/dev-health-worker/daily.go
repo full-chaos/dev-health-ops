@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -94,7 +96,7 @@ func buildDailyWorker(
 		store, storeErr := daily.NewPostgresStore(postgresDatabase.pools.Domain)
 		publisher, publisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 		compatibility, compatibilityErr := daily.NewHTTPCompatibilityExecutor(
-			&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 			daily.HTTPCompatibilityConfig{
 				Endpoint:    baseURL + "/internal/worker/daily-metrics/v1/execute",
 				BearerToken: cfg.OperationalBridgeToken.Reveal(),
@@ -148,7 +150,7 @@ func buildDailyWorker(
 	if len(remainingSpecs) > 0 {
 		store, storeErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain)
 		compatibility, compatibilityErr := remaining.NewHTTPCompatibilityExecutor(
-			&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 			remaining.HTTPCompatibilityConfig{
 				Endpoint:    baseURL + "/internal/worker/remaining-metrics/v1/execute",
 				BearerToken: cfg.OperationalBridgeToken.Reveal(),
@@ -224,6 +226,26 @@ func buildDailyWorker(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 	return metricsWorkerComponent{client: client}, registered, nil
+}
+
+func contractDeadlineHTTPClient(connectTimeout time.Duration) *http.Client {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		transport = &http.Transport{}
+	} else {
+		transport = transport.Clone()
+	}
+	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
+	transport.DialContext = dialer.DialContext
+	transport.TLSHandshakeTimeout = connectTimeout
+	// Do not set Client.Timeout or ResponseHeaderTimeout: compatibility APIs
+	// return headers only after the effect finishes, so the descriptor-derived
+	// River context is the authoritative whole-request deadline.
+	return &http.Client{Transport: transport}
+}
+
+func metricCompatibilityHTTPClient(connectTimeout time.Duration) *http.Client {
+	return contractDeadlineHTTPClient(connectTimeout)
 }
 
 func validateRemainingFamilyDescriptor(

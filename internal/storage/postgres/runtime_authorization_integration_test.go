@@ -45,6 +45,17 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
+		// CHAOS-3033 domain-grant reconciliation surface, so the
+		// required-table count in CheckDomainAuthorization matches.
+		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_sync_occurrences (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.fixed_schedule_occurrences (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
@@ -62,6 +73,10 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.sync_configurations, public.scheduled_jobs TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.scheduled_sync_occurrences, public.fixed_schedule_occurrences, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.organizations TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
@@ -173,6 +188,31 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if _, err := admin.Exec(ctx, "REVOKE UPDATE ON TABLE public.worker_job_outbox FROM "+runtimeAuthorizationDomainRole); err != nil {
 		t.Fatal(err)
+	}
+	// The completion-fence grant is column-scoped (SELECT/INSERT on
+	// completion_key only, never completed_at). has_table_privilege cannot
+	// see a column-level grant, so a naive reuse of the has_table_privilege
+	// pattern here would silently accept a table-wide grant it never checked
+	// for. Confirm the dedicated column-scoped check actually catches it.
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public.worker_job_completion_fences TO "+runtimeAuthorizationDomainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("domain completion-fence table-wide-leakage authorization error = %v, want ErrUnavailable", err)
+	}
+	// REVOKE SELECT ON TABLE (whole-table form) revokes SELECT for this
+	// grantee on this relation entirely — confirmed empirically — including
+	// the pre-existing column-level SELECT (completion_key) grant, not just
+	// the table-wide ACL entry just added. Restore the column-scoped grant
+	// before asserting recovery, or this legitimately fails closed.
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public.worker_job_completion_fences FROM "+runtimeAuthorizationDomainRole); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT SELECT (completion_key) ON TABLE public.worker_job_completion_fences TO "+runtimeAuthorizationDomainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); err != nil {
+		t.Fatalf("domain authorization did not recover after revoking completion-fence table-wide leakage: %v", err)
 	}
 	if _, err := admin.Exec(ctx, "GRANT TRUNCATE ON TABLE public.runtime_semantic_probe TO "+runtimeAuthorizationDomainRole); err != nil {
 		t.Fatal(err)

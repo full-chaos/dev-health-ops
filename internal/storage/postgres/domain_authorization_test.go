@@ -3,10 +3,30 @@ package postgres
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+// sqlLineComment matches a SQL "--" line comment. Comments are prose, never
+// executed, so they have no business being scanned for mutating SQL at all —
+// and English contractions in that prose ("PostgreSQL's", "worker's") plant
+// unpaired apostrophes that would otherwise desync singleQuotedLiteral's
+// pairing for everything after them. Stripping comments first removes that
+// hazard at the source instead of requiring every future comment to avoid
+// contractions.
+var sqlLineComment = regexp.MustCompile(`--[^\n]*`)
+
+// singleQuotedLiteral matches a SQL single-quoted string literal, applied
+// only after sqlLineComment has removed comment text. Privilege types passed
+// to has_table_privilege / has_column_privilege / etc — plain ("SELECT") or
+// with the option modifier ("SELECT WITH GRANT OPTION") — are always
+// literals, so stripping every one of them before the mutating-SQL scan
+// below is correct by construction for any current or future privilege-type
+// string, rather than relying on an argument about which specific word
+// sequences can only appear inside a literal.
+var singleQuotedLiteral = regexp.MustCompile(`'[^']*'`)
 
 func TestDomainAuthorizationRejectsMissingOrUnavailablePool(t *testing.T) {
 	t.Parallel()
@@ -41,8 +61,10 @@ func TestDomainAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *te
 	t.Parallel()
 
 	upperQuery := strings.ToUpper(domainAuthorizationQuery)
+	mutatingScanQuery := sqlLineComment.ReplaceAllString(upperQuery, "")
+	mutatingScanQuery = singleQuotedLiteral.ReplaceAllString(mutatingScanQuery, "")
 	for _, forbidden := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM", "CREATE ", "ALTER ", "DROP ", "GRANT ", "REVOKE "} {
-		if strings.Contains(upperQuery, forbidden) {
+		if strings.Contains(mutatingScanQuery, forbidden) {
 			t.Fatalf("domain authorization query contains mutating SQL %q", forbidden)
 		}
 	}

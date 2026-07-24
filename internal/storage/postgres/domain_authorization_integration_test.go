@@ -52,6 +52,20 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_dispatch_outbox (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id bigint PRIMARY KEY, state text)",
+		// CHAOS-3033 domain-grant reconciliation surface. Required so the
+		// required-table count in CheckDomainAuthorization matches; the
+		// domain_grant_reconciliation_integration_test.go suite exercises the
+		// actual production statement shapes against these tables.
+		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_sync_occurrences (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.fixed_schedule_occurrences (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY, completed_at timestamptz NOT NULL DEFAULT now())",
 		"CREATE TABLE public.unrelated_semantic_table (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SEQUENCE public.unrelated_sequence",
@@ -62,6 +76,10 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + authorizedDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.sync_configurations, public.scheduled_jobs TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.scheduled_sync_occurrences, public.fixed_schedule_occurrences, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.organizations TO " + authorizedDomainRole,
+		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

@@ -16,6 +16,7 @@ import (
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -72,6 +73,17 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
+		// CHAOS-3033 domain-grant reconciliation surface, so the
+		// required-table count in CheckDomainAuthorization matches.
+		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_sync_occurrences (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.fixed_schedule_occurrences (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
 		"CREATE FUNCTION public.domain_runtime_forbidden() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
 	} {
 		if _, err := adminPool.Exec(ctx, statement); err != nil {
@@ -343,6 +355,15 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		"sync_watermarks",
 		"sync_dispatch_outbox",
 		"worker_job_outbox",
+		"sync_configurations",
+		"scheduled_jobs",
+		"scheduled_sync_occurrences",
+		"fixed_schedule_occurrences",
+		"organizations",
+		"remaining_metric_runs",
+		"remaining_metric_partitions",
+		"work_graph_execution_requests",
+		"work_graph_execution_ledger",
 	} {
 		if _, err := domainPool.Exec(ctx, "SELECT count(*) FROM public."+table); err != nil {
 			t.Fatalf("domain role cannot SELECT %s: %v", table, err)
@@ -391,11 +412,30 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	); err != nil {
 		t.Fatalf("domain producer cannot insert outbox state: %v", err)
 	}
+	// CHAOS-3033: completion fences are a write-once ledger. The domain
+	// runtime gets exactly INSERT (plus the SELECT every readiness check
+	// carries) — never UPDATE or DELETE. Deletion of expired fences stays
+	// queue-side (queue_authorization.go).
 	if _, err := domainPool.Exec(
 		ctx,
 		"INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ('daily_metrics_run:00000000-0000-4000-8000-000000000001')",
-	); err == nil {
-		t.Fatal("domain runtime unexpectedly inserts completion fences")
+	); err != nil {
+		t.Fatalf("domain runtime cannot insert completion fences: %v", err)
+	}
+	// Pin the SQLSTATE, not just "some error": a later trigger or RLS policy
+	// could otherwise keep this green after the underlying privilege was
+	// broadened back out — the exact hazard this lane exists to prevent.
+	if _, err := domainPool.Exec(
+		ctx,
+		"UPDATE public.worker_job_completion_fences SET completion_key=completion_key",
+	); !isInsufficientPrivilege(err) {
+		t.Fatalf("domain runtime completion-fence UPDATE = %v, want 42501 insufficient_privilege", err)
+	}
+	if _, err := domainPool.Exec(
+		ctx,
+		"DELETE FROM public.worker_job_completion_fences",
+	); !isInsufficientPrivilege(err) {
+		t.Fatalf("domain runtime completion-fence DELETE = %v, want 42501 insufficient_privilege", err)
 	}
 	if _, err := domainPool.Exec(
 		ctx,
@@ -680,6 +720,15 @@ func roleURI(t *testing.T, rawURI, user, password, database string) string {
 	parsed.User = url.UserPassword(user, password)
 	parsed.Path = "/" + database
 	return parsed.String()
+}
+
+// isInsufficientPrivilege reports whether err is PostgreSQL's 42501
+// insufficient_privilege, not merely "some error" — a later trigger or RLS
+// policy could otherwise deny for an unrelated reason and mask a privilege
+// that was broadened back out.
+func isInsufficientPrivilege(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42501"
 }
 
 func openPool(t *testing.T, ctx context.Context, uri string) *pgxpool.Pool {

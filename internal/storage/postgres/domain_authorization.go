@@ -24,7 +24,34 @@ WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
 		('sync_run_units', false, true),
 		('sync_watermarks', true, true),
 		('sync_dispatch_outbox', true, true),
-		('worker_job_outbox', true, false)
+		('worker_job_outbox', true, false),
+		-- Scheduler and fixed-schedule surface. sync_configurations and
+		-- scheduled_jobs both carry allow_update: PostgreSQL's row-locking
+		-- clause, FOR UPDATE, requires the same table-level privilege as a
+		-- write, and SELECT alone is not enough (confirmed against a live
+		-- server; see domain_grant_reconciliation_integration_test.go). A
+		-- second, genuine writer also lands on sync_configurations: the
+		-- CUT-10 finalize path stamps last_sync_* columns, already covered
+		-- by the same allow_update.
+		('sync_configurations', false, true),
+		('scheduled_jobs', false, true),
+		('scheduled_sync_occurrences', true, true),
+		('fixed_schedule_occurrences', true, true),
+		('organizations', false, false),
+		-- Remaining-metrics and work-graph stores reached from the worker's
+		-- post-sync fanout. These are genuine read-modify-write callers
+		-- (claim/renew/complete/cancel/finalize transitions), not just row
+		-- locking, so the true writes here are what set allow_update.
+		('remaining_metric_runs', true, true),
+		('remaining_metric_partitions', true, true),
+		('work_graph_execution_requests', true, true),
+		-- Ledger half of the same Claim transaction as
+		-- work_graph_execution_requests: an upsert keyed on request_id
+		-- (internal/jobs/workgraph/postgres.go Claim/transition). The upsert's
+		-- conflict-target arm re-reads the existing row, so SELECT is a real
+		-- requirement here, not just this assertion's insert-without-select
+		-- limitation.
+		('work_graph_execution_ledger', true, true)
 ), required_tables AS (
 	SELECT
 		class.oid,
@@ -35,6 +62,36 @@ WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 	WHERE namespace.nspname = 'public'
 		AND class.relkind IN ('r', 'p')
+-- worker_job_completion_fences is deliberately NOT in required_table_privileges.
+-- completed_at is server-owned (DEFAULT statement_timestamp()) and no domain
+-- statement ever reads or writes it (joboutbox.MarkCompletionTx only inserts
+-- completion_key; deletion is queue-side, queue_authorization.go). A
+-- table-wide privilege would let the domain role forge completed_at and mint
+-- a fence retention never reaps, so the domain role's posture here is
+-- column-scoped instead of table-scoped, and required_table_privileges has
+-- no way to express "this column only" — hence the separate CTEs below.
+), column_scoped_privileges(table_name, column_name, privilege) AS (
+	VALUES
+		('worker_job_completion_fences', 'completion_key', 'SELECT'),
+		('worker_job_completion_fences', 'completion_key', 'INSERT')
+), column_scoped_relations AS (
+	SELECT DISTINCT class.oid, class.relname
+	FROM pg_catalog.pg_class AS class
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+	WHERE namespace.nspname = 'public'
+		AND class.relkind IN ('r', 'p')
+		AND class.relname IN (SELECT table_name FROM column_scoped_privileges)
+), column_scoped_privilege_types(privilege) AS (
+	VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES')
+), column_scoped_columns AS (
+	-- Every real column of a column-scoped relation, so an excess privilege
+	-- can be detected against the actual catalog rather than only against
+	-- whichever columns already appear in a privileges catalog view.
+	SELECT scoped.oid, scoped.relname, attribute.attname
+	FROM column_scoped_relations AS scoped
+	JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = scoped.oid
+	WHERE attribute.attnum > 0
+		AND NOT attribute.attisdropped
 ), other_public_relations AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
@@ -45,6 +102,11 @@ WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
 			SELECT 1
 			FROM required_table_privileges AS required
 			WHERE required.table_name = class.relname
+		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM column_scoped_privileges AS scoped
+			WHERE scoped.table_name = class.relname
 		)
 ), public_sequences AS (
 	SELECT class.oid
@@ -78,6 +140,8 @@ WITH required_table_privileges(table_name, allow_insert, allow_update) AS (
 	SELECT role.oid
 	FROM pg_catalog.pg_roles AS role
 	WHERE role.rolname <> current_user
+), current_role_identity(oid) AS (
+	SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
 )
 SELECT
 	current_user = $1
@@ -96,28 +160,194 @@ SELECT
 		SELECT 1 FROM member_roles
 		WHERE pg_has_role(current_user, oid, 'MEMBER')
 	)
+	-- Ownership is the one route that breaks every "holding a privilege WITH
+	-- GRANT OPTION implies holding the plain privilege" argument this query
+	-- otherwise relies on to treat required-ABSENT privileges as covered:
+	-- an owner can REVOKE ALL on its own object (base has_*_privilege checks
+	-- then read false) while PostgreSQL still treats ownership as carrying
+	-- every grant option, letting it re-grant to itself, another role, or
+	-- PUBLIC regardless of what it just revoked from itself. Confirmed
+	-- empirically: CREATE SCHEMA s AUTHORIZATION owner; REVOKE ALL ON SCHEMA
+	-- s FROM owner leaves has_schema_privilege(owner, s, 'CREATE') = false
+	-- but has_schema_privilege(owner, s, 'CREATE WITH GRANT OPTION') = true.
+	-- One "owns nothing at all" predicate closes the class across every
+	-- object and privilege type at once, rather than adding an ownership
+	-- carve-out to each option-form check individually, and is the more
+	-- honest invariant regardless: a least-privilege runtime identity should
+	-- own nothing. Verified both directions against a live server, not just
+	-- the failing case: confirmed to reject a role that owns a schema and
+	-- has revoked its own privileges on it (TestDomainAuthorizationRejectsSelfOwnedSchema),
+	-- AND confirmed to pass for the posture runtimeGrantStatements actually
+	-- provisions — both the domain and queue runtime roles were checked
+	-- against a live server and found to own zero databases, schemas,
+	-- relations, or functions, so this predicate does not fail closed on a
+	-- working deployment.
+	AND NOT EXISTS (
+		SELECT 1 FROM pg_catalog.pg_database AS database, current_role_identity
+		WHERE database.datdba = current_role_identity.oid
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM pg_catalog.pg_namespace AS namespace, current_role_identity
+		WHERE namespace.nspowner = current_role_identity.oid
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM pg_catalog.pg_class AS class, current_role_identity
+		WHERE class.relowner = current_role_identity.oid
+			AND class.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM pg_catalog.pg_proc AS procedure, current_role_identity
+		WHERE procedure.proowner = current_role_identity.oid
+	)
 	AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
 	AND NOT has_database_privilege(current_user, current_database(), 'TEMPORARY')
+	-- CONNECT itself is never asserted true — the query is already running as
+	-- this role, so it is implied — but the option to re-delegate CONNECT is
+	-- an ambient, ungated privilege no other predicate here would ever see.
+	AND NOT has_database_privilege(current_user, current_database(), 'CONNECT WITH GRANT OPTION')
 	AND has_schema_privilege(current_user, 'public', 'USAGE')
+	-- Same ambient-privilege shape as CONNECT above, for the one schema
+	-- privilege this role is required to actually hold.
+	AND NOT has_schema_privilege(current_user, 'public', 'USAGE WITH GRANT OPTION')
 	AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
 	AND (
 		SELECT count(*) FROM required_tables
 	) = (
 		SELECT count(*) FROM required_table_privileges
 	)
+	AND (
+		SELECT count(*) FROM column_scoped_relations
+	) = (
+		SELECT count(DISTINCT table_name) FROM column_scoped_privileges
+	)
 	AND NOT EXISTS (
+		-- Every declared column privilege must actually be held, and not
+		-- carry the option to re-delegate it: an option-bearing privilege
+		-- would otherwise pass unnoticed on a declared pair, letting the
+		-- domain role hand fence access to another role or PUBLIC itself.
+		SELECT 1
+		FROM column_scoped_privileges AS required
+		JOIN column_scoped_relations AS scoped ON scoped.relname = required.table_name
+		WHERE NOT has_column_privilege(
+				current_user, scoped.oid, required.column_name, required.privilege
+			)
+			OR has_column_privilege(
+				current_user, scoped.oid, required.column_name,
+				required.privilege || ' WITH GRANT OPTION'
+			)
+	)
+	AND NOT EXISTS (
+		-- No column privilege beyond the declared set, catalog angle: reads
+		-- information_schema.column_privileges directly. This alone is NOT
+		-- sufficient — it is filtered to grants whose grantee literally is
+		-- current_user, so it misses a column privilege the domain role
+		-- holds only via PUBLIC or role membership. Kept as a second
+		-- angle alongside the has_column_privilege sweep below, which
+		-- resolves effective privilege and does not have that gap. A row
+		-- with is_grantable = YES is excess even on a declared pair, since
+		-- the declared posture never lets the role re-delegate its privilege.
+		SELECT 1
+		FROM information_schema.column_privileges AS granted
+		JOIN column_scoped_relations AS scoped ON scoped.relname = granted.table_name
+		WHERE granted.table_schema = 'public'
+			AND granted.grantee = current_user
+			AND (
+				granted.is_grantable = 'YES'
+				OR NOT EXISTS (
+					SELECT 1
+					FROM column_scoped_privileges AS required
+					WHERE required.table_name = granted.table_name
+						AND required.column_name = granted.column_name
+						AND required.privilege = granted.privilege_type
+				)
+			)
+	)
+	AND NOT EXISTS (
+		-- No column privilege beyond the declared set, effective-privilege
+		-- angle: has_column_privilege resolves PUBLIC grants and role
+		-- membership the same way has_any_column_privilege already does
+		-- elsewhere in this query, so a column privilege granted to PUBLIC
+		-- (e.g. on completed_at) is caught here even though the domain role
+		-- was never named as grantee.
+		SELECT 1
+		FROM column_scoped_columns AS actual_column
+		CROSS JOIN column_scoped_privilege_types AS privilege_type
+		WHERE has_column_privilege(
+				current_user, actual_column.oid, actual_column.attname, privilege_type.privilege
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM column_scoped_privileges AS required
+				WHERE required.table_name = actual_column.relname
+					AND required.column_name = actual_column.attname
+					AND required.privilege = privilege_type.privilege
+			)
+	)
+	AND NOT EXISTS (
+		-- No table-wide privilege leakage on a column-scoped table.
+		SELECT 1
+		FROM column_scoped_relations AS scoped
+		WHERE has_table_privilege(current_user, scoped.oid, 'SELECT')
+			OR has_table_privilege(current_user, scoped.oid, 'INSERT')
+			OR has_table_privilege(current_user, scoped.oid, 'UPDATE')
+			OR has_table_privilege(current_user, scoped.oid, 'DELETE')
+			OR has_table_privilege(current_user, scoped.oid, 'TRUNCATE')
+			OR has_table_privilege(current_user, scoped.oid, 'REFERENCES')
+			OR has_table_privilege(current_user, scoped.oid, 'TRIGGER')
+			OR CASE
+				WHEN current_setting('server_version_num')::integer >= 170000
+				THEN has_table_privilege(current_user, scoped.oid, 'MAINTAIN')
+				ELSE false
+			END
+	)
+	AND NOT EXISTS (
+		-- The required-flag columns only capture whether the base privilege
+		-- is held, so a role that holds a required privilege WITH GRANT OPTION
+		-- passes the base check unchanged (having the option always implies
+		-- having the plain privilege) and could re-delegate it to another
+		-- role or to PUBLIC itself. Check the option explicitly wherever the
+		-- base privilege is required; where it is not required, the
+		-- plain-form mismatch above already fails closed, since holding the
+		-- option implies holding the plain form too.
+		--
+		-- has_table_privilege('... WITH GRANT OPTION') only sees the option
+		-- on a TABLE-level ACL entry, though: a column-level grant such as
+		-- GRANT SELECT (id) ON integrations TO domain_runtime WITH GRANT
+		-- OPTION is invisible to it (has_table_privilege never inspects
+		-- column ACLs at all, with or without the option). The
+		-- has_any_column_privilege calls below close that: they resolve
+		-- effective privilege the same way has_any_column_privilege already
+		-- does elsewhere in this query, so PUBLIC- or membership-held
+		-- column-level options are caught too, not just ones granted
+		-- directly to the role by name.
 		SELECT 1
 		FROM required_tables
 		WHERE NOT has_table_privilege(current_user, oid, 'SELECT')
+			OR has_table_privilege(current_user, oid, 'SELECT WITH GRANT OPTION')
+			OR has_any_column_privilege(current_user, oid, 'SELECT WITH GRANT OPTION')
 			OR has_table_privilege(current_user, oid, 'INSERT') <> allow_insert
 			OR (
 				NOT allow_insert
 				AND has_any_column_privilege(current_user, oid, 'INSERT')
 			)
+			OR (
+				allow_insert
+				AND (
+					has_table_privilege(current_user, oid, 'INSERT WITH GRANT OPTION')
+					OR has_any_column_privilege(current_user, oid, 'INSERT WITH GRANT OPTION')
+				)
+			)
 			OR has_table_privilege(current_user, oid, 'UPDATE') <> allow_update
 			OR (
 				NOT allow_update
 				AND has_any_column_privilege(current_user, oid, 'UPDATE')
+			)
+			OR (
+				allow_update
+				AND (
+					has_table_privilege(current_user, oid, 'UPDATE WITH GRANT OPTION')
+					OR has_any_column_privilege(current_user, oid, 'UPDATE WITH GRANT OPTION')
+				)
 			)
 			OR has_table_privilege(current_user, oid, 'DELETE')
 			OR has_table_privilege(current_user, oid, 'TRUNCATE')
@@ -157,6 +387,12 @@ SELECT
 			OR has_sequence_privilege(current_user, oid, 'UPDATE')
 	)
 	AND NOT has_schema_privilege(current_user, $2, 'USAGE')
+	-- Mirrors the public-schema CREATE check above: migrate.go revokes ALL
+	-- privileges on the River schema from the domain role, so this should
+	-- never be reachable in practice, but this assertion exists to verify
+	-- posture independently of what a migration claims to have done, and it
+	-- already refuses to take that on trust for the public schema.
+	AND NOT has_schema_privilege(current_user, $2, 'CREATE')
 	AND NOT EXISTS (
 		SELECT 1
 		FROM river_relations

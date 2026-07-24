@@ -71,10 +71,12 @@ def _canonical(value: Any) -> Any:
 
 class CaptureStore(ClickHouseStore):
     def __init__(self, org_id: str) -> None:
-        super().__init__("clickhouse://capture.invalid")
+        super().__init__(
+            "clickhouse://capture.invalid",
+            operational_ordering_contract=OperationalOrderingContract.CURRENT,
+        )
         self.client = object()
         self.org_id = org_id
-        self._operational_ordering_contract = OperationalOrderingContract.CURRENT
         self.captured: dict[str, dict[str, Any]] = {}
 
     async def _insert_rows(

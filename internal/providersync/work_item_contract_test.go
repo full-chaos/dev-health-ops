@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -63,5 +64,19 @@ func TestWorkItemCompatibilityContractComesFromLivePythonAdapter(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestWorkItemCompatibilityOracleRejectsUnexpectedSource(t *testing.T) {
+	python := pythonExecutable(t)
+	_, currentFile, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(currentFile)
+	oracleScript := filepath.Join(packageDir, "testdata", "python_work_item_contract_oracle.py")
+	unexpectedSource := filepath.Join(
+		packageDir, "..", "..", "src", "dev_health_ops", "processors", "launchdarkly.py",
+	)
+	output, err := exec.Command(python, oracleScript, unexpectedSource).CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "unexpected oracle source") {
+		t.Fatalf("unexpected source error=%v output=%s", err, output)
 	}
 }

@@ -12,6 +12,9 @@ from dev_health_ops.api.ingest.persist import (
     persist_items,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from dev_health_ops.storage.operational_ordering_guard import (
+    OperationalOrderingContract,
+)
 
 
 class TestRepoIdFromUrl:
@@ -236,6 +239,15 @@ class TestClickHouseStoreSettings:
     def test_default_settings_empty(self):
         store = ClickHouseStore("clickhouse://localhost")
         assert store._settings == {}
+
+    def test_explicit_operational_ordering_contract(self):
+        store = ClickHouseStore(
+            "clickhouse://localhost",
+            operational_ordering_contract=OperationalOrderingContract.CURRENT,
+        )
+        assert (
+            store._operational_ordering_contract is OperationalOrderingContract.CURRENT
+        )
 
     @pytest.mark.asyncio
     async def test_insert_rows_passes_settings(self):

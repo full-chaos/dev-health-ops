@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import pathlib
 import sys
 from types import SimpleNamespace
 from typing import Any
+
+from python_oracle_loader import load_live_module
 
 WORK_ITEM_DATASETS = (
     "work-items",
@@ -20,33 +21,16 @@ WORK_ITEM_DATASETS = (
 
 
 def selected_module(source: pathlib.Path) -> dict[str, Any]:
-    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    selected: list[ast.stmt] = []
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
-            "_explicit_flags",
-            "_work_item_kwargs",
-        }:
-            selected.append(node)
-        elif isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "_PROCESSOR_FLAG_NAMES"
-            for target in node.targets
-        ):
-            selected.append(node)
-    namespace: dict[str, Any] = {
-        "Any": Any,
-        "SyncTaskContext": Any,
-        "_WORK_ITEM_DATASETS": set(WORK_ITEM_DATASETS),
-        "_window_day": lambda _context: "day",
-        "_window_backfill_days": lambda _context: 1,
-        "_credentials_mapping": lambda _context: {},
-        "_gitlab_credentials": lambda _context: ("token", "https://gitlab.example"),
-    }
-    exec(
-        compile(ast.Module(body=selected, type_ignores=[]), str(source), "exec"),
-        namespace,
+    module = load_live_module(
+        source,
+        relative_path="src/dev_health_ops/processors/dataset_adapters.py",
+        module_name="dev_health_ops.processors.dataset_adapters",
     )
-    return namespace
+    module._window_day = lambda _context: "day"
+    module._window_backfill_days = lambda _context: 1
+    module._credentials_mapping = lambda _context: {}
+    module._gitlab_credentials = lambda _context: ("token", "https://gitlab.example")
+    return {"_work_item_kwargs": module._work_item_kwargs}
 
 
 def main() -> int:

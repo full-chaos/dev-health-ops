@@ -1,87 +1,20 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import ast
 import json
 import pathlib
 import sys
 from types import SimpleNamespace
 from typing import Any
 
-
-class _Value:
-    def __init__(self, value: str) -> None:
-        self.value = value
+from python_oracle_loader import load_live_module
 
 
-class _BudgetBucketKey:
-    def __init__(self, **values: Any) -> None:
-        self.dimension = values["dimension"]
+def _namespace(path: pathlib.Path, *, relative_path: str, module_name: str) -> Any:
+    return load_live_module(path, relative_path=relative_path, module_name=module_name)
 
 
-class _BudgetEstimate:
-    def __init__(
-        self,
-        *,
-        bucket: _BudgetBucketKey,
-        estimated_units: int,
-        confidence: str,
-        route_family: str,
-        notes: tuple[str, ...] = (),
-    ) -> None:
-        self.bucket = bucket
-        self.estimated_units = estimated_units
-        self.confidence = confidence
-        self.route_family = route_family
-        self.notes = notes
-
-
-DATASET_KEY = SimpleNamespace(
-    WORK_ITEMS=_Value("work-items"),
-    WORK_ITEM_LABELS=_Value("work-item-labels"),
-    WORK_ITEM_PROJECTS=_Value("work-item-projects"),
-    WORK_ITEM_HISTORY=_Value("work-item-history"),
-    WORK_ITEM_COMMENTS=_Value("work-item-comments"),
-    INCIDENTS=_Value("incidents"),
-    FEATURE_FLAGS=_Value("feature-flags"),
-)
-BUDGET_DIMENSION = SimpleNamespace(
-    REST_CORE="rest_core",
-    SEARCH="search",
-    GRAPHQL_COST="graphql_cost",
-    SECONDARY_ABUSE_RISK="secondary_abuse_risk",
-)
-
-
-def _namespace(path: pathlib.Path, names: set[str]) -> dict[str, Any]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    selected: list[ast.stmt] = [
-        ast.ImportFrom(module="__future__", names=[ast.alias("annotations")], level=0)
-    ]
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names:
-            selected.append(node)
-        elif isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id in names
-            for target in node.targets
-        ):
-            selected.append(node)
-    namespace: dict[str, Any] = {
-        "Any": Any,
-        "DatasetKey": DATASET_KEY,
-        "BudgetDimension": BUDGET_DIMENSION,
-        "BudgetBucketKey": _BudgetBucketKey,
-        "BudgetEstimate": _BudgetEstimate,
-        "_host_from_credentials": lambda _credentials: "fixture.example",
-        "_credential_fingerprint": lambda *_args, **_kwargs: "fingerprint",
-        "_env_flag": lambda _name: False,
-    }
-    module = ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[]))
-    exec(compile(module, str(path), "exec"), namespace)
-    return namespace
-
-
-def _render(estimates: tuple[_BudgetEstimate, ...]) -> list[dict[str, object]]:
+def _render(estimates: tuple[Any, ...]) -> list[dict[str, object]]:
     return sorted(
         (
             {
@@ -101,38 +34,18 @@ def main() -> int:
         return 2
     linear = _namespace(
         pathlib.Path(sys.argv[1]),
-        {
-            "_CONFIDENCE_MEDIUM",
-            "_CONFIDENCE_LOW",
-            "_dataset_estimates",
-            "_bucket_factory",
-            "_estimate",
-            "_scaled_units",
-        },
+        relative_path="src/dev_health_ops/providers/linear/budget.py",
+        module_name="dev_health_ops.providers.linear.budget",
     )
     jira = _namespace(
         pathlib.Path(sys.argv[2]),
-        {
-            "_CONFIDENCE_HIGH",
-            "_CONFIDENCE_MEDIUM",
-            "_CONFIDENCE_LOW",
-            "_MAX_JSM_INCIDENT_ADMISSION_CANDIDATES",
-            "_dataset_estimates",
-            "_bucket_factory",
-            "_estimate",
-            "_scaled_units",
-            "_flag_enabled",
-        },
+        relative_path="src/dev_health_ops/providers/jira/budget.py",
+        module_name="dev_health_ops.providers.jira.budget",
     )
     launchdarkly = _namespace(
         pathlib.Path(sys.argv[3]),
-        {
-            "_CONFIDENCE_MEDIUM",
-            "_CONFIDENCE_LOW",
-            "LaunchDarklyBudgetEstimator",
-            "_bucket_factory",
-            "_estimate",
-        },
+        relative_path="src/dev_health_ops/providers/launchdarkly/budget.py",
+        module_name="dev_health_ops.providers.launchdarkly.budget",
     )
     cases: list[dict[str, object]] = []
     work_item_datasets = (
@@ -151,7 +64,7 @@ def main() -> int:
                     "span_days": span_days,
                     "flags": {},
                     "estimates": _render(
-                        linear["_dataset_estimates"](
+                        linear._dataset_estimates(
                             dataset_key=dataset,
                             org_id="org",
                             host="fixture.example",
@@ -170,7 +83,7 @@ def main() -> int:
                         "span_days": span_days,
                         "flags": flags,
                         "estimates": _render(
-                            jira["_dataset_estimates"](
+                            jira._dataset_estimates(
                                 dataset_key=dataset,
                                 flags=flags,
                                 org_id="org",
@@ -196,7 +109,7 @@ def main() -> int:
             "span_days": 1,
             "flags": {},
             "estimates": _render(
-                launchdarkly["LaunchDarklyBudgetEstimator"]().estimate(context)
+                launchdarkly.LaunchDarklyBudgetEstimator().estimate(context)
             ),
         }
     )

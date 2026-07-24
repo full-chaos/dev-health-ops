@@ -101,7 +101,13 @@ if TYPE_CHECKING:
 class ClickHouseStore:
     """Async storage implementation backed by ClickHouse (via clickhouse-connect)."""
 
-    def __init__(self, conn_string: str, settings: dict | None = None) -> None:
+    def __init__(
+        self,
+        conn_string: str,
+        settings: dict | None = None,
+        *,
+        operational_ordering_contract: OperationalOrderingContract | None = None,
+    ) -> None:
         if not conn_string:
             raise ValueError("ClickHouse connection string is required")
         self.conn_string = conn_string
@@ -109,7 +115,11 @@ class ClickHouseStore:
         self.org_id: str | None = None
         self._lock = asyncio.Lock()
         self._settings = settings or {}
-        self._operational_ordering_contract = configured_operational_ordering_contract()
+        self._operational_ordering_contract = (
+            configured_operational_ordering_contract()
+            if operational_ordering_contract is None
+            else operational_ordering_contract
+        )
 
     async def __aenter__(self) -> ClickHouseStore:
         import clickhouse_connect

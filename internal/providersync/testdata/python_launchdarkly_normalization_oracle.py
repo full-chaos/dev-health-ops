@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import ast
 import json
 import pathlib
 import sys
 from dataclasses import asdict, make_dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from python_oracle_loader import load_live_module
 
 FIXED_NOW = datetime(2026, 7, 23, 12, 34, 56, 789000, tzinfo=timezone.utc)
 
@@ -64,38 +65,19 @@ FeatureFlagEventRecord = make_dataclass(
 
 
 def selected_module(source: pathlib.Path) -> dict[str, Any]:
-    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    names = {
-        "_EVENT_KIND_MAP",
-        "_SOURCE",
-        "_parse_iso",
-        "normalize_flags",
-        "normalize_audit_events",
+    module = load_live_module(
+        source,
+        relative_path="src/dev_health_ops/processors/launchdarkly.py",
+        module_name="dev_health_ops.processors.launchdarkly",
+    )
+    module.datetime = FixedDateTime
+    module.FeatureFlagRecord = FeatureFlagRecord
+    module.FeatureFlagEventRecord = FeatureFlagEventRecord
+    module.logger = type("Logger", (), {"info": lambda *_args: None})()
+    return {
+        "normalize_flags": module.normalize_flags,
+        "normalize_audit_events": module.normalize_audit_events,
     }
-    selected: list[ast.stmt] = [
-        ast.ImportFrom(module="__future__", names=[ast.alias("annotations")], level=0)
-    ]
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in names:
-            selected.append(node)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(target, ast.Name) and target.id in names
-                for target in targets
-            ):
-                selected.append(node)
-    namespace: dict[str, Any] = {
-        "Any": Any,
-        "datetime": FixedDateTime,
-        "timezone": timezone,
-        "FeatureFlagRecord": FeatureFlagRecord,
-        "FeatureFlagEventRecord": FeatureFlagEventRecord,
-        "logger": type("Logger", (), {"info": lambda *_args: None})(),
-    }
-    module = ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[]))
-    exec(compile(module, str(source), "exec"), namespace)
-    return namespace
 
 
 def encode(value: Any) -> Any:

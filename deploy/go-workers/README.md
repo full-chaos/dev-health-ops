@@ -61,7 +61,7 @@ filesystem, and expose only the operator HTTP surface on port 8080:
 `/healthz`, `/readyz`, and `/metrics`.
 
 The separately deployable `sync-provider` topology starts the checked-in
-`sync` runtime profile and consumes the isolated `sync.provider` River queue
+`sync` runtime profile and consumes the isolated `sync_provider` River queue
 when the provider-unit contract/handler release is present. It must never be
 combined with the coordinator's `sync` queue: the two clients have disjoint
 handlers. Both queues and all provider routes remain Celery-owned unless a
@@ -69,22 +69,36 @@ reviewed route release says otherwise.
 
 ### Coexistence canary
 
-1. Run the one-shot migration job with the direct migration DSN and wait for a
-   clean completion. A Go workload receives `POSTGRES_URI` and
-   `WORKER_DATABASE_URI`, never `MIGRATION_DATABASE_URI`.
+1. Compose runs a fail-closed bootstrap chain before any Go workload:
+   canonical `migrate` (Alembic and ClickHouse), `go-river-provision`
+   (idempotent post-Alembic runtime-role grants), `go-river-migrate` (the
+   pinned River migration followed by `dev-health-worker-migrate --check`),
+   then `go-contractcheck` (the embedded job registry and deployment
+   profile). Every edge requires `service_completed_successfully`; a failed
+   one-shot leaves the Go services unstarted. The elevated DSN is confined to
+   `go-river-migrate` as `GO_WORKER_MIGRATION_DATABASE_URI`; a Go workload
+   receives `POSTGRES_URI` and `WORKER_DATABASE_URI`, never
+   `MIGRATION_DATABASE_URI`.
 2. Verify the deployed immutable image contains the matching
    `profiles.json` and `contracts/jobs/v1/registry.json`; then deploy the
-   zero-replica coexistence topology:
+   coexistence topology:
 
    ```bash
    docker compose -f deploy/docker-compose/compose.production.yml \
-     -f deploy/docker-compose/compose.go-workers.yml --profile go-workers up -d
+     -f deploy/docker-compose/compose.go-workers.yml \
+     --profile go-workers up -d --build
    helm upgrade --install dev-health deploy/helm/dev-health \
      -f deploy/helm/dev-health/values-go-workers-coexistence.yaml
    kubectl -n dev-health apply -f deploy/kubernetes/go-workers.yaml
    docker stack deploy -c deploy/docker-swarm/stack.yml \
      -c deploy/docker-swarm/stack.go-workers.yml dev-health
    ```
+
+   This bootstrap validates schema and contracts only. It does not invoke
+   `dev-health-workerctl`, mutate a worker route, or transfer Celery/Beat
+   ownership. For an existing local Postgres volume, the post-Alembic
+   provision step is what grants access to tables that did not exist when
+   `/docker-entrypoint-initdb.d` originally ran.
 
 3. Scale one reviewed profile only, never above `profiles.json.max_replicas`.
    Wait for `/readyz` and confirm its build metadata and profile labels before
@@ -110,6 +124,6 @@ They scale Celery worker/Beat consumers to zero but do not delete their
 definitions or Valkey DB 0. Use them only after all of the following are
 recorded in the owning route release: executable River handlers, explicit
 route/rollback ownership, cross-process quiescence, scheduler policy parity,
-provider sync (`sync.provider`) contract support where applicable, and a
+provider sync (`sync_provider`) contract support where applicable, and a
 successful coexistence canary. The current checked-in contract fails these
 conditions, so Go-only is not production-authorized.

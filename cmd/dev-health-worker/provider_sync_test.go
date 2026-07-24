@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -8,7 +9,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 type independentRiverClient struct {
@@ -68,6 +71,27 @@ func TestProviderSyncClientOwnsItsRegistryQueue(t *testing.T) {
 	}
 	if _, ok := config.Queues[descriptor.Queue]; !ok {
 		t.Fatalf("provider client does not consume registry queue %q", descriptor.Queue)
+	}
+}
+
+func TestProviderSyncRiverConfigPassesRiverClientValidation(t *testing.T) {
+	pool, err := pgxpool.New(
+		context.Background(),
+		"postgresql://unused:unused@127.0.0.1:1/unused",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	_, err = river.NewClient(
+		riverpgxv5.New(pool),
+		providerSyncRiverConfig(
+			slog.Default(), river.NewWorkers(), "river",
+		),
+	)
+	if err != nil {
+		t.Fatalf("provider sync River config is invalid: %v", err)
 	}
 }
 

@@ -214,16 +214,36 @@ func validIdentifier(value string) bool {
 }
 
 func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions) error {
+	for _, statement := range runtimeGrantStatements(options) {
+		if _, err := tx.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("apply River runtime privilege policy")
+		}
+	}
+	return nil
+}
+
+func runtimeGrantStatements(options MigrationOptions) []string {
 	schema := pgx.Identifier{options.Schema}.Sanitize()
 	domainRole := pgx.Identifier{options.DomainRole}.Sanitize()
 	queueRole := pgx.Identifier{options.QueueRole}.Sanitize()
-	statements := []string{
+	return []string{
+		"DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC, %I, %I', current_database(), '" + options.DomainRole + "', '" + options.QueueRole + "'); END $$",
 		"GRANT USAGE ON SCHEMA public TO " + domainRole,
 		"REVOKE CREATE ON SCHEMA public FROM " + domainRole,
-		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO " + domainRole,
-		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO " + domainRole,
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + domainRole,
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + domainRole,
 		"DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.worker_job_outbox FROM " + domainRole + "; GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integrations') IS NOT NULL THEN GRANT SELECT ON TABLE public.integrations TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_runs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.worker_job_routes TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
 		"GRANT USAGE ON SCHEMA public TO " + queueRole,
 		"REVOKE CREATE ON SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + queueRole,
@@ -248,10 +268,4 @@ func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC",
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " GRANT EXECUTE ON FUNCTIONS TO " + queueRole,
 	}
-	for _, statement := range statements {
-		if _, err := tx.Exec(ctx, statement); err != nil {
-			return fmt.Errorf("apply River runtime privilege policy")
-		}
-	}
-	return nil
 }

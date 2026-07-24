@@ -52,6 +52,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/worker/app/contracts/jobs \
       /runtime/worker/app/deploy/go-workers \
       /runtime/scheduler/usr/local/bin \
+      /runtime/scheduler/app/contracts/jobs \
+      /runtime/scheduler/app/deploy/go-workers \
       /runtime/reconciler/usr/local/bin \
       /runtime/reconciler/app/contracts/jobs \
       /runtime/reconciler/app/contracts/sync-dispatch \
@@ -64,6 +66,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/contractcheck/app/deploy/go-workers; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
+    cp -R /src/contracts/jobs/v1 /runtime/scheduler/app/contracts/jobs/v1; \
+    cp /src/deploy/go-workers/profiles.json /runtime/scheduler/app/deploy/go-workers/profiles.json; \
     cp /out/dev-health-reconciler /runtime/reconciler/usr/local/bin/dev-health-reconciler; \
     cp -R /src/contracts/jobs/v1 /runtime/reconciler/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/reconciler/app/contracts/sync-dispatch/v1; \
@@ -101,6 +105,7 @@ ENTRYPOINT ["/usr/local/bin/dev-health-worker"]
 
 FROM runtime AS scheduler
 COPY --from=build --chown=65532:65532 /runtime/scheduler/ /
+WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dev-health-scheduler"]
 
 FROM runtime AS reconciler

@@ -298,20 +298,33 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
     assert '-v app_database="$POSTGRES_DB"' in init_script
     assert ':"app_database"' in init_script
     assert "GRANT CONNECT ON DATABASE" in init_script
+    assert (
+        'REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role", :"queue_role";'
+        in init_script
+    )
     for grant in (
         "GRANT USAGE ON SCHEMA public",
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public",
-        "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public",
         "REVOKE CREATE ON SCHEMA public FROM",
         "public.alembic_version",
-        "GRANT SELECT, INSERT ON TABLE public.worker_job_outbox",
         "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
         "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences",
     ):
         assert grant in init_script
     assert "REVOKE CREATE ON SCHEMA public FROM PUBLIC" not in init_script
-    assert "GRANT INSERT ON TABLE public.worker_job_outbox" not in init_script
+    assert (
+        'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, :"domain_role", :"queue_role";'
+        in init_script
+    )
+    assert (
+        "GRANT INSERT ON TABLE public.worker_job_completion_fences" not in init_script
+    )
+    _assert_least_privilege_domain_grants(
+        init_script.split('GRANT USAGE ON SCHEMA public TO :"queue_role";', maxsplit=1)[
+            0
+        ]
+    )
 
     upgrade_script = (
         _REPO_ROOT / "scripts" / "worker" / "provision_river_roles.sql"
@@ -319,20 +332,64 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
     assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION" in upgrade_script
     assert "WHERE NOT EXISTS" in upgrade_script
     assert "domain_role and queue_role must be distinct" in upgrade_script
+    assert (
+        'REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role", :"queue_role";'
+        in upgrade_script
+    )
     for grant in (
         "GRANT USAGE ON SCHEMA public",
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public",
-        "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public",
         "REVOKE CREATE ON SCHEMA public FROM",
         "public.alembic_version",
-        "GRANT SELECT, INSERT ON TABLE public.worker_job_outbox",
         "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
         "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences",
     ):
         assert grant in upgrade_script
     assert "REVOKE CREATE ON SCHEMA public FROM PUBLIC" not in upgrade_script
-    assert "GRANT INSERT ON TABLE public.worker_job_outbox" not in upgrade_script
+    assert (
+        'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, :"domain_role", :"queue_role";'
+        in upgrade_script
+    )
+    assert (
+        "GRANT INSERT ON TABLE public.worker_job_completion_fences"
+        not in upgrade_script
+    )
+    _assert_least_privilege_domain_grants(
+        upgrade_script.split("-- The queue role", maxsplit=1)[0]
+    )
+
+
+def _assert_least_privilege_domain_grants(domain_script: str) -> None:
+    expected_read_only_tables = {
+        "integrations",
+        "integration_sources",
+        "integration_datasets",
+        "integration_credentials",
+        "sync_runs",
+        "worker_job_routes",
+        "sync_dispatch_transport_routes",
+    }
+    configured_read_only_tables = {
+        line.strip().removeprefix("('").removesuffix("'),").removesuffix("')")
+        for line in domain_script.splitlines()
+        if line.strip().startswith("('")
+    }
+    assert configured_read_only_tables == expected_read_only_tables
+    for grant in (
+        "GRANT SELECT ON TABLE public.%I TO %I",
+        "GRANT SELECT, UPDATE ON TABLE public.sync_run_units",
+        "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks",
+        "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox",
+        "GRANT SELECT, INSERT ON TABLE public.worker_job_outbox",
+    ):
+        assert grant in domain_script
+    for forbidden in (
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES",
+        "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES",
+        "DELETE ON TABLE",
+    ):
+        assert forbidden not in domain_script
 
 
 def test_legacy_compose_disables_ambient_migrations() -> None:

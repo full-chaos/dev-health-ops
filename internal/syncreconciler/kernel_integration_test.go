@@ -660,11 +660,21 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 
 func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
 	for _, statement := range []string{
+		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + kernelDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + kernelDomainPassword + "'",
 		"CREATE ROLE " + kernelQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + kernelQueuePassword + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + kernelDomainRole + ", " + kernelQueueRole,
+		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_routes (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		`CREATE TABLE public.sync_dispatch_transport_routes (
 			kind text PRIMARY KEY,
 			transport text NOT NULL,

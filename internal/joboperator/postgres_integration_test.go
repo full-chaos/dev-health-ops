@@ -136,7 +136,9 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	authenticator, err := NewAuthenticator(domainPool)
+	// The operator credential store is intentionally outside the domain runtime
+	// allow-list, so authenticate through the fixture's operator/admin pool.
+	authenticator, err := NewAuthenticator(adminPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,6 +293,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	statements := []string{
+		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 		"CREATE ROLE " + operatorIntegrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationDomainPass + "'",
 		"CREATE ROLE " + operatorIntegrationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationQueuePass + "'",
 		`CREATE TABLE public.internal_service_credentials (
@@ -328,6 +331,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			job_kind text,
 			status text
 		)`,
+		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		`CREATE TABLE public.worker_job_runs (
 			id uuid PRIMARY KEY,
 			job_kind text NOT NULL,
@@ -340,6 +344,13 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			generation bigint NOT NULL,
 			updated_at timestamptz NOT NULL
 		)`,
+		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		`CREATE TABLE public.sync_dispatch_outbox (
 			id uuid PRIMARY KEY,
 			state text NOT NULL

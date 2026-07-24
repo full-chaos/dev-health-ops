@@ -303,7 +303,7 @@
       "current_version": 1,
       "supported_versions": [1],
       "profile": "sync",
-      "queue": "sync.provider",
+      "queue": "sync_provider",
       "handler_owner": "internal/jobs/providerunit",
       "execution_mode": "command",
       "priority": 2,

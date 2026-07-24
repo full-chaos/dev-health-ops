@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -161,5 +162,70 @@ func TestRuntimeRolePreflightRequiresSeparateLeastPrivilegeLoginRoles(t *testing
 				t.Fatalf("validateRuntimeRolePreflight() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T) {
+	t.Parallel()
+
+	statements := runtimeGrantStatements(MigrationOptions{
+		Schema:     "river",
+		DomainRole: "domain_runtime",
+		QueueRole:  "queue_runtime",
+	})
+	want := []string{
+		"DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC, %I, %I', current_database(), 'domain_runtime', 'queue_runtime'); END $$",
+		"GRANT USAGE ON SCHEMA public TO \"domain_runtime\"",
+		"REVOKE CREATE ON SCHEMA public FROM \"domain_runtime\"",
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"domain_runtime\"",
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"domain_runtime\"",
+		"DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integrations') IS NOT NULL THEN GRANT SELECT ON TABLE public.integrations TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_sources TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_datasets TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_runs TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.worker_job_routes TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO \"domain_runtime\"; END IF; END $$",
+		"GRANT USAGE ON SCHEMA public TO \"queue_runtime\"",
+		"REVOKE CREATE ON SCHEMA public FROM \"queue_runtime\"",
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"queue_runtime\"",
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"queue_runtime\"",
+		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, \"domain_runtime\", \"queue_runtime\"",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO \"queue_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO \"queue_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO \"queue_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO \"queue_runtime\"; END IF; END $$",
+		"REVOKE ALL PRIVILEGES ON SCHEMA \"river\" FROM PUBLIC",
+		"REVOKE ALL PRIVILEGES ON SCHEMA \"river\" FROM \"domain_runtime\"",
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA \"river\" FROM PUBLIC, \"domain_runtime\"",
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA \"river\" FROM PUBLIC, \"domain_runtime\"",
+		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA \"river\" FROM PUBLIC, \"domain_runtime\"",
+		"GRANT USAGE ON SCHEMA \"river\" TO \"queue_runtime\"",
+		"REVOKE CREATE ON SCHEMA \"river\" FROM \"queue_runtime\"",
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA \"river\" TO \"queue_runtime\"",
+		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA \"river\" TO \"queue_runtime\"",
+		"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA \"river\" TO \"queue_runtime\"",
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA \"river\" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"queue_runtime\"",
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA \"river\" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO \"queue_runtime\"",
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA \"river\" REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC",
+		"ALTER DEFAULT PRIVILEGES IN SCHEMA \"river\" GRANT EXECUTE ON FUNCTIONS TO \"queue_runtime\"",
+	}
+	if !reflect.DeepEqual(statements, want) {
+		t.Fatalf("runtime grant statements = %#v, want %#v", statements, want)
+	}
+	for _, forbidden := range []string{
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public",
+		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public",
+	} {
+		for _, statement := range statements {
+			if strings.Contains(statement, forbidden) {
+				t.Fatalf("runtime grant policy contains broad public grant %q", statement)
+			}
+		}
 	}
 }

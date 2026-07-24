@@ -60,6 +60,14 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE TABLE public.domain_runtime_probe (id bigserial PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
+		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_routes (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_watermarks (key text PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
@@ -323,22 +331,59 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	t.Helper()
 	domainPool := openPool(t, ctx, domainURI)
 	defer domainPool.Close()
-	var domainRowID int64
-	if err := domainPool.QueryRow(
+	for _, table := range []string{
+		"integrations",
+		"integration_sources",
+		"integration_datasets",
+		"integration_credentials",
+		"sync_runs",
+		"worker_job_routes",
+		"sync_dispatch_transport_routes",
+		"sync_run_units",
+		"sync_watermarks",
+		"sync_dispatch_outbox",
+		"worker_job_outbox",
+	} {
+		if _, err := domainPool.Exec(ctx, "SELECT count(*) FROM public."+table); err != nil {
+			t.Fatalf("domain role cannot SELECT %s: %v", table, err)
+		}
+	}
+	if _, err := domainPool.Exec(ctx, "UPDATE public.sync_run_units SET state='updated'"); err != nil {
+		t.Fatalf("domain role cannot UPDATE sync run units: %v", err)
+	}
+	if _, err := domainPool.Exec(ctx, "INSERT INTO public.sync_watermarks (key, value) VALUES ('privilege', 'ready')"); err != nil {
+		t.Fatalf("domain role cannot INSERT sync watermarks: %v", err)
+	}
+	if _, err := domainPool.Exec(ctx, "UPDATE public.sync_watermarks SET value='updated' WHERE key='privilege'"); err != nil {
+		t.Fatalf("domain role cannot UPDATE sync watermarks: %v", err)
+	}
+	if _, err := domainPool.Exec(
 		ctx,
-		"INSERT INTO public.domain_runtime_probe (value) VALUES ('ready') RETURNING id",
-	).Scan(&domainRowID); err != nil {
-		t.Fatalf("domain role cannot insert semantic state: %v", err)
+		"INSERT INTO public.sync_dispatch_outbox (id, state) VALUES ('00000000-0000-0000-0000-000000000003', 'pending')",
+	); err != nil {
+		t.Fatalf("domain role cannot INSERT sync-dispatch outbox state: %v", err)
 	}
-	if _, err := domainPool.Exec(ctx, "UPDATE public.domain_runtime_probe SET value='updated' WHERE id=$1", domainRowID); err != nil {
-		t.Fatalf("domain role cannot update semantic state: %v", err)
+	if _, err := domainPool.Exec(
+		ctx,
+		"UPDATE public.sync_dispatch_outbox SET state='ready' WHERE id='00000000-0000-0000-0000-000000000003'",
+	); err != nil {
+		t.Fatalf("domain role cannot UPDATE sync-dispatch outbox state: %v", err)
 	}
-	var domainValue string
-	if err := domainPool.QueryRow(ctx, "SELECT value FROM public.domain_runtime_probe WHERE id=$1", domainRowID).Scan(&domainValue); err != nil || domainValue != "updated" {
-		t.Fatalf("domain role semantic read = %q, %v", domainValue, err)
-	}
-	if _, err := domainPool.Exec(ctx, "DELETE FROM public.domain_runtime_probe WHERE id=$1", domainRowID); err != nil {
-		t.Fatalf("domain role cannot delete semantic state: %v", err)
+	for _, statement := range []string{
+		"SELECT count(*) FROM public.domain_runtime_probe",
+		"INSERT INTO public.domain_runtime_probe (value) VALUES ('forbidden')",
+		"UPDATE public.domain_runtime_probe SET value='forbidden'",
+		"DELETE FROM public.domain_runtime_probe",
+		"SELECT nextval('public.domain_runtime_probe_id_seq')",
+		"INSERT INTO public.integrations (id) VALUES ('00000000-0000-0000-0000-000000000010')",
+		"INSERT INTO public.sync_run_units (id, state) VALUES ('00000000-0000-0000-0000-000000000011', 'forbidden')",
+		"DELETE FROM public.sync_run_units",
+		"DELETE FROM public.sync_watermarks",
+		"DELETE FROM public.sync_dispatch_outbox",
+	} {
+		if _, err := domainPool.Exec(ctx, statement); err == nil {
+			t.Fatalf("domain role unexpectedly has broad semantic access for %q", statement)
+		}
 	}
 	if _, err := domainPool.Exec(
 		ctx,
@@ -349,8 +394,8 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	if _, err := domainPool.Exec(
 		ctx,
 		"INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ('daily_metrics_run:00000000-0000-4000-8000-000000000001')",
-	); err != nil {
-		t.Fatalf("domain runtime cannot insert completion fence: %v", err)
+	); err == nil {
+		t.Fatal("domain runtime unexpectedly inserts completion fences")
 	}
 	if _, err := domainPool.Exec(
 		ctx,

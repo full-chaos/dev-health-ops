@@ -10,13 +10,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+LEGACY_DOCS = ROOT / ".github" / "docs-legacy"
 TAXONOMY_PATH = ROOT / "src" / "dev_health_ops" / "investment_taxonomy.py"
 LLM_SCHEMA_PATH = (
     ROOT / "src" / "dev_health_ops" / "work_graph" / "investment" / "llm_schema.py"
 )
-TAXONOMY_DOC = ROOT / "docs" / "product" / "investment-taxonomy.md"
-LLM_CONTRACT_DOC = ROOT / "docs" / "llm" / "categorization-contract.md"
-INVESTMENT_MIX_DOC = ROOT / "docs" / "user-guide" / "views" / "investment-mix.md"
+TAXONOMY_DOC = LEGACY_DOCS / "product" / "investment-taxonomy.md"
+LLM_CONTRACT_DOC = LEGACY_DOCS / "llm" / "categorization-contract.md"
+INVESTMENT_MIX_DOC = LEGACY_DOCS / "user-guide" / "views" / "investment-mix.md"
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"
@@ -204,7 +205,9 @@ def check_published_investment_examples() -> list[str]:
 
     errors: list[str] = []
     classification = classify_all(
-        ROOT / "docs", ROOT / "mkdocs.yml", ROOT / "docs" / "publication.yml"
+        ROOT / "docs",
+        ROOT / "mkdocs.yml",
+        LEGACY_DOCS / "publication.yml",
     )
     for relpath, bucket in classification.items():
         if bucket == "excluded-internal":

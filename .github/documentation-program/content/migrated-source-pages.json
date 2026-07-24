@@ -1,0 +1,12 @@
+{
+  "admin/data-sources/incident-response.md": ".github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md",
+  "admin/data-sources/jira-atlassian.md": ".github/docs-legacy/providers/jira-service-management.md",
+  "contribute/architecture/go-worker-migration-plan.md": ".github/docs-legacy/plans/go-worker-migration-implementation-plan.md",
+  "contribute/architecture/go-worker-migration-prd.md": ".github/docs-legacy/product/go-worker-migration-prd.md",
+  "contribute/architecture/go-worker-runtime.md": ".github/docs-legacy/architecture/go-worker-runtime-trd.md",
+  "contribute/architecture/river-compatibility.md": ".github/docs-legacy/decisions/chaos-3034-river-compatibility.md",
+  "integrate/webhooks/pagerduty.md": ".github/docs-legacy/architecture/pagerduty-contract.md",
+  "operate/configure/database-connection-pooling.md": ".github/docs-legacy/ops/database-connection-pooling.md",
+  "operate/run/workers-and-jobs.md": ".github/docs-legacy/ops/workers.md",
+  "reference/cli/index.md": ".github/docs-legacy/ops/cli-reference.md"
+}

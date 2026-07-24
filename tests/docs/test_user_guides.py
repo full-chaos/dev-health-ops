@@ -16,7 +16,10 @@ from tests.docs.user_guide_contracts import (
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 DOCS: Final = ROOT / "docs"
-GUIDES: Final = DOCS / "user-guide"
+# Archived user-guide corpus: the calibrated-language and evidence-first contracts are
+# characterized against the preserved source documents, not the public routes.
+ARCHIVED: Final = ROOT / ".github" / "docs-legacy"
+GUIDES: Final = ARCHIVED / "user-guide"
 IMAGE_DIR: Final = GUIDES / "images"
 
 ONBOARDING_PAGES: Final = {
@@ -60,12 +63,23 @@ ONBOARDING_PAGES: Final = {
 FORBIDDEN_USER_JARGON: Final = ("GraphQL", "ClickHouse", "dev-hops")
 FORBIDDEN_DEFINITIVE_LANGUAGE: Final = ("detected", "determined")
 
+# Canonical public guides that must exist and be navigable under the accepted IA.
+CANONICAL_NAV_ROUTES: Final = (
+    "get-started/index.md",
+    "use/delivery-flow/pr-flow.md",
+    "use/ai-workflows/impact.md",
+    "use/ai-workflows/review-load.md",
+    "use/ai-workflows/risk.md",
+    "use/reports/index.md",
+    "reference/taxonomies/investment.md",
+)
 
-def _read_guide(relative_path: str) -> str:
+
+def _read_archived_guide(relative_path: str) -> str:
     return (GUIDES / relative_path).read_text(encoding="utf-8")
 
 
-def _read_view(page_name: str) -> str:
+def _read_archived_view(page_name: str) -> str:
     return (GUIDES / "views" / page_name).read_text(encoding="utf-8")
 
 
@@ -91,24 +105,31 @@ def _onboarding_contract_errors(pages: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(errors)
 
 
-def test_product_concepts_characterization_baseline() -> None:
-    concepts = (DOCS / "product" / "concepts.md").read_text(encoding="utf-8")
+# --- Archived-source characterization -------------------------------------------------
+
+
+def test_archived_product_concepts_characterization_baseline() -> None:
+    concepts = (ARCHIVED / "product" / "concepts.md").read_text(encoding="utf-8")
 
     assert "WorkUnit is an evidence container" in concepts
     assert "Evidence quality" in concepts
     assert "Probability distributions" in concepts
 
 
-def test_onboarding_pages_meet_plain_language_contract() -> None:
-    pages = {page_name: _read_guide(page_name) for page_name in ONBOARDING_PAGES}
+def test_archived_onboarding_pages_meet_plain_language_contract() -> None:
+    pages = {
+        page_name: _read_archived_guide(page_name) for page_name in ONBOARDING_PAGES
+    }
 
     assert _onboarding_contract_errors(pages) == ()
 
 
-def test_onboarding_negative_reports_missing_glossary_link_and_definitive_language() -> (
+def test_archived_onboarding_negative_reports_missing_glossary_link_and_definitive_language() -> (
     None
 ):
-    pages = {page_name: _read_guide(page_name) for page_name in ONBOARDING_PAGES}
+    pages = {
+        page_name: _read_archived_guide(page_name) for page_name in ONBOARDING_PAGES
+    }
     pages["how-to-read-dev-health.md"] = pages["how-to-read-dev-health.md"].replace(
         "[Glossary](glossary.md)",
         "glossary",
@@ -123,8 +144,8 @@ def test_onboarding_negative_reports_missing_glossary_link_and_definitive_langua
     assert "first-10-minutes.md: contains definitive AI language 'detected'" in errors
 
 
-def test_investment_journey_has_calibrated_evidence_first_language() -> None:
-    journey = _read_guide("journeys/investment-view.md")
+def test_archived_investment_journey_has_calibrated_evidence_first_language() -> None:
+    journey = _read_archived_guide("journeys/investment-view.md")
 
     for term in (
         "Feature Delivery",
@@ -142,16 +163,7 @@ def test_investment_journey_has_calibrated_evidence_first_language() -> None:
         assert phrase not in journey.casefold()
 
 
-def test_onboarding_navigation_and_sanitized_fixture_capture_are_present() -> None:
-    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
-    for page in (
-        "user-guide/first-10-minutes.md",
-        "user-guide/how-to-read-dev-health.md",
-        "user-guide/glossary.md",
-        "user-guide/journeys/investment-view.md",
-    ):
-        assert page in nav
-
+def test_archived_onboarding_sanitized_fixture_capture_is_present() -> None:
     metadata = json.loads(
         (IMAGE_DIR / "fixture-capture-metadata.json").read_text(encoding="utf-8")
     )
@@ -163,24 +175,28 @@ def test_onboarding_navigation_and_sanitized_fixture_capture_are_present() -> No
         assert (IMAGE_DIR / screenshot).is_file()
 
 
-def test_visualization_patterns_characterization_baseline() -> None:
-    patterns = (DOCS / "visualizations" / "patterns.md").read_text(encoding="utf-8")
+def test_archived_visualization_patterns_characterization_baseline() -> None:
+    patterns = (ARCHIVED / "visualizations" / "patterns.md").read_text(encoding="utf-8")
 
     assert "Quadrants show raw values only" in patterns
     assert "Flames for diagnosis" in patterns
     assert "Person-to-person rankings or comparisons" in patterns
 
 
-def test_quadrants_flame_and_hotspots_meet_diagnostic_contract() -> None:
-    pages = {page_name: _read_view(page_name) for page_name in DIAGNOSTIC_PAGES}
+def test_archived_quadrants_flame_and_hotspots_meet_diagnostic_contract() -> None:
+    pages = {
+        page_name: _read_archived_view(page_name) for page_name in DIAGNOSTIC_PAGES
+    }
 
     assert diagnostic_contract_errors(pages) == ()
 
 
-def test_diagnostic_negative_reports_comparison_framing_and_missing_evidence_link() -> (
+def test_archived_diagnostic_negative_reports_comparison_framing_and_missing_evidence_link() -> (
     None
 ):
-    pages = {page_name: _read_view(page_name) for page_name in DIAGNOSTIC_PAGES}
+    pages = {
+        page_name: _read_archived_view(page_name) for page_name in DIAGNOSTIC_PAGES
+    }
     pages["quadrants.md"] = pages["quadrants.md"].replace(
         "../glossary.md", "../missing.md"
     )
@@ -192,24 +208,28 @@ def test_diagnostic_negative_reports_comparison_framing_and_missing_evidence_lin
     assert "flame-diagrams.md: contains comparison framing 'percentile'" in errors
 
 
-def test_product_prd_characterization_baseline_for_flow_and_work_graph() -> None:
-    prd = (DOCS / "product" / "prd.md").read_text(encoding="utf-8")
+def test_archived_product_prd_characterization_baseline_for_flow_and_work_graph() -> (
+    None
+):
+    prd = (ARCHIVED / "product" / "prd.md").read_text(encoding="utf-8")
 
     assert "Flow & constraints" in prd
     assert "Work Graph" in prd
 
 
-def test_pr_flow_capacity_and_work_graph_meet_user_guide_contract() -> None:
-    pages = {page_name: _read_view(page_name) for page_name in FLOW_PAGES}
+def test_archived_pr_flow_capacity_and_work_graph_meet_user_guide_contract() -> None:
+    pages = {page_name: _read_archived_view(page_name) for page_name in FLOW_PAGES}
 
     assert flow_contract_errors(pages) == ()
-    reference = _read_guide("work-graph.md")
+    reference = _read_archived_guide("work-graph.md")
     assert "reference role" in reference.casefold()
     assert "canonical user journey" in pages["work-graph.md"].casefold()
 
 
-def test_flow_negative_reports_ambiguous_planning_and_comparison_framing() -> None:
-    pages = {page_name: _read_view(page_name) for page_name in FLOW_PAGES}
+def test_archived_flow_negative_reports_ambiguous_planning_and_comparison_framing() -> (
+    None
+):
+    pages = {page_name: _read_archived_view(page_name) for page_name in FLOW_PAGES}
     pages["pr-flow.md"] = pages["pr-flow.md"].replace(
         "Planned behavior", "Future behavior"
     )
@@ -223,24 +243,14 @@ def test_flow_negative_reports_ambiguous_planning_and_comparison_framing() -> No
     assert "capacity-planning.md: contains comparison framing 'leaderboard'" in errors
 
 
-def test_ai_views_explain_current_fields_with_calibrated_language() -> None:
-    pages = {page_name: _read_view(page_name) for page_name in AI_VIEW_PAGES}
+def test_archived_ai_views_explain_current_fields_with_calibrated_language() -> None:
+    pages = {page_name: _read_archived_view(page_name) for page_name in AI_VIEW_PAGES}
 
     assert ai_view_contract_errors(pages) == ()
-    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
-    views_index = _read_guide("views-index.md")
-    for path in (
-        "user-guide/views/ai-impact.md",
-        "user-guide/views/ai-review-load.md",
-        "user-guide/views/ai-risk.md",
-        "user-guide/views/ai-attribution.md",
-    ):
-        assert path in nav
-        assert path.removeprefix("user-guide/") in views_index
 
 
-def test_ai_negative_reports_definitive_and_ranking_language() -> None:
-    pages = {page_name: _read_view(page_name) for page_name in AI_VIEW_PAGES}
+def test_archived_ai_negative_reports_definitive_and_ranking_language() -> None:
+    pages = {page_name: _read_archived_view(page_name) for page_name in AI_VIEW_PAGES}
     pages["ai-impact.md"] = (
         f"{pages['ai-impact.md']}\nThe model determined the result.\n"
     )
@@ -259,10 +269,10 @@ def test_ai_negative_reports_definitive_and_ranking_language() -> None:
     )
 
 
-def test_ai_negative_reports_invented_fields_unlabeled_estimates_and_recomputation() -> (
+def test_archived_ai_negative_reports_invented_fields_unlabeled_estimates_and_recomputation() -> (
     None
 ):
-    pages = {page_name: _read_view(page_name) for page_name in AI_VIEW_PAGES}
+    pages = {page_name: _read_archived_view(page_name) for page_name in AI_VIEW_PAGES}
     pages["ai-impact.md"] = (
         f"{pages['ai-impact.md'].replace('**estimates**', 'estimates')}\n"
         "Leverage components estimate.\n"
@@ -288,27 +298,23 @@ def test_ai_negative_reports_invented_fields_unlabeled_estimates_and_recomputati
     )
 
 
-def test_reports_and_metrics_guides_explain_current_actions_and_interpretation() -> (
+def test_archived_reports_and_metrics_guides_explain_current_actions_and_interpretation() -> (
     None
 ):
     pages = {
-        page_name: _read_guide(page_name) for page_name in REPORTS_AND_METRICS_GUIDES
+        page_name: _read_archived_guide(page_name)
+        for page_name in REPORTS_AND_METRICS_GUIDES
     }
 
     assert reports_and_metrics_contract_errors(pages) == ()
-    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
-    for path in (
-        "user-guide/reports.md",
-        "user-guide/metrics-interpretation.md",
-    ):
-        assert path in nav
 
 
-def test_reports_metrics_negative_reports_jargon_missing_data_and_unlabeled_ai() -> (
+def test_archived_reports_metrics_negative_reports_jargon_missing_data_and_unlabeled_ai() -> (
     None
 ):
     pages = {
-        page_name: _read_guide(page_name) for page_name in REPORTS_AND_METRICS_GUIDES
+        page_name: _read_archived_guide(page_name)
+        for page_name in REPORTS_AND_METRICS_GUIDES
     }
     pages["reports.md"] = (
         pages["reports.md"].replace(
@@ -329,3 +335,35 @@ def test_reports_metrics_negative_reports_jargon_missing_data_and_unlabeled_ai()
         "metrics-interpretation.md: claims missing data is zero 'null means zero'"
         in errors
     )
+
+
+# --- Canonical public guides ----------------------------------------------------------
+
+
+def test_canonical_public_guides_exist_and_are_navigable() -> None:
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    for route in CANONICAL_NAV_ROUTES:
+        assert route in nav, f"canonical route not wired in mkdocs.yml: {route}"
+        assert (DOCS / route).is_file(), f"missing canonical page: {route}"
+
+
+def test_canonical_public_guides_do_not_reintroduce_legacy_user_guide_routes() -> None:
+    nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+
+    assert "user-guide/" not in nav, (
+        "mkdocs.yml must not restore the legacy user-guide/ routes"
+    )
+
+
+def test_canonical_delivery_flow_pr_flow_is_evidence_first() -> None:
+    pr_flow = (DOCS / "use" / "delivery-flow" / "pr-flow.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(pr_flow.casefold().split())
+
+    assert "evidence" in normalized
+    assert "not a measure of individual performance" in normalized
+    for phrase in FORBIDDEN_DEFINITIVE_LANGUAGE:
+        assert phrase not in normalized, (
+            f"canonical pr-flow.md contains definitive AI language {phrase!r}"
+        )

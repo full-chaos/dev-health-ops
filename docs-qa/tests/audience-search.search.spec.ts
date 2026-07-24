@@ -18,11 +18,11 @@ type SearchOutcome =
 
 const acceptancePath =
   process.env["DOCS_SEARCH_ACCEPTANCE_PATH"] ??
-  resolve(__dirname, "../../docs/search-acceptance.json");
+  resolve(__dirname, "../../.github/documentation-program/phase-10/search-acceptance.json");
 const acceptance: SearchAcceptanceSet = JSON.parse(readFileSync(acceptancePath, "utf8"));
 const SEARCH_INDEX_PATH = "/search/search_index.json";
-const SEARCH_READY_QUERY = "Inspectability";
-const SEARCH_READY_PATH = "/product/concepts/";
+const SEARCH_READY_QUERY = "Investment Mix";
+const SEARCH_READY_PATH = "/use/investment/investment-mix/";
 
 const searchInput = (page: Page) => page.getByRole("textbox", { name: "Search" });
 const searchResultLinks = (page: Page) => page.locator(".md-search-result__link");
@@ -162,9 +162,9 @@ test.describe("audience-first documentation search", () => {
     await Promise.all([indexRequested.promise, searchWorker]);
 
     const target = {
-      query: "Capacity Planning View",
+      query: "Completion Forecast",
       synonyms: [],
-      canonical_url: "/user-guide/views/capacity-planning/",
+      canonical_url: "/use/plan-and-improve/capacity-planning/",
     } as const;
     await submitSearchQuery(page, target.query);
     const targetOutcome = waitForSearchOutcome(page);
@@ -174,7 +174,7 @@ test.describe("audience-first documentation search", () => {
 
   test("synchronizes an explicit no-match state before another query", async ({ page }) => {
     await waitForSearchApplication(page);
-    resultUrlsFor(await searchFor(page, "Capacity Planning View"));
+    resultUrlsFor(await searchFor(page, "Completion Forecast"));
     await resetSearch(page);
     assertNoResults(await searchFor(page, "qzxwvut987654321"));
     await resetSearch(page);

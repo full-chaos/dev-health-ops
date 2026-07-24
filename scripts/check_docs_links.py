@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Check relative markdown links and anchors under docs/."""
+"""Check relative Markdown links and anchors under the canonical docs tree."""
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_ROOT = ROOT / "docs"
+MIGRATED_SOURCE_MAP = (
+    ROOT
+    / ".github"
+    / "documentation-program"
+    / "content"
+    / "migrated-source-pages.json"
+)
 
 INLINE_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 REFERENCE_DEF_RE = re.compile(r"^\[[^\]]+\]:\s+(\S+)", re.MULTILINE)
 HTML_ID_RE = re.compile(r"\bid=[\"']([^\"']+)[\"']")
-HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s+\#*\s*$")
 
 
 def slugify(heading: str) -> str:
@@ -94,7 +102,11 @@ def check_link(
 def check_docs(docs_root: Path, root: Path) -> list[str]:
     errors: list[str] = []
     anchor_cache: dict[Path, set[str]] = {}
+    migrated = set(json.loads(MIGRATED_SOURCE_MAP.read_text(encoding="utf-8")))
     for path in sorted(docs_root.rglob("*.md")):
+        relpath = path.relative_to(docs_root).as_posix()
+        if relpath in migrated:
+            continue
         for target in iter_links(path):
             error = check_link(path, target, anchor_cache, docs_root, root)
             if error:

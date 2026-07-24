@@ -341,6 +341,51 @@ async def test_execute_marks_ambiguous_when_compatibility_process_fails(
 
 
 @pytest.mark.asyncio
+async def test_execute_marks_ambiguous_and_preserves_task_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncMock()
+    result = MagicMock()
+    result.mappings.return_value.first.return_value = {
+        "id": uuid.UUID("00000000-0000-4000-8000-000000000131"),
+        "org_id": uuid.UUID("00000000-0000-4000-8000-000000000009"),
+        "kind": "workgraph.build",
+        "scope": {},
+        "model_ref": None,
+        "prompt_ref": None,
+        "llm_concurrency": 1,
+        "spend_limit_microunits": 0,
+        "claim_token": uuid.UUID("00000000-0000-4000-8000-000000000132"),
+    }
+    session.execute.return_value = result
+    monkeypatch.setattr(worker_workgraph, "authorize_worker_bridge", lambda _auth: None)
+    mark_ambiguous = AsyncMock()
+    monkeypatch.setattr(worker_workgraph, "_mark_ambiguous", mark_ambiguous)
+
+    async def cancel_after_transaction_release(
+        _connection: object, _kind: str, _arguments: dict[str, object]
+    ) -> dict[str, object]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        worker_workgraph,
+        "_run_until_client_disconnect",
+        cancel_after_transaction_release,
+    )
+    request = ExecuteRequest(
+        request_id=uuid.UUID("00000000-0000-4000-8000-000000000131"),
+        claim_token=uuid.UUID("00000000-0000-4000-8000-000000000132"),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker_workgraph.execute(request, session, MagicMock(), "Bearer test")
+
+    mark_ambiguous.assert_awaited_once_with(
+        session, request, "compatibility executor raised CancelledError"
+    )
+
+
+@pytest.mark.asyncio
 async def test_compatibility_process_returns_fixed_json_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

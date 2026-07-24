@@ -401,7 +401,12 @@ async def execute(
                 "outcome": outcome,
             }
         )
-    except (Exception, asyncio.CancelledError) as exc:
+    except asyncio.CancelledError as exc:
+        await _mark_ambiguous(
+            session, request, f"compatibility executor raised {type(exc).__name__}"
+        )
+        raise
+    except Exception as exc:
         await _mark_ambiguous(
             session, request, f"compatibility executor raised {type(exc).__name__}"
         )

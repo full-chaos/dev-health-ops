@@ -94,11 +94,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends git wget \
 COPY --from=builder /install /usr/local
 COPY --from=go-migrator-builder /out/dev-health-worker-migrate /usr/local/bin/dev-health-worker-migrate
 
-RUN useradd --create-home --shell /bin/bash appuser
+RUN useradd --uid 10001 --create-home --shell /bin/bash appuser
 
 WORKDIR /app
 
-USER appuser
+USER 10001
 
 
 # ── API target ────────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ RUN mkdir -p /app/.venv/bin \
 
 ENV PYTHONPATH=/app/src
 
-USER appuser
+USER 10001
 
 ENTRYPOINT ["dev-health-sync-parity"]
 CMD ["--limit", "100"]

@@ -431,8 +431,17 @@ func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 			t.Errorf("%s delete_before %q is not UTC; the handler treats that as permanent",
 				test.scheduleID, payload.DeleteBefore)
 		}
+		// The universal invariant is that a cutoff is never AFTER its due time.
+		// It is deliberately not "strictly before": a zero horizon is legal
+		// configuration and makes the two equal. Strict inequality is asserted
+		// separately for the default horizon this case actually exercises.
+		if parsed.After(dueTime) {
+			t.Errorf("%s cutoff %s is in the future relative to its due time",
+				test.scheduleID, payload.DeleteBefore)
+		}
 		if !parsed.Before(dueTime) {
-			t.Errorf("%s cutoff %s is not before its due time", test.scheduleID, payload.DeleteBefore)
+			t.Errorf("%s cutoff %s is not before its due time under the default horizon",
+				test.scheduleID, payload.DeleteBefore)
 		}
 	}
 }
@@ -548,5 +557,35 @@ func TestRetentionHorizonIsResolvedPerOccurrenceNotAtConstruction(t *testing.T) 
 	if got != "2026-06-24T05:00:00Z" {
 		t.Fatalf("cutoff after override change = %s, want the 30 day horizon; "+
 			"the producer cached its horizon at construction", got)
+	}
+}
+
+// A zero horizon is legal and puts the cutoff exactly on the due time. That is
+// the only configuration this producer can emit which does not sit strictly in
+// the past, so it is the boundary case against the retention handler's
+// future-cutoff guard and is pinned explicitly rather than left to the default
+// horizon paths.
+func TestZeroHorizonEmitsACutoffExactlyAtTheDueTime(t *testing.T) {
+	t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", "0")
+	schedule := scheduleByID(t, "prune_rate_limit_observations")
+	dueTime := mustTime(t, "2026-07-24T05:00:00Z")
+	outcome, err := NewRetentionProducer().Produce(
+		context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+	)
+	if err != nil {
+		t.Fatalf("a zero horizon is legal configuration: %v", err)
+	}
+	payload := outcome.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload)
+	parsed, err := time.Parse(time.RFC3339, payload.DeleteBefore)
+	if err != nil {
+		t.Fatalf("cutoff %q is not RFC3339: %v", payload.DeleteBefore, err)
+	}
+	if !parsed.Equal(dueTime) {
+		t.Fatalf("zero-horizon cutoff = %s, want the due time exactly", payload.DeleteBefore)
+	}
+	// It must never be emitted as a future cutoff, which is what the handler
+	// refuses outright.
+	if parsed.After(dueTime) {
+		t.Fatalf("zero-horizon cutoff %s is in the future", payload.DeleteBefore)
 	}
 }

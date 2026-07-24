@@ -54,3 +54,7 @@ services:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
     environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ingest}
+  go-stream-pagerduty:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: pagerduty}

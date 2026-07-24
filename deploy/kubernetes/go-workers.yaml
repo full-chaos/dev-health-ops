@@ -181,6 +181,28 @@ spec:
           livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-go-stream-pagerduty, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-pagerduty}}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-pagerduty}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-pagerduty}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: stream-runner
+          image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+          env: [{name: DEV_HEALTH_PROFILE, value: pagerduty}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
 # Requires a Prometheus Adapter mapping these metric names. All three signals
 # must be present: depth asks for capacity, oldest-age protects latency, and
 # execution saturation prevents a replica count from hiding a busy process.

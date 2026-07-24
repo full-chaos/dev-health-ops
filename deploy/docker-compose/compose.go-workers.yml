@@ -175,3 +175,12 @@ services:
     environment:
       <<: *go-worker-env
       DEV_HEALTH_PROFILE: ingest
+
+  # PagerDuty webhook delivery is independently routable from dataset sync, so
+  # it runs as its own stream family rather than sharing the external runner.
+  go-stream-pagerduty:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    environment:
+      <<: *go-worker-env
+      DEV_HEALTH_PROFILE: pagerduty

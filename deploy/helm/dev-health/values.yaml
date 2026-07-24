@@ -258,6 +258,15 @@ goWorkers:
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
+    # Not a singleton: PagerDuty entries are exclusive per consumer through the
+    # group PEL and duplicates are fenced by the receipt claim token.
+    - name: stream-pagerduty
+      image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+      runtimeProfile: pagerduty
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: false}
 
 # =============================================================================
 # Celery Beat (scheduler)

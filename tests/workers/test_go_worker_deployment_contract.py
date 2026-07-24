@@ -135,6 +135,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         "scheduler",
         "stream-external",
         "stream-ingest",
+        "stream-pagerduty",
         "sync",
     }
 
@@ -147,6 +148,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         "go-scheduler",
         "go-stream-external",
         "go-stream-ingest",
+        "go-stream-pagerduty",
     }
     assert set(compose) == runtime_services | {
         "go-river-provision",

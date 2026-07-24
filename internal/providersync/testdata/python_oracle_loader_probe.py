@@ -26,7 +26,7 @@ def main() -> int:
     class HostileModule(ModuleType):
         def __getattr__(self, name: str) -> Any:
             touches.append(name)
-            raise AssertionError(f"hostile cached module was inspected: {name}")
+            return object()
 
     forged_target = ModuleType("dev_health_ops.processors.dataset_adapters")
     forged_target.__file__ = str(source)

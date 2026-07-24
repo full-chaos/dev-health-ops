@@ -167,3 +167,94 @@ func TestPythonOracleLoaderPurgesForgedAndHostilePreloads(t *testing.T) {
 		t.Fatalf("Python oracle origin=%q err=%v", result.Origin, err)
 	}
 }
+
+func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
+	python := pythonExecutable(t)
+	_, currentFile, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(currentFile)
+	root := filepath.Join(packageDir, "..", "..")
+
+	withoutSite := func(args ...string) *exec.Cmd {
+		command := exec.Command(python, append([]string{"-S"}, args...)...)
+		command.Env = make([]string, 0, len(os.Environ()))
+		for _, value := range os.Environ() {
+			if !strings.HasPrefix(value, "PYTHONPATH=") &&
+				!strings.HasPrefix(value, "PYTHONHOME=") {
+				command.Env = append(command.Env, value)
+			}
+		}
+		return command
+	}
+
+	output, err := withoutSite(
+		"-c",
+		"import importlib.util; assert importlib.util.find_spec('sqlalchemy') is None",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("minimal Python unexpectedly exposes sqlalchemy: %v: %s", err, output)
+	}
+
+	for _, test := range []struct {
+		name   string
+		script string
+		source []string
+	}{
+		{
+			name:   "provider budget parity",
+			script: "python_provider_budget_oracle.py",
+			source: []string{
+				filepath.Join(root, "src", "dev_health_ops", "providers", "linear", "budget.py"),
+				filepath.Join(root, "src", "dev_health_ops", "providers", "jira", "budget.py"),
+				filepath.Join(root, "src", "dev_health_ops", "providers", "launchdarkly", "budget.py"),
+			},
+		},
+		{
+			name:   "LaunchDarkly normalization parity",
+			script: "python_launchdarkly_normalization_oracle.py",
+			source: []string{
+				filepath.Join(root, "src", "dev_health_ops", "processors", "launchdarkly.py"),
+			},
+		},
+		{
+			name:   "work-item contract parity",
+			script: "python_work_item_contract_oracle.py",
+			source: []string{
+				filepath.Join(root, "src", "dev_health_ops", "processors", "dataset_adapters.py"),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := append(
+				[]string{filepath.Join(packageDir, "testdata", test.script)},
+				test.source...,
+			)
+			output, err := withoutSite(args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("execute minimal-Python oracle: %v: %s", err, output)
+			}
+		})
+	}
+}
+
+func TestPythonOracleLoaderHasNoDynamicExecutionOrSubprocess(t *testing.T) {
+	_, currentFile, _, _ := runtime.Caller(0)
+	loaderPath := filepath.Join(filepath.Dir(currentFile), "testdata", "python_oracle_loader.py")
+	contents, err := os.ReadFile(loaderPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"importlib.import_module",
+		"__import__(",
+		"import subprocess",
+		"subprocess.",
+		"builtins.exec",
+		"builtins.compile",
+		"\nexec(",
+		"\ncompile(",
+	} {
+		if strings.Contains(string(contents), forbidden) {
+			t.Fatalf("oracle loader must not use %q", forbidden)
+		}
+	}
+}

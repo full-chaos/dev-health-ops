@@ -125,6 +125,22 @@ type analyzer struct {
 	// Built once, independent of taint state (a pure syntactic property of
 	// call sites), before the taint fixed-point loop.
 	sqlParamConstants map[*types.Func]map[int][]string
+
+	// txOriginParam[fn][paramIndex] holds the origin ID (a "file:line"
+	// string naming the specific `.Begin(ctx)` call site) of a pgx.Tx-typed
+	// parameter, when every path that reaches this parameter (across
+	// however many function/type hops) traces back to the SAME Begin()
+	// call, unambiguously. A parameter reached from two DIFFERENT Begin()
+	// call sites, or from an unresolvable source, is excluded (not present
+	// in the map) -- fail-closed, matching sqlParamConstants's discipline:
+	// a verified list of "unknown" beats a guessed grouping. This is what
+	// makes Evidence.TxGroup precise ACROSS function/type boundaries (e.g.
+	// NativePostSyncService.Fanout opens one tx and hands it to up to five
+	// different writer types' methods in different packages -- without
+	// this, each write gets its own function-scoped TxGroup even though
+	// they commit together). Built once, independent of taint state, same
+	// fixed-point shape as buildSQLParamConstants.
+	txOriginParam map[*types.Func]map[int]string
 }
 
 // DevirtualizedCallSite records every place the analyzer resolved an
@@ -233,6 +249,7 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 	}
 	a.buildImplementers(pkgs)
 	a.buildSQLParamConstants()
+	a.buildTxOrigins()
 
 	const maxIterations = 40
 	for iter := 0; iter < maxIterations; iter++ {
@@ -531,6 +548,176 @@ func paramIndex(decl *ast.FuncDecl, name string) int {
 		}
 	}
 	return -1
+}
+
+// paramNameAt returns the name of the parameter at positional index idx in
+// decl's parameter list, or "" if idx is out of range or the parameter is
+// unnamed (`_` or bare type with no identifier).
+func paramNameAt(decl *ast.FuncDecl, idx int) string {
+	if decl.Type.Params == nil {
+		return ""
+	}
+	pos := 0
+	for _, field := range decl.Type.Params.List {
+		if len(field.Names) == 0 {
+			if pos == idx {
+				return ""
+			}
+			pos++
+			continue
+		}
+		for _, n := range field.Names {
+			if pos == idx {
+				return n.Name
+			}
+			pos++
+		}
+	}
+	return ""
+}
+
+func isPgxTxType(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Name() == "Tx" && strings.HasSuffix(named.Obj().Pkg().Path(), "/pgx/v5")
+}
+
+// buildTxOrigins is the cross-function-boundary counterpart to
+// buildSQLParamConstants, for pgx.Tx values instead of SQL string literals.
+// See txOriginParam's doc comment on the analyzer struct for what this
+// proves and why it's fail-closed rather than a best guess. Deliberately a
+// SEPARATE pass from the main taint fixed-point loop (not folded into
+// exprTainted/handleAssign): it only needs to track "which specific Begin()
+// call did this pgx.Tx come from", a narrower and different question than
+// "is this value pool-derived at all", and keeping it separate means it
+// cannot perturb the existing, already-verified taint/SQL-extraction
+// behavior -- a bug here can only degrade TxGroup precision (falling back
+// to the coarse function-scoped grouping), never affect which tables/
+// privileges are found.
+func (a *analyzer) buildTxOrigins() {
+	a.txOriginParam = map[*types.Func]map[int]string{}
+	const maxIterations = 12
+	for iter := 0; iter < maxIterations; iter++ {
+		seen := map[*types.Func]map[int]string{}   // resolved, unambiguous origin so far this pass
+		conflict := map[*types.Func]map[int]bool{} // saw >1 distinct origin, or an unresolvable source -- exclude
+
+		record := func(fn *types.Func, idx int, origin string) {
+			if conflict[fn] != nil && conflict[fn][idx] {
+				return
+			}
+			if seen[fn] == nil {
+				seen[fn] = map[int]string{}
+			}
+			if existing, ok := seen[fn][idx]; ok && existing != origin {
+				if conflict[fn] == nil {
+					conflict[fn] = map[int]bool{}
+				}
+				conflict[fn][idx] = true
+				delete(seen[fn], idx)
+				return
+			}
+			seen[fn][idx] = origin
+		}
+		markUnresolved := func(fn *types.Func, idx int) {
+			if conflict[fn] == nil {
+				conflict[fn] = map[int]bool{}
+			}
+			conflict[fn][idx] = true
+			if seen[fn] != nil {
+				delete(seen[fn], idx)
+			}
+		}
+
+		for _, ctx := range a.funcDecls {
+			var currentFn *types.Func
+			if obj, ok := ctx.info.Defs[ctx.decl.Name]; ok {
+				currentFn, _ = obj.(*types.Func)
+			}
+			// localOrigin seeds from this function's own already-resolved
+			// tx parameters (from the previous iteration), then grows as we
+			// walk the body and see `tx, err := X.Begin(ctx)`.
+			localOrigin := map[string]string{}
+			if currentFn != nil {
+				for idx, origin := range a.txOriginParam[currentFn] {
+					if name := paramNameAt(ctx.decl, idx); name != "" {
+						localOrigin[name] = origin
+					}
+				}
+			}
+			ast.Inspect(ctx.decl.Body, func(n ast.Node) bool {
+				if assign, ok := n.(*ast.AssignStmt); ok && len(assign.Rhs) == 1 {
+					if call, ok := assign.Rhs[0].(*ast.CallExpr); ok {
+						if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Begin" {
+							if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
+								pos := a.fset.Position(call.Pos())
+								localOrigin[id.Name] = fmt.Sprintf("%s:%d", a.relFile(pos), pos.Line)
+							}
+						}
+					}
+				}
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee := simpleCalleeFunc(call, ctx.info)
+				if callee == nil {
+					return true
+				}
+				if _, ok := a.funcDecls[callee]; !ok {
+					return true
+				}
+				sig, ok := callee.Type().(*types.Signature)
+				if !ok {
+					return true
+				}
+				for i, arg := range call.Args {
+					if i >= sig.Params().Len() {
+						break
+					}
+					if !isPgxTxType(sig.Params().At(i).Type()) {
+						continue
+					}
+					id, ok := arg.(*ast.Ident)
+					if !ok {
+						markUnresolved(callee, i)
+						continue
+					}
+					origin, ok := localOrigin[id.Name]
+					if !ok {
+						markUnresolved(callee, i)
+						continue
+					}
+					record(callee, i, origin)
+				}
+				return true
+			})
+		}
+
+		next := map[*types.Func]map[int]string{}
+		total := 0
+		for fn, byIdx := range seen {
+			for idx, origin := range byIdx {
+				if conflict[fn][idx] {
+					continue
+				}
+				if next[fn] == nil {
+					next[fn] = map[int]string{}
+				}
+				next[fn][idx] = origin
+				total++
+			}
+		}
+		prevTotal := 0
+		for _, byIdx := range a.txOriginParam {
+			prevTotal += len(byIdx)
+		}
+		a.txOriginParam = next
+		if total == prevTotal {
+			break
+		}
+	}
 }
 
 // resolveParamConstantSQL handles a SQL argument that is a bare identifier
@@ -862,7 +1049,7 @@ func (a *analyzer) handleCall(call *ast.CallExpr, ctx funcCtx, locals map[string
 	// SQL execution sink: X.Exec/Query/QueryRow/QueryFunc/SendBatch(ctx, sql, ...)
 	// where X is domain-pool-tainted.
 	if isSel && isSQLMethod[sel.Sel.Name] && isTainted(sel.X) {
-		a.recordSQLSite(call, ctx)
+		a.recordSQLSite(call, ctx, sel.X)
 	}
 
 	// Resolve the callee to an in-module function so taint can propagate
@@ -943,13 +1130,13 @@ func (a *analyzer) recordUnresolved(call *ast.CallExpr, ctx funcCtx, callee, rea
 	})
 }
 
-func (a *analyzer) recordSQLSite(call *ast.CallExpr, ctx funcCtx) {
+func (a *analyzer) recordSQLSite(call *ast.CallExpr, ctx funcCtx, recvExpr ast.Expr) {
 	if len(call.Args) < 2 {
 		return
 	}
 	sqlArg := call.Args[1]
 	pos := a.fset.Position(call.Pos())
-	txGroup := a.txGroupKey(ctx)
+	txGroup := a.txGroupKey(ctx, recvExpr)
 
 	if tv := ctx.info.Types[sqlArg]; tv.Value != nil && tv.Value.Kind() == constant.String {
 		a.recordSQLText(constant.StringVal(tv.Value), pos, txGroup)
@@ -994,10 +1181,28 @@ func (a *analyzer) recordSQLSite(call *ast.CallExpr, ctx funcCtx) {
 	})
 }
 
-// txGroupKey returns the coarse "same enclosing function" transaction-group
-// identifier for a SQL call site inside ctx. See Evidence.TxGroup's doc
-// comment for exactly what this does and does not prove.
-func (a *analyzer) txGroupKey(ctx funcCtx) string {
+// txGroupKey identifies the transaction a SQL call site's evidence belongs
+// to. It tries the precise, cross-function answer first (recvExpr is a
+// pgx.Tx-typed PARAMETER of the current function whose origin
+// buildTxOrigins resolved unambiguously back to a specific `.Begin(ctx)`
+// call site, however many function/type hops away) and falls back to the
+// coarse same-function-body grouping when that isn't available (recvExpr
+// isn't a parameter -- e.g. it's a tx declared via Begin() right here,
+// which the fallback already groups correctly on its own -- or
+// buildTxOrigins couldn't resolve it unambiguously). See
+// Evidence.TxGroup's doc comment.
+func (a *analyzer) txGroupKey(ctx funcCtx, recvExpr ast.Expr) string {
+	if id, ok := recvExpr.(*ast.Ident); ok {
+		if fnObj, ok := ctx.info.Defs[ctx.decl.Name]; ok {
+			if fn, ok := fnObj.(*types.Func); ok {
+				if idx := paramIndex(ctx.decl, id.Name); idx >= 0 {
+					if origin, ok := a.txOriginParam[fn][idx]; ok {
+						return "txorigin:" + origin
+					}
+				}
+			}
+		}
+	}
 	name := ctx.decl.Name.Name
 	if ctx.decl.Recv != nil && len(ctx.decl.Recv.List) == 1 {
 		if named := namedTypeOf(ctx.info.TypeOf(ctx.decl.Recv.List[0].Type)); named != nil {

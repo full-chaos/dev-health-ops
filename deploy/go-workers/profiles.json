@@ -111,26 +111,6 @@
       ]
     },
     {
-      "name": "latency",
-      "binary": "dev-health-worker",
-      "runtime": "river",
-      "registry_profile": "latency",
-      "enabled_by_default": false,
-      "min_replicas": 0,
-      "max_replicas": 2,
-      "queues": [],
-      "queue_workers": [],
-      "job_kinds": [],
-      "queue_control_max_connections": 2,
-      "domain_max_connections": 4,
-      "requires_clickhouse": false,
-      "requires_valkey": false,
-      "secret_env": [
-        "POSTGRES_URI",
-        "WORKER_DATABASE_URI"
-      ]
-    },
-    {
       "name": "ops",
       "binary": "dev-health-worker",
       "runtime": "river",
@@ -248,6 +228,27 @@
         "CLICKHOUSE_URI",
         "POSTGRES_URI",
         "VALKEY_URI"
+      ]
+    },
+    {
+      "name": "stream-pagerduty",
+      "binary": "dev-health-stream-runner",
+      "runtime": "stream",
+      "enabled_by_default": false,
+      "min_replicas": 0,
+      "max_replicas": 2,
+      "queues": [],
+      "queue_workers": [],
+      "job_kinds": [],
+      "queue_control_max_connections": 0,
+      "domain_max_connections": 4,
+      "requires_clickhouse": true,
+      "requires_valkey": true,
+      "secret_env": [
+        "CLICKHOUSE_URI",
+        "POSTGRES_URI",
+        "VALKEY_URI",
+        "WORKER_OPERATIONAL_BRIDGE_TOKEN"
       ]
     },
     {

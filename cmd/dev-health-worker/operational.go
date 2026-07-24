@@ -14,7 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
 	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -37,9 +36,9 @@ func buildOperationalWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
-) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+) (workerFamily, error) {
 	if cfg.Profile != "ops" || registry == nil {
-		return nil, nil, nil
+		return workerFamily{}, nil
 	}
 	profile := registry.Profile("ops")
 	executable := 0
@@ -49,13 +48,13 @@ func buildOperationalWorker(
 		}
 	}
 	if executable == 0 {
-		return nil, nil, nil
+		return workerFamily{}, nil
 	}
 	// The process-level readiness contract is all-or-nothing. Never start a
 	// partial queue consumer before every checked-in ops handler has concrete
 	// coverage; later system-handler work completes the same profile.
 	if executable != len(profile) {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	specs := make([]jobruntime.HandlerSpec, 0, len(profile))
 	for _, kind := range []string{
@@ -70,11 +69,11 @@ func buildOperationalWorker(
 		}
 	}
 	if len(specs) != len(profile) {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	baseURL := strings.TrimRight(cfg.OperationalBridgeURL, "/")
 	dispatcher, err := operational.NewHTTPDispatcher(
@@ -88,22 +87,41 @@ func buildOperationalWorker(
 		},
 	)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// Retention deletes relay-owned outbox rows and completion fences. Use the
 	// queue-control role, whose intentionally narrow grants own that cleanup;
 	// the domain role is producer-only for worker_job_outbox.
 	outboxStore, err := joboutbox.NewRepository(postgresDatabase.pools.QueueControl)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	store, err := operational.NewPostgresStore(postgresDatabase.pools.Domain)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	// Rate-limit observations and external-ingest batches live in the domain
+	// database, so their retention runs with the domain role. Worker-outbox
+	// retention keeps the queue-control role because it also removes the
+	// relay-owned completion fences.
+	terminalRetention, terminalErr := systemjobs.NewTerminalOutboxRetentionStore(outboxStore)
+	rateLimitRetention, rateLimitErr := systemjobs.NewRateLimitObservationStore(
+		postgresDatabase.pools.Domain,
+	)
+	externalIngestRetention, externalIngestErr := systemjobs.NewExternalIngestBatchStore(
+		postgresDatabase.pools.Domain,
+	)
+	if terminalErr != nil || rateLimitErr != nil || externalIngestErr != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	retentionStores := map[string]systemjobs.RetentionStore{
+		jobcontract.RetentionWorkerTerminal:        terminalRetention,
+		jobcontract.RetentionRateLimitObservations: rateLimitRetention,
+		jobcontract.RetentionExternalIngestBatches: externalIngestRetention,
 	}
 	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	dependencies := jobruntime.Dependencies{
 		Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
@@ -116,65 +134,73 @@ func buildOperationalWorker(
 		case jobcontract.KindBillingNotification:
 			handler, handlerErr := operational.NewBillingHandler(store, dispatcher)
 			if handlerErr != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.BillingNotificationArgs](
 				registry, spec, handler, dependencies,
 			)
 			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, adapter.Spec())
 		case jobcontract.KindWebhookDelivery:
 			handler, handlerErr := operational.NewWebhookHandler(store, dispatcher)
 			if handlerErr != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.WebhookDeliveryArgs](
 				registry, spec, handler, dependencies,
 			)
 			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, adapter.Spec())
 		case jobcontract.KindHeartbeat:
 			handler, handlerErr := systemjobs.NewHeartbeatHandler(dispatcher)
 			if handlerErr != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.HeartbeatArgs](
 				registry, spec, handler, dependencies,
 			)
 			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, adapter.Spec())
 		case jobcontract.KindRetentionCleanup:
-			handler, handlerErr := systemjobs.NewRetentionHandler(outboxStore)
+			handler, handlerErr := systemjobs.NewRetentionHandler(retentionStores)
 			if handlerErr != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.RetentionCleanupArgs](
 				registry, spec, handler, dependencies,
 			)
 			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, adapter.Spec())
 		}
 	}
-	queues := map[string]river.QueueConfig{
-		"heartbeat": {MaxWorkers: 1},
-		"retention": {MaxWorkers: 1},
-		"webhooks":  {MaxWorkers: 4},
+	budgets := []jobruntime.QueueBudget{
+		{Queue: "heartbeat", MaxWorkers: 1},
+		{Queue: "retention", MaxWorkers: 1},
+		{Queue: "webhooks", MaxWorkers: 4},
+	}
+	queues := make(map[string]river.QueueConfig, len(budgets))
+	for _, budget := range budgets {
+		queues[budget.Queue] = river.QueueConfig{MaxWorkers: budget.MaxWorkers}
 	}
 	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
 		Logger: logger, Queues: queues, Schema: cfg.RiverDatabaseSchema, Workers: workers,
 	})
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	return operationalWorkerComponent{client: client}, registered, nil
+	return workerFamily{
+		component: operationalWorkerComponent{client: client},
+		handlers:  registered,
+		queues:    budgets,
+	}, nil
 }
 
 type operationalTenantScope struct{}

@@ -28,6 +28,15 @@ from valkey.exceptions import ValkeyError
 
 from dev_health_ops.api.ingest.streams import get_redis_client
 from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.providers.pagerduty.webhook_transport import (
+    WEBHOOK_TRANSPORT_ENV as WEBHOOK_TRANSPORT_ENV,
+)
+from dev_health_ops.providers.pagerduty.webhook_transport import (
+    WebhookTransport as WebhookTransport,
+)
+from dev_health_ops.providers.pagerduty.webhook_transport import (
+    resolve_webhook_transport as _webhook_transport,
+)
 from dev_health_ops.workers.system_webhooks import process_pagerduty_webhook_event
 
 from .pagerduty_models import PagerDutyEventType, PagerDutyV3Webhook
@@ -497,19 +506,37 @@ async def pagerduty_webhook(
             canonical_binding_id, provider_subscription_id, webhook.event.id, body
         )
         raise
-    try:
-        getattr(process_pagerduty_webhook_event, "delay")(
-            binding_id=canonical_binding_id, stream_entry_id=stream_entry_id
-        )
-    except (ValkeyError, KombuError) as exc:
-        _compensate_stream_write(canonical_binding_id, stream_entry_id)
-        _release_replay_claim(
-            canonical_binding_id, provider_subscription_id, webhook.event.id, body
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_QUEUE_UNAVAILABLE_DETAIL,
-        ) from exc
+    # The stream write above is unconditional: it is the durable handoff both
+    # runtimes read. Only the Celery dispatch is gated, so the River consumer
+    # owns the entry outright when it is the configured transport.
+    match _webhook_transport():
+        case WebhookTransport.CELERY:
+            try:
+                getattr(process_pagerduty_webhook_event, "delay")(
+                    binding_id=canonical_binding_id, stream_entry_id=stream_entry_id
+                )
+            except (ValkeyError, KombuError) as exc:
+                _compensate_stream_write(canonical_binding_id, stream_entry_id)
+                _release_replay_claim(
+                    canonical_binding_id,
+                    provider_subscription_id,
+                    webhook.event.id,
+                    body,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=_QUEUE_UNAVAILABLE_DETAIL,
+                ) from exc
+        case WebhookTransport.RIVER:
+            logger.info(
+                "pagerduty_webhook.dispatch_delegated binding_id=%s event_id=%s "
+                "transport=%s",
+                canonical_binding_id,
+                webhook.event.id,
+                WebhookTransport.RIVER.value,
+            )
+        case unreachable_transport:
+            assert_never(unreachable_transport)
     _accept_replay_claim(
         canonical_binding_id, provider_subscription_id, webhook.event.id, body
     )

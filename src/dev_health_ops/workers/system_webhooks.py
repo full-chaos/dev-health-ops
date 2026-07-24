@@ -8,6 +8,10 @@ from datetime import datetime, timezone
 from typing import NoReturn
 
 from dev_health_ops.exceptions import RateLimitException
+from dev_health_ops.providers.pagerduty.webhook_transport import (
+    WebhookTransport,
+    resolve_webhook_transport,
+)
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -271,6 +275,30 @@ def process_pagerduty_webhook_event(
         reconcile_pagerduty_webhook_with_locked_graph,
         resolve_pagerduty_webhook_binding,
     )
+
+    # Re-read the switch here, at execution time, rather than trusting the
+    # producer's decision: a task queued before the flip, or dispatched by a
+    # rolling API pod that had not yet picked up the new env, arrives after the
+    # stream entry already belongs to the Go consumer. Reconciling it would
+    # double-write, and the XDEL below would strip an entry still pending in
+    # Go's consumer group. Stand down before touching Valkey at all so the
+    # entry, the receipt, and the ACK stay wholly Go's.
+    transport = resolve_webhook_transport()
+    if transport is WebhookTransport.RIVER:
+        logger.info(
+            "pagerduty_webhook.task_delegated binding_id=%s stream_entry_id=%s "
+            "transport=%s",
+            binding_id,
+            stream_entry_id,
+            transport.value,
+        )
+        return {
+            "processed": False,
+            "reason": "transport_delegated",
+            "transport": transport.value,
+            "binding_id": binding_id,
+            "stream_entry_id": stream_entry_id,
+        }
 
     redis_client = get_redis_client()
     stream_name = f"pagerduty-webhooks:{binding_id}"

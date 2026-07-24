@@ -215,13 +215,6 @@ goWorkers:
       terminationGracePeriodSeconds: 120
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 1, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
-    - name: latency
-      image: ghcr.io/full-chaos/dev-health-go-worker:latest
-      runtimeProfile: latency
-      replicas: 0
-      terminationGracePeriodSeconds: 60
-      resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 30, saturationMilli: 800m}
     - name: ops
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       runtimeProfile: ops
@@ -261,6 +254,15 @@ goWorkers:
     - name: stream-ingest
       image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
       runtimeProfile: ingest
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: false}
+    # Not a singleton: PagerDuty entries are exclusive per consumer through the
+    # group PEL and duplicates are fenced by the receipt claim token.
+    - name: stream-pagerduty
+      image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+      runtimeProfile: pagerduty
       replicas: 0
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -469,6 +471,19 @@ config:
   RIVER_DATABASE_SCHEMA: "river"
   RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
   RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
+  # -- Worker operational bridge (CUT-04). The Go PagerDuty stream runner
+  #    forwards reconciliation to the API bridge, so it cannot open readiness
+  #    without a reachable endpoint. Empty auto-computes the in-cluster API
+  #    Service URL; the matching bearer token is a Secret key, never set here.
+  WORKER_OPERATIONAL_BRIDGE_URL: ""
+  # -- The auto-computed in-cluster endpoint is plaintext, which the Go runtime
+  #    rejects unless this opt-in is set. Set "false" and point the URL above at
+  #    an internal HTTPS origin (mesh/ingress) to drop the exemption.
+  WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: "true"
+  # -- Exactly one runtime owns the PagerDuty webhook stream. API and Go stream
+  #    runner pods share this ConfigMap so they can never disagree: "celery"
+  #    keeps the Celery dispatch, "river" hands the stream to Go (CUT-14/18).
+  PAGERDUTY_WEBHOOK_TRANSPORT: "celery"
   # -- Celery (auto-set if valkey.enabled, override for external broker)
   CELERY_BROKER_URL: ""
   CELERY_RESULT_BACKEND: ""
@@ -524,6 +539,10 @@ secrets:
     JWT_SECRET_KEY: ""
     SETTINGS_ENCRYPTION_KEY: ""
     ADMIN_API_KEY: ""
+    # Shared bearer token for the worker operational bridge: the API validates
+    # inbound bridge calls against it and the Go stream runner presents it, so
+    # both workloads must read the same value from this Secret.
+    WORKER_OPERATIONAL_BRIDGE_TOKEN: ""
     GITHUB_TOKEN: ""
     GITHUB_APP_PRIVATE_KEY: ""
     GITLAB_TOKEN: ""

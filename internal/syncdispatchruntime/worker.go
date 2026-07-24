@@ -14,6 +14,19 @@ var ErrWorkerRegistration = errors.New("sync dispatch worker registration failed
 // RegisterWorkers adds all four guarded at-least-once coordinator consumers.
 // Each worker carries only a durable domain reference and delegates execution
 // through the authenticated compatibility boundary.
+// RegisterWorkers registers the sync-dispatch coordinator kinds. These are
+// syncdispatchcontract kinds outside the bounded job registry, so they carry no
+// registry descriptor and are not subject to registry startup validation;
+// CUT-10 brings them under registered kinds.
+//
+// sync.team_autoimport is deliberately NOT registered here. It is a bounded
+// registry kind, and a registry kind may only be consumed when its durable
+// route permits River execution. Registering it unconditionally alongside these
+// coordinators gave the sync worker a live consumer for a Celery-routed kind
+// that no readiness check could observe, because this client is private to the
+// coordinator and never reported its handlers. Use
+// RegisterTeamAutoimportWorker so the caller owns both the route decision and
+// reporting the constructed spec through the canonical capability channel.
 func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge, postSync *NativePostSyncService) error {
 	if workers == nil || bridge == nil || postSync == nil {
 		return ErrWorkerRegistration
@@ -21,8 +34,21 @@ func RegisterWorkers(workers *river.Workers, bridge CoordinatorBridge, postSync 
 	if river.AddWorkerSafely(workers, &dispatchWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &finalizeWorker{bridge: bridge}) != nil ||
 		river.AddWorkerSafely(workers, &postSyncWorker{service: postSync}) != nil ||
-		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil ||
-		river.AddWorkerSafely(workers, &teamAutoimportWorker{bridge: bridge}) != nil {
+		river.AddWorkerSafely(workers, &referenceDiscoveryWorker{bridge: bridge}) != nil {
+		return ErrWorkerRegistration
+	}
+	return nil
+}
+
+// RegisterTeamAutoimportWorker registers the one bounded-registry kind this
+// runtime hosts. The caller must first prove the kind is executable and must
+// report the constructed handler spec to startup validation, so capability is
+// observable no matter which River client hosts the worker.
+func RegisterTeamAutoimportWorker(workers *river.Workers, bridge CoordinatorBridge) error {
+	if workers == nil || bridge == nil {
+		return ErrWorkerRegistration
+	}
+	if river.AddWorkerSafely(workers, &teamAutoimportWorker{bridge: bridge}) != nil {
 		return ErrWorkerRegistration
 	}
 	return nil

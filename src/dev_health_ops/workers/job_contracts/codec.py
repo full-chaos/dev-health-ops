@@ -27,7 +27,7 @@ from .models import (
     KIND_WEBHOOK_DELIVERY,
     KIND_WORK_GRAPH_BUILD,
     MAX_ENVELOPE_BYTES,
-    RETENTION_WORKER_TERMINAL,
+    RETENTION_POLICIES,
     BillingNotificationPayload,
     ContractPayload,
     DailyMetricsDispatchPayload,
@@ -422,7 +422,7 @@ def _decode_retention(value: Any) -> RetentionCleanupPayload:
     delete_before = _expect_string(payload["delete_before"], "delete_before")
     _validate_utc_timestamp("delete_before", delete_before)
     retention_policy = _expect_string(payload["retention_policy"], "retention_policy")
-    if retention_policy != RETENTION_WORKER_TERMINAL:
+    if retention_policy not in RETENTION_POLICIES:
         raise ContractDecodeError("unsupported retention_policy")
     return RetentionCleanupPayload(
         batch_size=batch_size,

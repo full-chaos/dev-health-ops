@@ -146,6 +146,14 @@ services:
       CELERY_RESULT_BACKEND: redis://valkey:6379/0
       GRAPHQL_QUERY_TIMEOUT: "30"
       LOG_LEVEL: INFO
+      # The API serves the worker operational bridge and authenticates the Go
+      # caller against this shared token; without it every bridge call from
+      # the PagerDuty stream runner is rejected with 401.
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
+      # Exactly one runtime owns the PagerDuty webhook stream. This must stay
+      # in lockstep with the Go overlay's value: `celery` here dispatches the
+      # Celery task, `river` hands the stream to the Go runner (CUT-14/18).
+      PAGERDUTY_WEBHOOK_TRANSPORT: ${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}
       # Schema is applied by the one-shot `migrate` service — the API must
       # never run migrations itself (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"

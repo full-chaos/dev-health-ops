@@ -14,7 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -237,17 +236,36 @@ func (component syncCoordinatorLifecycle) Shutdown(ctx context.Context) error {
 	return component.startStop.Stop(ctx)
 }
 
+// syncCoordinatorQueue and its worker budget must match the deployment
+// manifest entry for the sync process.
+const (
+	syncCoordinatorQueue        = "sync"
+	syncCoordinatorQueueWorkers = 4
+)
+
+// buildSyncCoordinatorWorker hosts a mixed River client: four sync-dispatch
+// coordinator kinds that are outside the bounded job registry (CUT-10 brings
+// them in) plus one registered kind, sync.team_autoimport.
+//
+// The registered kind is what makes the return type a workerFamily. Before
+// CUT-02 this builder returned only a lifecycle component, so the
+// team-autoimport worker it constructed was invisible to startup validation --
+// a second registration blind spot alongside the compiled-kind list. Capability
+// must reach validation through one canonical channel no matter which client
+// hosts the worker.
 func buildSyncCoordinatorWorker(
 	cfg config.Config,
 	database workerDatabase,
+	registry *jobruntime.Registry,
+	_ jobruntime.Observer,
 	logger *slog.Logger,
-) (lifecycle.Component, error) {
+) (workerFamily, error) {
 	if cfg.Profile != "sync" {
-		return nil, nil
+		return workerFamily{}, nil
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
-	if !ok || postgresDatabase.pools == nil || logger == nil {
-		return nil, errWorkerDependencyUnavailable
+	if !ok || postgresDatabase.pools == nil || logger == nil || registry == nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	bridge, err := syncdispatchruntime.NewHTTPBridge(syncdispatchruntime.HTTPBridgeConfig{
 		BaseURL:       strings.TrimRight(cfg.OperationalBridgeURL, "/"),
@@ -256,11 +274,7 @@ func buildSyncCoordinatorWorker(
 		AllowInsecure: cfg.OperationalBridgeAllowInsecure,
 	})
 	if err != nil {
-		return nil, errWorkerDependencyUnavailable
-	}
-	registry, err := jobruntime.Load(defaultContractRoot)
-	if err != nil {
-		return nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	dailyStore, dailyStoreErr := daily.NewPostgresStore(postgresDatabase.pools.Domain)
 	dailyPublisher, dailyPublisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
@@ -270,7 +284,7 @@ func buildSyncCoordinatorWorker(
 	workGraphWriter, workGraphWriterErr := workgraph.NewRequestWriter(registry)
 	if dailyStoreErr != nil || dailyPublisherErr != nil || remainingStoreErr != nil ||
 		remainingPublisherErr != nil || producerErr != nil || workGraphWriterErr != nil {
-		return nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postSync, err := syncdispatchruntime.NewNativePostSyncService(
 		postgresDatabase.pools.Domain,
@@ -280,22 +294,45 @@ func buildSyncCoordinatorWorker(
 		teamAutoimportPostSyncWriter{producer: producer},
 	)
 	if err != nil {
-		return nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	workers := river.NewWorkers()
 	if err := syncdispatchruntime.RegisterWorkers(workers, bridge, postSync); err != nil {
-		return nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	// A registered kind may only be consumed once its durable route permits
+	// River execution. While sync.team_autoimport routes to Celery the worker
+	// is not constructed at all, so the sync queue carries no registry
+	// capability and stays out of registry queue coverage.
+	autoimport, ok := registry.Descriptor(jobcontract.KindTeamAutoimport)
+	if !ok {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	var handlers []jobruntime.HandlerSpec
+	var queues []jobruntime.QueueBudget
+	if autoimport.Executable() {
+		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, bridge); err != nil {
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		handlers = []jobruntime.HandlerSpec{autoimport}
+		queues = []jobruntime.QueueBudget{
+			{Queue: syncCoordinatorQueue, MaxWorkers: syncCoordinatorQueueWorkers},
+		}
 	}
 	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{
 		Logger: logger,
 		Queues: map[string]river.QueueConfig{
-			"sync": {MaxWorkers: 4},
+			syncCoordinatorQueue: {MaxWorkers: syncCoordinatorQueueWorkers},
 		},
 		Schema:  cfg.RiverDatabaseSchema,
 		Workers: workers,
 	})
 	if err != nil {
-		return nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	return syncCoordinatorLifecycle{startStop: client}, nil
+	return workerFamily{
+		component: syncCoordinatorLifecycle{startStop: client},
+		handlers:  handlers,
+		queues:    queues,
+	}, nil
 }

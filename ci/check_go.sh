@@ -211,13 +211,17 @@ check_contract() {
 }
 
 check_integration() {
-	printf 'go test integration: PostgreSQL roles, River, outbox, and operator\n'
+	printf 'go test integration: PostgreSQL roles, River, outbox, operator, reports, retention\n'
 	(
 		cd "${ROOT}"
-		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=10m \
+		# This list is explicit rather than ./... so the gate never silently
+		# starts (or stops) exercising containers. Add a package here in the
+		# same change that adds its first integration test.
+		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=15m \
 			./internal/testsupport/containers ./internal/storage/postgres ./internal/storage/river \
 			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute \
-			./internal/scheduler/sync ./internal/syncdispatchruntime
+			./internal/scheduler/sync ./internal/syncdispatchruntime \
+			./internal/jobs/report ./internal/jobs/system ./internal/jobs/pagerduty
 	)
 }
 

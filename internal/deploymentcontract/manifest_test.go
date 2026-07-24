@@ -30,13 +30,14 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.DirectQueueControlConnections != 22 {
+	if summary.DirectQueueControlConnections != 18 {
 		t.Fatalf("direct queue-control connections = %d", summary.DirectQueueControlConnections)
 	}
+	// stream-pagerduty adds two replicas of a four-connection domain pool.
 	if summary.DomainClientConnections != 50 {
 		t.Fatalf("domain client connections = %d", summary.DomainClientConnections)
 	}
-	if summary.ServerConnectionFootprint != 87 {
+	if summary.ServerConnectionFootprint != 83 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
 }
@@ -70,7 +71,7 @@ func TestManifestRejectsQueueWorkerCoverageDrift(t *testing.T) {
 func TestManifestRejectsConnectionBudgetOverflow(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)
-	manifest.PostgresBudget.ServerMaxConnections = 86
+	manifest.PostgresBudget.ServerMaxConnections = 82
 	if _, err := manifest.Validate(registry); err == nil {
 		t.Fatal("expected server connection budget overflow")
 	}

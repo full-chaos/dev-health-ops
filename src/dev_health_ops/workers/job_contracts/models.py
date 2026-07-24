@@ -31,6 +31,18 @@ KIND_REMAINING_RELEASE_IMPACT = "metrics.remaining.release_impact"
 KIND_REMAINING_TEAM_METRICS = "metrics.remaining.team_metrics"
 KIND_SYNC_PROVIDER_UNIT = "sync.provider_unit"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
+# Retention policies are table-scoped: each names exactly one operational
+# table whose owning store the Go ops worker constructs. Widening a policy is
+# a contract change, not a payload change.
+RETENTION_RATE_LIMIT_OBSERVATIONS = "rate_limit_observations"
+RETENTION_EXTERNAL_INGEST_BATCHES = "external_ingest_batches"
+RETENTION_POLICIES = frozenset(
+    {
+        RETENTION_WORKER_TERMINAL,
+        RETENTION_RATE_LIMIT_OBSERVATIONS,
+        RETENTION_EXTERNAL_INGEST_BATCHES,
+    }
+)
 MAX_ENVELOPE_BYTES = 16 * 1024
 
 

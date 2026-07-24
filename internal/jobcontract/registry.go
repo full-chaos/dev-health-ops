@@ -507,9 +507,17 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if !ok || policy["type"] != "string" {
 		return errors.New("retention_policy schema drifts from compiled type")
 	}
+	// The schema enum and the compiled policy list must stay identical and
+	// ordered: a policy that exists in only one of them is either an
+	// unrunnable contract or an undeclared table-deletion capability.
 	enum, ok := policy["enum"].([]any)
-	if !ok || len(enum) != 1 || enum[0] != RetentionWorkerTerminal {
+	if !ok || len(enum) != len(RetentionPolicies()) {
 		return errors.New("retention_policy schema drifts from compiled values")
+	}
+	for index, supported := range RetentionPolicies() {
+		if enum[index] != supported {
+			return errors.New("retention_policy schema drifts from compiled values")
+		}
 	}
 	return nil
 }

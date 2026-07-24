@@ -40,7 +40,31 @@ const (
 	KindInvestmentFinalize       = "investment.finalize"
 	KindSyncProviderUnit         = "sync.provider_unit"
 	RetentionWorkerTerminal      = "worker_job_terminal"
+	// Retention policies are table-scoped. Each one names exactly one
+	// operational table whose owning store is constructed by the ops worker;
+	// widening a policy is a contract change, not a payload change.
+	RetentionRateLimitObservations = "rate_limit_observations"
+	RetentionExternalIngestBatches = "external_ingest_batches"
 )
+
+// RetentionPolicies enumerates every retention policy the contract accepts.
+func RetentionPolicies() []string {
+	return []string{
+		RetentionWorkerTerminal,
+		RetentionRateLimitObservations,
+		RetentionExternalIngestBatches,
+	}
+}
+
+// SupportedRetentionPolicy reports whether policy is contract-declared.
+func SupportedRetentionPolicy(policy string) bool {
+	for _, supported := range RetentionPolicies() {
+		if policy == supported {
+			return true
+		}
+	}
+	return false
+}
 
 var (
 	kindPattern       = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
@@ -598,7 +622,7 @@ func (payload RetentionCleanupPayload) validate() error {
 	if err := validateUTCTimestamp("delete_before", payload.DeleteBefore); err != nil {
 		return err
 	}
-	if payload.RetentionPolicy != RetentionWorkerTerminal {
+	if !SupportedRetentionPolicy(payload.RetentionPolicy) {
 		return errors.New("unsupported retention_policy")
 	}
 	return nil

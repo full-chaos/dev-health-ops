@@ -4,7 +4,11 @@
   "title": "system.retention_cleanup payload v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["batch_size", "delete_before", "retention_policy"],
+  "required": [
+    "batch_size",
+    "delete_before",
+    "retention_policy"
+  ],
   "properties": {
     "batch_size": {
       "type": "integer",
@@ -18,7 +22,11 @@
     },
     "retention_policy": {
       "type": "string",
-      "enum": ["worker_job_terminal"]
+      "enum": [
+        "worker_job_terminal",
+        "rate_limit_observations",
+        "external_ingest_batches"
+      ]
     }
   }
 }

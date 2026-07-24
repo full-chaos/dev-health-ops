@@ -58,6 +58,63 @@ func TestHTTPClientClampsIntegerAndDateRetryAfter(t *testing.T) {
 	}
 }
 
+func TestHTTPClientRetryJitterStaysWithinBounds(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		policy  RetryPolicy
+		attempt int
+		minimum time.Duration
+		maximum time.Duration
+	}{
+		{"first attempt", RetryPolicy{MaxAttempts: 2, InitialWait: 10 * time.Millisecond, MaxWait: 100 * time.Millisecond}, 1, 10 * time.Millisecond, 12 * time.Millisecond},
+		{"exponential attempt", RetryPolicy{MaxAttempts: 2, InitialWait: 10 * time.Millisecond, MaxWait: 100 * time.Millisecond}, 3, 40 * time.Millisecond, 48 * time.Millisecond},
+		{"maximum wait", RetryPolicy{MaxAttempts: 2, InitialWait: 90 * time.Millisecond, MaxWait: 100 * time.Millisecond}, 1, 90 * time.Millisecond, 100 * time.Millisecond},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := newTestHTTPClient(t, HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+				t.Fatal("unexpected request")
+				return nil, nil
+			}), test.policy)
+			if got := client.retryDelay(test.attempt, 0); got < test.minimum || got > test.maximum {
+				t.Fatalf("retry delay=%s, want [%s,%s]", got, test.minimum, test.maximum)
+			}
+		})
+	}
+}
+
+func TestHTTPClientRetryJitterFallsBackWhenEntropyFails(t *testing.T) {
+	policy := RetryPolicy{MaxAttempts: 2, InitialWait: 5 * time.Millisecond, MaxWait: 100 * time.Millisecond}
+	attempts := 0
+	client := newTestHTTPClient(t, HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return testHTTPResponse(request, http.StatusServiceUnavailable, nil, `{}`), nil
+		}
+		return testHTTPResponse(request, http.StatusOK, nil, `{}`), nil
+	}), policy)
+	client.entropy = failingEntropyReader{}
+
+	if got := client.retryDelay(1, 0); got != policy.InitialWait {
+		t.Fatalf("retry delay=%s, want unjittered fallback %s", got, policy.InitialWait)
+	}
+	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
+	if err != nil {
+		t.Fatalf("retry with failed entropy: %v", err)
+	}
+	_ = response.Body.Close()
+	if attempts != policy.MaxAttempts {
+		t.Fatalf("requests=%d, want %d", attempts, policy.MaxAttempts)
+	}
+}
+
+type failingEntropyReader struct{}
+
+func (failingEntropyReader) Read([]byte) (int, error) {
+	return 0, errors.New("entropy unavailable")
+}
+
 func TestHTTPClientPenalizesSharedGateWithLocalBackoff(t *testing.T) {
 	t.Parallel()
 	policy := RetryPolicy{MaxAttempts: 1, InitialWait: 20 * time.Millisecond, MaxWait: 25 * time.Millisecond}

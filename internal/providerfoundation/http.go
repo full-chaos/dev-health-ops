@@ -3,9 +3,10 @@ package providerfoundation
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"io"
-	"math/rand/v2"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -64,6 +65,7 @@ type HTTPClient struct {
 	Budget    BudgetStore
 	BudgetKey BudgetKey
 	Metrics   *Metrics
+	entropy   io.Reader
 
 	// ReservationReleaseTimeout bounds cleanup independently from a cancelled
 	// request. Zero uses defaultReservationReleaseTimeout.
@@ -75,7 +77,7 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" || doer == nil || auth == nil || lease == nil || !retry.valid() {
 		return nil, ErrCredentialInvalid
 	}
-	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: doer, Auth: auth, Retry: retry, Lease: lease}, nil
+	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: doer, Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
 }
 
 func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {
@@ -207,12 +209,27 @@ func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration) time.Dura
 		wait *= 2
 	}
 	if wait < c.Retry.MaxWait {
-		wait += time.Duration(rand.Int64N(int64(wait/5 + 1)))
+		entropy := c.entropy
+		if entropy == nil {
+			entropy = rand.Reader
+		}
+		wait += retryJitter(entropy, wait/5+1)
 	}
 	if wait > c.Retry.MaxWait {
 		return c.Retry.MaxWait
 	}
 	return wait
+}
+
+func retryJitter(entropy io.Reader, limit time.Duration) time.Duration {
+	if entropy == nil || limit <= 1 {
+		return 0
+	}
+	jitter, err := rand.Int(entropy, big.NewInt(int64(limit)))
+	if err != nil {
+		return 0
+	}
+	return time.Duration(jitter.Int64())
 }
 
 func (c *HTTPClient) wait(ctx context.Context, wait time.Duration) error {

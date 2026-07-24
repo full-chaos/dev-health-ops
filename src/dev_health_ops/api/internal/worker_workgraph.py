@@ -265,10 +265,18 @@ async def _run_compatibility_process(
     stdout_task = asyncio.create_task(
         _read_bounded_stream(process.stdout, _MAX_COMPATIBILITY_PROCESS_BYTES)
     )
+    input_error: BrokenPipeError | ConnectionResetError | None = None
     try:
-        process.stdin.write(payload)
-        await process.stdin.drain()
-        process.stdin.close()
+        try:
+            process.stdin.write(payload)
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            # A fast non-zero child exit may close stdin before drain finishes.
+            # Reap it and report the stable process-result contract below
+            # instead of leaking a platform-dependent pipe exception.
+            input_error = exc
+        finally:
+            process.stdin.close()
         stdout, return_code = await asyncio.gather(stdout_task, process.wait())
     except BaseException:
         await _terminate_process(process)
@@ -279,6 +287,8 @@ async def _run_compatibility_process(
         await asyncio.gather(stdout_task, return_exceptions=True)
     if return_code != 0:
         raise RuntimeError("compatibility process failed")
+    if input_error is not None:
+        raise RuntimeError("compatibility process rejected its input") from input_error
     try:
         decoded = json.loads(stdout)
     except (TypeError, json.JSONDecodeError) as exc:

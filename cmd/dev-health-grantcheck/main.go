@@ -94,6 +94,13 @@ func printText(report *domaingrants.Report, derived *domaingrants.DerivedSurface
 			fmt.Printf("  %s:%d  %s\n", d.File, d.Line, d.Reason)
 		}
 	}
+
+	if len(derived.UnresolvedTx) > 0 {
+		fmt.Printf("\nUnresolved cross-function transactions (co-residency NOT verified -- a pgx.Tx parameter whose origin Begin() call could not be traced unambiguously; any transaction-consistency finding touching these is incomplete, not clean):\n")
+		for _, u := range derived.UnresolvedTx {
+			fmt.Printf("  %s:%d  in %s\n", u.File, u.Line, u.Function)
+		}
+	}
 }
 
 func printMarkdown(report *domaingrants.Report, derived *domaingrants.DerivedSurface) {

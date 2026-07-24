@@ -70,6 +70,22 @@ type UnresolvedCallSite struct {
 	Reason string
 }
 
+// UnresolvedTxSite is a SQL call issued through a pgx.Tx-typed PARAMETER
+// (so it necessarily originates from some other function's `.Begin(ctx)`)
+// whose origin buildTxOrigins could not resolve to a single unambiguous
+// Begin() call site -- either because two different call chains reach this
+// parameter with two different origins, or because a link in the chain
+// couldn't be traced. This is the explicit "co-residency unverified" list:
+// the evidence at this site still contributes to its table's privilege
+// finding as normal, but its TxGroup fell back to coarse function-scoped
+// grouping, so any transaction-consistency finding involving it should be
+// treated as incomplete rather than a clean "no conflict" signal.
+type UnresolvedTxSite struct {
+	File     string
+	Line     int
+	Function string
+}
+
 // DerivedSurface is the full result of statically deriving the domain-pool
 // query surface.
 type DerivedSurface struct {
@@ -78,6 +94,7 @@ type DerivedSurface struct {
 	Unresolved    []UnresolvedCallSite
 	SeedSites     []Evidence // where a *.Domain/.domainPool/.DomainPool() root was found, for auditing tool scope
 	Devirtualized []DevirtualizedCallSite
+	UnresolvedTx  []UnresolvedTxSite
 	rootModule    string
 }
 
@@ -96,11 +113,12 @@ type analyzer struct {
 	taintedField map[*types.Named]map[string]bool
 	changed      bool
 
-	tables     map[string]*TableSurface
-	dynamic    []DynamicSite
-	unresolved []UnresolvedCallSite
-	seedSites  []Evidence
-	seedSeen   map[string]bool
+	tables       map[string]*TableSurface
+	dynamic      []DynamicSite
+	unresolved   []UnresolvedCallSite
+	seedSites    []Evidence
+	seedSeen     map[string]bool
+	unresolvedTx []UnresolvedTxSite
 
 	// implementers maps an interface's Named type to every non-test,
 	// in-module concrete Named type that implements it. Used only to
@@ -264,6 +282,7 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 		a.devirt = nil
 		a.seedSites = nil
 		a.seedSeen = map[string]bool{}
+		a.unresolvedTx = nil
 		for fn, ctx := range a.funcDecls {
 			a.walkFunc(fn, ctx)
 		}
@@ -292,8 +311,27 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 		Unresolved:    a.unresolved,
 		SeedSites:     a.seedSites,
 		Devirtualized: a.devirt,
+		UnresolvedTx:  dedupUnresolvedTx(a.unresolvedTx),
 		rootModule:    moduleDir,
 	}, nil
+}
+
+// dedupUnresolvedTx collapses duplicate (file, line) entries -- the same
+// call site can be visited more than once across the fixed-point loop's
+// final iteration in rare cases (e.g. reached via two different resolved
+// callers), and only one report per site is useful.
+func dedupUnresolvedTx(sites []UnresolvedTxSite) []UnresolvedTxSite {
+	seen := map[string]bool{}
+	var out []UnresolvedTxSite
+	for _, s := range sites {
+		key := fmt.Sprintf("%s:%d", s.File, s.Line)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // buildImplementers scans every non-test, module-loaded package's package
@@ -1199,17 +1237,36 @@ func (a *analyzer) txGroupKey(ctx funcCtx, recvExpr ast.Expr) string {
 					if origin, ok := a.txOriginParam[fn][idx]; ok {
 						return "txorigin:" + origin
 					}
+					// recvExpr IS a pgx.Tx-typed parameter (it necessarily
+					// crossed at least one function boundary to get here),
+					// but buildTxOrigins could not resolve a single
+					// unambiguous origin for it -- report this explicitly
+					// rather than silently falling back to a function-scoped
+					// grouping that LOOKS complete but isn't proven to be.
+					if isPgxTxType(ctx.info.TypeOf(recvExpr)) {
+						pos := a.fset.Position(recvExpr.Pos())
+						a.unresolvedTx = append(a.unresolvedTx, UnresolvedTxSite{
+							File: a.relFile(pos), Line: pos.Line,
+							Function: txGroupFallbackName(ctx),
+						})
+					}
 				}
 			}
 		}
 	}
+	return ctx.pkg.PkgPath + "." + txGroupFallbackName(ctx)
+}
+
+// txGroupFallbackName returns the "[Receiver.]FuncName" the coarse,
+// same-function-body TxGroup fallback uses.
+func txGroupFallbackName(ctx funcCtx) string {
 	name := ctx.decl.Name.Name
 	if ctx.decl.Recv != nil && len(ctx.decl.Recv.List) == 1 {
 		if named := namedTypeOf(ctx.info.TypeOf(ctx.decl.Recv.List[0].Type)); named != nil {
 			name = named.Obj().Name() + "." + name
 		}
 	}
-	return ctx.pkg.PkgPath + "." + name
+	return name
 }
 
 func (a *analyzer) recordSQLText(sqlText string, pos token.Position, txGroup string) {

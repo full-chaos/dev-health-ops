@@ -3,6 +3,7 @@ package fixed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -436,18 +437,23 @@ func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 	}
 }
 
-// A negative override collapses to zero in the legacy Python readers, which
-// makes the cutoff the occurrence's own due time. Preserving that is a
-// deliberate parity decision; the hazard is recorded in the lane handoff.
-func TestRetentionHorizonMatchesLegacyClampSemantics(t *testing.T) {
+// Unset, empty, and unparseable overrides take the checked default, matching
+// both legacy Python readers. Zero is legal: "retain nothing" is a coherent
+// posture and is exactly what was typed. A negative value is not an expression
+// of intent, and the legacy clamp turned it into "delete every terminal row"
+// with no backstop, so it now fails the occurrence loudly.
+func TestRetentionHorizonRejectsNegativeOverridesAndHonorsTheRest(t *testing.T) {
 	schedule := scheduleByID(t, "prune_rate_limit_observations")
 	dueTime := mustTime(t, "2026-07-24T05:00:00Z")
+
 	for _, test := range []struct{ raw, wantCutoff string }{
 		{"7", "2026-07-17T05:00:00Z"},
+		// Zero is deliberate configuration, not a clamp artifact: the cutoff
+		// becomes the due time itself.
 		{"0", "2026-07-24T05:00:00Z"},
-		{"-3", "2026-07-24T05:00:00Z"},
 		{"garbage", "2026-07-10T05:00:00Z"},
 		{"", "2026-07-10T05:00:00Z"},
+		{"  21  ", "2026-07-03T05:00:00Z"},
 	} {
 		t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", test.raw)
 		outcome, err := NewRetentionProducer().Produce(
@@ -461,6 +467,52 @@ func TestRetentionHorizonMatchesLegacyClampSemantics(t *testing.T) {
 			t.Errorf("override %q produced cutoff %s, want %s",
 				test.raw, payload.DeleteBefore, test.wantCutoff)
 		}
+	}
+
+	for _, raw := range []string{"-1", "-3", " -90 "} {
+		t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", raw)
+		outcome, err := NewRetentionProducer().Produce(
+			context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+		)
+		if !errors.Is(err, ErrRetentionConfiguration) {
+			t.Fatalf("override %q = %v, want ErrRetentionConfiguration", raw, err)
+		}
+		// The delete-everything cutoff must never reach an envelope, not even
+		// alongside the error.
+		if len(outcome.Requests) != 0 || outcome.Handoffs != 0 {
+			t.Fatalf("override %q emitted work anyway: %+v", raw, outcome)
+		}
+	}
+}
+
+// Both retention schedules honor their own override independently, so a bad
+// value on one cannot silently disable the other.
+func TestRetentionOverridesAreIndependentPerSchedule(t *testing.T) {
+	t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", "-1")
+	t.Setenv("EXTERNAL_INGEST_STATUS_RETENTION_DAYS", "30")
+	producer := NewRetentionProducer()
+
+	rateLimit := scheduleByID(t, "prune_rate_limit_observations")
+	rateLimitDue := mustTime(t, "2026-07-24T05:00:00Z")
+	if _, err := producer.Produce(
+		context.Background(), &stubTx{}, rateLimit,
+		NewOccurrence(rateLimit, rateLimitDue, rateLimitDue),
+	); !errors.Is(err, ErrRetentionConfiguration) {
+		t.Fatalf("rate-limit schedule = %v, want ErrRetentionConfiguration", err)
+	}
+
+	external := scheduleByID(t, "prune_external_ingest_batches")
+	externalDue := mustTime(t, "2026-07-24T05:15:00Z")
+	outcome, err := producer.Produce(
+		context.Background(), &stubTx{}, external,
+		NewOccurrence(external, externalDue, externalDue),
+	)
+	if err != nil {
+		t.Fatalf("external-ingest schedule failed on the other schedule's bad override: %v", err)
+	}
+	payload := outcome.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload)
+	if payload.DeleteBefore != "2026-06-24T05:15:00Z" {
+		t.Fatalf("external-ingest cutoff = %s", payload.DeleteBefore)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -112,30 +113,50 @@ type RetentionSpec struct {
 	RetentionDaysEnv string
 }
 
-// retentionDays resolves the operator-configurable horizon with the same
-// semantics as the Python tasks being replaced, because a cutover must not
-// silently change how long data is kept.
+// ErrRetentionConfiguration identifies an operator-supplied retention horizon
+// that cannot be honored. It is deliberately an error rather than a bounded
+// skip: a misconfigured horizon never repairs itself, so reporting it as
+// "nothing to do" would let retention silently stop while the schedule looked
+// healthy.
+var ErrRetentionConfiguration = errors.New("retention horizon configuration is invalid")
+
+// retentionDays resolves the operator-configurable horizon.
 //
-// Both legacy readers behave identically once normalized: an unset or empty
-// value takes the default, an unparseable value takes the default, and a parsed
-// value is clamped with max(0, days). The clamp is preserved deliberately even
-// though it means a negative override collapses to zero, which deletes
-// everything older than the occurrence rather than erroring. That is the
-// current production behavior; changing it here would be an undeclared
-// behavioral change during a cutover, so it is preserved and flagged in the
-// lane handoff instead.
-func retentionDays(name string, fallbackDays int) time.Duration {
+// Unset, empty, and unparseable values take the checked default, matching both
+// legacy Python readers exactly. A NEGATIVE value does not.
+//
+// The legacy readers clamp with max(0, days), which turns a one-character typo
+// into "delete every terminal row", with no backstop anywhere: the resulting
+// payload has a valid batch size, a valid RFC3339 UTC cutoff, and violates no
+// contract. Reviewed jointly with the retention handler owner and ruled: a
+// negative value is not an expression of intent, so it fails the occurrence
+// loudly instead of being interpreted as the most destructive reading
+// available. The clamp branch was also unreachable in any healthy installation
+// — a negative override deletes everything nightly from the moment it is set —
+// so refusing it changes nothing observable for anyone whose data is intact.
+//
+// Zero remains legal. "Retain nothing" is a coherent posture an operator can
+// mean, and unlike a negative it is exactly what was typed.
+func retentionDays(name string, fallbackDays int) (time.Duration, error) {
 	days := fallbackDays
 	if raw, present := os.LookupEnv(name); present && strings.TrimSpace(raw) != "" {
-		parsed, err := strconv.Atoi(strings.TrimSpace(raw))
-		if err == nil {
+		trimmed := strings.TrimSpace(raw)
+		parsed, err := strconv.Atoi(trimmed)
+		switch {
+		case err != nil:
+			// Unparseable text carries no intent at all, so the checked default
+			// is the safe reading and matches the legacy behavior.
+		case parsed < 0:
+			return 0, fmt.Errorf(
+				"%w: %s=%q is negative; a negative horizon would delete every row "+
+					"older than the occurrence itself",
+				ErrRetentionConfiguration, name, trimmed,
+			)
+		default:
 			days = parsed
 		}
 	}
-	if days < 0 {
-		days = 0
-	}
-	return time.Duration(days) * 24 * time.Hour
+	return time.Duration(days) * 24 * time.Hour, nil
 }
 
 // RetentionProducer emits bounded retention requests for the retention
@@ -191,7 +212,10 @@ func (producer *RetentionProducer) Produce(
 	// trailing Z: a non-UTC offset is a permanent failure there. Deriving it
 	// from the occurrence's canonical due time also makes the cutoff immutable
 	// across retries, so an interrupted drain resumes against the same range.
-	retention := retentionDays(spec.RetentionDaysEnv, spec.DefaultDays)
+	retention, err := retentionDays(spec.RetentionDaysEnv, spec.DefaultDays)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("schedule %s: %w", schedule.ID, err)
+	}
 	deleteBefore := occurrence.ScheduledFor.UTC().Add(-retention).Format(time.RFC3339)
 	envelope := jobcontract.Envelope{
 		ContractVersion: jobcontract.ContractVersionV1,

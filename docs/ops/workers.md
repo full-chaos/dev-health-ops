@@ -191,8 +191,13 @@ The operational effect bridge is an authenticated internal API. Set
 `WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
 `WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the
 optional `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` is bounded from 100ms to 30s and
-defaults to 10s. Plain HTTP defaults to loopback-only. Local container stacks
-may explicitly set `WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
+defaults to 10s for the bounded operational-effect, coordinator, and metric
+compatibility calls. Long-running work-graph and investment compatibility
+calls are the exception: their dedicated client has no independent wall-clock
+timeout and is canceled by the River handler execution context, whose
+contract-specific deadline remains authoritative. Plain HTTP defaults to
+loopback-only. Local container stacks may explicitly set
+`WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
 permits only private IPs and single-label/`.internal`/`.local` service-discovery
 names, while public HTTP origins remain rejected. Production must leave the
 opt-in unset and use TLS. Requests contain durable UUID references and bounded

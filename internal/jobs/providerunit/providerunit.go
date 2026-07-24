@@ -15,6 +15,55 @@ import (
 
 var ErrUnavailable = errors.New("provider unit runtime is unavailable")
 
+// ErrRouteReconciliationRequired reports a unit that reached River for a scope
+// the Go capability system does not route. That is a producer-gate fault, not
+// a property of the unit, so it must never terminalize the unit.
+var ErrRouteReconciliationRequired = errors.New(
+	"provider unit route is unavailable for this scope; producer gate and Go descriptor disagree",
+)
+
+// RouteReconciliationCategory is the durable, distinguishable failure category
+// recorded when a route fault survives every River attempt. It is deliberately
+// not "route_disabled": that category meant "this scope is unsupported, drop
+// it", while this one means "a producer routed a scope Go does not serve and a
+// human must reconcile the gate".
+const RouteReconciliationCategory = "route_reconciliation_required"
+
+// RepositoryIdentityCategory records a unit whose repository identity cannot be
+// proven identical to the Python derivation. Like RouteReconciliationCategory
+// it is durable, distinguishable, and alertable — but it is reached on the
+// first attempt because retrying a deterministic fault cannot change it.
+const RepositoryIdentityCategory = "repository_identity_ambiguous"
+
+// deterministicTerminalCategory maps executor failures that no retry can clear
+// onto their own durable category. Anything not listed keeps the ordinary
+// bounded-retry path.
+func deterministicTerminalCategory(err error) (string, bool) {
+	if errors.Is(err, providersync.ErrRepositoryIdentityAmbiguous) {
+		return RepositoryIdentityCategory, true
+	}
+	return "", false
+}
+
+// RouteFault describes a producer/consumer capability disagreement for
+// alerting. It carries no credentials, URLs, or provider payloads.
+type RouteFault struct {
+	Provider          string
+	Dataset           string
+	DescriptorPresent bool
+	RouteReady        bool
+	RouteEnabled      bool
+	Attempt           int
+	MaxAttempts       int
+	// Released reports whether the claim was handed back to dispatching. When
+	// false the unit is still leased and will recover through lease expiry, or
+	// has been recorded as reconciliation-required.
+	Released bool
+	// Terminal reports that River has no attempt left, so the unit was moved to
+	// the durable reconciliation-required state instead of being released.
+	Terminal bool
+}
+
 type ExecutorFactory func(
 	*providersync.LeaseSession,
 ) (providersync.CompleteRouteExecutor, error)
@@ -46,6 +95,17 @@ type Handler struct {
 	LeaseDuration time.Duration
 	Heartbeat     time.Duration
 	Now           func() time.Time
+	// OnRouteFault receives producer/consumer capability disagreements so a
+	// binary can alert on them. A nil hook keeps the fail-safe behavior; it
+	// never converts the fault into success.
+	OnRouteFault func(RouteFault)
+}
+
+func (handler *Handler) observeRouteFault(fault RouteFault) {
+	if handler == nil || handler.OnRouteFault == nil {
+		return
+	}
+	handler.OnRouteFault(fault)
 }
 
 func (handler *Handler) now() time.Time {
@@ -85,11 +145,47 @@ func (handler *Handler) Work(
 	}
 	descriptor, ok := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
 	if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-		_ = handler.Repository.Fail(
-			context.WithoutCancel(ctx), claim, "route_disabled",
-			startedAt, handler.now(),
+		// TRD non-negotiable #3: a provider unit delivered to River must never
+		// terminalize as route_disabled. A unit only reaches here when the
+		// Python producer gate routed a scope the Go descriptor does not
+		// serve, so the sync data is real and the gate is wrong. Terminalizing
+		// would silently discard that scope's data for the whole run. Instead
+		// hand the claim back to dispatching, alert, and fail retryably so the
+		// unit stays recoverable by the Celery route or the reconciler.
+		fault := RouteFault{
+			Provider: claim.Provider, Dataset: claim.Dataset,
+			DescriptorPresent: ok, RouteReady: descriptor.RouteReady,
+			RouteEnabled: descriptor.RouteEnabled,
+			Attempt:      execution.Attempt,
+			MaxAttempts:  execution.Definition.MaxAttempts,
+		}
+		// Releasing on the terminal attempt would strand the unit: River
+		// discards the job after the last attempt, leaving the unit
+		// `dispatching` with no live consumer, and the producer outbox dedupe
+		// row makes a stale redispatch report "queued" without enqueueing
+		// anything. The sync run would then never finalize. Record an explicit
+		// durable reconciliation-required state instead — terminal and
+		// alertable, but never the silent route_disabled drop.
+		if execution.Attempt >= execution.Definition.MaxAttempts {
+			fault.Terminal = true
+			handler.observeRouteFault(fault)
+			if failErr := handler.Repository.Fail(
+				context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
+				startedAt, handler.now(),
+			); failErr != nil {
+				return jobruntime.Retryable(failErr)
+			}
+			return jobruntime.Retryable(ErrRouteReconciliationRequired)
+		}
+		releaseErr := handler.Repository.ReleaseForRetry(
+			context.WithoutCancel(ctx), claim, handler.now(),
 		)
-		return jobruntime.Permanent(ErrUnavailable)
+		fault.Released = releaseErr == nil
+		handler.observeRouteFault(fault)
+		if releaseErr != nil {
+			return jobruntime.Retryable(releaseErr)
+		}
+		return jobruntime.Retryable(ErrRouteReconciliationRequired)
 	}
 	session := &providersync.LeaseSession{
 		Repository: handler.Repository,
@@ -118,6 +214,22 @@ func (handler *Handler) Work(
 		}
 	}
 	completedAt := handler.now()
+	// A deterministic fault cannot succeed on a later attempt. Burning the
+	// remaining attempts would only delay the outcome and then bury the real
+	// cause under the generic provider_unit_exhausted category.
+	if category, deterministic := deterministicTerminalCategory(err); deterministic {
+		// Discarding this error would report a permanent, already-recorded
+		// outcome while the category never persisted and run finalization
+		// never armed, leaving the run nonterminal. Stay retryable so a later
+		// attempt can record it, exactly as the route-reconciliation path does.
+		if failErr := handler.Repository.Fail(
+			context.WithoutCancel(ctx), session.Claim, category,
+			startedAt, completedAt,
+		); failErr != nil {
+			return jobruntime.Retryable(failErr)
+		}
+		return jobruntime.Permanent(err)
+	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
 		_ = handler.Repository.Fail(
 			context.WithoutCancel(ctx), session.Claim, "provider_unit_exhausted",

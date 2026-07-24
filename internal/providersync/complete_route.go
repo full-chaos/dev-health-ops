@@ -144,7 +144,15 @@ func (executor CompleteRouteExecutor) Execute(
 		}
 		client.Metrics = executor.Metrics
 		normalizedAt := executor.now()
-		if descriptor.RouteEnabled && session.Claim.Recovered {
+		// Every attempt for this unit occurrence must rebuild byte-identical
+		// rows, not just expired-lease recoveries. Effect digests cover the
+		// serialized rows, so a wall-clock timestamp regenerated on an ordinary
+		// River retry would change the digest and make PrepareEffects reject
+		// the manifest with ErrEffectLedgerConflict before any readback could
+		// run — wedging the unit until it exhausts. ReleaseForRetry returns the
+		// unit to `dispatching`, so the next claim is *not* Recovered; gating
+		// this on Recovered covered only a fraction of the real retry paths.
+		if descriptor.RouteEnabled {
 			state, loadErr := executor.Committer.Ledger.LoadEffects(
 				workContext, session.Claim, normalizedAt,
 			)
@@ -186,8 +194,13 @@ func (executor CompleteRouteExecutor) Execute(
 			result.ShadowOnly = true
 			return nil
 		}
+		// The same instant that stamped these rows must become the persisted
+		// ledger CreatedAt. Letting the committer read its own clock would
+		// persist a later time than the rows were built with, so the next
+		// attempt would reload that later time, rebuild different rows, and be
+		// rejected on digest — the wedge in a second disguise.
 		result.Effects, err = executor.Committer.Commit(
-			workContext, session.Claim, batch.Effects,
+			workContext, session.Claim, batch.Effects, normalizedAt,
 		)
 		return err
 	})

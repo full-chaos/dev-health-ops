@@ -167,12 +167,15 @@ func successfulExecutor(
 }
 
 type memoryUnitRepository struct {
-	mu        sync.Mutex
-	unit      providersync.Unit
-	status    string
-	attempt   int
-	lastClaim providersync.Claim
-	result    map[string]any
+	mu               sync.Mutex
+	unit             providersync.Unit
+	status           string
+	attempt          int
+	lastClaim        providersync.Claim
+	result           map[string]any
+	failures         int
+	lastFailCategory string
+	releaseErr       error
 }
 
 func newMemoryUnitRepository(unit providersync.Unit) *memoryUnitRepository {
@@ -257,6 +260,9 @@ func (repository *memoryUnitRepository) ReleaseForRetry(
 ) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
+	if repository.releaseErr != nil {
+		return repository.releaseErr
+	}
 	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
 		return providersync.ErrLeaseLost
 	}
@@ -267,7 +273,7 @@ func (repository *memoryUnitRepository) ReleaseForRetry(
 func (repository *memoryUnitRepository) Fail(
 	_ context.Context,
 	claim providersync.Claim,
-	_ string,
+	category string,
 	_ time.Time,
 	_ time.Time,
 ) error {
@@ -276,6 +282,8 @@ func (repository *memoryUnitRepository) Fail(
 	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
 		return providersync.ErrLeaseLost
 	}
+	repository.failures++
+	repository.lastFailCategory = category
 	repository.status = "failed"
 	return nil
 }

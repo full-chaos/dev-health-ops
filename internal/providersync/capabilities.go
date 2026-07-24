@@ -34,10 +34,17 @@ type DatasetCapability struct {
 	FeatureFlagDataset bool
 }
 
+// datasetCapabilities mirrors src/dev_health_ops/sync/datasets.py, which stays
+// authoritative for provider/dataset membership, cost class, watermark
+// behavior, legacy targets, and processor flags. It is dataset *metadata*, not
+// route authority: whether a pair may execute in Go is decided only by
+// CompleteRouteSwitches.Descriptor. Divergence from Python is caught by the
+// frozen contract at contracts/provider-matrix/v1/matrix.json, which a Go test
+// and a pytest both verify.
 var datasetCapabilities = buildDatasetCapabilities()
 
 func buildDatasetCapabilities() map[string]map[string]DatasetCapability {
-	registry := make(map[string]map[string]DatasetCapability, 5)
+	registry := make(map[string]map[string]DatasetCapability, 6)
 	add := func(provider, dataset string, cost CostClass, watermark WatermarkBehavior, targets []string, flags map[string]bool) {
 		if registry[provider] == nil {
 			registry[provider] = map[string]DatasetCapability{}
@@ -103,7 +110,44 @@ func buildDatasetCapabilities() map[string]map[string]DatasetCapability {
 	}
 	add("jira", "incidents", CostMedium, WatermarkIncremental, []string{"operational"}, nil)
 	add("launchdarkly", "feature-flags", CostMedium, WatermarkIncremental, []string{"feature-flags"}, nil)
+	// PagerDuty's eleven datasets are required by TRD §10.1 and were the one
+	// provider entirely absent from the Go registry before CUT-08. Every
+	// PagerDuty dataset legacy-targets `operational` (the Python
+	// _PAGERDUTY_LEGACY_TARGET_OVERRIDES redirect for `incidents` collapses
+	// onto the same target the rest of the provider already uses). Registering
+	// them does not open a route: no PagerDuty pair is RouteReady.
+	for _, capability := range []struct {
+		dataset   string
+		cost      CostClass
+		watermark WatermarkBehavior
+		flags     map[string]bool
+	}{
+		{"services", CostLight, WatermarkNone, nil},
+		{"business-services", CostLight, WatermarkNone, nil},
+		{"escalation-policies", CostLight, WatermarkNone, nil},
+		{"schedules", CostLight, WatermarkNone, nil},
+		{"on-calls", CostMedium, WatermarkNone, nil},
+		{"users", CostLight, WatermarkNone, nil},
+		{"teams", CostLight, WatermarkNone, nil},
+		{"incidents", CostLight, WatermarkIncremental, map[string]bool{"sync_incidents": true}},
+		{"incident-alerts", CostMedium, WatermarkIncremental, nil},
+		{"incident-log-entries", CostMedium, WatermarkIncremental, nil},
+		{"incident-notes", CostMedium, WatermarkIncremental, nil},
+	} {
+		add(
+			"pagerduty", capability.dataset, capability.cost, capability.watermark,
+			[]string{"operational"}, capability.flags,
+		)
+	}
 	return registry
+}
+
+// MatrixProviders is the frozen provider list the provider matrix contract
+// covers (TRD §10.1).
+func MatrixProviders() []string {
+	return []string{
+		"github", "gitlab", "jira", "launchdarkly", "linear", "pagerduty",
+	}
 }
 
 func Capability(provider, dataset string) (DatasetCapability, bool) {

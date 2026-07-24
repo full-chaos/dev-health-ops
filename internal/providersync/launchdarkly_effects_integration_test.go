@@ -143,7 +143,7 @@ ORDER BY (org_id, flag_key, environment, event_ts)`); err != nil {
 	result, err := (EffectCommitter{
 		Ledger: freshRepository, Sink: freshSink, Readback: freshSink,
 		Now: func() time.Time { return recoveryNow },
-	}).Commit(ctx, recovered, []EffectBatch{eventEffect})
+	}).Commit(ctx, recovered, []EffectBatch{eventEffect}, now.Add(time.Second))
 	if err != nil || result.MarkedCommitted != 1 || result.Written != 0 {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}

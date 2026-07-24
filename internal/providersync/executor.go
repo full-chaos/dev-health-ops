@@ -113,6 +113,11 @@ func comparableEnvelopes(input []providerfoundation.NormalizedEnvelope) (map[str
 type BackoffGateFactory func(Claim, *providerfoundation.HTTPClient) providerfoundation.BackoffGate
 type GenerationSinkFactory func(providerfoundation.LeaseGuard) providerfoundation.GenerationSink
 
+// Executor is the generation-block parity harness for shadow-eligible
+// datasets. It is not a routing path: it accepts only a ShadowDescriptor
+// projected from the canonical CompleteRouteDescriptor, and no binary
+// constructs it. Production provider execution runs through
+// CompleteRouteExecutor.
 type Executor struct {
 	Credentials       providerfoundation.CredentialResolver
 	Doer              providerfoundation.HTTPDoer
@@ -149,17 +154,16 @@ func (executor Executor) now() time.Time {
 func (executor Executor) Execute(
 	ctx context.Context,
 	session *LeaseSession,
-	descriptor ExecutionDescriptor,
+	descriptor ShadowDescriptor,
 ) (ExecutionResult, error) {
 	if ctx == nil || session == nil || !session.valid() ||
 		descriptor.Provider != session.Claim.Provider ||
 		descriptor.Dataset != session.Claim.Dataset ||
-		!descriptor.NativeShadow ||
 		executor.Doer == nil || executor.Handler == nil || executor.Comparator == nil ||
 		executor.HeartbeatInterval <= 0 {
 		return ExecutionResult{}, ErrInvalidConfiguration
 	}
-	if descriptor.RouteEnabled &&
+	if descriptor.Write &&
 		(executor.Budget == nil || executor.Gate == nil || executor.Journal == nil ||
 			executor.Sink == nil || executor.Destination == "") {
 		return ExecutionResult{}, ErrInvalidConfiguration
@@ -181,7 +185,7 @@ func (executor Executor) Execute(
 		if err != nil {
 			return err
 		}
-		if descriptor.RouteEnabled {
+		if descriptor.Write {
 			limit := executor.BudgetLimits[session.Claim.CostClass]
 			if limit < 1 || executor.BudgetTTL <= 0 {
 				return ErrInvalidConfiguration
@@ -211,7 +215,7 @@ func (executor Executor) Execute(
 		if !comparison.Match {
 			return ErrShadowMismatch
 		}
-		if !descriptor.RouteEnabled {
+		if !descriptor.Write {
 			result.ShadowOnly = true
 			return nil
 		}

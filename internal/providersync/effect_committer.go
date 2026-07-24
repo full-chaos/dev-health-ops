@@ -40,25 +40,36 @@ func (committer EffectCommitter) now() time.Time {
 // effect manifest. The manifest never persists provider payloads. A fresh
 // process refetches the frozen unit window, rebuilds the same content digest,
 // and may then reconcile a writing effect from its in-memory rows.
+//
+// normalizedAt is the single instant the caller stamped into these rows. It
+// becomes the persisted ledger CreatedAt, so a later attempt that reloads the
+// ledger rebuilds byte-identical rows and reproduces the same digest. Reading
+// a fresh clock here instead would persist a *different* instant than the one
+// the rows were built with, and every retry would regenerate the digest and be
+// rejected by PrepareEffects — the wedge this parameter exists to prevent.
+// The committer's own clock still stamps the begin/commit audit transitions,
+// which are not part of any digest.
 func (committer EffectCommitter) Commit(
 	ctx context.Context,
 	claim Claim,
 	batches []EffectBatch,
+	normalizedAt time.Time,
 ) (EffectCommitResult, error) {
 	if ctx == nil || claim.Validate() != nil || committer.Ledger == nil ||
-		committer.Sink == nil {
+		committer.Sink == nil || normalizedAt.IsZero() {
 		return EffectCommitResult{}, ErrInvalidConfiguration
 	}
+	normalizedAt = normalizedAt.UTC()
 	ordered := append([]EffectBatch(nil), batches...)
 	sort.Slice(ordered, func(left, right int) bool {
 		return ordered[left].Destination < ordered[right].Destination
 	})
-	desired, err := NewEffectLedgerState(claim, ordered, committer.now())
+	desired, err := NewEffectLedgerState(claim, ordered, normalizedAt)
 	if err != nil {
 		return EffectCommitResult{}, err
 	}
 	persisted, err := committer.Ledger.PrepareEffects(
-		ctx, claim, desired, committer.now(),
+		ctx, claim, desired, normalizedAt,
 	)
 	if err != nil {
 		return EffectCommitResult{}, err

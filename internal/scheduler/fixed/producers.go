@@ -23,27 +23,6 @@ import (
 // organization to schedule.
 const SkipNoActiveOrganizations = "no_active_organizations"
 
-// Retention policy names.
-//
-// These are agreed cross-lane values, not this package's to define: the
-// canonical list lives in internal/jobcontract on the runtime-truth lane, where
-// internal/jobcontract/registry.go pins it element-by-element against the
-// system.retention_cleanup schema enum so the constant list and the contract
-// cannot drift apart. They are declared here only so the producer compiles
-// before that lane merges, and this block is deleted in favour of the
-// jobcontract constants at merge.
-//
-// The names are plural because the policy IS the table scope. Each retention
-// store holds its table as a compile-time literal, never a constructor argument
-// or payload field, so no operator input and no future policy can widen the
-// target. A reviewer reading the policy name knows exactly which table can lose
-// rows: `external_ingest_batches` is the table, and
-// `rate_limit_observations` is the tail of `provider_rate_limit_observations`.
-const (
-	retentionRateLimitObservations = "rate_limit_observations"
-	retentionExternalIngestBatches = "external_ingest_batches"
-)
-
 // occurrenceDomainNamespace derives the synthetic domain identity for job
 // kinds whose domain link has no backing table. `schedule_occurrence` and
 // `maintenance_run` are declared in the job contract but no table exists for
@@ -175,7 +154,7 @@ func NewRetentionProducer() Producer {
 	)
 	return &RetentionProducer{byScheduleID: map[string]RetentionSpec{
 		"prune_rate_limit_observations": {
-			Policy:      retentionRateLimitObservations,
+			Policy:      jobcontract.RetentionRateLimitObservations,
 			DefaultDays: 14, // CHAOS-2758
 			// The handler drains one occurrence chunk-by-chunk until the work is
 			// gone, so this bounds a single pass rather than the total deletion.
@@ -184,7 +163,7 @@ func NewRetentionProducer() Producer {
 			RetentionDaysEnv: rateLimitEnv,
 		},
 		"prune_external_ingest_batches": {
-			Policy:           retentionExternalIngestBatches,
+			Policy:           jobcontract.RetentionExternalIngestBatches,
 			DefaultDays:      90, // CHAOS-2694
 			BatchSize:        500,
 			RetentionDaysEnv: externalIngestEnv,

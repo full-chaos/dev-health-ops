@@ -280,12 +280,12 @@ func TestRetentionProducerHonorsOperatorHorizonOverrides(t *testing.T) {
 	}{
 		{
 			scheduleID:   "prune_rate_limit_observations",
-			wantPolicy:   retentionRateLimitObservations,
+			wantPolicy:   jobcontract.RetentionRateLimitObservations,
 			wantDeleteAt: "2026-07-17T05:00:00Z",
 		},
 		{
 			scheduleID:   "prune_external_ingest_batches",
-			wantPolicy:   retentionExternalIngestBatches,
+			wantPolicy:   jobcontract.RetentionExternalIngestBatches,
 			wantDeleteAt: "2026-06-24T05:15:00Z",
 		},
 	} {
@@ -319,14 +319,15 @@ func TestRetentionProducerHonorsOperatorHorizonOverrides(t *testing.T) {
 // A malformed or non-positive override must keep the checked default rather
 // than widening or zeroing a deletion range.
 func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
-	// Retention is deliberately absent here. Its policy names are owned by the
-	// runtime-truth lane's internal/jobcontract change, which pins the Go
-	// constant list against the schema enum; until that merges this branch's
-	// compiled contract cannot accept them, so retention payloads are asserted
-	// field-by-field against the handler contract below instead. Add them back
-	// to this round-trip once the lanes merge.
+	// Retention rejoins this strict round-trip now that the runtime-truth
+	// lane's internal/jobcontract change has landed: the compiled contract
+	// pins its schema enum to jobcontract.RetentionPolicies() element-by-
+	// element, so both plural policy names now marshal and decode cleanly.
+	retentionProducer := NewRetentionProducer()
 	producers := map[string]Producer{
-		"phone_home_heartbeat": NewHeartbeatProducer(),
+		"phone_home_heartbeat":          NewHeartbeatProducer(),
+		"prune_rate_limit_observations": retentionProducer,
+		"prune_external_ingest_batches": retentionProducer,
 	}
 	for id, producer := range producers {
 		schedule := scheduleByID(t, id)
@@ -392,8 +393,8 @@ func TestOccurrenceDomainIdentityIsAValidDeterministicUUID(t *testing.T) {
 func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 	producer := NewRetentionProducer()
 	for _, test := range []struct{ scheduleID, wantPolicy string }{
-		{"prune_rate_limit_observations", retentionRateLimitObservations},
-		{"prune_external_ingest_batches", retentionExternalIngestBatches},
+		{"prune_rate_limit_observations", jobcontract.RetentionRateLimitObservations},
+		{"prune_external_ingest_batches", jobcontract.RetentionExternalIngestBatches},
 	} {
 		schedule := scheduleByID(t, test.scheduleID)
 		dueTime := mustTime(t, "2026-07-24T05:00:00Z")

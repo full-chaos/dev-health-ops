@@ -34,14 +34,6 @@ services:
   go-worker-heavy:
     <<: *go-worker
     environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: heavy}
-  go-worker-latency:
-    <<: *go-worker
-    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: latency}
-    deploy:
-      <<: *go-worker-deploy
-      resources:
-        limits: {cpus: "0.5", memory: 512M}
-        reservations: {cpus: "0.10", memory: 128M}
   go-worker-ops:
     <<: *go-worker
     environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ops}

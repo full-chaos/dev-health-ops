@@ -53,7 +53,7 @@ transfer a job, queue, or scheduler marker to Go.
 ### Images and topology
 
 Publish one immutable image per target in `docker/go-worker.Dockerfile`:
-`dev-health-go-worker` (latency, sync, heavy, ops),
+`dev-health-go-worker` (sync, heavy, ops),
 `dev-health-go-reconciler`, `dev-health-go-scheduler`, and
 `dev-health-go-stream-runner` (external, ingest). All workload definitions
 run as UID/GID `65532`, deny privilege escalation, use a read-only root

@@ -130,7 +130,6 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     }
     assert expected_profiles == {
         "heavy",
-        "latency",
         "ops",
         "reconciler",
         "scheduler",
@@ -142,7 +141,6 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     compose = _load_yaml(_GO_COMPOSE)["services"]
     runtime_services = {
         "go-worker-heavy",
-        "go-worker-latency",
         "go-worker-ops",
         "go-worker-sync-provider",
         "go-reconciler",

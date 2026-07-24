@@ -58,11 +58,13 @@ func (clock *fixedTestClock) tick(at time.Time) {
 	ticker.ticks <- at
 }
 
-// scriptedStepper fails until its failures counter is exhausted, modelling a
-// window that is broken and then repaired without restarting the process.
+// scriptedStepper keeps failing until it is explicitly repaired, modelling a
+// window that is broken by configuration and then fixed in place. The failure
+// is persistent on purpose: a self-decrementing counter would heal on its own,
+// which would let a recovery test pass without the repair step doing anything.
 type scriptedStepper struct {
 	mu        sync.Mutex
-	failures  int
+	failing   bool
 	calls     atomic.Int64
 	schedules []Schedule
 }
@@ -77,8 +79,7 @@ func (stepper *scriptedStepper) Step(_ context.Context, observedAt time.Time) (W
 			ScheduleID: stepper.schedules[0].ID,
 		}},
 	}
-	if stepper.failures > 0 {
-		stepper.failures--
+	if stepper.failing {
 		result.Schedules[0].Err = errors.New("window failed")
 	}
 	return result, nil
@@ -89,7 +90,7 @@ func (stepper *scriptedStepper) Schedules() []Schedule { return stepper.schedule
 func (stepper *scriptedStepper) repair() {
 	stepper.mu.Lock()
 	defer stepper.mu.Unlock()
-	stepper.failures = 0
+	stepper.failing = false
 }
 
 func newFixedTestLoop(t *testing.T, stepper Stepper) (*Loop, *fixedTestClock) {
@@ -114,7 +115,7 @@ func newFixedTestLoop(t *testing.T, stepper Stepper) (*Loop, *fixedTestClock) {
 // process, even though the steady-state path is explicitly built to retry.
 func TestInitialWindowFailureStillStartsTheLoopAndSelfHeals(t *testing.T) {
 	schedule := heartbeatSchedule(t)
-	stepper := &scriptedStepper{failures: 1, schedules: []Schedule{schedule}}
+	stepper := &scriptedStepper{failing: true, schedules: []Schedule{schedule}}
 	loop, clock := newFixedTestLoop(t, stepper)
 
 	if err := loop.Start(context.Background()); err != nil {
@@ -122,9 +123,7 @@ func TestInitialWindowFailureStillStartsTheLoopAndSelfHeals(t *testing.T) {
 	}
 	defer func() { _ = loop.Shutdown(context.Background()) }()
 
-	if stepper.calls.Load() != 1 {
-		t.Fatalf("initial window ran %d times", stepper.calls.Load())
-	}
+	waitFor(t, "the first window to run", func() bool { return stepper.calls.Load() >= 1 })
 	if err := loop.Readiness(context.Background()); err == nil {
 		t.Fatal("readiness opened despite a failed first window")
 	}
@@ -163,9 +162,9 @@ func TestHealthyInitialWindowOpensReadiness(t *testing.T) {
 		t.Fatalf("Start() = %v", err)
 	}
 	defer func() { _ = loop.Shutdown(context.Background()) }()
-	if err := loop.Readiness(context.Background()); err != nil {
-		t.Fatalf("readiness stayed closed after a healthy first window: %v", err)
-	}
+	waitFor(t, "readiness to open", func() bool {
+		return loop.Readiness(context.Background()) == nil
+	})
 }
 
 // Shutdown must close readiness regardless of how the loop was faring.
@@ -181,5 +180,79 @@ func TestShutdownClosesReadiness(t *testing.T) {
 	}
 	if err := loop.Readiness(context.Background()); err == nil {
 		t.Fatal("readiness stayed open after shutdown")
+	}
+}
+
+func waitFor(t *testing.T, what string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// blockingStepper parks inside its window until released.
+type blockingStepper struct {
+	entered   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+	schedules []Schedule
+}
+
+func (stepper *blockingStepper) Step(context.Context, time.Time) (WindowResult, error) {
+	stepper.once.Do(func() { close(stepper.entered) })
+	<-stepper.release
+	return WindowResult{Schedules: []ScheduleResult{{ScheduleID: stepper.schedules[0].ID}}}, nil
+}
+
+func (stepper *blockingStepper) Schedules() []Schedule { return stepper.schedules }
+
+// Start must not block for the duration of the first window. A window may run
+// for up to the configured step timeout, and holding the caller that long
+// delays every component sequenced after the scheduler for a result nobody
+// waits on.
+//
+// The release channel is closed only after Start has returned, so if Start
+// waited for the window this deadlocks — the timeout below turns that into a
+// clean failure rather than a hang.
+func TestStartDoesNotBlockOnTheDurationOfTheFirstWindow(t *testing.T) {
+	schedule := heartbeatSchedule(t)
+	stepper := &blockingStepper{
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+		schedules: []Schedule{schedule},
+	}
+	loop, _ := newFixedTestLoop(t, stepper)
+
+	started := make(chan error, 1)
+	go func() { started <- loop.Start(context.Background()) }()
+
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("Start() = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start blocked on the first window instead of returning promptly")
+	}
+
+	// The window is genuinely in flight: it began, and it has not been allowed
+	// to finish, yet Start already returned.
+	select {
+	case <-stepper.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first window never began")
+	}
+
+	close(stepper.release)
+	waitFor(t, "readiness to open once the window completes", func() bool {
+		return loop.Readiness(context.Background()) == nil
+	})
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() = %v", err)
 	}
 }

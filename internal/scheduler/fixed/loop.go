@@ -198,21 +198,6 @@ func (loop *Loop) Start(ctx context.Context) error {
 	loop.started, loop.cancel, loop.done = true, cancel, done
 	loop.mu.Unlock()
 
-	// The first window is just the first tick, not a gate on starting at all.
-	//
-	// Treating it as a gate made startup permanently fatal for failures the
-	// steady-state path is explicitly designed to retry. A due retention
-	// occurrence carrying a bad operator override, for example, fails its
-	// window; if that happened on the first window the loop never started, and
-	// correcting the environment could not take effect without restarting the
-	// process. Window failures close readiness and back off wherever they
-	// occur, so startup and steady state now behave identically and the
-	// self-heal property holds from any state.
-	var nextEligible time.Time
-	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
-		loop.setFailed()
-		nextEligible = loop.clock.Now().Add(loop.backoff())
-	}
 	ticker := loop.clock.NewTicker(loop.config.PollInterval)
 	loop.mu.Lock()
 	if loop.stopping || loopCtx.Err() != nil {
@@ -228,21 +213,34 @@ func (loop *Loop) Start(ctx context.Context) error {
 	}
 	loop.ticker = ticker
 	loop.mu.Unlock()
-	go loop.run(loopCtx, ticker, done, nextEligible)
+	go loop.run(loopCtx, ticker, done)
 	return nil
 }
 
-// run drives subsequent windows. nextEligible carries any backoff owed by a
-// failed initial window, so a failure at startup is retried on the same
-// schedule as one that happens later.
-func (loop *Loop) run(
-	ctx context.Context,
-	ticker loopTicker,
-	done chan struct{},
-	nextEligible time.Time,
-) {
+// run drives every window, including the first.
+//
+// The first window runs here rather than in Start for two reasons. Its result
+// must not gate startup: window failures close readiness and back off wherever
+// they occur, so treating the first one as fatal made startup permanently
+// unrecoverable for failures the steady-state path is built to retry — a due
+// occurrence carrying a bad operator override could then only be repaired by
+// restarting the process. Its duration must not gate startup either: a window
+// may run for up to the configured step timeout, and blocking Start for that
+// long delays every component sequenced after it, for a result nobody waits on.
+//
+// Running it on entry rather than on the first tick keeps the cadence honest:
+// the loop still evaluates due work immediately at startup, it just does so
+// without holding the caller.
+func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}) {
 	defer close(done)
 	defer ticker.Stop()
+	var nextEligible time.Time
+	if ctx.Err() == nil {
+		if err := loop.step(ctx, loop.clock.Now()); err != nil {
+			loop.setFailed()
+			nextEligible = loop.clock.Now().Add(loop.backoff())
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():

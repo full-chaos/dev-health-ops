@@ -485,15 +485,16 @@ func TestConcurrentPollsNeverSeeHealthyAfterDetachCompletes(t *testing.T) {
 					return
 				default:
 				}
-				// The flag must be sampled BEFORE the call. Sampling after
-				// would flag a call that legitimately began while attached and
-				// answered healthy before detach ran — a correct result, since
-				// the invariant is about calls that start after detach
-				// completes, not about results observed later.
-				detachedFirst := detachCompleted.Load()
-				readinessErr := gate.readiness(context.Background())
-				coverageErr := gate.coverage(context.Background())
-				if detachedFirst && (readinessErr == nil || coverageErr == nil) {
+				// The flag is sampled immediately before EACH call, never once
+				// for both. Sampling after a call would flag one that
+				// legitimately began while attached; sampling once for two
+				// calls would evaluate the second against the first's stale
+				// observation, so a coverage call that genuinely began from a
+				// detached gate could go unchecked.
+				if detachCompleted.Load() && gate.readiness(context.Background()) == nil {
+					staleHealthy.Add(1)
+				}
+				if detachCompleted.Load() && gate.coverage(context.Background()) == nil {
 					staleHealthy.Add(1)
 				}
 			}

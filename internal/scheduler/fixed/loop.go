@@ -198,11 +198,20 @@ func (loop *Loop) Start(ctx context.Context) error {
 	loop.started, loop.cancel, loop.done = true, cancel, done
 	loop.mu.Unlock()
 
+	// The first window is just the first tick, not a gate on starting at all.
+	//
+	// Treating it as a gate made startup permanently fatal for failures the
+	// steady-state path is explicitly designed to retry. A due retention
+	// occurrence carrying a bad operator override, for example, fails its
+	// window; if that happened on the first window the loop never started, and
+	// correcting the environment could not take effect without restarting the
+	// process. Window failures close readiness and back off wherever they
+	// occur, so startup and steady state now behave identically and the
+	// self-heal property holds from any state.
+	var nextEligible time.Time
 	if err := loop.step(loopCtx, loop.clock.Now()); err != nil {
 		loop.setFailed()
-		cancel()
-		close(done)
-		return fmt.Errorf("initial fixed schedule window: %w", err)
+		nextEligible = loop.clock.Now().Add(loop.backoff())
 	}
 	ticker := loop.clock.NewTicker(loop.config.PollInterval)
 	loop.mu.Lock()
@@ -219,14 +228,21 @@ func (loop *Loop) Start(ctx context.Context) error {
 	}
 	loop.ticker = ticker
 	loop.mu.Unlock()
-	go loop.run(loopCtx, ticker, done)
+	go loop.run(loopCtx, ticker, done, nextEligible)
 	return nil
 }
 
-func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}) {
+// run drives subsequent windows. nextEligible carries any backoff owed by a
+// failed initial window, so a failure at startup is retried on the same
+// schedule as one that happens later.
+func (loop *Loop) run(
+	ctx context.Context,
+	ticker loopTicker,
+	done chan struct{},
+	nextEligible time.Time,
+) {
 	defer close(done)
 	defer ticker.Stop()
-	var nextEligible time.Time
 	for {
 		select {
 		case <-ctx.Done():

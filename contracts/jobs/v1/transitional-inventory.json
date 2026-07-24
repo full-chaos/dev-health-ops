@@ -993,12 +993,12 @@
       "notes": "Beat entry phone-home-heartbeat, crontab(0,0) UTC; registry kind system.heartbeat"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_webhooks.py:53",
+      "id": "celery_task:src/dev_health_ops/workers/system_webhooks.py:57",
       "surface": "process_webhook_event",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_webhooks.py",
-        "line": 53
+        "line": 57
       },
       "queue_or_cadence": "webhooks",
       "dispatches": "self",
@@ -1017,12 +1017,12 @@
       "notes": "registry kind operational.webhook_delivery"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_webhooks.py:250",
+      "id": "celery_task:src/dev_health_ops/workers/system_webhooks.py:254",
       "surface": "process_pagerduty_webhook_event",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_webhooks.py",
-        "line": 250
+        "line": 254
       },
       "queue_or_cadence": "webhooks",
       "dispatches": "self",
@@ -1206,7 +1206,7 @@
       "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
       "deletion_evidence_requirement": "Beat entry `run-complexity-daily` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": ""
+      "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
       "id": "beat_entry:src/dev_health_ops/workers/config.py:183",
@@ -1230,7 +1230,7 @@
       "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
       "deletion_evidence_requirement": "Beat entry `run-recommendations` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": ""
+      "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
       "id": "beat_entry:src/dev_health_ops/workers/config.py:194",
@@ -1254,7 +1254,7 @@
       "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
       "deletion_evidence_requirement": "Beat entry `run-release-impact-daily` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": ""
+      "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
       "id": "beat_entry:src/dev_health_ops/workers/config.py:203",
@@ -1302,7 +1302,7 @@
       "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
       "deletion_evidence_requirement": "Beat entry `run-capacity-forecast` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": ""
+      "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
       "id": "beat_entry:src/dev_health_ops/workers/config.py:213",
@@ -1518,7 +1518,7 @@
       "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
       "deletion_evidence_requirement": "Beat entry `run-membership-backfill-daily` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": ""
+      "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
       "id": "beat_entry:src/dev_health_ops/workers/config.py:286",
@@ -2457,12 +2457,12 @@
       "notes": "grep-evading form; POST /webhooks/{github,gitlab,jira}, route-gated by route_requires_celery"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/webhooks/pagerduty.py:501",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/api/webhooks/pagerduty.py:515",
       "surface": "getattr(process_pagerduty_webhook_event,'delay')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 501
+        "line": 515
       },
       "queue_or_cadence": "n/a",
       "dispatches": "process_pagerduty_webhook_event",
@@ -2727,12 +2727,12 @@
       "route_mount_prefix": "/webhooks"
     },
     {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/webhooks/pagerduty.py:393",
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/webhooks/pagerduty.py:402",
       "surface": "POST /webhooks/pagerduty/{binding_id}",
       "class": "api_trigger_endpoint",
       "source": {
         "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 393
+        "line": 402
       },
       "queue_or_cadence": "n/a",
       "dispatches": "process_pagerduty_webhook_event",
@@ -3425,12 +3425,12 @@
       "notes": "Go consumer name go-external-ingest, dependencies.go:367; groups match"
     },
     {
-      "id": "stream_surface:src/dev_health_ops/api/webhooks/pagerduty.py:342",
+      "id": "stream_surface:src/dev_health_ops/api/webhooks/pagerduty.py:351",
       "surface": "PagerDuty webhook event stream",
       "class": "stream_surface",
       "source": {
         "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 342
+        "line": 351
       },
       "queue_or_cadence": "no consumer group - direct dispatch after stream write",
       "dispatches": "process_pagerduty_webhook_event (Python direct .delay) / internal/jobs/pagerduty (Go, dormant)",

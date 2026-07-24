@@ -370,3 +370,68 @@ func (doer *trackingCompleteRouteDoer) Do(
 var _ CompleteRouteHandler = (*staticCompleteRouteHandler)(nil)
 var _ CompleteRouteHandler = (*requestingCompleteRouteHandler)(nil)
 var _ CompleteRouteComparator = matchingCompleteRouteComparator{}
+
+// TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnOrdinaryRetry is
+// the wedge regression. Effect digests cover the serialized rows, so a
+// wall-clock timestamp regenerated on an ordinary River retry changes the
+// digest and PrepareEffects rejects the manifest with ErrEffectLedgerConflict
+// before any readback can run — permanently wedging the unit.
+//
+// ReleaseForRetry returns the unit to `dispatching`, so the next claim is NOT
+// Recovered. Stabilization must therefore key off the persisted ledger, not
+// the recovery flag.
+func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnOrdinaryRetry(
+	t *testing.T,
+) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	if claim.Recovered {
+		t.Fatal("this regression requires a non-recovered claim")
+	}
+	firstAttemptAt := now.Add(-3 * time.Minute)
+	batch := completeRouteFixture(t, claim)
+	state, err := NewEffectLedgerState(claim, batch.Effects, firstAttemptAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := &memoryEffectLedger{state: state}
+	handler := &staticCompleteRouteHandler{batch: batch}
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+
+	if _, err := completeRouteExecutor(
+		now, handler, ledger, &memoryEffectSink{},
+	).Execute(context.Background(), session, descriptor); err != nil {
+		t.Fatalf("ordinary retry error=%v", err)
+	}
+
+	if !handler.normalizedAt.Equal(firstAttemptAt) {
+		t.Fatalf(
+			"normalization time=%s want=%s (retry regenerated the digest)",
+			handler.normalizedAt, firstAttemptAt,
+		)
+	}
+}
+
+// TestCompleteRouteExecutorStartsFreshWhenNoLedgerExists keeps the
+// stabilization from swallowing a genuinely absent ledger.
+func TestCompleteRouteExecutorStartsFreshWhenNoLedgerExists(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	handler := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+
+	if _, err := completeRouteExecutor(
+		now, handler, &memoryEffectLedger{}, &memoryEffectSink{},
+	).Execute(context.Background(), session, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if !handler.normalizedAt.Equal(now) {
+		t.Fatalf("normalization time=%s want=%s", handler.normalizedAt, now)
+	}
+}

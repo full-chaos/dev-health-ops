@@ -29,6 +29,22 @@ var ErrRouteReconciliationRequired = errors.New(
 // human must reconcile the gate".
 const RouteReconciliationCategory = "route_reconciliation_required"
 
+// RepositoryIdentityCategory records a unit whose repository identity cannot be
+// proven identical to the Python derivation. Like RouteReconciliationCategory
+// it is durable, distinguishable, and alertable — but it is reached on the
+// first attempt because retrying a deterministic fault cannot change it.
+const RepositoryIdentityCategory = "repository_identity_ambiguous"
+
+// deterministicTerminalCategory maps executor failures that no retry can clear
+// onto their own durable category. Anything not listed keeps the ordinary
+// bounded-retry path.
+func deterministicTerminalCategory(err error) (string, bool) {
+	if errors.Is(err, providersync.ErrRepositoryIdentityAmbiguous) {
+		return RepositoryIdentityCategory, true
+	}
+	return "", false
+}
+
 // RouteFault describes a producer/consumer capability disagreement for
 // alerting. It carries no credentials, URLs, or provider payloads.
 type RouteFault struct {
@@ -198,6 +214,16 @@ func (handler *Handler) Work(
 		}
 	}
 	completedAt := handler.now()
+	// A deterministic fault cannot succeed on a later attempt. Burning the
+	// remaining attempts would only delay the outcome and then bury the real
+	// cause under the generic provider_unit_exhausted category.
+	if category, deterministic := deterministicTerminalCategory(err); deterministic {
+		_ = handler.Repository.Fail(
+			context.WithoutCancel(ctx), session.Claim, category,
+			startedAt, completedAt,
+		)
+		return jobruntime.Permanent(err)
+	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
 		_ = handler.Repository.Fail(
 			context.WithoutCancel(ctx), session.Claim, "provider_unit_exhausted",

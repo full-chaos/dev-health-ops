@@ -144,7 +144,15 @@ func (executor CompleteRouteExecutor) Execute(
 		}
 		client.Metrics = executor.Metrics
 		normalizedAt := executor.now()
-		if descriptor.RouteEnabled && session.Claim.Recovered {
+		// Every attempt for this unit occurrence must rebuild byte-identical
+		// rows, not just expired-lease recoveries. Effect digests cover the
+		// serialized rows, so a wall-clock timestamp regenerated on an ordinary
+		// River retry would change the digest and make PrepareEffects reject
+		// the manifest with ErrEffectLedgerConflict before any readback could
+		// run — wedging the unit until it exhausts. ReleaseForRetry returns the
+		// unit to `dispatching`, so the next claim is *not* Recovered; gating
+		// this on Recovered covered only a fraction of the real retry paths.
+		if descriptor.RouteEnabled {
 			state, loadErr := executor.Committer.Ledger.LoadEffects(
 				workContext, session.Claim, normalizedAt,
 			)

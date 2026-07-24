@@ -230,3 +230,45 @@ func TestUnroutableScopeStaysRetryableWhenReleaseFails(t *testing.T) {
 		t.Fatalf("faults=%v", faults)
 	}
 }
+
+// TestDeterministicIdentityFaultTerminalizesOnFirstAttempt covers the
+// repository-identity fault. It cannot clear on retry, so burning the
+// remaining attempts would only delay the outcome and then hide the cause
+// behind the generic provider_unit_exhausted category.
+func TestDeterministicIdentityFaultTerminalizesOnFirstAttempt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	repository := newMemoryUnitRepository(providerUnit())
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(
+			*providersync.LeaseSession,
+		) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{},
+				providersync.ErrRepositoryIdentityAmbiguous
+		},
+	}
+	execution := providerExecution(repository.unit, now, 1)
+	execution.Definition.MaxAttempts = 5
+
+	err := handler.Work(context.Background(), execution)
+
+	if !errors.Is(err, providersync.ErrRepositoryIdentityAmbiguous) {
+		t.Fatalf("error=%v", err)
+	}
+	if err.Error() == retryableCategory {
+		t.Fatalf("deterministic fault was marked retryable: %v", err)
+	}
+	if repository.status != "failed" || repository.failures != 1 {
+		t.Fatalf("status=%q failures=%d", repository.status, repository.failures)
+	}
+	if repository.lastFailCategory != RepositoryIdentityCategory {
+		t.Fatalf("category=%q", repository.lastFailCategory)
+	}
+}

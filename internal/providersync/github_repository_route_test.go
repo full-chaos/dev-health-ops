@@ -159,6 +159,13 @@ func TestRepositoryIdentityFailsClosedOnDocumentedPythonDivergences(t *testing.T
 	) {
 		t.Errorf("REPO_UUID override error=%v", err)
 	}
+	// Python truthiness-checks the variable, so an empty value is not an
+	// override and must still hash normally.
+	t.Setenv("REPO_UUID", "")
+	if got, err := repositoryIdentity("acme/api"); err != nil ||
+		got != "c7198fbc-1945-3717-05d8-eb78866b4e79" {
+		t.Errorf("empty REPO_UUID = %q,%v", got, err)
+	}
 	os.Unsetenv("REPO_UUID")
 
 	// Python str.lower() applies full Unicode case mapping (U+0130 lowers to

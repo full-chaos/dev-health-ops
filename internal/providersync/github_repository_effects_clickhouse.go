@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -9,8 +10,9 @@ import (
 
 // GitHubRepositoryClickHouseEffects writes the single `repos` effect produced
 // by GitHubRepositoryRouteHandler. The table is
-// ReplacingMergeTree(last_synced) ordered by (org_id, id), so a replayed
-// identical batch is idempotent and no readback contract is required.
+// ReplacingMergeTree(last_synced) ordered by (org_id, id). Deduplication is
+// asynchronous, so recovery is readback-fenced rather than blind-replayed:
+// see InspectEffect.
 type GitHubRepositoryClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
@@ -123,12 +125,32 @@ func (sink GitHubRepositoryClickHouseEffects) InspectEffect(
 	}
 }
 
+// inspectRepository resolves the *latest* ReplacingMergeTree version for the
+// key and compares the full stable persisted row against it.
+//
+// Reading every physical version would be wrong: pre-merge history for a key
+// legitimately holds this occurrence's row alongside earlier occurrences'
+// rows, so requiring all versions to match would report a conflict for a
+// perfectly healthy table and wedge recovery. `repos` is
+// ReplacingMergeTree(last_synced), so argMax over last_synced is the
+// engine-defined winner — the same argMax/FINAL discipline every raw reader
+// of this table owes.
 func (sink GitHubRepositoryClickHouseEffects) inspectRepository(
 	ctx context.Context,
 	expected repositoryRow,
 ) (EffectInspection, error) {
+	// ifNull keeps Nullable(String)/Nullable(UUID) out of the scan contract;
+	// the native sink always writes ref and source_id as NULL.
 	rows, err := sink.Conn.Query(ctx, `
-SELECT repo, ref, created_at, settings, tags, provider, last_synced
+SELECT
+  argMax(repo, last_synced)                     AS repo,
+  argMax(ifNull(ref, ''), last_synced)          AS ref,
+  argMax(created_at, last_synced)               AS created_at,
+  argMax(ifNull(settings, ''), last_synced)     AS settings,
+  argMax(ifNull(tags, ''), last_synced)         AS tags,
+  argMax(provider, last_synced)                 AS provider,
+  argMax(ifNull(toString(source_id), ''), last_synced) AS source_id,
+  max(last_synced)                              AS last_synced
 FROM repos
 WHERE org_id = ? AND id = ?`,
 		expected.OrgID, expected.ID,
@@ -137,37 +159,79 @@ WHERE org_id = ? AND id = ?`,
 		return EffectConflict, err
 	}
 	defer rows.Close()
-	found, matched := 0, 0
+	var (
+		actual     repositoryRow
+		ref        string
+		sourceID   string
+		lastSynced time.Time
+		found      bool
+	)
 	for rows.Next() {
-		var actual repositoryRow
 		if err := rows.Scan(
-			&actual.Repo, &actual.Ref, &actual.CreatedAt, &actual.Settings,
-			&actual.Tags, &actual.Provider, &actual.LastSynced,
+			&actual.Repo, &ref, &actual.CreatedAt, &actual.Settings,
+			&actual.Tags, &actual.Provider, &sourceID, &lastSynced,
 		); err != nil {
 			return EffectConflict, err
 		}
-		found++
-		if actual.Repo == expected.Repo && actual.Settings == expected.Settings &&
-			actual.Tags == expected.Tags && actual.Provider == expected.Provider &&
-			actual.CreatedAt.UTC().Equal(expected.CreatedAt.UTC()) &&
-			actual.LastSynced.UTC().Equal(expected.LastSynced.UTC()) {
-			matched++
-		}
+		found = true
 	}
 	if err := rows.Err(); err != nil {
 		return EffectConflict, err
 	}
-	switch {
-	case found == 0:
-		return EffectAbsent, nil
-	// A duplicate insert of the identical row is still exactly this effect;
-	// ReplacingMergeTree collapses the copies. Any differing row means another
-	// writer owns the key and recovery must stop.
-	case matched == found:
-		return EffectExact, nil
-	default:
-		return EffectConflict, nil
+	return compareRepositoryVersion(expected, repositoryVersion{
+		Row: actual, Ref: ref, SourceID: sourceID,
+		LastSynced: lastSynced, Found: found,
+	}), nil
+}
+
+// repositoryVersion is the winning ReplacingMergeTree version for a key, as
+// scanned from ClickHouse.
+type repositoryVersion struct {
+	Row        repositoryRow
+	Ref        string
+	SourceID   string
+	LastSynced time.Time
+	Found      bool
+}
+
+// compareRepositoryVersion decides whether this effect is the version that
+// currently wins for the key. It is separated from the query so every branch
+// is testable without a live ClickHouse.
+func compareRepositoryVersion(
+	expected repositoryRow,
+	actual repositoryVersion,
+) EffectInspection {
+	// An aggregate over no rows still yields one all-zero row.
+	if !actual.Found || actual.LastSynced.IsZero() {
+		return EffectAbsent
 	}
+	switch {
+	case actual.LastSynced.UTC().Before(expected.LastSynced.UTC()):
+		// The winning version predates this effect: our write never landed.
+		// Pre-merge history from earlier occurrences is normal and must not
+		// read as a conflict.
+		return EffectAbsent
+	case actual.LastSynced.UTC().After(expected.LastSynced.UTC()):
+		// A newer occurrence already superseded this key. Reinserting would be
+		// pointless and we cannot prove our write landed; reconcile explicitly.
+		return EffectConflict
+	}
+	expectedRef := ""
+	if expected.Ref != nil {
+		expectedRef = *expected.Ref
+	}
+	// The full stable persisted row, including the columns the native sink
+	// leaves NULL. A differing value at the same version means another writer
+	// owns this key.
+	if actual.Row.Repo == expected.Repo && actual.Ref == expectedRef &&
+		actual.Row.Settings == expected.Settings &&
+		actual.Row.Tags == expected.Tags &&
+		actual.Row.Provider == expected.Provider &&
+		actual.SourceID == "" &&
+		actual.Row.CreatedAt.UTC().Equal(expected.CreatedAt.UTC()) {
+		return EffectExact
+	}
+	return EffectConflict
 }
 
 var _ EffectSink = GitHubRepositoryClickHouseEffects{}

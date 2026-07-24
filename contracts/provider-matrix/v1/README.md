@@ -82,6 +82,27 @@ The pair is `native_go` with `route_ready: false`. Before it may be flipped:
    `repos` effect is `EffectReadbackRequired`, so a committer without a
    readback fails closed with `ErrEffectRecoveryAmbiguous` rather than
    reinserting.
+
+## Effect timestamp stabilization (applies to every complete route)
+
+`BuildEffectBatch` digests the serialized rows, so any wall-clock value inside
+a row is part of the effect identity. `CompleteRouteExecutor` therefore loads
+the persisted effect ledger on **every** attempt for a unit occurrence — not
+only on expired-lease recovery — and reuses its `created_at` as the
+normalization instant.
+
+This matters because `ReleaseForRetry` returns a unit to `dispatching`, so the
+next claim is *not* `Recovered`. Stabilizing only on recovery left ordinary
+River retries regenerating timestamps, changing the digest, and being rejected
+by `PrepareEffects` with `ErrEffectLedgerConflict` before any readback could
+run — wedging the unit until it exhausted. Any new complete-route handler that
+stamps time into a row inherits this guarantee; handlers must take the
+`normalizedAt` passed to `Collect` rather than reading the clock themselves.
+
+Readbacks over a `ReplacingMergeTree` destination must compare against the
+**winning** version (`argMax` over the version column), never every physical
+version: unmerged history from earlier occurrences is normal and would
+otherwise read as a conflict.
 3. Raw `repos` readers must be audited. `repos` is
    `ReplacingMergeTree(last_synced)` ordered by `(org_id, id)`; readers that
    join it without `FINAL` or `argMax` can double-count between an insert and

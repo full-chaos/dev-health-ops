@@ -253,7 +253,10 @@ func (ledger *memoryEffectLedger) LoadEffects(
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	if ledger.state.SchemaVersion == "" {
-		return EffectLedgerState{}, ErrEffectLedgerConflict
+		// Match PostgresRepository.LoadEffects: an absent ledger is "not
+		// found", not a conflict. Returning a conflict here hid the fact that
+		// the executor now stabilizes timestamps on every attempt.
+		return EffectLedgerState{}, ErrEffectLedgerNotFound
 	}
 	return ledger.state, nil
 }

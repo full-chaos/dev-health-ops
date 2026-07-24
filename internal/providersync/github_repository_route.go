@@ -230,7 +230,9 @@ func providerRelativePath(
 //     [A-Za-z0-9._-], so a non-ASCII identifier means something upstream is
 //     already wrong; refusing it beats writing a forked repo_id.
 func repositoryIdentity(repo string) (string, error) {
-	if _, overridden := os.LookupEnv("REPO_UUID"); overridden {
+	// Python truthiness-checks the variable (`if env_uuid:`), so an empty
+	// REPO_UUID is not an override there and must not be one here.
+	if os.Getenv("REPO_UUID") != "" {
 		return "", ErrRepositoryIdentityAmbiguous
 	}
 	trimmed := strings.TrimSpace(repo)

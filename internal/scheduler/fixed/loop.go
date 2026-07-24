@@ -154,12 +154,19 @@ func newLoop(stepper Stepper, config LoopConfig, clock loopClock) (*Loop, error)
 	for _, schedule := range stepper.Schedules() {
 		loop.schedules[schedule.ID] = &scheduleState{}
 	}
-	if err := config.Registry.RegisterRequired("fixed_scheduler_loop", loop.readiness); err != nil {
-		return nil, fmt.Errorf("register fixed scheduler readiness: %w", err)
-	}
-	if err := config.Registry.RegisterRequired("fixed_schedule_coverage", loop.coverage); err != nil {
-		return nil, fmt.Errorf("register fixed schedule coverage readiness: %w", err)
-	}
+	// Readiness names are deliberately NOT registered here.
+	//
+	// The health registry rejects duplicate names and offers no unregister, so
+	// any constructor that registers a name and then fails leaves the caller
+	// unable to register a fallback under that name. That turned a fixed-loop
+	// construction failure into a failure of the whole scheduler process,
+	// stranding pending occurrences — the precise coupling the optional fixed
+	// loop exists to prevent. Ownership of the two readiness names therefore
+	// sits with the composition root, which registers them exactly once and
+	// unconditionally, before anything fallible runs.
+	//
+	// Metrics registration stays here because it is the last fallible step and
+	// owns a name nothing else claims, so failing it leaves no partial state.
 	if err := config.Registry.RegisterMetrics("fixed_scheduler", loop); err != nil {
 		return nil, fmt.Errorf("register fixed scheduler metrics: %w", err)
 	}
@@ -337,17 +344,20 @@ func (loop *Loop) setFailed() {
 	loop.mu.Unlock()
 }
 
-func (loop *Loop) readiness(context.Context) error {
+// Readiness reports whether the loop has completed a current successful window.
+// The composition root binds it to the fixed_scheduler_loop check.
+func (loop *Loop) Readiness(context.Context) error {
 	if loop != nil && loop.ready.Load() {
 		return nil
 	}
 	return errLoopNotReady
 }
 
-// coverage keeps readiness closed while the checked schedule inventory does
+// Coverage keeps readiness closed while the checked schedule inventory does
 // not fully account for the legacy Beat inventory. Unknown schedule ownership
-// is a deployment error, not a runtime degradation.
-func (loop *Loop) coverage(context.Context) error {
+// is a deployment error, not a runtime degradation. The composition root binds
+// it to the fixed_schedule_coverage check.
+func (loop *Loop) Coverage(context.Context) error {
 	if loop == nil {
 		return ErrEngineUnavailable
 	}

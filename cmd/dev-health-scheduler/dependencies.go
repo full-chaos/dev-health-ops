@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
-	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -91,6 +91,68 @@ func (database *postgresSchedulerDatabase) Close() {
 	}
 }
 
+// fixedScheduleRuntime is the fixed maintenance scheduler as this process uses
+// it: a lifecycle component that also supplies its own readiness checks. The
+// checks are supplied rather than self-registered so exactly one place owns the
+// readiness names.
+type fixedScheduleRuntime interface {
+	lifecycle.Component
+	Readiness(context.Context) error
+	Coverage(context.Context) error
+}
+
+var errFixedScheduleUnavailable = errors.New("fixed maintenance scheduler is unavailable")
+
+// fixedScheduleGate owns the two fixed-scheduler readiness names for the whole
+// process lifetime.
+//
+// It is registered unconditionally, before anything fallible runs, and has the
+// runtime attached only once construction and startup both succeed. That
+// ordering is the whole point: the health registry rejects duplicate names and
+// offers no unregister, so any scheme that registers on success and registers a
+// fallback on failure can collide and fail the entire composition — taking the
+// sync loop and its occurrence reconciler down with it, which is the stranding
+// the optional fixed loop exists to prevent. With one unconditional
+// registration site that collision cannot be expressed at all.
+type fixedScheduleGate struct {
+	mu      sync.RWMutex
+	runtime fixedScheduleRuntime
+}
+
+func (gate *fixedScheduleGate) attach(runtime fixedScheduleRuntime) {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	gate.runtime = runtime
+}
+
+func (gate *fixedScheduleGate) detach() {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	gate.runtime = nil
+}
+
+func (gate *fixedScheduleGate) attached() fixedScheduleRuntime {
+	gate.mu.RLock()
+	defer gate.mu.RUnlock()
+	return gate.runtime
+}
+
+func (gate *fixedScheduleGate) readiness(ctx context.Context) error {
+	runtime := gate.attached()
+	if runtime == nil {
+		return errFixedScheduleUnavailable
+	}
+	return runtime.Readiness(ctx)
+}
+
+func (gate *fixedScheduleGate) coverage(ctx context.Context) error {
+	runtime := gate.attached()
+	if runtime == nil {
+		return errFixedScheduleUnavailable
+	}
+	return runtime.Coverage(ctx)
+}
+
 type schedulerRuntimeSources struct {
 	openDatabase   func(context.Context, config.Config) (schedulerDatabase, error)
 	newRepository  func(*pgxpool.Pool) (schedulersync.HandoffStepper, error)
@@ -103,7 +165,7 @@ type schedulerRuntimeSources struct {
 	// newFixedLoop builds the fixed maintenance schedule runtime that replaces
 	// Celery Beat's non-product entries. It shares this process because two
 	// processes must never both believe they own periodic work.
-	newFixedLoop func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error)
+	newFixedLoop func(*pgxpool.Pool, *health.Registry) (fixedScheduleRuntime, error)
 	// newOccurrences builds the consumer for the occurrences the sync loop
 	// hands off. It is constructed in the same process for the same reason:
 	// the marker advances on handoff, so an unconsumed occurrence is stranded
@@ -204,26 +266,36 @@ func buildSchedulerLoopWithSources(
 	// whether Beat's maintenance replacement could be constructed would turn a
 	// maintenance outage into permanently unprocessed product work.
 	//
-	// A missing fixed loop closes only its own readiness names.
+	// Its readiness names are claimed here, before construction is attempted, so
+	// a construction failure needs no compensating registration and therefore
+	// cannot collide with one the failed constructor already made.
+	gate := &fixedScheduleGate{}
+	if err := registry.RegisterRequired("fixed_scheduler_loop", gate.readiness); err != nil {
+		return nil, err
+	}
+	if err := registry.RegisterRequired("fixed_schedule_coverage", gate.coverage); err != nil {
+		return nil, err
+	}
 	fixedLoop, err := sources.newFixedLoop(database.DomainPool(), registry)
 	if err != nil || fixedLoop == nil {
-		if err := processreadiness.RegisterUnavailable(
-			registry,
-			"fixed_scheduler_loop",
-			"fixed_schedule_coverage",
-		); err != nil {
-			return nil, err
-		}
+		// The gate stays unattached, so both names report unavailable while the
+		// product loop below runs normally.
 		fixedLoop = nil
 	}
 	closeOnError = false
-	return schedulerRuntime{database: database, loop: loop, fixedLoop: fixedLoop}, nil
+	return schedulerRuntime{
+		database:  database,
+		loop:      loop,
+		fixedLoop: fixedLoop,
+		fixedGate: gate,
+	}, nil
 }
 
 type schedulerRuntime struct {
 	database  schedulerDatabase
 	loop      *schedulersync.Loop
-	fixedLoop lifecycle.Component
+	fixedLoop fixedScheduleRuntime
+	fixedGate *fixedScheduleGate
 }
 
 func (schedulerRuntime) Name() string { return "sync-scheduler-runtime" }
@@ -243,15 +315,16 @@ func (component schedulerRuntime) Start(ctx context.Context) error {
 	if err := component.loop.Start(ctx); err != nil {
 		return err
 	}
-	if component.fixedLoop == nil {
+	if component.fixedLoop == nil || component.fixedGate == nil {
 		return nil
 	}
 	if err := component.fixedLoop.Start(ctx); err != nil {
-		// Readiness for the fixed profile is already closed by the loop's own
-		// failure path, so the process reports the degradation without
-		// abandoning product scheduling.
-		component.fixedLoop = nil
+		// Leaving the gate unattached reports the degradation through the fixed
+		// profile's own readiness names without abandoning product scheduling.
+		component.fixedGate.detach()
+		return nil
 	}
+	component.fixedGate.attach(component.fixedLoop)
 	return nil
 }
 
@@ -265,6 +338,9 @@ func (component schedulerRuntime) Shutdown(ctx context.Context) error {
 		return errSchedulerActivationUnavailable
 	}
 	var fixedErr error
+	if component.fixedGate != nil {
+		component.fixedGate.detach()
+	}
 	if component.fixedLoop != nil {
 		fixedErr = component.fixedLoop.Shutdown(ctx)
 	}

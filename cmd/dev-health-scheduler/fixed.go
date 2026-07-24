@@ -5,7 +5,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
-	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	schedulerfixed "github.com/full-chaos/dev-health-ops/internal/scheduler/fixed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -81,7 +80,7 @@ func buildFixedScheduleProducers(
 func buildFixedScheduleLoop(
 	pool *pgxpool.Pool,
 	registry *health.Registry,
-) (lifecycle.Component, error) {
+) (fixedScheduleRuntime, error) {
 	if pool == nil || registry == nil {
 		return nil, errSchedulerActivationUnavailable
 	}

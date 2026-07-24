@@ -129,14 +129,19 @@ def _provider_cases(provider: str, source: pathlib.Path) -> list[dict[str, objec
 def _provider_subprocess(
     provider: str, source: pathlib.Path
 ) -> list[dict[str, object]]:
-    output = subprocess.check_output(
+    command = [sys.executable]
+    if sys.flags.no_site:
+        command.append("-S")
+    command.extend(
         [
-            sys.executable,
             str(pathlib.Path(__file__).resolve()),
             "--provider",
             provider,
             str(source.resolve(strict=True)),
-        ],
+        ]
+    )
+    output = subprocess.check_output(
+        command,
         text=True,
     )
     return cast(list[dict[str, object]], json.loads(output))

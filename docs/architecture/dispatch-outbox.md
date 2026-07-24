@@ -235,7 +235,10 @@ Before starting the long compatibility operation, the API closes its
 PostgreSQL read transaction so Go lease renewal is never blocked by a held row
 lock. The dedicated work-graph HTTP client uses the River execution context as
 its deadline instead of the shared short operational-bridge timeout; context
-cancellation still aborts the request.
+cancellation still aborts the request. The canonical `investment.dispatch`
+descriptor therefore has the same 7,200-second execution budget as synchronous
+investment materialization and chunks; its contract version remains `1` and
+its checked-in route remains `celery`.
 
 Child routes are evaluated independently. While a reviewed child remains
 `go_implemented` and Celery-routed, its generic outbox row is persisted as

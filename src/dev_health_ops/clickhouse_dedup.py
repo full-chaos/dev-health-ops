@@ -35,12 +35,17 @@ RERUN_DEDUPED_DAILY_TABLES = frozenset(
 
 # Legacy append-only daily tables written once per compute generation.  Values
 # are logically unique at these keys, but a post-sync re-drive appends a newer
-# generation.  The table order from migration 027 is used deliberately so an
-# identity alias or a second repository is never collapsed with another row.
+# generation.  Each table's physical daily key is paired with ``org_id`` so an
+# identity alias, tenant, or second repository is never collapsed into another
+# logical row.
 _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     "repo_metrics_daily": ("org_id", "repo_id", "day"),
     "user_metrics_daily": ("org_id", "repo_id", "author_email", "day"),
     "team_metrics_daily": ("org_id", "team_id", "day"),
+    "testops_pipeline_metrics_daily": ("org_id", "repo_id", "day"),
+    "testops_test_metrics_daily": ("org_id", "repo_id", "day"),
+    "testops_coverage_metrics_daily": ("org_id", "repo_id", "day"),
+    "testops_quality_drag": ("org_id", "repo_id", "day"),
 }
 
 

@@ -38,6 +38,11 @@ _NOW = datetime(2025, 6, 15, 12, 0, 0)
 _ORG = "test-org"
 
 
+def _assert_append_only_generation_dedup(query: str) -> None:
+    normalized = " ".join(query.split())
+    assert "ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day" in normalized
+
+
 class TestDeliveryScorer:
     def test_all_signals_present(self) -> None:
         client = FakeClickHouseClient(
@@ -72,6 +77,16 @@ class TestDeliveryScorer:
             1.0 - 24.0 / 168.0
         )
         assert signal_map["throughput"].normalized_value == pytest.approx(10.0 / 50.0)
+        _assert_append_only_generation_dedup(
+            next(
+                query
+                for query in client.queries
+                if "testops_pipeline_metrics_daily" in query
+            )
+        )
+        _assert_append_only_generation_dedup(
+            next(query for query in client.queries if "repo_metrics_daily" in query)
+        )
 
     def test_missing_pipeline_data(self) -> None:
         client = FakeClickHouseClient(
@@ -124,6 +139,20 @@ class TestDurabilityScorer:
         )
         assert signal_map["coverage_line_pct"].normalized_value == pytest.approx(0.825)
         assert signal_map["coverage_branch_pct"].normalized_value == pytest.approx(0.70)
+        _assert_append_only_generation_dedup(
+            next(
+                query
+                for query in client.queries
+                if "testops_test_metrics_daily" in query
+            )
+        )
+        _assert_append_only_generation_dedup(
+            next(
+                query
+                for query in client.queries
+                if "testops_coverage_metrics_daily" in query
+            )
+        )
 
     def test_no_coverage_data(self) -> None:
         client = FakeClickHouseClient(
@@ -175,9 +204,15 @@ class TestWellbeingScorer:
         team_query = next(
             query for query in client.queries if "team_metrics_daily" in query
         )
+        pipeline_query = next(
+            query
+            for query in client.queries
+            if "testops_pipeline_metrics_daily" in query
+        )
         assert "argMax(after_hours_commit_ratio, computed_at)" in team_query
         assert "argMax(weekend_commit_ratio, computed_at)" in team_query
         assert "GROUP BY day, team_id" in team_query
+        _assert_append_only_generation_dedup(pipeline_query)
 
     def test_no_data(self) -> None:
         client = FakeClickHouseClient()
@@ -219,6 +254,19 @@ class TestDynamicsScorer:
         assert signal_map["failure_ownership"].normalized_value == pytest.approx(0.6)
         assert signal_map["wip_congestion_inverse"].normalized_value == pytest.approx(
             0.7
+        )
+        _assert_append_only_generation_dedup(
+            next(query for query in client.queries if "testops_quality_drag" in query)
+        )
+        _assert_append_only_generation_dedup(
+            next(
+                query
+                for query in client.queries
+                if "testops_pipeline_metrics_daily" in query
+            )
+        )
+        assert "FROM work_item_metrics_daily FINAL" in next(
+            query for query in client.queries if "work_item_metrics_daily" in query
         )
 
     def test_partial_data(self) -> None:

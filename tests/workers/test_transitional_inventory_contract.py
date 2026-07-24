@@ -58,8 +58,10 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # HIGH-1): the missed chord(...)() dispatch, plus a fail-closed row for
     # each celery-canvas (chain/chord/group) import in the tree, + 1 added
     # in round-3 hardening (an ordinary two-hop API trigger the call-graph
-    # fallback missed: billing/router.py's Stripe webhook).
-    assert inventory["row_count"] == 153
+    # fallback missed: billing/router.py's Stripe webhook), + 1 added in
+    # round-4 hardening (a separately deployed second FastAPI app,
+    # billing_edge.py, forwarding to that same handler cross-file).
+    assert inventory["row_count"] == 154
 
 
 def test_discovered_keys_and_row_keys_are_identical_sets():
@@ -131,12 +133,13 @@ def test_every_acceptance_test_id_points_at_a_real_test_function():
 def test_billing_rows_point_at_the_billing_bridge_test():
     """Regression guard for a Codex MED-3 finding: the billing dispatch rows
     previously pointed at unrelated tests (e.g. tests/test_sync_units.py for
-    the API call site row). All three billing-related rows (the Celery task,
-    its API call site, and its registry kind) must point at the real
-    operational-bridge billing test."""
+    the API call site row). The billing-related rows whose surface text
+    names "billing" (the Celery task, its API call site, its registry kind,
+    and the round-4 billing_edge.py cross-file forwarding row) must all
+    point at the real operational-bridge billing test."""
     inventory = checker.load_inventory(_INVENTORY_PATH)
     billing_rows = [r for r in inventory["rows"] if "billing" in r["surface"].lower()]
-    assert len(billing_rows) == 3, billing_rows
+    assert len(billing_rows) == 4, billing_rows
     for row in billing_rows:
         assert row["acceptance_test_id"] == (
             "tests/api/test_worker_operational_bridge.py"
@@ -180,6 +183,7 @@ def _make_row(
     target_owner: dict | None = None,
     target_kind_id: str | None = None,
     current_implementation_state: str = "celery_only",
+    route_mount_prefix: str = "",
 ) -> dict:
     """A minimal-but-complete inventory row for end-to-end fixture tests --
     every required field filled with an inert placeholder except the ones
@@ -200,6 +204,7 @@ def _make_row(
         "deletion_evidence_requirement": "n/a (fixture)",
         "acceptance_test_id": "tests/workers/test_transitional_inventory_contract.py",
         "notes": "",
+        "route_mount_prefix": route_mount_prefix,
     }
 
 
@@ -1346,12 +1351,14 @@ def test_gate_catches_a_rest_path_swap(tmp_path):
     assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
 
 
-def test_gate_tolerates_a_router_prefix_composed_path(tmp_path):
-    """A route decorator whose local path argument is only the *suffix* of
-    the row's recorded full effective path (the router's own `prefix=`
-    mount, declared elsewhere, supplies the rest -- exactly the real
-    pagerduty.py shape: `@router.post("/{binding_id}")` under a router
-    mounted at `/webhooks/pagerduty`) must NOT be flagged as content drift."""
+def test_gate_honors_an_explicit_route_mount_prefix(tmp_path):
+    """A route decorator whose local path argument is only the tail of the
+    row's recorded full effective path -- exactly the real pagerduty.py
+    shape: `@router.post("/{binding_id}")` under a router conceptually
+    mounted ahead of it -- must NOT be flagged as content drift PROVIDED the
+    row records the matching `route_mount_prefix` explicitly (Codex round-4
+    HIGH-2: this is no longer an arbitrary suffix-tolerance rule -- the
+    prefix must be recorded on the row, not inferred)."""
     root = tmp_path / "repo"
     _write(
         root / "src/dev_health_ops/api/routers/example.py",
@@ -1373,9 +1380,172 @@ def test_gate_tolerates_a_router_prefix_composed_path(tmp_path):
         "api_trigger_endpoint",
         "src/dev_health_ops/api/routers/example.py",
         4,
+        route_mount_prefix="/webhooks/pagerduty",
     )
     inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
     _inventory_root_with_rows(root, [row, endpoint_row])
+
+    errors = checker.check(root, inventory_path)
+    assert errors == [], errors
+
+
+def test_gate_catches_an_unrelated_same_tail_path(tmp_path):
+    """The exact Codex round-4 HIGH-2 repro: a row for `POST /sync` must NOT
+    accept `@router.post("/other/sync")` just because the tail matches --
+    the old symmetric-suffix comparison false-passed this."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        '@router.post("/other/sync")\nasync def trigger_example():\n    pass\n',
+    )
+    row = _make_row(
+        "POST /sync",
+        "api_trigger_endpoint",
+        "src/dev_health_ops/api/routers/example.py",
+        1,
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, [row])
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_gate_catches_an_http_method_swap(tmp_path):
+    """Changing `@router.post(...)` to `@router.get(...)` while keeping the
+    same path must fail content-drift -- Codex round-4 HIGH-2: the old
+    check never compared the HTTP method at all."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        '@router.get("/example")\nasync def trigger_example():\n    pass\n',
+    )
+    row = _make_row(
+        "POST /example",
+        "api_trigger_endpoint",
+        "src/dev_health_ops/api/routers/example.py",
+        1,
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, [row])
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_gate_catches_a_versioned_task_name_substring_swap(tmp_path):
+    """The exact Codex round-4 MED-2 repro: `send_billing_notification_v2`
+    must NOT satisfy the `send_billing_notification` row just because the
+    old name is a substring of the new one."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "send_billing_notification_v2.delay()\n",
+    )
+    row = _make_row(
+        "send_billing_notification.delay",
+        "call_site_literal",
+        "src/dev_health_ops/somewhere.py",
+        1,
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, [row])
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_discovery_finds_a_cross_file_forwarding_endpoint(tmp_path):
+    """A route in a module with its OWN FastAPI() app instance whose
+    handler forwards to an imported symbol that's already a known
+    dispatch-relevant endpoint elsewhere is discoverable, without needing a
+    local dispatch call site in the same file (Codex round-4 HIGH-1 --
+    exactly billing_edge.py's shape: a separately deployed edge app calling
+    the imported billing/router.py stripe_webhook handler)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/billing/router.py",
+        "\n\n\n"
+        '@router.post("/webhooks/stripe")\n'
+        "async def stripe_webhook(request):\n"
+        "    some_task.apply_async()\n",
+    )
+    _write(
+        root / "src/dev_health_ops/api/billing_edge.py",
+        "from fastapi import FastAPI\n"
+        "\n"
+        "from dev_health_ops.api.billing.router import stripe_webhook\n"
+        "\n"
+        "app = FastAPI(\n"
+        '    title="Billing Edge",\n'
+        ")\n"
+        "\n"
+        "\n"
+        '@app.post("/api/v1/billing/webhooks/stripe")\n'
+        "async def stripe_webhook_public(request):\n"
+        "    return await stripe_webhook(request)\n",
+    )
+    literal, getattr_indirection = checker.discover_call_sites(root)
+    primary = checker.discover_api_trigger_endpoints(
+        root, literal + getattr_indirection
+    )
+    cross_file = checker.discover_cross_file_forwarding_endpoints(root, primary)
+    assert [(s.file, s.line) for s in cross_file] == [
+        ("src/dev_health_ops/api/billing_edge.py", 10)
+    ]
+
+
+def test_end_to_end_cross_file_forwarding_endpoint_can_be_inventoried(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/billing/router.py",
+        "\n\n\n"
+        '@router.post("/webhooks/stripe")\n'
+        "async def stripe_webhook(request):\n"
+        "    some_task.apply_async()\n",
+    )
+    _write(
+        root / "src/dev_health_ops/api/billing_edge.py",
+        "from fastapi import FastAPI\n"
+        "\n"
+        "from dev_health_ops.api.billing.router import stripe_webhook\n"
+        "\n"
+        "app = FastAPI(\n"
+        '    title="Billing Edge",\n'
+        ")\n"
+        "\n"
+        "\n"
+        '@app.post("/api/v1/billing/webhooks/stripe")\n'
+        "async def stripe_webhook_public(request):\n"
+        "    return await stripe_webhook(request)\n",
+    )
+    literal, getattr_indirection = checker.discover_call_sites(root)
+    primary = checker.discover_api_trigger_endpoints(
+        root, literal + getattr_indirection
+    )
+    cross_file = checker.discover_cross_file_forwarding_endpoints(root, primary)
+
+    rows = (
+        [
+            _make_row("some_task.apply_async", "call_site_literal", s.file, s.line)
+            for s in literal
+        ]
+        + [
+            _make_row("POST /webhooks/stripe", "api_trigger_endpoint", s.file, s.line)
+            for s in primary
+        ]
+        + [
+            _make_row(
+                "POST /api/v1/billing/webhooks/stripe",
+                "api_trigger_endpoint",
+                s.file,
+                s.line,
+            )
+            for s in cross_file
+        ]
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, rows)
 
     errors = checker.check(root, inventory_path)
     assert errors == [], errors

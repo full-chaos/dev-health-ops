@@ -527,14 +527,38 @@ def _decorators_by_def_line(text: list[str]) -> dict[int, list[int]]:
     return result
 
 
+_APP_OR_ROUTER_CONSTRUCTOR_RE = re.compile(r"^(\w+)\s*=\s*(FastAPI|APIRouter)\(")
+
+
+def _app_instance_names(lines: list[str]) -> tuple[set[str], set[str]]:
+    """Local names bound to a `FastAPI()` or `APIRouter()` constructor call
+    (returns (fastapi_names, router_names) separately -- a standalone
+    FastAPI() app, not just an APIRouter included into one, is what marks a
+    module as its own deployable entrypoint, e.g. billing_edge.py). Only
+    the constructor's opening line needs matching even when its argument
+    list spans multiple lines (`app = FastAPI(\\n    title=...,\\n)`) -- the
+    arguments themselves are irrelevant here."""
+    fastapi_names: set[str] = set()
+    router_names: set[str] = set()
+    for line in _docstring_safe_lines(lines):
+        m = _APP_OR_ROUTER_CONSTRUCTOR_RE.match(line.strip())
+        if not m:
+            continue
+        (fastapi_names if m.group(2) == "FastAPI" else router_names).add(m.group(1))
+    return fastapi_names, router_names
+
+
 def _router_aliases(lines: list[str]) -> set[str]:
-    """Local names that refer to the module's APIRouter instance. Seeded
-    with the repo-wide convention `router`, extended through simple bare
+    """Local names that refer to a module's FastAPI app or APIRouter
+    instance. Seeded with the repo-wide convention `router`, plus any name
+    actually bound to a `FastAPI()`/`APIRouter()` constructor call (e.g.
+    `app` in billing_edge.py/main.py), extended through simple bare
     aliasing (`r = router`) to a fixed point. Known limitation: an alias
     introduced any other way (a function return value, a container/dict
     lookup, an attribute on another object) is not tracked -- see
     docs/architecture/transitional-workload-inventory.md."""
-    aliases = {"router"}
+    fastapi_names, router_names = _app_instance_names(lines)
+    aliases = {"router"} | fastapi_names | router_names
     safe_lines = _docstring_safe_lines(lines)
     for _ in range(4):
         changed = False
@@ -553,12 +577,119 @@ def _router_aliases(lines: list[str]) -> set[str]:
 
 def _router_decorator_re_for(aliases: set[str]) -> re.Pattern:
     alt = "|".join(re.escape(a) for a in sorted(aliases))
-    return re.compile(rf"^\s*@(?:{alt})\.(get|post|put|patch|delete)\(")
+    return re.compile(rf"^\s*@(?:{alt})\.(get|post|put|patch|delete|api_route)\(")
 
 
 def _add_route_re_for(aliases: set[str]) -> re.Pattern:
     alt = "|".join(re.escape(a) for a in sorted(aliases))
     return re.compile(rf"^\s*(?:{alt})\.(?:add_api_route|add_route)\(")
+
+
+def _imported_names(lines: list[str]) -> set[str]:
+    """Local names bound by `from X import Y[, Z as W, ...]` in this module
+    (parenthesized multi-line imports joined). Used to recognize a route
+    handler that is a thin forwarding proxy to a function defined in
+    another file -- discover_call_sites alone can't see the actual
+    dispatch, since it lives in the OTHER module."""
+    names: set[str] = set()
+    safe_lines = _docstring_safe_lines(lines)
+    for _, text in _join_logical_import_lines(safe_lines):
+        m = re.match(r"^from\s+[\w.]+\s+import\s+(.+)$", text)
+        if not m:
+            continue
+        body = m.group(1).strip()
+        if body.startswith("("):
+            body = body[1:]
+        body = body.rstrip(")").rstrip(",")
+        for part in body.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            original, _, alias = part.partition(" as ")
+            names.add(alias.strip() or original.strip())
+    return names
+
+
+def _endpoint_function_names(root: Path, endpoints: list[Surface]) -> set[str]:
+    """The function name behind each already-discovered decorator-anchored
+    api_trigger_endpoint surface (skips GraphQL-call-site-anchored ones,
+    which have no enclosing decorated function name in the same sense).
+    Used to recognize a cross-file forwarding proxy: a route in a
+    separately deployed app module whose body calls one of these names,
+    imported from the module that owns it."""
+    names: set[str] = set()
+    by_file: dict[str, list[int]] = {}
+    for s in endpoints:
+        by_file.setdefault(s.file, []).append(s.line)
+    for relfile, anchors in by_file.items():
+        text = (root / relfile).read_text().splitlines()
+        decorators_by_def = _decorators_by_def_line(text)
+        anchor_set = set(anchors)
+        for def_line, decorator_lines in decorators_by_def.items():
+            if anchor_set.isdisjoint(decorator_lines):
+                continue
+            m = DEF_NAME_RE.match(text[def_line - 1])
+            if m:
+                names.add(m.group(1))
+    return names
+
+
+def discover_cross_file_forwarding_endpoints(
+    root: Path, primary_endpoints: list[Surface]
+) -> list[Surface]:
+    """A route registered in a module that instantiates its OWN FastAPI()
+    app (e.g. billing_edge.py, a separately deployed edge service per
+    deploy/helm/dev-health/templates/billing-edge-deployment.yaml) whose
+    handler body calls a same-file-imported symbol that is ITSELF a
+    function already known to be a dispatch-relevant endpoint elsewhere
+    (see _endpoint_function_names) is a thin forwarding proxy (Codex
+    round-4 HIGH-1: billing_edge.py's `/api/v1/billing/webhooks/stripe`
+    route just calls the imported `stripe_webhook` from billing/router.py).
+
+    Scoped deliberately narrowly -- only files with their own FastAPI()
+    instance, and only when the called imported name is already a proven
+    dispatch-relevant endpoint -- rather than flagging every route in every
+    module that happens to call some imported helper (which would flood
+    discovery with ordinary business-logic calls unrelated to worker
+    dispatch). General cross-file call graphs remain a documented known
+    limitation; this is a targeted extension for the one ordinary
+    production shape found in this repo (a second deployed app entrypoint
+    wrapping a handler defined elsewhere)."""
+    dispatch_names = _endpoint_function_names(root, primary_endpoints)
+    if not dispatch_names:
+        return []
+    out: list[Surface] = []
+    for path in _iter_py_files(root / "src/dev_health_ops/api"):
+        relfile = _relpath(root, path)
+        text = path.read_text().splitlines()
+        fastapi_names, _ = _app_instance_names(text)
+        if not fastapi_names:
+            continue
+        relevant_imports = _imported_names(text) & dispatch_names
+        if not relevant_imports:
+            continue
+        aliases = _router_aliases(text)
+        router_re = _router_decorator_re_for(aliases)
+        decorators_by_def = _decorators_by_def_line(text)
+        def_lines = sorted(
+            d for d in decorators_by_def if not text[d - 1][:1].isspace()
+        )
+        for def_line in def_lines:
+            decorator_anchor = None
+            for d in decorators_by_def.get(def_line, []):
+                if router_re.match(text[d - 1]):
+                    decorator_anchor = d
+                    break
+            if decorator_anchor is None:
+                continue
+            later = [d for d in def_lines if d > def_line]
+            body_end = (later[0] - 1) if later else len(text)
+            body = "\n".join(text[def_line:body_end])
+            if any(
+                re.search(rf"\b{re.escape(name)}\(", body) for name in relevant_imports
+            ):
+                out.append(Surface(CLASS_API_TRIGGER, relfile, decorator_anchor))
+    return out
 
 
 def discover_api_trigger_endpoints(
@@ -763,7 +894,15 @@ def discover_all(root: Path) -> list[Surface]:
     literal, getattr_indirection = discover_call_sites(root)
     surfaces += literal
     surfaces += getattr_indirection
-    surfaces += discover_api_trigger_endpoints(root, literal + getattr_indirection)
+    primary_endpoints = discover_api_trigger_endpoints(
+        root, literal + getattr_indirection
+    )
+    surfaces += primary_endpoints
+    cross_file_endpoints = discover_cross_file_forwarding_endpoints(
+        root, primary_endpoints
+    )
+    seen_endpoint_keys = {s.key() for s in primary_endpoints}
+    surfaces += [s for s in cross_file_endpoints if s.key() not in seen_endpoint_keys]
     surfaces += discover_stream_surfaces(root)
     surfaces += discover_json_kinds(
         root, "contracts/jobs/v1/registry.json", CLASS_REGISTRY_KIND
@@ -887,7 +1026,13 @@ def _dispatch_token_present(lines: list[str], line_no: int, row: dict) -> bool:
     token = _expected_dispatch_token(row)
     if token is None:
         return True
-    return token in _statement_window(lines, line_no)
+    # Word-boundary, not substring: `send_billing_notification_v2.delay()`
+    # must NOT satisfy the `send_billing_notification.delay` row (Codex
+    # round-4 MED-2 -- an ordinary versioned-replacement rename must not
+    # retain stale ownership just because the old name is a substring of
+    # the new one).
+    pattern = re.compile(r"\b" + re.escape(token) + r"\b")
+    return bool(pattern.search(_statement_window(lines, line_no)))
 
 
 def _call_site_literal_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
@@ -910,23 +1055,40 @@ def _call_site_getattr_content_ok(lines: list[str], line_no: int, row: dict) -> 
     return _dispatch_token_present(lines, line_no, row)
 
 
-_REST_SURFACE_RE = re.compile(r"^(?:GET|POST|PUT|PATCH|DELETE)\s+(\S+)$")
+_REST_SURFACE_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE)\s+(\S+)$")
 
 
-def _expected_rest_path(row: dict) -> str | None:
-    """The specific route path a REST api_trigger_endpoint row records, so
-    content-drift can confirm the SAME path still appears near the anchor,
-    not just that some decorator/registration is still there (Codex
-    round-3 MED: editing the path string used to pass). Returns None for
-    surfaces that don't cleanly encode one path -- e.g. the compressed
-    `POST /webhooks/github|gitlab|jira` notation for three sibling routes
-    sharing one dispatch helper, which isn't a single literal to check --
-    that stays shape-only, a documented known limitation."""
+def _expected_rest_identity(row: dict) -> tuple[str, str] | None:
+    """The (method, local-path) a REST api_trigger_endpoint row records, so
+    content-drift can confirm the SAME method and path still appear at the
+    anchor -- not just that some decorator/registration is still there
+    (Codex round-3 MED, tightened round-4 HIGH-2/MED-1: a symmetric suffix
+    comparison used to false-pass an unrelated same-tail path
+    (`POST /sync` accepting `@router.post("/other/sync")`), a changed
+    mount prefix, and HTTP method swaps).
+
+    `route_mount_prefix` (default "") is the row's OWN recorded prefix,
+    stripped from its full `surface` path to get the exact local path the
+    decorator/registration argument must equal -- not an arbitrary
+    "ends-with" relationship. Every real row's `route_mount_prefix` is ""
+    (its surface path already IS the decorator's exact local literal)
+    except the two whose router mounts a prefix (pagerduty.py, and the
+    compressed webhooks row) -- see contracts/jobs/v1/transitional-inventory.json.
+
+    Returns None for surfaces that don't cleanly encode one method+path
+    (the GraphQL row has no HTTP verb at all)."""
     surface = row.get("surface", "")
-    if "|" in surface:
-        return None
     m = _REST_SURFACE_RE.match(surface)
-    return m.group(1) if m else None
+    if not m:
+        return None
+    method, full_path = m.group(1).lower(), m.group(2)
+    prefix = row.get("route_mount_prefix") or ""
+    local_path = (
+        full_path[len(prefix) :]
+        if prefix and full_path.startswith(prefix)
+        else full_path
+    )
+    return method, local_path
 
 
 _ROUTE_PATH_LITERAL_RE = re.compile(r"""["']([^"']+)["']""")
@@ -934,12 +1096,7 @@ _ROUTE_PATH_LITERAL_RE = re.compile(r"""["']([^"']+)["']""")
 
 def _actual_route_path(lines: list[str], line_no: int) -> str | None:
     """The first quoted string literal in the decorator/registration
-    statement -- the route's local path argument. APIRouter path arguments
-    are frequently only a *suffix* of the row's recorded full effective path
-    (the router's own `prefix=` mount, declared elsewhere, supplies the
-    rest -- e.g. `@router.post("/{binding_id}")` under a router mounted at
-    `/webhooks/pagerduty`), so this is compared to the row's expected path
-    via a suffix relationship, not exact equality."""
+    statement -- the route's local path argument."""
     m = _ROUTE_PATH_LITERAL_RE.search(_statement_window(lines, line_no))
     return m.group(1) if m else None
 
@@ -950,21 +1107,32 @@ def _api_trigger_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
     router_re = _router_decorator_re_for(aliases)
     add_route_re = _add_route_re_for(aliases)
     code = _strip_line_noise(line)
-    if router_re.match(line) or add_route_re.match(code):
-        # REST registration (decorator or add_api_route/add_route): also
-        # confirm the specific path still appears near the anchor, when the
-        # row's surface encodes exactly one path. Compared via a suffix
-        # relationship (see _actual_route_path) to tolerate router mount
-        # prefixes composing with a locally-declared path suffix.
-        expected_path = _expected_rest_path(row)
-        if expected_path is None:
+    decorator_match = router_re.match(line)
+    add_route_match = add_route_re.match(code)
+    if decorator_match or add_route_match:
+        # REST registration (decorator or add_api_route/add_route): confirm
+        # the SAME HTTP method and the SAME local path literal, when the
+        # row's surface encodes exactly one method+path.
+        identity = _expected_rest_identity(row)
+        if identity is None:
             return True
-        actual_path = _actual_route_path(lines, line_no)
-        if actual_path is None:
+        expected_method, expected_local_path = identity
+        if decorator_match:
+            actual_method = decorator_match.group(1).lower()
+            if actual_method == "api_route":
+                # `@app.api_route(..., methods=[...])` registers a runtime
+                # list of methods, not one literal to compare -- method
+                # identity isn't independently verified for this form,
+                # only that a route registration is still here.
+                actual_method = expected_method
+        else:
+            # add_api_route/add_route: same "methods=[...] is a runtime
+            # list" reasoning.
+            actual_method = expected_method
+        if actual_method != expected_method:
             return False
-        return expected_path.endswith(actual_path) or actual_path.endswith(
-            expected_path
-        )
+        actual_path = _actual_route_path(lines, line_no)
+        return actual_path is not None and actual_path == expected_local_path
     if CALL_SITE_LITERAL_RE.search(code) or GETATTR_INDIRECTION_RE.search(code):
         # GraphQL-resolver-anchored row: the anchor line IS the dispatch call
         # site, so the same specific-name check applies.

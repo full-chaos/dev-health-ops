@@ -22,11 +22,13 @@ alongside the final Celery cleanup once CI proves no legacy surface remains.
 
 ## What is in the contract
 
-`contracts/jobs/v1/transitional-inventory.json` has 153 rows: the 147 surfaces
+`contracts/jobs/v1/transitional-inventory.json` has 154 rows: the 147 surfaces
 discovered in the Wave-0 audit, plus 5 added during CUT-01 round-2 hardening
 (a Codex adversarial review found a live dispatch the original scanner
-missed) and 1 added during round-3 hardening (an ordinary two-hop API
-trigger the call-graph fallback missed) -- see "Round-2/3/4 hardening"
+missed), 1 added during round-3 hardening (an ordinary two-hop API
+trigger the call-graph fallback missed), and 1 added during round-4
+hardening (a separately deployed second FastAPI app forwarding to a
+handler defined in another file) -- see "Round-2/3/4/5 hardening"
 below. Classes: Celery task decorators,
 Beat schedule entries (19 unconditional + 1 conditional), literal dispatch
 calls (`.delay(`, `.apply_async(`, `send_task(`, `.signature(`, a bare
@@ -56,6 +58,7 @@ Each row has:
 | `deletion_evidence_requirement` | what must be true before this row can be deleted from the inventory |
 | `acceptance_test_id` | an existing, executable test file that exercises this row (or the CI contract test itself, for rows whose only current acceptance test is "this surface is correctly inventoried and owned") |
 | `notes` | audit findings and any orchestrator resolution recorded for this row |
+| `route_mount_prefix` | `api_trigger_endpoint` rows only (default `""`): a prefix stripped from `surface`'s recorded path before comparing it, exactly, to the decorator/registration's local path literal during content-drift re-verification (added round-5; see "Round-5 hardening" below) |
 
 ### Ownership model: `primary` vs `contributor`
 
@@ -163,11 +166,19 @@ Discovery specifically re-derives, from scratch:
   canvas primitive requires its own row even where the exact invocation shape
   downstream can't be statically enumerated;
 - API trigger endpoints: REST endpoints by finding the enclosing function's
-  `@router.<method>(...)` decorator (correctly handling both single- and
-  multi-line decorator argument lists via a bracket-depth-tracking scan, and a
-  dispatch call sitting in a shared undecorated helper via one hop of
-  same-file call-graph lookup), and GraphQL resolvers (which have no
-  per-function route decorator at all) by anchoring to the call site itself;
+  `@router.<method>(...)`/`@router.api_route(...)` decorator (correctly
+  handling both single- and multi-line decorator argument lists via a
+  bracket-depth-tracking scan, a router/app alias such as `r = router` or
+  any name bound to `FastAPI()`/`APIRouter()`, and a dispatch call sitting
+  in a shared undecorated helper via a transitive same-file call-graph
+  BFS of any depth up to a 12-hop backstop); GraphQL resolvers (which have
+  no per-function route decorator at all) by anchoring to the call site
+  itself; `router.add_api_route(...)`/`.add_route(...)` registrations
+  across every api/ module; and one targeted cross-file shape -- a module
+  with its own `FastAPI()` instance whose route handler forwards to an
+  imported name that is itself already a proven dispatch-relevant endpoint
+  elsewhere (e.g. a separately deployed edge app calling a handler defined
+  in the main API);
 - job registry kinds (`contracts/jobs/v1/registry.json`);
 - sync-dispatch transport routes (`contracts/sync-dispatch/v1/transport-routes.json`);
 - stream surfaces (`CONSUMER_GROUP` constants in `**/streams.py` modules, plus
@@ -381,19 +392,69 @@ inconsistencies** between discovery and re-verification, and one genuinely
   recorded full effective path (the router's own `prefix=` mount, declared
   elsewhere, supplies the rest).
 
+### Round-5 hardening (Codex adversarial review, round 4)
+
+A fourth Codex review returned **BLOCK** with 2 HIGH + 2 MED, scoped to
+exactly four findings per the team lead's direction (this is the final
+round; anything found beyond these four is triaged as follow-up rather than
+another automation round):
+
+- **A deployed second FastAPI app forwarding cross-file was invisible
+  (HIGH):** `billing_edge.py` is a SEPARATELY DEPLOYED app (its own
+  `app = FastAPI(...)` instance, deployed per
+  `deploy/helm/dev-health/templates/billing-edge-deployment.yaml`) whose
+  `/api/v1/billing/webhooks/stripe` route is a thin proxy calling the
+  imported `stripe_webhook` from `billing/router.py` -- a real production
+  shape, not exotic, but outside the same-file call-graph BFS's reach.
+  Fixed with `discover_cross_file_forwarding_endpoints`: a *targeted*
+  extension (not a general cross-file call-graph resolver) scoped to
+  modules with their own `FastAPI()` instance, whose route handler calls a
+  same-file-imported name that is ITSELF already a proven dispatch-relevant
+  endpoint elsewhere (`_endpoint_function_names`). Added the missing
+  `billing_edge.py` row.
+- **The round-4 suffix-based path comparison false-passed unrelated
+  same-tail paths, prefix changes, and HTTP method swaps (HIGH):** a row
+  for `POST /sync` accepted `@router.post("/other/sync")` just because both
+  end in `/sync`. Replaced the symmetric-suffix heuristic with exact
+  comparison: each row now optionally records its own `route_mount_prefix`
+  (default `""`, meaning the row's path already equals the decorator's
+  exact local literal); content-drift strips that prefix from the row's
+  recorded path and requires an EXACT match to the decorator/registration's
+  literal argument, plus an exact HTTP method match
+  (`_expected_rest_identity`). Only two real rows need a non-empty
+  `route_mount_prefix` (pagerduty.py and the webhooks row below); every
+  other REST row's surface path already equals its decorator's literal
+  exactly.
+- **The compressed multi-route webhook row skipped path identity entirely
+  (MED):** `POST /webhooks/github|gitlab|jira` had no single literal to
+  check, so changing the real `/github` decorator to `/sync` still passed.
+  Fixed by re-anchoring that row to the one real route at its exact anchor
+  line (`/github`, with `route_mount_prefix: "/webhooks"`) and documenting
+  in its notes that the sibling `gitlab`/`jira` routes share the same
+  dispatch mechanism rather than needing separate rows.
+- **Dispatch-identity token matching was substring-based (MED):**
+  `send_billing_notification_v2.delay()` satisfied the
+  `send_billing_notification.delay` row just because the old name is a
+  substring of the new one. Fixed with a word-boundary regex
+  (`\bTOKEN\b`) instead of a plain `in` check.
+
 ## Known limitations
 
 `ci/check_transitional_inventory.py` is a regex/line-based static scanner, not
-a Python interpreter or a full AST-with-type-inference tool. Three full
-rounds of adversarial review (see "Round-2/3/4 hardening" above) closed
+a Python interpreter or a full AST-with-type-inference tool. Four full
+rounds of adversarial review (see "Round-2/3/4/5 hardening" above) closed
 every concrete evasion found against *this* codebase's actual patterns,
-including same-file multi-hop API registration, which round-4 established
-is an ordinary pattern here and is now fully handled. The following forms
-remain theoretically possible and are **deliberately not chased further** --
-the goal is that an ordinary code change can't slip through unnoticed, not
-that the gate is evasion-complete against a hypothetically adversarial
-contributor. Reviewers: treat any of these shapes appearing in a PR as a
-reason to ask for an explicit inventory row by hand.
+including same-file multi-hop API registration and one specific cross-file
+shape (a second deployed FastAPI app forwarding to an imported handler),
+both established as ordinary (not exotic) patterns here and now fully
+handled. Per the team lead's direction, round-5 is the last automation
+round: findings beyond these are triaged as follow-up in review rather than
+chased with more scanner machinery. The following forms remain theoretically
+possible and are **deliberately not chased further** -- the goal is that an
+ordinary code change can't slip through unnoticed, not that the gate is
+evasion-complete against a hypothetically adversarial contributor.
+Reviewers: treat any of these shapes appearing in a PR as a reason to ask
+for an explicit inventory row by hand.
 
 - **Non-literal dynamic imports.** `importlib.import_module(some_variable)`
   (the module name comes from a variable, config value, or computed
@@ -406,25 +467,26 @@ reason to ask for an explicit inventory row by hand.
   alias propagation (capped at 4 fixed-point iterations, which comfortably
   covers realistic short alias chains but not an arbitrarily long or
   indirect one).
-- **API registration across file boundaries.** The call-graph BFS in
-  `discover_api_trigger_endpoints` is transitive but scoped to one file: a
-  `router.add_api_route(...)` registration in one module registering a
-  handler imported from another module, or a call chain that crosses a file
-  boundary, is not resolved. Same-file multi-hop chains of any depth (up to
-  the 12-hop backstop) ARE resolved as of round-4 -- see above.
+- **General cross-file API registration.** Same-file multi-hop call chains
+  of any depth (up to the 12-hop backstop) ARE resolved, and one specific
+  cross-file shape (a module with its own `FastAPI()` instance forwarding to
+  an imported, already-proven dispatch-relevant handler) IS resolved as of
+  round-5 (`discover_cross_file_forwarding_endpoints`). A general cross-file
+  call-graph resolver is not implemented: a handler imported and called
+  through a longer or less direct cross-file chain, or an `add_api_route(...)`
+  registration whose handler comes from another module without being a
+  thin one-line forward, is not resolved.
 - **Dynamically constructed decorators.** `@getattr(router, method_name)(...)`
   or building the HTTP verb from a variable is not recognized -- only a
-  literal `.get`/`.post`/`.put`/`.patch`/`.delete` (or `add_api_route`/
-  `add_route`) method name is.
+  literal `.get`/`.post`/`.put`/`.patch`/`.delete`/`.api_route` (or
+  `add_api_route`/`add_route`) method name is. `@router.api_route(...,
+  methods=[...])` and `add_api_route`/`add_route`'s `methods=[...]` are
+  registration forms whose *method* isn't independently re-verified (it's a
+  runtime list, not one literal) -- only that a route registration is still
+  present at that anchor.
 - **Bound-alias/partial forms combined with getattr or double indirection**
   (e.g. `partial(getattr(task, "apply_async"), ...)`) are not recognized by
   either the alias or the getattr-indirection pattern individually.
-- **The compressed multi-route REST notation stays shape-only.** A row whose
-  `surface` compresses several sibling routes into one string (e.g.
-  `POST /webhooks/github|gitlab|jira` for three provider routes sharing one
-  dispatch helper) has no single path literal to check, so path-swap
-  content-drift isn't verified for those specific rows (the decorator/
-  registration shape still is).
 
 ## What CUT-01 does **not** cover
 

@@ -3,13 +3,17 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/externalrecompute"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/pagerduty"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -28,6 +32,7 @@ const (
 	internalIngestHandlerKind   streamHandlerKind = "internal-ingest"
 	productTelemetryHandlerKind streamHandlerKind = "product-telemetry"
 	externalIngestHandlerKind   streamHandlerKind = "external-ingest"
+	pagerdutyHandlerKind        streamHandlerKind = "pagerduty"
 )
 
 type streamStorage interface {
@@ -47,6 +52,17 @@ type productionStreamStorage struct {
 	domainRole  string
 	riverSchema string
 	recompute   *externalrecompute.Controller
+	bridge      operationalBridgeSettings
+}
+
+// operationalBridgeSettings is the transitional Python worker-bridge wiring the
+// PagerDuty handler needs. It is kept out of the handler construction path's
+// signature so the bridge can be deleted with its compatibility reconciler.
+type operationalBridgeSettings struct {
+	baseURL       string
+	token         secrets.Value
+	timeout       time.Duration
+	allowInsecure bool
 }
 
 func openProductionStreamStorage(ctx context.Context, cfg config.Config) (streamStorage, error) {
@@ -75,6 +91,12 @@ func openProductionStreamStorage(ctx context.Context, cfg config.Config) (stream
 	return &productionStreamStorage{
 		clickHouse: clickHouse, domainPool: domainPool, valkey: valkeyClient,
 		domainRole: cfg.DomainDatabaseRole, riverSchema: cfg.RiverDatabaseSchema,
+		bridge: operationalBridgeSettings{
+			baseURL:       cfg.OperationalBridgeURL,
+			token:         cfg.OperationalBridgeToken,
+			timeout:       cfg.OperationalBridgeTimeout,
+			allowInsecure: cfg.OperationalBridgeAllowInsecure,
+		},
 	}, nil
 }
 
@@ -141,6 +163,27 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind) (streamr
 			return nil, err
 		}
 		return streamhandlers.NewExternalIngestHandler(repository, sink, storage.recompute)
+	case pagerdutyHandlerKind:
+		// Receipts are the crash-safe half of this handler and are native Go.
+		// The reconciliation effect is not: it is forwarded to the Python worker
+		// bridge until the locked-graph port lands (CUT-20).
+		receipts, err := pagerduty.NewPostgresReceiptStore(storage.domainPool)
+		if err != nil {
+			return nil, err
+		}
+		reconciler, err := pagerduty.NewHTTPCompatibilityReconciler(
+			&http.Client{Timeout: storage.bridge.timeout},
+			pagerduty.HTTPCompatibilityConfig{
+				Endpoint: strings.TrimRight(storage.bridge.baseURL, "/") +
+					"/api/internal/worker-operational/pagerduty",
+				BearerToken:           storage.bridge.token.Reveal(),
+				AllowInsecureInternal: storage.bridge.allowInsecure,
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		return pagerduty.NewHandler(receipts, reconciler)
 	default:
 		return nil, streamrunner.ErrInvalidConfig
 	}
@@ -302,6 +345,20 @@ func configureStreamRunnerDependenciesWithSources(
 		}
 		components = append(components, storage.ControlComponents()...)
 		components = append(components, runner)
+	case "pagerduty":
+		runner, err := buildStreamRunner(
+			storage,
+			registry,
+			pagerdutyHandlerKind,
+			pagerdutyRunnerConfig(replicas),
+		)
+		if err != nil {
+			if errors.Is(err, streamrunner.ErrInvalidConfig) {
+				return nil, err
+			}
+			return nil, nil
+		}
+		components = append(components, runner)
 	default:
 		return nil, streamrunner.ErrInvalidConfig
 	}
@@ -369,6 +426,31 @@ func externalIngestRunnerConfig(replicas int) streamrunner.Config {
 		ReclaimEvery: time.Minute, ReclaimIdle: 15 * time.Minute,
 		MaxDeliveries: 5, ShutdownDrain: 20 * time.Second,
 		Singleton: true, ConfiguredReplicas: replicas,
+	}
+}
+
+// pagerdutyRunnerConfig preserves the Python webhook contract. The producer
+// XADDs to "pagerduty-webhooks:{binding_id}", so discovery is a two-segment
+// wildcard rather than the three-segment ingest shape.
+//
+// The Celery task uses max_retries=3, i.e. four total attempts before it
+// dead-letters, so MaxDeliveries is 4. Its backoff is 30s/60s/120s; a stream
+// runner redelivers on a fixed reclaim threshold instead of an exponential
+// curve, so ReclaimIdle/ReclaimEvery take the 30s floor of that curve and the
+// budget is bounded by MaxDeliveries rather than by the retry schedule.
+//
+// Not a singleton: a binding's entries are exclusive to one consumer through
+// the group PEL, and duplicate work across replicas is fenced by the Postgres
+// receipt claim token. Only external-ingest needs a single lane, because its
+// recompute controller carries cross-batch state.
+func pagerdutyRunnerConfig(replicas int) streamrunner.Config {
+	return streamrunner.Config{
+		Name: "pagerduty_webhooks", Patterns: []string{"pagerduty-webhooks:*"},
+		ConsumerGroup: "pagerduty-webhook-consumers", ConsumerName: "go-pagerduty-webhooks",
+		BatchSize: 25, DiscoveryLimit: 10_000, Block: 5 * time.Second,
+		ReclaimEvery: 30 * time.Second, ReclaimIdle: 30 * time.Second,
+		MaxDeliveries: 4, ShutdownDrain: 30 * time.Second,
+		ConfiguredReplicas: replicas,
 	}
 }
 

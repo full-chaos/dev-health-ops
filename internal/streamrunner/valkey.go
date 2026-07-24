@@ -171,7 +171,10 @@ func (t *ValkeyTransport) Quarantine(ctx context.Context, message Message, reaso
 	}
 	fields := map[string]string{"original_stream": message.Stream, "entry_id": message.ID, "reason": reason, "moved_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	for key, value := range message.Fields {
-		if key == "ingestion_id" || key == "org_id" {
+		// Durable identities only. binding_id/event_id make a PagerDuty DLQ row
+		// reconcilable against the Python contract; the raw payload deliberately
+		// stays out of the quarantine record.
+		if key == "ingestion_id" || key == "org_id" || key == "binding_id" || key == "event_id" {
 			fields[key] = value
 		}
 	}
@@ -294,6 +297,12 @@ func quarantineStream(stream string) string {
 	}
 	if len(parts) == 3 && parts[0] == "ingest" {
 		return "ingest:dlq:" + parts[2]
+	}
+	// The Python PagerDuty worker dead-letters to "<stream>:dlq". Its stream key
+	// has only two segments, so without this route its permanent failures would
+	// land in the unrelated product-telemetry DLQ.
+	if len(parts) == 2 && parts[0] == "pagerduty-webhooks" && parts[1] != "" {
+		return stream + ":dlq"
 	}
 	return "product-telemetry:dlq"
 }

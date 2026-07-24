@@ -75,7 +75,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 	if streamRunnerSpec.Service != "dev-health-stream-runner" || streamRunnerSpec.DefaultProfile != "ingest" {
 		t.Fatalf("unexpected stream-runner spec: %#v", streamRunnerSpec)
 	}
-	if !slices.Equal(streamRunnerSpec.Profiles, []string{"ingest", "external"}) {
+	if !slices.Equal(streamRunnerSpec.Profiles, []string{"ingest", "external", "pagerduty"}) {
 		t.Fatalf("unexpected stream profiles: %v", streamRunnerSpec.Profiles)
 	}
 	if streamRunnerSpec.ConfigureDependencies == nil {
@@ -188,6 +188,68 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []string{"stream_consumer", "valkey"}
+		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
+			t.Fatalf("readiness = %#v, want failed %v", status, want)
+		}
+	})
+
+	t.Run("pagerduty owns one webhook loop over process storage", func(t *testing.T) {
+		storage := &streamCommandStorage{}
+		registry := health.NewRegistry(100 * time.Millisecond)
+		components, err := configureStreamRunnerDependenciesWithSources(
+			context.Background(),
+			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 2},
+			registry,
+			streamDependencySources{
+				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+					return storage, nil
+				},
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(components) != 2 {
+			t.Fatalf("components = %d, want storage plus one webhook loop", len(components))
+		}
+		if !slices.Equal(storage.handlers, []streamHandlerKind{pagerdutyHandlerKind}) {
+			t.Fatalf("handlers = %v", storage.handlers)
+		}
+		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		status := registry.Readiness(context.Background())
+		want := []string{"pagerduty_webhooks_loop"}
+		if status.Ready || !slices.Equal(status.Failed, want) {
+			t.Fatalf("readiness = %#v, want failed %v", status, want)
+		}
+	})
+
+	t.Run("unavailable pagerduty bridge stays live and fails readiness", func(t *testing.T) {
+		// The compatibility reconciler is unconfigured until the worker bridge
+		// URL and token are deployed; that must never kill the process.
+		storage := &streamCommandStorage{handlerErr: errors.New("bridge unavailable")}
+		registry := health.NewRegistry(100 * time.Millisecond)
+		components, err := configureStreamRunnerDependenciesWithSources(
+			context.Background(),
+			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 1},
+			registry,
+			streamDependencySources{
+				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+					return storage, nil
+				},
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(components) != 0 || !storage.closed {
+			t.Fatalf("components=%d storage_closed=%v, want no components and closed storage", len(components), storage.closed)
+		}
+		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"stream_consumer"}
 		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 			t.Fatalf("readiness = %#v, want failed %v", status, want)
 		}
@@ -319,5 +381,15 @@ func TestProductionRunnerConfigsPreservePythonStreamContracts(t *testing.T) {
 		external.ReclaimIdle != 15*time.Minute || external.MaxDeliveries != 5 ||
 		!external.Singleton || external.ConfiguredReplicas != 1 {
 		t.Fatalf("external config = %#v", external)
+	}
+	// Python: max_retries=3 (four attempts) with a 30s first backoff, one
+	// stream per binding, and horizontally scalable webhook processing.
+	pagerdutyRunner := pagerdutyRunnerConfig(2)
+	if pagerdutyRunner.ConsumerGroup != "pagerduty-webhook-consumers" ||
+		!slices.Equal(pagerdutyRunner.Patterns, []string{"pagerduty-webhooks:*"}) ||
+		pagerdutyRunner.MaxDeliveries != 4 || pagerdutyRunner.ReclaimIdle != 30*time.Second ||
+		pagerdutyRunner.ReclaimEvery != 30*time.Second ||
+		pagerdutyRunner.Singleton || pagerdutyRunner.ConfiguredReplicas != 2 {
+		t.Fatalf("pagerduty config = %#v", pagerdutyRunner)
 	}
 }

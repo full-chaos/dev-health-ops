@@ -209,6 +209,15 @@ func (r *Runner) refreshStreams(ctx context.Context) error {
 		streams = append(streams, found...)
 	}
 	streams = sortedUnique(streams)
+	// A runner must never consume a dead-letter stream it writes. Redis globs
+	// cannot exclude a separator, so the PagerDuty pattern
+	// "pagerduty-webhooks:*" necessarily also matches its own
+	// "pagerduty-webhooks:<binding>:dlq" key, and consuming that would replay
+	// quarantined entries forever. Existing lanes are unaffected: their DLQ keys
+	// are not discovered by their own patterns.
+	streams = slices.DeleteFunc(streams, func(stream string) bool {
+		return strings.HasSuffix(stream, ":dlq")
+	})
 	for _, stream := range streams {
 		if err := r.transport.EnsureGroup(ctx, stream, r.config.ConsumerGroup); err != nil {
 			return fmt.Errorf("ensure group for stream %q: %w", stream, err)

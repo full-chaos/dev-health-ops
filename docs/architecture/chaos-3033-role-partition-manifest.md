@@ -1,154 +1,152 @@
-# CHAOS-3033 Option B role-partition manifest
+# CHAOS-3033 Option B grant-partition manifest (durable, single-sourced)
 
-Source tree: `feat/go-default-cutover` @ `cd7aa8a8e` (per the "derive from the
-tree the epic is actually building" instruction). `internal/domaingrants`
-version: commit `5d0fe8626` on `lane/grant-surface-deriver` (buildTxOrigins +
-UnresolvedTx included). Read the handoff `README.md` §2-4 for the analysis
-method; this file is the flat, machine-checkable output grants-finisher2
-implements from.
+**Authority for role attribution: real Go SQL execution sites (this tool's
+derivation + hand-verified file:line), never a Python-derived "this path
+touches X" claim.** That rule was established this session after a
+Python-derived retag round got 4 of 6 tables wrong (see "Corrections"
+below) while every tag this tool derived from actual Go source held.
 
-**One row per (table, privilege). `role` for a dual-grant row is expressed
-per-role, not as a single set — see `provider_rate_limit_observations` for
-why that matters.**
+Source tree: `feat/go-default-cutover` @ `cd7aa8a8e`. Tool: `internal/domaingrants`
+@ commit `5d0fe8626` on `lane/grant-surface-deriver`. A durable copy of this
+same file also lives at `.remember/chaos-3033-grant-partition-manifest.md`
+for discoverability outside the repo (that directory is not git-tracked;
+this commit is the versioned source of truth). This revision supersedes the
+first pass at `95c589722`, which predates the corrections below.
 
-## ⚠️ Disputed rows — NOT applied, evidence below, needs reconciliation
+## Corrections made this round (verified against Go source, not relayed)
 
-Before the table: five retags arrived in a follow-up message, attributed to
-"CUT-10's `privilege-slice3c-budgetguard-rows.md`" and a "lane-provider-2."
-I checked both claims against the actual source before applying anything,
-per this whole engagement's standing rule (verify, don't relay). They do not
-hold up, and I have NOT applied them. Evidence:
+A follow-up round retagged 6 tables from a Python-derived source
+("privilege-slice3c-budgetguard-rows.md" / "dispatch_sync_run session").
+That source was itself unverifiable (see "Prior dispute" below for the full
+trail — the cited file/branch doesn't exist, the underlying Go code has
+zero database access by design, and the one commit message that could be
+found concluded the opposite of what was relayed). A second round retracted
+4 of those 6 retags after independent verification and asked me to confirm
+the remaining 2. I checked all of it against `cd7aa8a8e` directly before
+writing anything durable:
 
-1. **The cited file does not exist as a committed artifact anywhere.**
-   `git log --all --diff-filter=A --name-only` finds no commit that adds
-   `privilege-slice3c-budgetguard-rows.md`. It appears ONLY as prose inside
-   one commit message (`6f95d7f87`, `lane/cut-10-sync-coordinators`,
-   "CUT-10 slice 3c: native BudgetGuard pure decision layer") — the commit
-   itself adds exactly two files, `budget_guard_plan.go` and
-   `budget_guard_plan_test.go`, no markdown. There is no `lane-provider-2`
-   branch or worktree anywhere in this repo. I cannot read the document I
-   was asked to reconcile against; I can only read the commit message that
-   references it.
-
-2. **That commit's own code has zero database access**, confirmed by
-   grepping the actual file content at that commit for `.Exec(`/`.Query(`:
-   zero matches. Same for slice 3a's `dispatch_guard_plan.go` (commit
-   `94c2e23af`) — also zero. Both commit messages say so explicitly: slice
-   3a is "testable without domain grants," slice 3c is "no database, no
-   clock, no privileges" by design, with "every CAS write" and the
-   `_active_cooldowns` query "Deliberately NOT ported." Neither file is
-   imported or called from `cmd/dev-health-worker` or
-   `internal/syncdispatchruntime`'s wired code on ANY branch I checked
-   (grepped for `BudgetGuard`/`DispatchGuard`/`budget_guard_plan`/
-   `dispatch_guard_plan` across `cmd/dev-health-worker/*.go` and
-   `internal/syncdispatchruntime/*.go` — zero hits).
-
-3. **Neither file exists on `feat/go-default-cutover` at all** —
-   `git merge-base --is-ancestor 6f95d7f87 cd7aa8a8e` fails. This code isn't
-   in the tree I was told is ground truth for this manifest, independent of
-   whether its claims are accurate.
-
-4. **The commit message's own "Grant audit" summary says the opposite of
-   what was relayed to me.** Verbatim, from `6f95d7f87`'s message: *"BudgetGuard.enforce_run/reconfirm_cooldowns run inside dispatch_sync_run's
-   SAME session as DispatchGuard.authorize_run and \_claim_units -- a
-   transaction cannot span two pools, so every table that session touches
-   ... must resolve to ONE role. This likely means dispatch_sync_run's
-   entire session is "coordinator," not "domain" as implicitly assumed
-   before Option-B existed -- flagged as the single most important open
-   item from this pass, not resolved unilaterally."* I was told this had
-   been "ruled" domain and "verified." The source material I can actually
-   read says the opposite lean, and explicitly says it wasn't resolved.
-
-**What this means for the 5 retagged rows**: `organizations`, `org_licenses`,
-`tier_limits`, `worker_job_routes`, `sync_dispatch_transport_routes`, and the
-`provider_rate_limit_observations` split all rest on a `dispatch_sync_run`
-session that has no wired, executing Go implementation on any branch I can
-find. I have kept my previously-verified tags for the four tables I have
-real evidence for (`organizations`/`org_licenses` via the stream-runner
-feature-flag path, domain; `provider_rate_limit_observations` via retention,
-domain, DELETE-schema-gap) and marked `worker_job_routes` and
-`sync_dispatch_transport_routes` as **DISPUTED** in the table below rather
-than silently keeping my tag or silently taking the retag. `tier_limits` has
-zero Go references anywhere (confirmed earlier, Python-only, out of scope
-regardless of this dispute).
-
-If `dispatch_sync_run`'s session really does turn out to span these tables
-once its I/O layer is written, the commit's own conclusion is the one to
-build on: that session likely needs to run as coordinator, not domain — the
-opposite direction from what was relayed to me. Either way, this needs a
-human or an independently-reproducible artifact, not a second-hand summary
-I couldn't locate the source of.
-
-## Verified / inferred rows
-
-`confidence`: **verified** = I directly confirmed a `cfg.Profile != "X"`
-gate or binary-exclusive wiring in Go source. **inferred** = profile-level
-attribution from `deploy/go-workers/profiles.json` job_kinds cross-referenced
-with evidence file paths, not an automated scoped re-run. **unverified-shape**
-= confirmed present in Go source but privilege shape not derivable by the
-tool (documented limitation) — do not grant blind.
-
-| table | privileges | role | confidence | evidence |
+| Table | Retag round said | My tool said | Verified against `cd7aa8a8e` source | Verdict |
 |---|---|---|---|---|
-| billing_notifications | SELECT | domain | verified | `internal/jobs/operational/postgres.go:61` (ops profile, `operational.go` gate) |
-| daily_metrics_partitions | SELECT, INSERT, UPDATE | domain | verified | `internal/jobs/metrics/daily/postgres.go` (heavy profile `daily.go` gate; also reached via sync profile's Fanout, same role) |
-| daily_metrics_runs | SELECT, INSERT, UPDATE | domain | verified | same |
-| external_ingest_batch_payloads | SELECT | domain | verified | `internal/streamhandlers/external_postgres.go:172` (stream-* profiles) |
-| external_ingest_batch_payloads | DELETE (schema gap — no `allow_delete` column) | domain | verified | `internal/streamhandlers/external_postgres.go:278,315` |
-| external_ingest_batches | SELECT, UPDATE | domain | verified | `internal/streamhandlers/external_postgres.go`, `internal/externalrecompute/postgres.go` (stream-*) |
-| external_ingest_batches | DELETE (schema gap) | domain | verified | `internal/jobs/system/retention_postgres.go` (ops profile) |
-| external_ingest_recompute_jobs | INSERT | domain | verified | `internal/externalrecompute/postgres.go:75` (stream-*) |
-| external_ingest_rejections | INSERT | domain | verified | `internal/streamhandlers/external_postgres.go:267` (stream-*) |
-| external_ingest_sources | SELECT | domain | verified | `internal/streamhandlers/external_postgres.go:183` (stream-*) |
-| feature_flags | SELECT | domain | verified | `internal/streamhandlers/external_postgres.go:58` (stream-*) |
-| org_feature_overrides | SELECT | domain | verified | same |
-| org_licenses | SELECT | domain | verified | same |
-| organizations | SELECT | domain | verified | same |
-| provider_rate_limit_observations | SELECT, UPDATE | domain | verified | `internal/jobs/system/retention_postgres.go` (ops profile, `FOR UPDATE SKIP LOCKED` chunked delete-read) |
-| provider_rate_limit_observations | DELETE (schema gap) | domain | verified | same file |
-| remaining_metric_partitions | SELECT, INSERT, UPDATE | domain | verified | `internal/jobs/metrics/remaining/postgres.go` (heavy + sync via Fanout) |
-| remaining_metric_runs | SELECT, INSERT, UPDATE | domain | verified | same |
-| report_runs | SELECT, UPDATE | domain | verified | `internal/jobs/report/{postgres,query}.go` (heavy profile, `reports.go` gate) |
-| saved_reports | SELECT, UPDATE | domain | verified | same |
-| sync_configurations | SELECT | domain | verified | `internal/syncdispatchruntime/native_post_sync.go:263` (sync profile, Fanout tx) |
-| webhook_deliveries | SELECT | domain | verified | `internal/jobs/operational/postgres.go:34` (ops) |
-| work_graph_execution_ledger | INSERT, UPDATE | domain | verified | `internal/jobs/workgraph/postgres.go` (heavy + sync) |
-| work_graph_execution_requests | SELECT, INSERT, UPDATE | domain | verified | `internal/jobs/workgraph/{postgres,publisher}.go` |
-| worker_job_completion_fences | INSERT | domain | verified | `internal/joboutbox/completion.go:37`, reached from heavy/sync writers |
-| worker_job_completion_fences | INSERT (possible 2nd reacher) | coordinator? | **unverified-shape** | `internal/scheduler/fixed/producers.go:462` also calls the same `joboutbox.CompletionKey`/`MarkCompletionTx` helper — reachability from scheduler not resolved by the tool (same closure-taint limitation as the 3 scheduler tables below); if real, this becomes a `both` row |
-| internal_service_credentials | SELECT, UPDATE | coordinator | verified | `internal/joboperator/auth.go:68`, workerctl `main.go:160` (binary-exclusive) |
-| worker_operator_audits | INSERT, UPDATE | coordinator | verified | `internal/joboperator/audit.go:32,64`, workerctl `main.go:231` |
-| sync_run_reference_discoveries | SELECT | coordinator | verified | `internal/syncreconciler/materializer.go`, reconciler `dependencies.go:168` |
-| sync_run_post_dispatches | SELECT | coordinator | verified | same |
-| scheduled_jobs | SELECT, **UPDATE** (per required_table_privileges convention for a table with any write; exact write shape NOT independently derived) | coordinator | **unverified-shape** | `internal/scheduler/sync/repository.go:166` -- confirmed present via direct read; reachability blocked by a closure-typed struct field (`schedulerRuntimeSources.newRepository`) the analyzer can't trace. Do not grant blind. |
-| scheduled_sync_occurrences | SELECT, INSERT, UPDATE (bounded guess from table name + write-heavy occurrence-tracking pattern; NOT independently derived) | coordinator | **unverified-shape** | `internal/scheduler/sync/*.go` -- same blind spot |
-| fixed_schedule_occurrences | SELECT, INSERT, UPDATE (same caveat) | coordinator | **unverified-shape** | `internal/scheduler/fixed/*.go` -- same blind spot |
-| sync_dispatch_outbox | SELECT, INSERT, UPDATE (domain) **+** SELECT, UPDATE (coordinator) | **both** | verified | domain: hot-path writers (heavy/sync). coordinator: `Materializer.Step` (reconciler, one transaction with sync_run_reference_discoveries/sync_run_post_dispatches -- the veto case) AND `syncroute.Controller` (workerctl `main.go:206` + reconciler `dependencies.go:145`) |
-| sync_run_units | SELECT, UPDATE (domain) **+** SELECT (coordinator) | **both** | verified | domain: `providersync` hot path. coordinator: `Materializer.Step` |
-| sync_runs | SELECT, UPDATE (domain) **+** SELECT, UPDATE (coordinator) | **both** | verified | domain: Fanout `FOR SHARE` + `providersync` hot path. coordinator: `Materializer.Step` + `internal/syncreconciler/lease_repair.go` |
-| worker_job_runs | SELECT, INSERT, UPDATE (domain) **+** SELECT, UPDATE (coordinator) | **both** | verified | domain: `internal/jobruntime/idempotency_postgres.go`, called from heavy+ops. coordinator: `internal/jobroute/control.go` LOCK/count, workerctl-only |
-| worker_job_routes | UPDATE | coordinator | verified (per my own evidence) — **DISPUTED, see above** | `internal/jobroute/control.go:158,228`, workerctl-only wiring confirmed; a claimed additional sync-worker write path could not be verified (§ Disputed rows) |
-| sync_dispatch_transport_routes | SELECT (baseline) + UPDATE | coordinator | verified (per my own evidence) — **DISPUTED, see above** | `internal/syncroute/control.go`, reached from workerctl `main.go:206` AND reconciler `dependencies.go:145` (both coordinator-candidates, so this stays coordinator-only under my evidence, not domain+coordinator); a claimed sync-worker write path could not be verified |
+| `worker_job_routes` | coordinator (workerctl-only) | coordinator | `internal/jobroute/control.go`'s only two constructors are `cmd/dev-health-workerctl/main.go:210` AND `cmd/dev-health-reconciler/dependencies.go:273` (`jobroute.NewController(domainPool, registry, quiescer)`) — both coordinator-candidate binaries, no domain-hot-path site | **coordinator, confirmed** — refine attribution to "workerctl + reconciler," not workerctl-only |
+| `provider_rate_limit_observations` | domain (ops retention) | domain | Only SQL site is `internal/jobs/system/retention_postgres.go`, ops profile | **domain, confirmed**, no coordinator split |
+| `tier_limits` | out of scope | out of scope (zero Go refs) | `git grep tier_limits -- '*.go'` at `cd7aa8a8e`: zero hits | **confirmed out of scope** |
+| `organizations` | asked me to confirm **coordinator-only** (scheduler) | domain (via streamhandlers) | **Both sites are real.** `internal/streamhandlers/external_postgres.go:60` (`JOIN organizations AS organization`, stream-* profiles, domain — same query as `org_licenses`/`org_feature_overrides`) AND `internal/scheduler/fixed/organizations.go` (`PostgresOrganizationLister.ActiveOrganizationIDs`, genuinely wired at `cmd/dev-health-scheduler/fixed.go:52`, scheduler, coordinator) | **NOT coordinator-only — tag as `both`.** The domain-side site was never in question; declining to confirm "coordinator-only" here, not silently accepting it. |
+| `org_licenses` | asked me to resolve — "no SQL site turned up in my grep" | domain (via streamhandlers, same query as organizations) | `internal/streamhandlers/external_postgres.go:64`: `LEFT JOIN org_licenses AS license ON license.org_id = organization.id` — same query, same file, 4 lines below the `organizations` JOIN | **domain, confirmed present** — the grep that found nothing had a false negative, not evidence of absence |
+| `sync_dispatch_transport_routes` | domain SELECT + coordinator SELECT+UPDATE (`both`) | had it as coordinator-only in the first manifest pass (my own compilation error — the transaction-grouping evidence already showed this, I didn't cross-reference it) | `internal/syncdispatchruntime/native_post_sync.go:160`: `JOIN public.sync_dispatch_transport_routes AS route` inside `currentPostSyncReference`, called from `Fanout` (sync profile, domain) — SELECT only from this side. Coordinator side (SELECT+UPDATE) unchanged from before, via `internal/syncroute/control.go`, workerctl+reconciler | **`both`, confirmed** — this one the retag round got right, and I'm correcting my own manifest to match, crediting the actual Go evidence (which my tool's own `Materializer`/Fanout transaction-grouping output already contained) rather than the claim itself |
 
-## Schema-level blocker (unchanged from the original report)
+Net: of 6 claims across the two rounds, the tool-and-verify approach held
+on 4, corrected 1 real gap in my own manual compilation
+(`sync_dispatch_transport_routes`), and caught 1 wrong "confirm this" ask
+(`organizations` is not coordinator-only). `org_licenses` was a pure
+resolve, not a dispute.
+
+## Prior dispute (from commit `95c589722`, kept for the record)
+
+Five earlier retags (`organizations`, `org_licenses`, `tier_limits`,
+`worker_job_routes`, `sync_dispatch_transport_routes`, plus a
+`provider_rate_limit_observations` role split) were relayed from "CUT-10's
+`privilege-slice3c-budgetguard-rows.md`" and a "lane-provider-2." Before
+applying them I checked: the cited file does not exist as a committed
+artifact anywhere (`git log --all --diff-filter=A --name-only` finds no
+commit adding it; it appears only as prose inside commit `6f95d7f87`'s
+message); there is no `lane-provider-2` branch/worktree anywhere; the
+underlying Go code (`budget_guard_plan.go` slice 3c, `dispatch_guard_plan.go`
+slice 3a) has zero `.Exec`/`.Query` calls by explicit design ("no database,
+no privileges" per their own commit messages) and is not reachable from
+`feat/go-default-cutover` at all (`git merge-base --is-ancestor 6f95d7f87
+cd7aa8a8e` fails); and that commit's own "Grant audit" summary concluded
+the opposite of what was relayed to me ("dispatch_sync_run's entire session
+is likely coordinator, not domain... not resolved unilaterally"). None of
+the five were applied in `95c589722`. The corrections table above is the
+resolution of that dispute, arrived at independently in a later round.
+
+## Manifest
+
+`confidence`: **verified** = directly confirmed `cfg.Profile != "X"` gate or
+binary-exclusive wiring in Go source (this round or prior). **inferred** =
+profile-level attribution from `deploy/go-workers/profiles.json` job_kinds
+cross-referenced with evidence, not an automated scoped re-run.
+**unverified-shape** = confirmed present in Go source but exact privilege
+shape not independently derivable (closure-typed struct field blind spot,
+documented in the handoff README) — grants-finisher2 must derive these by
+hand, not grant blind.
+
+| table | role | privileges | confidence | evidence |
+|---|---|---|---|---|
+| billing_notifications | domain | SELECT | verified | `internal/jobs/operational/postgres.go:61` (ops profile) |
+| daily_metrics_partitions | domain | SELECT, INSERT, UPDATE | verified | `internal/jobs/metrics/daily/postgres.go` (heavy profile; also sync via Fanout) |
+| daily_metrics_runs | domain | SELECT, INSERT, UPDATE | verified | same |
+| external_ingest_batch_payloads | domain | SELECT | verified | `internal/streamhandlers/external_postgres.go:172` (stream-*) |
+| external_ingest_batch_payloads | domain | DELETE (schema gap — no `allow_delete` column) | verified | `internal/streamhandlers/external_postgres.go:278,315` |
+| external_ingest_batches | domain | SELECT, UPDATE | verified | `internal/streamhandlers/external_postgres.go`, `internal/externalrecompute/postgres.go` (stream-*) |
+| external_ingest_batches | domain | DELETE (schema gap) | verified | `internal/jobs/system/retention_postgres.go` (ops) |
+| external_ingest_recompute_jobs | domain | INSERT | verified | `internal/externalrecompute/postgres.go:75` (stream-*) |
+| external_ingest_rejections | domain | INSERT | verified | `internal/streamhandlers/external_postgres.go:267` (stream-*) |
+| external_ingest_sources | domain | SELECT | verified | `internal/streamhandlers/external_postgres.go:183` (stream-*) |
+| feature_flags | domain | SELECT | verified | `internal/streamhandlers/external_postgres.go:58` (stream-*) |
+| org_feature_overrides | domain | SELECT | verified | same query as organizations/org_licenses |
+| org_licenses | domain | SELECT | verified | `internal/streamhandlers/external_postgres.go:64` |
+| organizations | **both** | domain: SELECT | verified | `internal/streamhandlers/external_postgres.go:60` |
+| organizations | **both** | coordinator: read (exact shape not independently confirmed — see below) | unverified-shape | `internal/scheduler/fixed/organizations.go`, wired at `cmd/dev-health-scheduler/fixed.go:52`; the method takes `tx pgx.Tx` as a parameter, so its caller's own reachability (`internal/scheduler/fixed/loop.go` or similar) wasn't independently traced past this point — flag, don't grant blind on the coordinator side |
+| provider_rate_limit_observations | domain | SELECT, UPDATE | verified | `internal/jobs/system/retention_postgres.go` (ops, `FOR UPDATE SKIP LOCKED` chunked delete-read) |
+| provider_rate_limit_observations | domain | DELETE (schema gap) | verified | same file |
+| remaining_metric_partitions | domain | SELECT, INSERT, UPDATE | verified | `internal/jobs/metrics/remaining/postgres.go` (heavy + sync) |
+| remaining_metric_runs | domain | SELECT, INSERT, UPDATE | verified | same |
+| report_runs | domain | SELECT, UPDATE | verified | `internal/jobs/report/{postgres,query}.go` (heavy) |
+| saved_reports | domain | SELECT, UPDATE | verified | same |
+| sync_configurations | domain | SELECT | verified | `internal/syncdispatchruntime/native_post_sync.go:263` (sync, Fanout) |
+| webhook_deliveries | domain | SELECT | verified | `internal/jobs/operational/postgres.go:34` (ops) |
+| work_graph_execution_ledger | domain | INSERT, UPDATE | verified | `internal/jobs/workgraph/postgres.go` (heavy + sync) |
+| work_graph_execution_requests | domain | SELECT, INSERT, UPDATE | verified | `internal/jobs/workgraph/{postgres,publisher}.go` |
+| worker_job_completion_fences | domain | INSERT | verified | `internal/joboutbox/completion.go:37`, heavy/sync writers |
+| worker_job_completion_fences | coordinator? | INSERT (possible 2nd reacher, unresolved) | unverified-shape | `internal/scheduler/fixed/producers.go:462` calls the same helper; scheduler-side reachability not resolved by the tool |
+| internal_service_credentials | coordinator | SELECT, UPDATE | verified | `internal/joboperator/auth.go:68`, workerctl `main.go:160` |
+| worker_operator_audits | coordinator | INSERT, UPDATE | verified | `internal/joboperator/audit.go:32,64`, workerctl `main.go:231` |
+| sync_run_reference_discoveries | coordinator | SELECT | verified | `internal/syncreconciler/materializer.go`, reconciler `dependencies.go:168` |
+| sync_run_post_dispatches | coordinator | SELECT | verified | same |
+| worker_job_routes | coordinator | UPDATE | verified | `internal/jobroute/control.go:158,228`; constructed from workerctl `main.go:210` AND reconciler `dependencies.go:273` — both coordinator, no domain-hot-path site found |
+| scheduled_jobs | coordinator | SELECT, UPDATE (write shape not independently derived) | **unverified-shape** | `internal/scheduler/sync/repository.go:166` — reachability blocked by closure-typed `schedulerRuntimeSources.newRepository` field; do not grant blind |
+| scheduled_sync_occurrences | coordinator | SELECT, INSERT, UPDATE (bounded guess, not independently derived) | **unverified-shape** | `internal/scheduler/sync/*.go` — same blind spot |
+| fixed_schedule_occurrences | coordinator | SELECT, INSERT, UPDATE (same caveat) | **unverified-shape** | `internal/scheduler/fixed/*.go` — same blind spot |
+| sync_dispatch_outbox | **both** | domain: SELECT, INSERT, UPDATE | verified | hot-path writers (heavy/sync) |
+| sync_dispatch_outbox | **both** | coordinator: SELECT, UPDATE | verified | `Materializer.Step` (reconciler — the transaction veto case) + `syncroute.Controller` (workerctl `main.go:206` + reconciler `dependencies.go:273`) |
+| sync_run_units | **both** | domain: SELECT, UPDATE | verified | `internal/providersync` hot path |
+| sync_run_units | **both** | coordinator: SELECT | verified | `Materializer.Step` |
+| sync_runs | **both** | domain: SELECT, UPDATE | verified | Fanout `FOR SHARE` + `providersync` hot path |
+| sync_runs | **both** | coordinator: SELECT, UPDATE | verified | `Materializer.Step` + `internal/syncreconciler/lease_repair.go` |
+| sync_dispatch_transport_routes | **both** | domain: SELECT | verified | `internal/syncdispatchruntime/native_post_sync.go:160` (Fanout, `currentPostSyncReference`) |
+| sync_dispatch_transport_routes | **both** | coordinator: SELECT, UPDATE | verified | `internal/syncroute/control.go`, workerctl `main.go:206` + reconciler `dependencies.go:273` |
+| worker_job_runs | **both** | domain: SELECT, INSERT, UPDATE | verified | `internal/jobruntime/idempotency_postgres.go`, heavy+ops |
+| worker_job_runs | **both** | coordinator: SELECT, UPDATE | verified | `internal/jobroute/control.go` LOCK/count, workerctl+reconciler |
+
+## Schema-level blocker (unchanged)
 
 `external_ingest_batch_payloads`, `external_ingest_batches`,
-`provider_rate_limit_observations` all need DELETE, all trace to
-domain-role retention/cleanup code, and `required_table_privileges` has no
-`allow_delete` column at all -- this can't be granted with the current
-schema shape regardless of role assignment. Needs a schema decision
-(add the column, or a different mechanism) before implementation, same as
-originally reported.
+`provider_rate_limit_observations` all need DELETE, all domain-role
+retention/cleanup, and `required_table_privileges` has no `allow_delete`
+column — needs a schema decision before implementation regardless of role.
 
-## Attribution-test coordination note
+## Unresolved cross-function transactions (hedge, not a clean-list claim)
 
-The dual-grant ("both") set above is: `sync_dispatch_outbox`,
-`sync_run_units`, `sync_runs`, `worker_job_runs` -- **4 tables**, not the 3
-originally scoped from `Materializer.Step` alone (`worker_job_runs` was
-added once `internal/jobroute/control.go`'s workerctl-side LOCK/count
-requirement was folded in). This is the whitelist
+20 sites where a `pgx.Tx` parameter's origin `Begin()` call couldn't be
+traced unambiguously (tool: `DerivedSurface.UnresolvedTx`). I reviewed all
+20 by hand for whether any cross the domain/coordinator boundary
+specifically: 12 are `daily`/`remaining`/`workgraph`/`joboutbox` sites
+ambiguous between "heavy" and "sync" (both domain, not a boundary
+question); 8 are `syncreconciler`/`syncroute` sites ambiguous within
+reconciler/workerctl (both coordinator). **None appeared to span
+domain↔coordinator** — stated as my read of which package/binary each site
+belongs to, not a formal proof. Full list: `go run ./cmd/dev-health-grantcheck
+-root .` from a `feat/go-default-cutover`-checked-out worktree with this
+tool's files copied in (see the handoff README's "Integration-branch
+re-run" section for the exact procedure).
+
+## Dual-grant ("both") whitelist for the attribution test
+
+`sync_dispatch_outbox`, `sync_run_units`, `sync_runs`, `worker_job_runs`,
+`sync_dispatch_transport_routes`, `organizations` — **6 tables**, updated
+from the prior 4-table list now that `sync_dispatch_transport_routes` and
+`organizations` are confirmed dual-grant. This is the whitelist
 `TestDomainGrantSurfaceMatchesQuerySurface`'s future role-attribution
-extension and grants-finisher2's posture manifest both need to agree on.
-The disputed `worker_job_routes`/`sync_dispatch_transport_routes` rows are
-NOT in this set pending the reconciliation above -- if they turn out to be
-real dual-grants, the whitelist grows to 6.
+extension and grants-finisher2's posture manifest must both reference —
+coordinate before either side hard-codes it independently.

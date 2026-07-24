@@ -40,6 +40,43 @@ on 4, corrected 1 real gap in my own manual compilation
 (`organizations` is not coordinator-only). `org_licenses` was a pure
 resolve, not a dispute.
 
+### Third round: `scheduled_*` shapes and `organizations` coordinator-side, resolved
+
+A later message proposed exact privilege shapes for the 3 `scheduled_*`
+tables (previously `unverified-shape`, blocked by the closure-typed
+`schedulerRuntimeSources.newRepository`/`newOccurrences` fields) and asked
+me to mark them `verified`. Rather than accept a second-hand shape
+proposal directly, I independently re-derived each from `cd7aa8a8e` source:
+
+- `scheduled_jobs`: `internal/scheduler/sync/transaction.go` has a claim
+  query (`FOR UPDATE OF config, job SKIP LOCKED`) and `schedulerAdvanceMarkerSQL`
+  (`UPDATE ... SET next_run_at = ...`). SELECT+UPDATE, no INSERT/DELETE
+  anywhere — confirmed, matches the proposal exactly.
+- `scheduled_sync_occurrences`: `internal/scheduler/sync/coordinator.go`
+  (`INSERT ... ON CONFLICT DO NOTHING`, `SELECT ... FOR UPDATE`) +
+  `occurrence_reconciler.go` (three `UPDATE` statements). SELECT+INSERT+UPDATE,
+  no DELETE — confirmed, matches.
+- `fixed_schedule_occurrences`: `internal/scheduler/fixed/ledger.go`
+  (INSERT ON CONFLICT DO NOTHING, SELECT FOR UPDATE, an UPDATE, a plain
+  SELECT). SELECT+INSERT+UPDATE, no DELETE — confirmed, matches.
+- `organizations` coordinator-side: `internal/scheduler/fixed/organizations.go:91`,
+  `activeOrganizationsSQL` is a plain `SELECT ... FROM public.organizations
+  WHERE is_active = TRUE`, no lock clause. SELECT only — confirmed.
+
+All four upgraded from `unverified-shape`/partial to `verified` in the
+table below, with the source excerpt that confirms each. The wiring for
+the `scheduled_jobs`/`scheduled_sync_occurrences` pair still goes through
+the same closure-typed-field pattern my automated tool can't trace on its
+own (`sources.newRepository(database.DomainPool())`,
+`cmd/dev-health-scheduler/dependencies.go`) — that part of the original
+flag stands: the tool's automated reachability trace didn't confirm this,
+a direct source read did. `fixed_schedule_occurrences`/`organizations`'
+coordinator side is wired through plain function calls
+(`cmd/dev-health-scheduler/fixed.go`), no closure indirection, so that half
+was always in principle traceable and the earlier `unverified-shape` tag
+on `organizations`' coordinator side was more conservative than it needed
+to be.
+
 ## Prior dispute (from commit `95c589722`, kept for the record)
 
 Five earlier retags (`organizations`, `org_licenses`, `tier_limits`,
@@ -87,7 +124,7 @@ hand, not grant blind.
 | org_feature_overrides | domain | SELECT | verified | same query as organizations/org_licenses |
 | org_licenses | domain | SELECT | verified | `internal/streamhandlers/external_postgres.go:64` |
 | organizations | **both** | domain: SELECT | verified | `internal/streamhandlers/external_postgres.go:60` |
-| organizations | **both** | coordinator: read (exact shape not independently confirmed — see below) | unverified-shape | `internal/scheduler/fixed/organizations.go`, wired at `cmd/dev-health-scheduler/fixed.go:52`; the method takes `tx pgx.Tx` as a parameter, so its caller's own reachability (`internal/scheduler/fixed/loop.go` or similar) wasn't independently traced past this point — flag, don't grant blind on the coordinator side |
+| organizations | **both** | coordinator: SELECT | verified | `internal/scheduler/fixed/organizations.go:91` (`activeOrganizationsSQL`: `SELECT id::text FROM public.organizations WHERE is_active = TRUE ...`), wired at `cmd/dev-health-scheduler/fixed.go:52`. Reachability from the binary is real (a plain function call chain, not the closure-typed-field pattern below); only the tool's automated trace didn't confirm it, direct source read did. |
 | provider_rate_limit_observations | domain | SELECT, UPDATE | verified | `internal/jobs/system/retention_postgres.go` (ops, `FOR UPDATE SKIP LOCKED` chunked delete-read) |
 | provider_rate_limit_observations | domain | DELETE (schema gap) | verified | same file |
 | remaining_metric_partitions | domain | SELECT, INSERT, UPDATE | verified | `internal/jobs/metrics/remaining/postgres.go` (heavy + sync) |
@@ -105,9 +142,9 @@ hand, not grant blind.
 | sync_run_reference_discoveries | coordinator | SELECT | verified | `internal/syncreconciler/materializer.go`, reconciler `dependencies.go:168` |
 | sync_run_post_dispatches | coordinator | SELECT | verified | same |
 | worker_job_routes | coordinator | UPDATE | verified | `internal/jobroute/control.go:158,228`; constructed from workerctl `main.go:210` AND reconciler `dependencies.go:273` — both coordinator, no domain-hot-path site found |
-| scheduled_jobs | coordinator | SELECT, UPDATE (write shape not independently derived) | **unverified-shape** | `internal/scheduler/sync/repository.go:166` — reachability blocked by closure-typed `schedulerRuntimeSources.newRepository` field; do not grant blind |
-| scheduled_sync_occurrences | coordinator | SELECT, INSERT, UPDATE (bounded guess, not independently derived) | **unverified-shape** | `internal/scheduler/sync/*.go` — same blind spot |
-| fixed_schedule_occurrences | coordinator | SELECT, INSERT, UPDATE (same caveat) | **unverified-shape** | `internal/scheduler/fixed/*.go` — same blind spot |
+| scheduled_jobs | coordinator | SELECT, UPDATE | verified | `internal/scheduler/sync/transaction.go:340-371`: `schedulerClaimSQL`-style `JOIN public.scheduled_jobs ... FOR UPDATE OF config, job SKIP LOCKED` (claim) + `schedulerAdvanceMarkerSQL`: `UPDATE public.scheduled_jobs SET next_run_at = $1, updated_at = $2 WHERE id = $3` (advance marker). No INSERT/DELETE found anywhere against this table. Confirmed by direct source read, upgraded from unverified-shape after a second reader (grants-finisher2, via the lane doc) proposed this exact shape and I independently re-derived it from the same source rather than taking the proposal on trust. |
+| scheduled_sync_occurrences | coordinator | SELECT, INSERT, UPDATE | verified | `internal/scheduler/sync/coordinator.go:92-116`: `schedulerInsertOccurrenceSQL` (`INSERT ... ON CONFLICT DO NOTHING`) + `schedulerSelectOccurrenceSQL` (`SELECT ... FOR UPDATE`) + three `UPDATE public.scheduled_sync_occurrences` statements in `occurrence_reconciler.go`. No DELETE found. Confirmed by direct source read. |
+| fixed_schedule_occurrences | coordinator | SELECT, INSERT, UPDATE | verified | `internal/scheduler/fixed/ledger.go:230-268`: `insertOccurrenceSQL` (INSERT ON CONFLICT DO NOTHING), `selectOccurrenceSQL` (SELECT ... FOR UPDATE), `completeOccurrenceSQL` (UPDATE), `selectLastOccurrenceSQL` (SELECT). No DELETE found. Confirmed by direct source read. |
 | sync_dispatch_outbox | **both** | domain: SELECT, INSERT, UPDATE | verified | hot-path writers (heavy/sync) |
 | sync_dispatch_outbox | **both** | coordinator: SELECT, UPDATE | verified | `Materializer.Step` (reconciler — the transaction veto case) + `syncroute.Controller` (workerctl `main.go:206` + reconciler `dependencies.go:273`) |
 | sync_run_units | **both** | domain: SELECT, UPDATE | verified | `internal/providersync` hot path |

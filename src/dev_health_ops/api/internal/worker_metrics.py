@@ -629,47 +629,78 @@ async def _mark_ambiguous(
     await session.commit()
 
 
-def _completion_fence(execution: _Execution) -> str:
+_MARK_SUCCEEDED_REMAINING_PARTITION = """
+    UPDATE metric_compatibility_executions
+    SET state = 'succeeded',
+        output_evidence = CAST(:evidence AS jsonb),
+        completed_at = statement_timestamp(),
+        last_attempt_at = statement_timestamp()
+    WHERE id = CAST(:id AS uuid)
+      AND state = 'executing'
+      AND EXISTS (
+          SELECT 1
+          FROM remaining_metric_runs AS r
+          JOIN remaining_metric_partitions AS p ON p.run_id = r.id
+          WHERE r.id = CAST(:run_id AS uuid)
+            AND p.id = CAST(:partition_id AS uuid)
+            AND r.status = 'running'
+            AND r.canceled_at IS NULL
+            AND p.status = 'running'
+            AND p.claim_token = CAST(:claim_token AS uuid)
+            AND p.lease_expires_at > statement_timestamp()
+      )
+    RETURNING id
+"""
+
+_MARK_SUCCEEDED_DAILY_PARTITION = """
+    UPDATE metric_compatibility_executions
+    SET state = 'succeeded',
+        output_evidence = CAST(:evidence AS jsonb),
+        completed_at = statement_timestamp(),
+        last_attempt_at = statement_timestamp()
+    WHERE id = CAST(:id AS uuid)
+      AND state = 'executing'
+      AND EXISTS (
+          SELECT 1
+          FROM daily_metrics_runs AS r
+          JOIN daily_metrics_partitions AS p ON p.run_id = r.id
+          WHERE r.id = CAST(:run_id AS uuid)
+            AND p.id = CAST(:partition_id AS uuid)
+            AND r.status = 'running'
+            AND p.status = 'running'
+            AND p.claim_token = CAST(:claim_token AS uuid)
+            AND p.lease_expires_at > statement_timestamp()
+      )
+    RETURNING id
+"""
+
+_MARK_SUCCEEDED_DAILY_FINALIZE = """
+    UPDATE metric_compatibility_executions
+    SET state = 'succeeded',
+        output_evidence = CAST(:evidence AS jsonb),
+        completed_at = statement_timestamp(),
+        last_attempt_at = statement_timestamp()
+    WHERE id = CAST(:id AS uuid)
+      AND state = 'executing'
+      AND EXISTS (
+          SELECT 1
+          FROM daily_metrics_runs AS r
+          WHERE r.id = CAST(:run_id AS uuid)
+            AND r.status = 'running'
+            AND r.finalization_status = 'running'
+            AND r.finalization_claim_token = CAST(:claim_token AS uuid)
+            AND r.finalization_lease_expires_at > statement_timestamp()
+      )
+    RETURNING id
+"""
+
+
+def _mark_succeeded_statement(execution: _Execution) -> str:
     if execution.worker_kind == "remaining":
-        return """
-            EXISTS (
-                SELECT 1
-                FROM remaining_metric_runs AS r
-                JOIN remaining_metric_partitions AS p ON p.run_id = r.id
-                WHERE r.id = CAST(:run_id AS uuid)
-                  AND p.id = CAST(:partition_id AS uuid)
-                  AND r.status = 'running'
-                  AND r.canceled_at IS NULL
-                  AND p.status = 'running'
-                  AND p.claim_token = CAST(:claim_token AS uuid)
-                  AND p.lease_expires_at > statement_timestamp()
-            )
-        """
+        return _MARK_SUCCEEDED_REMAINING_PARTITION
     if execution.operation == "partition":
-        return """
-            EXISTS (
-                SELECT 1
-                FROM daily_metrics_runs AS r
-                JOIN daily_metrics_partitions AS p ON p.run_id = r.id
-                WHERE r.id = CAST(:run_id AS uuid)
-                  AND p.id = CAST(:partition_id AS uuid)
-                  AND r.status = 'running'
-                  AND p.status = 'running'
-                  AND p.claim_token = CAST(:claim_token AS uuid)
-                  AND p.lease_expires_at > statement_timestamp()
-            )
-        """
-    return """
-        EXISTS (
-            SELECT 1
-            FROM daily_metrics_runs AS r
-            WHERE r.id = CAST(:run_id AS uuid)
-              AND r.status = 'running'
-              AND r.finalization_status = 'running'
-              AND r.finalization_claim_token = CAST(:claim_token AS uuid)
-              AND r.finalization_lease_expires_at > statement_timestamp()
-        )
-    """
+        return _MARK_SUCCEEDED_DAILY_PARTITION
+    return _MARK_SUCCEEDED_DAILY_FINALIZE
 
 
 async def _mark_succeeded(
@@ -679,19 +710,7 @@ async def _mark_succeeded(
     if len(encoded.encode()) > _MAX_EVIDENCE_BYTES:
         raise RuntimeError("metric execution evidence exceeds durable bound")
     result = await session.execute(
-        text(
-            f"""
-            UPDATE metric_compatibility_executions
-            SET state = 'succeeded',
-                output_evidence = CAST(:evidence AS jsonb),
-                completed_at = statement_timestamp(),
-                last_attempt_at = statement_timestamp()
-            WHERE id = CAST(:id AS uuid)
-              AND state = 'executing'
-              AND {_completion_fence(execution)}
-            RETURNING id
-            """
-        ),
+        text(_mark_succeeded_statement(execution)),
         {
             "id": str(execution.id),
             "evidence": encoded,

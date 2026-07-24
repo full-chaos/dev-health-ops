@@ -321,6 +321,10 @@ web:
   tolerations: []
   affinity: {}
   extraEnv: []
+  localDevelopment:
+    enabled: false
+    extraVolumeMounts: []
+    extraVolumes: []
 
 # =============================================================================
 # Database migrations (CHAOS-2304)

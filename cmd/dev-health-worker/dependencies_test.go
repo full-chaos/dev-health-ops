@@ -1031,3 +1031,97 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 		})
 	}
 }
+
+// TestNestedRiverClientCapabilityIsValidated proves a handler hosted in a
+// builder's own private River client is covered by exact startup validation.
+// sync.team_autoimport lives in the sync coordinator's client, not the provider
+// client, so before CUT-02 it could be constructed and consumed while readiness
+// had no way to observe it. Capability now reaches validation through one
+// canonical channel regardless of which client hosts the worker.
+func TestNestedRiverClientCapabilityIsValidated(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, contractRoot := promotedContractRoot(t, jobcontract.KindTeamAutoimport)
+	providerSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindSyncProviderUnit)
+	if !ok {
+		t.Fatal("sync.provider_unit descriptor missing")
+	}
+	autoimportSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindTeamAutoimport)
+	if !ok {
+		t.Fatal("sync.team_autoimport descriptor missing")
+	}
+
+	syncConfig := config.Config{
+		Profile:                "sync",
+		RiverDatabaseSchema:    "river",
+		DomainDatabaseMaxConns: 4,
+		QueueDatabaseMaxConns:  2,
+	}
+	baseSources := func() workerDependencySources {
+		sources := productionWorkerDependencySources
+		sources.contractRoot = contractRoot
+		sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+			return runtimeRegistry, nil
+		}
+		sources.buildProviderSync = func(
+			context.Context, config.Config, workerDatabase,
+			*jobruntime.Registry, jobruntime.Observer, *slog.Logger,
+		) (workerFamily, error) {
+			return workerFamily{
+				handlers: []jobruntime.HandlerSpec{providerSpec},
+				queues: []jobruntime.QueueBudget{
+					{Queue: "sync_provider", MaxWorkers: 2},
+				},
+			}, nil
+		}
+		return sources
+	}
+
+	for _, test := range []struct {
+		name      string
+		reported  bool
+		wantReady bool
+	}{
+		{name: "unreported nested handler closes readiness"},
+		{name: "reported nested handler completes the profile", reported: true, wantReady: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database := &fakeWorkerDatabase{}
+			sources := baseSources()
+			sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+				return database, nil
+			}
+			sources.buildSyncCoordinator = func(
+				config.Config, workerDatabase, *jobruntime.Registry,
+				jobruntime.Observer, *slog.Logger,
+			) (workerFamily, error) {
+				family := workerFamily{component: namedComponent("sync-coordinator")}
+				if test.reported {
+					family.handlers = []jobruntime.HandlerSpec{autoimportSpec}
+					family.queues = []jobruntime.QueueBudget{
+						{Queue: "sync", MaxWorkers: 4},
+					}
+				}
+				return family, nil
+			}
+			registry := health.NewRegistry(100 * time.Millisecond)
+			_, err := configureWorkerDependenciesWithSources(
+				context.Background(), syncConfig, registry, sources,
+			)
+			if test.wantReady {
+				if err != nil {
+					t.Fatalf("configure error = %v", err)
+				}
+			} else if !errors.Is(err, errWorkerDependencyUnavailable) {
+				t.Fatalf("configure error = %v, want unavailable", err)
+			}
+			if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			status := registry.Readiness(context.Background())
+			if failed := slices.Contains(status.Failed, "profile_completeness"); failed == test.wantReady {
+				t.Fatalf("readiness = %#v, want profile_completeness failure = %t",
+					status, !test.wantReady)
+			}
+		})
+	}
+}

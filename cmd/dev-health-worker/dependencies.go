@@ -139,7 +139,7 @@ type workerDependencySources struct {
 	loadDeployment       func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
 	newRiverClientID     func() string
 	buildOperational     workerFamilyBuilder
-	buildSyncCoordinator func(config.Config, workerDatabase, *slog.Logger) (lifecycle.Component, error)
+	buildSyncCoordinator workerFamilyBuilder
 	buildDaily           workerFamilyBuilder
 	buildReports         func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (workerFamily, error)
 	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (workerFamily, error)
@@ -285,6 +285,7 @@ func configureWorkerDependenciesWithSources(
 		sources.buildOperational,
 		sources.buildDaily,
 		sources.buildWorkgraph,
+		sources.buildSyncCoordinator,
 	} {
 		if builder == nil {
 			continue
@@ -332,19 +333,6 @@ func configureWorkerDependenciesWithSources(
 		if err := dependencies.profileReady(ctx); err != nil {
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
-		}
-	}
-	if sources.buildSyncCoordinator != nil {
-		// The sync coordinator hosts River workers that are outside the bounded
-		// job registry, so its queue is deliberately not part of registry startup
-		// validation. CUT-10 moves those coordinators into registered kinds.
-		component, err := sources.buildSyncCoordinator(cfg, dependencies.database, logger)
-		if err != nil {
-			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
-		}
-		if component != nil {
-			components = append(components, component)
 		}
 	}
 	return components, nil

@@ -6,6 +6,8 @@
 **Last updated:** 2026-07-20  
 **Product requirements:** [Go Worker Migration PRD](../product/go-worker-migration-prd.md)  
 **Delivery plan:** Repository-only [Go Worker Migration Implementation Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-migration-implementation-plan.md)  
+**Cutover completion design:** [Go Worker Cutover Completion TRD](go-worker-cutover-trd.md)  
+**Cutover completion plan:** Repository-only [Go Worker Cutover Completion Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-cutover-implementation-plan.md)  
 **Phase 0 decision:** [CHAOS-3034 River compatibility ADR](../decisions/chaos-3034-river-compatibility.md)
 
 ## 1. Decision summary

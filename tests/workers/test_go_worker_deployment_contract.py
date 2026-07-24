@@ -247,12 +247,13 @@ def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
     dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
 
     assert (
-        "cp -R /src/contracts/jobs/v1 "
-        "/runtime/reconciler/app/contracts/jobs/v1;" in dockerfile
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/reconciler/app/contracts/jobs/v1;"
+        in dockerfile
     )
     assert (
         "cp -R /src/contracts/sync-dispatch/v1 "
-        "/runtime/reconciler/app/contracts/sync-dispatch/v1;" in dockerfile
+        + "/runtime/reconciler/app/contracts/sync-dispatch/v1;"
+        in dockerfile
     )
 
 
@@ -262,11 +263,11 @@ def test_sync_parity_image_packages_fixed_runtime_paths() -> None:
     for required in (
         "FROM runtime AS sync-parity",
         "COPY --from=go-migrator-builder /out/dev-health-sync-parity "
-        "/usr/local/bin/dev-health-sync-parity",
+        + "/usr/local/bin/dev-health-sync-parity",
         "COPY --from=builder /build/contracts/sync-dispatch/v1 "
-        "/app/contracts/sync-dispatch/v1",
+        + "/app/contracts/sync-dispatch/v1",
         "COPY --from=builder /build/scripts/worker/observe_sync_dispatch_parity.py "
-        "/app/scripts/worker/observe_sync_dispatch_parity.py",
+        + "/app/scripts/worker/observe_sync_dispatch_parity.py",
         "ln -s /usr/local/bin/python /app/.venv/bin/python",
         "ENV PYTHONPATH=/app/src",
         'ENTRYPOINT ["dev-health-sync-parity"]',
@@ -430,7 +431,7 @@ def test_helm_accepts_dedicated_migration_dsn_without_sharing_it() -> None:
             str(_HELM_CHART),
             "--set-string",
             "migrations.hook.secretData.MIGRATION_DATABASE_URI="
-            "postgresql://migration@direct/app",
+            + "postgresql://migration@direct/app",
         ],
         check=False,
         capture_output=True,

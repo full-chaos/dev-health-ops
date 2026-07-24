@@ -67,10 +67,9 @@ def test_on_demand_run_and_deferred_handoff_rollback_together(engine):
             report_id = report.id
 
     with Session(engine) as session:
-        with pytest.raises(RuntimeError):
-            with session.begin():
-                create_on_demand_report_execution(session, report_id, "org-a")
-                raise RuntimeError("force rollback")
+        transaction = session.begin()
+        create_on_demand_report_execution(session, report_id, "org-a")
+        transaction.rollback()
 
     with Session(engine) as session:
         assert session.scalar(select(ReportRun)) is None

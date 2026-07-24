@@ -267,9 +267,14 @@ func TestCrashAfterCommitKeepsTheOccurrenceClaimed(t *testing.T) {
 	if err != nil || claim != ClaimDuplicate {
 		t.Fatalf("restart Claim() = %v / %v, want a duplicate", claim, err)
 	}
-	last, present, err := ledger.LastScheduledFor(ctx, restarted, schedule.ID)
-	if err != nil || !present || !last.Equal(occurrence.ScheduledFor) {
-		t.Fatalf("LastScheduledFor() = %v present=%t err=%v", last, present, err)
+	anchor, present, err := ledger.LastOccurrence(ctx, restarted, schedule.ID)
+	if err != nil || !present || !anchor.ScheduledFor.Equal(occurrence.ScheduledFor) {
+		t.Fatalf("LastOccurrence() = %+v present=%t err=%v", anchor, present, err)
+	}
+	// The observation instant is what an interval cadence anchors its next
+	// eligible boundary on, so it has to survive the round trip too.
+	if !anchor.ObservedAt.Equal(occurrence.ObservedAt) {
+		t.Fatalf("anchor observed_at = %s, want %s", anchor.ObservedAt, occurrence.ObservedAt)
 	}
 }
 

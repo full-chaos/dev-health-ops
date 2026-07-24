@@ -209,7 +209,7 @@ type DueDecision struct {
 func DueOccurrence(
 	schedule Schedule,
 	observedAt time.Time,
-	lastRecorded *time.Time,
+	lastRecorded *Anchor,
 ) (DueDecision, error) {
 	if err := schedule.Validate(); err != nil {
 		return DueDecision{}, err
@@ -228,10 +228,27 @@ func DueOccurrence(
 		occurrence := NewOccurrence(schedule, scheduledFor, observedAt)
 		return DueDecision{Occurrence: &occurrence, ColdStart: true}, nil
 	}
-	anchor := lastRecorded.UTC()
+	anchor := lastRecorded.ScheduledFor.UTC()
 	if !scheduledFor.After(anchor) {
 		// The newest boundary is already durably owned.
 		return DueDecision{}, nil
+	}
+	// An interval cadence's grid points carry no meaning of their own: 10:05 is
+	// not a contract the way 01:00 is, it is just where the epoch grid fell. So
+	// the guarantee owed after a cold start is elapsed time, not a boundary.
+	// Anchoring on the grid alone would fire a 300 second schedule three minutes
+	// after a 10:02 start, because 10:05 is the next grid point; measuring from
+	// the anchor's observation instant restores Beat's "one full interval after
+	// you started" behavior while keeping the grid for replica determinism.
+	//
+	// Wall-clock cadences deliberately skip this: 01:00 means 01:00, and a
+	// daily schedule that started at 09:00 still owes tomorrow's 01:00 rather
+	// than waiting a full day past its own startup.
+	if schedule.Cadence.Kind == CadenceInterval {
+		earliest := lastRecorded.ObservedAt.UTC().Add(schedule.Cadence.Period())
+		if scheduledFor.Before(earliest) {
+			return DueDecision{}, nil
+		}
 	}
 
 	occurrence := NewOccurrence(schedule, scheduledFor, observedAt)

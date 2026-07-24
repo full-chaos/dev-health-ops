@@ -176,42 +176,6 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 	}
 }
 
-// A scheduler process that cannot construct the fixed maintenance loop must
-// not start with only half the periodic surface: the legacy Beat entries would
-// silently stop firing while the process reported itself healthy.
-func TestSchedulerRuntimeRefusesToStartWithoutTheFixedScheduleLoop(t *testing.T) {
-	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
-	_, err := buildSchedulerLoopWithSources(
-		context.Background(),
-		config.Config{RiverDatabaseSchema: "river"},
-		health.NewRegistry(time.Second),
-		schedulerRuntimeSources{
-			openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) {
-				return database, nil
-			},
-			newRepository: func(*pgxpool.Pool) (schedulersync.HandoffStepper, error) {
-				return schedulerHandoffStepperFunc(func(
-					context.Context, time.Time, int, schedulersync.Coordinator,
-				) (schedulersync.HandoffResult, error) {
-					return schedulersync.HandoffResult{}, nil
-				}), nil
-			},
-			newCoordinator: schedulersync.NewOccurrenceCoordinator,
-			newLoop:        schedulersync.NewLoop,
-			newOccurrences: stubOccurrenceSource,
-			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error) {
-				return nil, errors.New("producers unavailable")
-			},
-		},
-	)
-	if !errors.Is(err, errSchedulerActivationUnavailable) {
-		t.Fatalf("err = %v, want errSchedulerActivationUnavailable", err)
-	}
-	if !database.closed.Load() {
-		t.Fatal("failed fixed-loop composition leaked the database pools")
-	}
-}
-
 func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing.T) {
 	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
 	_, err := buildSchedulerLoopWithSources(
@@ -235,5 +199,110 @@ func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing
 	)
 	if !errors.Is(err, errSchedulerActivationUnavailable) || !database.closed.Load() {
 		t.Fatalf("err=%v database_closed=%v", err, database.closed.Load())
+	}
+}
+
+// Product schedule handoff and pending-occurrence reconciliation must survive a
+// broken or disabled fixed maintenance scheduler. An occurrence whose marker has
+// already advanced is stranded until something consumes it, so tying its fate to
+// Beat's maintenance replacement would turn a maintenance outage into
+// permanently unprocessed product work.
+func TestSyncLoopAndOccurrenceReconcilerRunWithoutTheFixedScheduler(t *testing.T) {
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	steps := atomic.Int64{}
+	registry := health.NewRegistry(100 * time.Millisecond)
+	component, err := buildSchedulerLoopWithSources(
+		context.Background(),
+		config.Config{RiverDatabaseSchema: "river"},
+		registry,
+		schedulerRuntimeSources{
+			openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) {
+				return database, nil
+			},
+			newRepository: func(*pgxpool.Pool) (schedulersync.HandoffStepper, error) {
+				return schedulerHandoffStepperFunc(func(
+					context.Context, time.Time, int, schedulersync.Coordinator,
+				) (schedulersync.HandoffResult, error) {
+					steps.Add(1)
+					return schedulersync.HandoffResult{}, nil
+				}), nil
+			},
+			newCoordinator: schedulersync.NewOccurrenceCoordinator,
+			newLoop:        schedulersync.NewLoop,
+			newOccurrences: stubOccurrenceSource,
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error) {
+				return nil, errors.New("fixed maintenance schedules are unavailable")
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("a broken fixed scheduler blocked the whole runtime: %v", err)
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() = %v; the product loop must run without the fixed loop", err)
+	}
+	if steps.Load() != 1 {
+		t.Fatalf("the sync loop ran %d windows without the fixed scheduler", steps.Load())
+	}
+
+	// The degradation is reported, not hidden: the fixed profile's readiness
+	// names are closed while the process keeps scheduling product work.
+	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	status := registry.Readiness(context.Background())
+	if status.Ready {
+		t.Fatal("readiness stayed open with the fixed scheduler unavailable")
+	}
+	if err := component.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() = %v", err)
+	}
+	if !database.closed.Load() {
+		t.Fatal("shutdown without a fixed loop leaked the database pools")
+	}
+}
+
+// A fixed loop that constructs but fails to START must also not take the
+// product loop down with it.
+func TestFixedSchedulerStartFailureDoesNotStopTheSyncLoop(t *testing.T) {
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	fixedLoop := &fakeFixedLoop{startErr: errors.New("fixed loop cannot start")}
+	component, err := buildSchedulerLoopWithSources(
+		context.Background(),
+		config.Config{RiverDatabaseSchema: "river"},
+		health.NewRegistry(100*time.Millisecond),
+		schedulerRuntimeSources{
+			openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) {
+				return database, nil
+			},
+			newRepository: func(*pgxpool.Pool) (schedulersync.HandoffStepper, error) {
+				return schedulerHandoffStepperFunc(func(
+					context.Context, time.Time, int, schedulersync.Coordinator,
+				) (schedulersync.HandoffResult, error) {
+					return schedulersync.HandoffResult{}, nil
+				}), nil
+			},
+			newCoordinator: schedulersync.NewOccurrenceCoordinator,
+			newLoop:        schedulersync.NewLoop,
+			newOccurrences: stubOccurrenceSource,
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error) {
+				return fixedLoop, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() = %v; a fixed-loop start failure must not fail the process", err)
+	}
+	if fixedLoop.started.Load() != 1 {
+		t.Fatalf("fixed loop start attempts = %d", fixedLoop.started.Load())
+	}
+	if err := component.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() = %v", err)
+	}
+	if !database.closed.Load() {
+		t.Fatal("shutdown leaked the database pools")
 	}
 }

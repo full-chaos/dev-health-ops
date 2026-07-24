@@ -410,8 +410,10 @@ func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 			t.Errorf("%s policy = %q, want the agreed plural name %q",
 				test.scheduleID, payload.RetentionPolicy, test.wantPolicy)
 		}
-		if payload.BatchSize < 1 || payload.BatchSize > 1000 {
-			t.Errorf("%s batch_size %d is outside the schema bound 1..1000",
+		// Pinned to exactly 500, not merely inside the 1..1000 schema bound:
+		// it is a coordinated value with the retention handler's chunk size.
+		if payload.BatchSize != 500 {
+			t.Errorf("%s batch_size = %d, want the coordinated 500",
 				test.scheduleID, payload.BatchSize)
 		}
 		if !strings.HasSuffix(payload.DeleteBefore, "Z") {
@@ -459,5 +461,40 @@ func TestRetentionHorizonMatchesLegacyClampSemantics(t *testing.T) {
 			t.Errorf("override %q produced cutoff %s, want %s",
 				test.raw, payload.DeleteBefore, test.wantCutoff)
 		}
+	}
+}
+
+// The scheduler is long-lived and the legacy tasks re-read their horizon on
+// every run, so an operator changing the override must take effect on the next
+// occurrence rather than at the next process restart. Caching it at producer
+// construction would silently keep emitting the old cutoff.
+func TestRetentionHorizonIsResolvedPerOccurrenceNotAtConstruction(t *testing.T) {
+	t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", "14")
+	producer := NewRetentionProducer()
+	schedule := scheduleByID(t, "prune_rate_limit_observations")
+	dueTime := mustTime(t, "2026-07-24T05:00:00Z")
+
+	first, err := producer.Produce(
+		context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := first.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload).DeleteBefore; got != "2026-07-10T05:00:00Z" {
+		t.Fatalf("initial cutoff = %s", got)
+	}
+
+	// Same producer instance, changed override.
+	t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", "30")
+	second, err := producer.Produce(
+		context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := second.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload).DeleteBefore
+	if got != "2026-06-24T05:00:00Z" {
+		t.Fatalf("cutoff after override change = %s, want the 30 day horizon; "+
+			"the producer cached its horizon at construction", got)
 	}
 }

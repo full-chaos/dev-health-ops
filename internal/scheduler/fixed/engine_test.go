@@ -20,7 +20,7 @@ import (
 type memoryLedger struct {
 	mu       sync.Mutex
 	byKey    map[string]Occurrence
-	byTime   map[string]time.Time
+	byTime   map[string]Anchor
 	statuses map[string]string
 	failNext error
 }
@@ -28,7 +28,7 @@ type memoryLedger struct {
 func newMemoryLedger() *memoryLedger {
 	return &memoryLedger{
 		byKey:    map[string]Occurrence{},
-		byTime:   map[string]time.Time{},
+		byTime:   map[string]Anchor{},
 		statuses: map[string]string{},
 	}
 }
@@ -51,8 +51,11 @@ func (ledger *memoryLedger) Claim(_ context.Context, _ pgx.Tx, occurrence Occurr
 	ledger.byKey[occurrence.Key] = occurrence
 	ledger.statuses[occurrence.Key] = "claimed"
 	last := ledger.byTime[occurrence.ScheduleID]
-	if occurrence.ScheduledFor.After(last) {
-		ledger.byTime[occurrence.ScheduleID] = occurrence.ScheduledFor
+	if occurrence.ScheduledFor.After(last.ScheduledFor) {
+		ledger.byTime[occurrence.ScheduleID] = Anchor{
+			ScheduledFor: occurrence.ScheduledFor,
+			ObservedAt:   occurrence.ObservedAt,
+		}
 	}
 	return ClaimInserted, nil
 }
@@ -71,9 +74,9 @@ func (ledger *memoryLedger) Complete(
 	return nil
 }
 
-func (ledger *memoryLedger) LastScheduledFor(
+func (ledger *memoryLedger) LastOccurrence(
 	_ context.Context, _ pgx.Tx, scheduleID string,
-) (time.Time, bool, error) {
+) (Anchor, bool, error) {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	value, ok := ledger.byTime[scheduleID]
@@ -223,7 +226,10 @@ func heartbeatSchedule(t *testing.T) Schedule {
 func seedAnchor(ledger *memoryLedger, schedule Schedule, scheduledFor time.Time) {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
-	ledger.byTime[schedule.ID] = scheduledFor.UTC()
+	ledger.byTime[schedule.ID] = Anchor{
+		ScheduledFor: scheduledFor.UTC(),
+		ObservedAt:   scheduledFor.UTC(),
+	}
 }
 
 func newTestEngine(
@@ -432,10 +438,10 @@ func TestSkipPolicyDoesNotReplayOccurrencesMissedDuringAnOutage(t *testing.T) {
 	}
 }
 
-func anchor(t *testing.T, value string) *time.Time {
+func anchor(t *testing.T, value string) *Anchor {
 	t.Helper()
 	parsed := mustTime(t, value)
-	return &parsed
+	return &Anchor{ScheduledFor: parsed, ObservedAt: parsed}
 }
 
 func TestBoundedCatchUpEmitsOneOverdueOccurrenceNotTheWholeGap(t *testing.T) {
@@ -498,7 +504,12 @@ func TestAnchoredScheduleDoesNotRefireAnOwnedBoundary(t *testing.T) {
 
 // A 300 second schedule started mid-bucket must wait a full period rather than
 // immediately firing the bucket it started inside, which is Beat's behavior.
-func TestIntervalScheduleWaitsAPeriodAfterItsBaseline(t *testing.T) {
+// An interval cadence's grid points carry no meaning of their own, so after a
+// cold start the guarantee owed is elapsed time, not the next grid point.
+// Anchoring on the grid alone fired a 300 second schedule three minutes after a
+// 10:02 start; measuring from the baseline's observation instant restores
+// Beat's "one full interval after you started" behavior.
+func TestIntervalScheduleWaitsAFullPeriodAfterItsBaseline(t *testing.T) {
 	schedule := Schedule{
 		ID:               "interval_probe",
 		LegacyBeatEntry:  "dispatch-scheduled-metrics",
@@ -512,27 +523,81 @@ func TestIntervalScheduleWaitsAPeriodAfterItsBaseline(t *testing.T) {
 		AlertThreshold:   30 * time.Minute,
 		Rationale:        "probe",
 	}
-	baseline, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:02:00Z"), nil)
+	startedAt := mustTime(t, "2026-07-24T10:02:00Z")
+	baseline, err := DueOccurrence(schedule, startedAt, nil)
 	if err != nil || !baseline.ColdStart {
 		t.Fatalf("cold start = %+v err=%v", baseline, err)
 	}
-	recorded := baseline.Occurrence.ScheduledFor
-	// Still inside the baseline bucket: nothing owed.
-	held, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:04:59Z"), &recorded)
+	recorded := Anchor{
+		ScheduledFor: baseline.Occurrence.ScheduledFor,
+		ObservedAt:   baseline.Occurrence.ObservedAt,
+	}
+	if !recorded.ObservedAt.Equal(startedAt) {
+		t.Fatalf("baseline recorded observation %s, want the start instant", recorded.ObservedAt)
+	}
+
+	// 10:05 is the next grid point but only three minutes after activation.
+	// Firing there is the exact regression this guards.
+	early, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:05:01Z"), &recorded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if held.Occurrence != nil {
-		t.Fatalf("fired inside the baseline bucket: %+v", held.Occurrence)
+	if early.Occurrence != nil {
+		t.Fatalf("fired at %s, only %s after activation; a full period is owed",
+			early.Occurrence.ScheduledFor, early.Occurrence.ScheduledFor.Sub(startedAt))
 	}
-	// Next boundary is owed.
-	next, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:05:01Z"), &recorded)
+
+	// The first eligible boundary is the first grid point at or after
+	// start + period, and it must be at least a full period out.
+	fired, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:11:00Z"), &recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fired.Occurrence == nil {
+		t.Fatal("no occurrence after a full period elapsed")
+	}
+	if elapsed := fired.Occurrence.ScheduledFor.Sub(startedAt); elapsed < schedule.Cadence.Period() {
+		t.Fatalf("fired %s after activation, want at least one %s period",
+			elapsed, schedule.Cadence.Period())
+	}
+
+	// Steady state resumes the plain grid cadence once anchored on real runs.
+	steady := Anchor{
+		ScheduledFor: fired.Occurrence.ScheduledFor,
+		ObservedAt:   fired.Occurrence.ScheduledFor,
+	}
+	next, err := DueOccurrence(schedule, fired.Occurrence.ScheduledFor.Add(6*time.Minute), &steady)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if next.Occurrence == nil ||
-		!next.Occurrence.ScheduledFor.Equal(mustTime(t, "2026-07-24T10:05:00Z")) {
-		t.Fatalf("next boundary = %+v", next.Occurrence)
+		!next.Occurrence.ScheduledFor.Equal(steady.ScheduledFor.Add(5*time.Minute)) {
+		t.Fatalf("steady-state cadence drifted: %+v", next.Occurrence)
+	}
+}
+
+// A wall-clock cadence must NOT wait a period past its own startup: 01:00 means
+// 01:00, so a daily schedule baselined at 09:00 still owes tomorrow's 01:00.
+func TestWallClockScheduleIsNotDelayedByItsBaselineObservation(t *testing.T) {
+	schedule := scheduleByID(t, "daily_metrics_fanout")
+	startedAt := mustTime(t, "2026-07-24T09:00:00Z")
+	baseline, err := DueOccurrence(schedule, startedAt, nil)
+	if err != nil || !baseline.ColdStart {
+		t.Fatalf("cold start = %+v err=%v", baseline, err)
+	}
+	recorded := Anchor{
+		ScheduledFor: baseline.Occurrence.ScheduledFor,
+		ObservedAt:   baseline.Occurrence.ObservedAt,
+	}
+	next, err := DueOccurrence(schedule, mustTime(t, "2026-07-25T01:30:00Z"), &recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Occurrence == nil {
+		t.Fatal("a daily schedule baselined at 09:00 skipped the next 01:00 boundary")
+	}
+	if !next.Occurrence.ScheduledFor.Equal(mustTime(t, "2026-07-25T01:00:00Z")) {
+		t.Fatalf("fired %s, want the next 01:00 boundary", next.Occurrence.ScheduledFor)
 	}
 }
 

@@ -94,17 +94,21 @@ func (HeartbeatProducer) Produce(
 type RetentionSpec struct {
 	// Policy is the checked-in retention policy value.
 	Policy string
-	// Retention is how much history the store keeps. The delete cutoff is the
-	// occurrence's canonical due time minus this duration, so the cutoff is a
-	// pure function of the occurrence and never of the wall clock at execution.
-	Retention time.Duration
+	// DefaultDays is the checked horizon when no operator override applies.
+	DefaultDays int
 	// BatchSize bounds one deletion pass.
 	BatchSize int
 	// RetentionDaysEnv is the operator override the legacy Python task honored.
-	// The horizon is resolved here, at the producer, so the cutoff that travels
-	// in delete_before is authoritative and a handler never has to re-read the
-	// environment. A worker with a different environment than the scheduler
-	// would otherwise delete a different range than the one that was scheduled.
+	// It is read per occurrence rather than cached at construction: the
+	// scheduler is long-lived, and a horizon changed by an operator must take
+	// effect on the next occurrence rather than at the next process restart.
+	// The legacy tasks re-read it on every run, so caching would also be a
+	// silent behavioral change.
+	//
+	// The horizon is still resolved here, at the producer, so the cutoff that
+	// travels in delete_before stays authoritative and the handler never reads
+	// the environment. A worker whose environment differs from the scheduler's
+	// would otherwise delete a different range than the one scheduled.
 	RetentionDaysEnv string
 }
 
@@ -150,8 +154,8 @@ func NewRetentionProducer() Producer {
 	)
 	return &RetentionProducer{byScheduleID: map[string]RetentionSpec{
 		"prune_rate_limit_observations": {
-			Policy:    retentionRateLimitObservations,
-			Retention: retentionDays(rateLimitEnv, 14), // CHAOS-2758
+			Policy:      retentionRateLimitObservations,
+			DefaultDays: 14, // CHAOS-2758
 			// The handler drains one occurrence chunk-by-chunk until the work is
 			// gone, so this bounds a single pass rather than the total deletion.
 			// No catch-up occurrence is needed to clear a first-run backlog.
@@ -160,7 +164,7 @@ func NewRetentionProducer() Producer {
 		},
 		"prune_external_ingest_batches": {
 			Policy:           retentionExternalIngestBatches,
-			Retention:        retentionDays(externalIngestEnv, 90), // CHAOS-2694
+			DefaultDays:      90, // CHAOS-2694
 			BatchSize:        500,
 			RetentionDaysEnv: externalIngestEnv,
 		},
@@ -187,7 +191,8 @@ func (producer *RetentionProducer) Produce(
 	// trailing Z: a non-UTC offset is a permanent failure there. Deriving it
 	// from the occurrence's canonical due time also makes the cutoff immutable
 	// across retries, so an interrupted drain resumes against the same range.
-	deleteBefore := occurrence.ScheduledFor.UTC().Add(-spec.Retention).Format(time.RFC3339)
+	retention := retentionDays(spec.RetentionDaysEnv, spec.DefaultDays)
+	deleteBefore := occurrence.ScheduledFor.UTC().Add(-retention).Format(time.RFC3339)
 	envelope := jobcontract.Envelope{
 		ContractVersion: jobcontract.ContractVersionV1,
 		CorrelationID:   "fixed-schedule:" + schedule.ID + ":" + occurrence.ScheduledFor.UTC().Format(time.RFC3339),

@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -197,9 +197,24 @@ func buildSchedulerLoopWithSources(
 	if err != nil || loop == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
+	// The fixed maintenance scheduler is deliberately optional. Product schedule
+	// handoff and pending-occurrence reconciliation are a different workload
+	// with a different failure mode: an occurrence whose marker has already
+	// advanced is stranded until something consumes it, so tying its fate to
+	// whether Beat's maintenance replacement could be constructed would turn a
+	// maintenance outage into permanently unprocessed product work.
+	//
+	// A missing fixed loop closes only its own readiness names.
 	fixedLoop, err := sources.newFixedLoop(database.DomainPool(), registry)
 	if err != nil || fixedLoop == nil {
-		return nil, errSchedulerActivationUnavailable
+		if err := processreadiness.RegisterUnavailable(
+			registry,
+			"fixed_scheduler_loop",
+			"fixed_schedule_coverage",
+		); err != nil {
+			return nil, err
+		}
+		fixedLoop = nil
 	}
 	closeOnError = false
 	return schedulerRuntime{database: database, loop: loop, fixedLoop: fixedLoop}, nil
@@ -213,35 +228,45 @@ type schedulerRuntime struct {
 
 func (schedulerRuntime) Name() string { return "sync-scheduler-runtime" }
 
-// Start brings up the product schedule loop first. If it cannot start, the
-// fixed maintenance loop is never started either: a process that owns half the
-// periodic surface is harder to reason about than one that stays closed.
+// Start brings up the product schedule loop, which owns marker handoff and
+// pending-occurrence reconciliation. That loop is required: without it an
+// activated scheduler has no owner for either.
+//
+// The fixed maintenance loop starts after it and is allowed to fail. Its
+// failure closes its own readiness names and leaves the product loop running,
+// because a pending occurrence whose marker already advanced must still be
+// consumed while maintenance schedules are broken or intentionally disabled.
 func (component schedulerRuntime) Start(ctx context.Context) error {
-	if component.database == nil || component.loop == nil || component.fixedLoop == nil {
+	if component.database == nil || component.loop == nil {
 		return errSchedulerActivationUnavailable
 	}
 	if err := component.loop.Start(ctx); err != nil {
 		return err
 	}
+	if component.fixedLoop == nil {
+		return nil
+	}
 	if err := component.fixedLoop.Start(ctx); err != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		_ = component.loop.Shutdown(shutdownCtx)
-		return err
+		// Readiness for the fixed profile is already closed by the loop's own
+		// failure path, so the process reports the degradation without
+		// abandoning product scheduling.
+		component.fixedLoop = nil
 	}
 	return nil
 }
 
-// Shutdown stops both loops and always closes the database, even when one loop
-// fails to stop cleanly.
+// Shutdown stops whichever loops are running and always closes the database,
+// even when one fails to stop cleanly.
 func (component schedulerRuntime) Shutdown(ctx context.Context) error {
 	if component.database != nil {
 		defer component.database.Close()
 	}
-	if component.loop == nil || component.fixedLoop == nil {
+	if component.loop == nil {
 		return errSchedulerActivationUnavailable
 	}
-	fixedErr := component.fixedLoop.Shutdown(ctx)
-	syncErr := component.loop.Shutdown(ctx)
-	return errors.Join(fixedErr, syncErr)
+	var fixedErr error
+	if component.fixedLoop != nil {
+		fixedErr = component.fixedLoop.Shutdown(ctx)
+	}
+	return errors.Join(fixedErr, component.loop.Shutdown(ctx))
 }

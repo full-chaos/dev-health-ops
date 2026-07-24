@@ -282,7 +282,7 @@ func (engine *Engine) stepSchedule(
 func (engine *Engine) lastRecorded(
 	ctx context.Context,
 	schedule Schedule,
-) (*time.Time, error) {
+) (*Anchor, error) {
 	tx, err := engine.beginner.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin fixed schedule read: %w", err)
@@ -292,14 +292,14 @@ func (engine *Engine) lastRecorded(
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
-	last, present, err := engine.ledger.LastScheduledFor(ctx, tx, schedule.ID)
+	anchor, present, err := engine.ledger.LastOccurrence(ctx, tx, schedule.ID)
 	if err != nil {
 		return nil, err
 	}
 	if !present {
 		return nil, nil
 	}
-	return &last, nil
+	return &anchor, nil
 }
 
 // runOccurrence performs the single transaction that owns one occurrence:
@@ -417,7 +417,7 @@ func (engine *Engine) runOccurrence(
 func (engine *Engine) missingFor(
 	schedule Schedule,
 	observedAt time.Time,
-	lastRecorded *time.Time,
+	lastRecorded *Anchor,
 ) time.Duration {
 	location, err := schedule.Location()
 	if err != nil {
@@ -433,7 +433,7 @@ func (engine *Engine) missingFor(
 		// deployment start unhealthy.
 		return 0
 	}
-	if lastRecorded.Before(expected) {
+	if lastRecorded.ScheduledFor.Before(expected) {
 		return observedAt.Sub(expected)
 	}
 	return 0

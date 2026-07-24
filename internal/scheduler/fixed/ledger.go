@@ -50,9 +50,9 @@ type Ledger interface {
 	Claim(ctx context.Context, tx pgx.Tx, occurrence Occurrence) (ClaimResult, error)
 	// Complete records the producer outcome for a claimed occurrence.
 	Complete(ctx context.Context, tx pgx.Tx, occurrence Occurrence, status string, handoffs int, skipReason string) error
-	// LastScheduledFor returns the newest recorded due time for a schedule.
-	// The zero time with a false second result means no occurrence exists.
-	LastScheduledFor(ctx context.Context, tx pgx.Tx, scheduleID string) (time.Time, bool, error)
+	// LastOccurrence returns the newest recorded occurrence for a schedule.
+	// A false second result means no occurrence exists.
+	LastOccurrence(ctx context.Context, tx pgx.Tx, scheduleID string) (Anchor, bool, error)
 }
 
 // PostgresLedger is the production ledger.
@@ -183,23 +183,39 @@ func (PostgresLedger) Complete(
 	return nil
 }
 
-// LastScheduledFor supports missed-occurrence alerting without replaying work.
-func (PostgresLedger) LastScheduledFor(
+// Anchor is the newest durable occurrence for one schedule. It carries both the
+// canonical due time and the instant that occurrence was observed, because
+// those answer different questions: the due time says which grid point is
+// already owned, and the observation instant says when this schedule actually
+// began running. An interval cadence needs the second one, since its grid
+// points carry no meaning of their own.
+type Anchor struct {
+	ScheduledFor time.Time
+	ObservedAt   time.Time
+}
+
+// LastOccurrence supports both due-ness anchoring and missed-occurrence
+// alerting without replaying work.
+func (PostgresLedger) LastOccurrence(
 	ctx context.Context,
 	tx pgx.Tx,
 	scheduleID string,
-) (time.Time, bool, error) {
+) (Anchor, bool, error) {
 	if ctx == nil || tx == nil || scheduleID == "" {
-		return time.Time{}, false, ErrLedgerUnavailable
+		return Anchor{}, false, ErrLedgerUnavailable
 	}
-	var scheduledFor time.Time
-	if err := tx.QueryRow(ctx, selectLastOccurrenceSQL, scheduleID).Scan(&scheduledFor); err != nil {
+	var anchor Anchor
+	if err := tx.QueryRow(ctx, selectLastOccurrenceSQL, scheduleID).Scan(
+		&anchor.ScheduledFor, &anchor.ObservedAt,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return time.Time{}, false, nil
+			return Anchor{}, false, nil
 		}
-		return time.Time{}, false, fmt.Errorf("read last fixed schedule occurrence: %w", err)
+		return Anchor{}, false, fmt.Errorf("read last fixed schedule occurrence: %w", err)
 	}
-	return scheduledFor.UTC(), true, nil
+	anchor.ScheduledFor = anchor.ScheduledFor.UTC()
+	anchor.ObservedAt = anchor.ObservedAt.UTC()
+	return anchor, true, nil
 }
 
 func validateOccurrence(occurrence Occurrence) error {
@@ -247,7 +263,7 @@ WHERE occurrence_key = $5
 `
 
 const selectLastOccurrenceSQL = `
-SELECT scheduled_for
+SELECT scheduled_for, observed_at
 FROM public.fixed_schedule_occurrences
 WHERE schedule_id = $1
 ORDER BY scheduled_for DESC

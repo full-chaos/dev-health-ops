@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
@@ -1708,7 +1709,7 @@ def test_subscription_billing_plan_fk_has_no_cascade():
 
 
 class TestInvalidOrgIdGuards:
-    def test_task_drops_invalid_org_id_without_retry(self):
+    def test_task_drops_invalid_org_id_without_retry(self, caplog):
         """A malformed org_id is permanently bad — the task must drop it
         instead of retry-looping (observed live with Stripe TEST webhook
         fixture ids like 'org-abc')."""
@@ -1717,7 +1718,10 @@ class TestInvalidOrgIdGuards:
         task = cast(_CallableCeleryTask, send_billing_notification)
         task.push_request(id="billing-bad-org", retries=0)
         try:
-            result = task("subscription_cancelled", "org-abc", tier="team")
+            with caplog.at_level(
+                logging.ERROR, logger="dev_health_ops.workers.system_ops"
+            ):
+                result = task("subscription_cancelled", "org-abc", tier="team")
         finally:
             task.pop_request()
 
@@ -1726,3 +1730,59 @@ class TestInvalidOrgIdGuards:
             "reason": "invalid_org_id",
             "org_id": "org-abc",
         }
+        assert (
+            "Billing notification dropped: invalid organization identifier"
+            in caplog.text
+        )
+        assert "org-abc" not in caplog.text
+        assert "subscription_cancelled" not in caplog.text
+
+    def test_task_logs_unsupported_email_type_without_payload_value(self, caplog):
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        task = cast(_CallableCeleryTask, send_billing_notification)
+        task.push_request(id="billing-unknown-type", retries=0)
+        try:
+            with caplog.at_level(
+                logging.ERROR, logger="dev_health_ops.workers.system_ops"
+            ):
+                result = task("customer-provided-email-type", str(uuid.uuid4()))
+        finally:
+            task.pop_request()
+
+        assert result == {
+            "status": "error",
+            "reason": "unknown_email_type: customer-provided-email-type",
+        }
+        assert "Billing notification dropped: unsupported email type" in caplog.text
+        assert "customer-provided-email-type" not in caplog.text
+
+    def test_task_retry_log_excludes_delivery_error_and_identifiers(self, caplog):
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        task = cast(_CallableCeleryTask, send_billing_notification)
+        org_id = str(uuid.uuid4())
+        task.push_request(id="billing-delivery-failure", retries=0)
+        try:
+            with (
+                patch(
+                    "dev_health_ops.workers.system_ops.run_async",
+                    side_effect=RuntimeError("private mail provider response"),
+                ),
+                patch(
+                    "dev_health_ops.api.services.billing_emails.send_subscription_cancelled",
+                    return_value=None,
+                ),
+                caplog.at_level(
+                    logging.WARNING, logger="dev_health_ops.workers.system_ops"
+                ),
+                pytest.raises(RuntimeError, match="private mail provider response"),
+            ):
+                task("subscription_cancelled", org_id, tier="team")
+        finally:
+            task.pop_request()
+
+        assert "Billing notification delivery failed (attempt 1/4)" in caplog.text
+        assert "private mail provider response" not in caplog.text
+        assert org_id not in caplog.text
+        assert "subscription_cancelled" not in caplog.text

@@ -162,7 +162,9 @@ def send_billing_notification(
 
     fn = dispatch.get(email_type)
     if not fn:
-        logger.error("Unknown billing email type: %s", email_type)
+        # email_type comes from the task payload and may contain customer-supplied
+        # data. Keep the operational signal without sending it to application logs.
+        logger.error("Billing notification dropped: unsupported email type")
         return {"status": "error", "reason": f"unknown_email_type: {email_type}"}
 
     try:
@@ -171,11 +173,7 @@ def send_billing_notification(
         # A malformed org_id is permanently bad — retrying can never succeed.
         # Seen via Stripe TEST webhooks whose metadata carries fixture ids like
         # "org-abc"; the retry loop just spams the worker.
-        logger.error(
-            "Billing email %s dropped: org_id=%r is not a UUID (non-retryable)",
-            email_type,
-            org_id,
-        )
+        logger.error("Billing notification dropped: invalid organization identifier")
         return {"status": "dropped", "reason": "invalid_org_id", "org_id": org_id}
 
     try:
@@ -183,12 +181,9 @@ def send_billing_notification(
         return {"status": "sent", "email_type": email_type, "org_id": org_id}
     except Exception as exc:
         logger.warning(
-            "Billing email %s failed for org_id=%s (attempt %d/%d): %s",
-            email_type,
-            org_id,
+            "Billing notification delivery failed (attempt %d/%d)",
             self.request.retries + 1,
             self.max_retries + 1,
-            exc,
         )
         raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
 
@@ -220,9 +215,7 @@ def _load_billing_notification(
                 dict(notification.attributes),
             )
     except Exception:
-        logger.exception(
-            "Unable to load durable billing notification id=%s", durable_notification_id
-        )
+        logger.error("Unable to load durable billing notification")
         raise
 
 

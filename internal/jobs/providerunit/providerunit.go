@@ -15,6 +15,26 @@ import (
 
 var ErrUnavailable = errors.New("provider unit runtime is unavailable")
 
+// ErrRouteReconciliationRequired reports a unit that reached River for a scope
+// the Go capability system does not route. That is a producer-gate fault, not
+// a property of the unit, so it must never terminalize the unit.
+var ErrRouteReconciliationRequired = errors.New(
+	"provider unit route is unavailable for this scope; producer gate and Go descriptor disagree",
+)
+
+// RouteFault describes a producer/consumer capability disagreement for
+// alerting. It carries no credentials, URLs, or provider payloads.
+type RouteFault struct {
+	Provider          string
+	Dataset           string
+	DescriptorPresent bool
+	RouteReady        bool
+	RouteEnabled      bool
+	// Released reports whether the claim was handed back to dispatching. When
+	// false the unit is still leased and will recover through lease expiry.
+	Released bool
+}
+
 type ExecutorFactory func(
 	*providersync.LeaseSession,
 ) (providersync.CompleteRouteExecutor, error)
@@ -46,6 +66,17 @@ type Handler struct {
 	LeaseDuration time.Duration
 	Heartbeat     time.Duration
 	Now           func() time.Time
+	// OnRouteFault receives producer/consumer capability disagreements so a
+	// binary can alert on them. A nil hook keeps the fail-safe behavior; it
+	// never converts the fault into success.
+	OnRouteFault func(RouteFault)
+}
+
+func (handler *Handler) observeRouteFault(fault RouteFault) {
+	if handler == nil || handler.OnRouteFault == nil {
+		return
+	}
+	handler.OnRouteFault(fault)
 }
 
 func (handler *Handler) now() time.Time {
@@ -85,11 +116,27 @@ func (handler *Handler) Work(
 	}
 	descriptor, ok := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
 	if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-		_ = handler.Repository.Fail(
-			context.WithoutCancel(ctx), claim, "route_disabled",
-			startedAt, handler.now(),
+		// TRD non-negotiable #3: a provider unit delivered to River must never
+		// terminalize as route_disabled. A unit only reaches here when the
+		// Python producer gate routed a scope the Go descriptor does not
+		// serve, so the sync data is real and the gate is wrong. Terminalizing
+		// would silently discard that scope's data for the whole run. Instead
+		// hand the claim back to dispatching, alert, and fail retryably so the
+		// unit stays recoverable by the Celery route or the reconciler.
+		fault := RouteFault{
+			Provider: claim.Provider, Dataset: claim.Dataset,
+			DescriptorPresent: ok, RouteReady: descriptor.RouteReady,
+			RouteEnabled: descriptor.RouteEnabled,
+		}
+		releaseErr := handler.Repository.ReleaseForRetry(
+			context.WithoutCancel(ctx), claim, handler.now(),
 		)
-		return jobruntime.Permanent(ErrUnavailable)
+		fault.Released = releaseErr == nil
+		handler.observeRouteFault(fault)
+		if releaseErr != nil {
+			return jobruntime.Retryable(releaseErr)
+		}
+		return jobruntime.Retryable(ErrRouteReconciliationRequired)
 	}
 	session := &providersync.LeaseSession{
 		Repository: handler.Repository,

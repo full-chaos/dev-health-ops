@@ -126,6 +126,22 @@ func buildProviderSyncWorker(
 		Switches:      switches,
 		LeaseDuration: providerUnitLeaseDuration,
 		Heartbeat:     providerUnitHeartbeat,
+		// A route fault means the Python producer gate routed a scope the Go
+		// capability system does not serve. The unit is never terminalized
+		// (TRD non-negotiable #3), so this log is the operator's only signal
+		// that a producer gate needs reconciliation. Fields are bounded: no
+		// credentials, URLs, or provider payloads.
+		OnRouteFault: func(fault providerunit.RouteFault) {
+			logger.Error(
+				"provider unit route reconciliation required",
+				"provider", fault.Provider,
+				"dataset", fault.Dataset,
+				"descriptor_present", fault.DescriptorPresent,
+				"route_ready", fault.RouteReady,
+				"route_enabled", fault.RouteEnabled,
+				"released_for_retry", fault.Released,
+			)
+		},
 		BuildExecutor: func(
 			session *providersync.LeaseSession,
 		) (providersync.CompleteRouteExecutor, error) {

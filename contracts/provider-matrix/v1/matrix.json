@@ -1,0 +1,1408 @@
+{
+  "schema_version": 1,
+  "providers": [
+    "github",
+    "gitlab",
+    "jira",
+    "launchdarkly",
+    "linear",
+    "pagerduty"
+  ],
+  "pairs": [
+    {
+      "provider": "github",
+      "dataset": "blame",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "blame"
+      ],
+      "processor_flags": {
+        "blame_only": true,
+        "sync_blame": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "blame",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "cicd",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "cicd"
+      ],
+      "processor_flags": {
+        "sync_cicd": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "cicd",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "commit-stats",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {
+        "sync_commit_stats": true,
+        "sync_git": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "commit-stats",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "commits",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {
+        "sync_commits": true,
+        "sync_git": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "commits",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "deployments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "deployments"
+      ],
+      "processor_flags": {
+        "sync_deployments": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "deployments",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "files",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {
+        "sync_files": true,
+        "sync_git": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "files",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "pr-comments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "prs"
+      ],
+      "processor_flags": {
+        "sync_prs": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "pr-comments",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "pr-reviews",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "prs"
+      ],
+      "processor_flags": {
+        "sync_prs": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "pr-reviews",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "prs",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "prs"
+      ],
+      "processor_flags": {
+        "sync_prs": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "prs",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "repo-metadata",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": true,
+      "route_dataset": "repo-metadata",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "security",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "security"
+      ],
+      "processor_flags": {
+        "sync_security": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "security",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "tests",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "tests"
+      ],
+      "processor_flags": {
+        "sync_tests": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "tests",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "work-item-comments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-comments",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "work-item-history",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-history",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "work-item-labels",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-labels",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "work-item-projects",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-projects",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "github",
+      "dataset": "work-items",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"github\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token",
+        "github_app_installation"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "blame",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "blame"
+      ],
+      "processor_flags": {
+        "blame_only": true,
+        "sync_blame": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "blame",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "cicd",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "cicd"
+      ],
+      "processor_flags": {
+        "sync_cicd": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "cicd",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "commit-stats",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {
+        "sync_commit_stats": true,
+        "sync_git": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "commit-stats",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "commits",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {
+        "sync_commits": true,
+        "sync_git": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "commits",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "deployments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "deployments"
+      ],
+      "processor_flags": {
+        "sync_deployments": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "deployments",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "feature-flags",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "feature-flags"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "feature-flags",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "files",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {
+        "sync_files": true,
+        "sync_git": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "files",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "incidents",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "incidents"
+      ],
+      "processor_flags": {
+        "sync_incidents": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "incidents",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "pr-comments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "prs"
+      ],
+      "processor_flags": {
+        "sync_prs": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "pr-comments",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "pr-reviews",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "prs"
+      ],
+      "processor_flags": {
+        "sync_prs": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "pr-reviews",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "prs",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "prs"
+      ],
+      "processor_flags": {
+        "sync_prs": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "prs",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "repo-metadata",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "git"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": true,
+      "route_dataset": "repo-metadata",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "security",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "security"
+      ],
+      "processor_flags": {
+        "sync_security": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "security",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "tests",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "heavy",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "tests"
+      ],
+      "processor_flags": {
+        "sync_tests": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "tests",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "work-item-comments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-comments",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "work-item-history",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-history",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "work-item-labels",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-labels",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "work-item-projects",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-item-projects",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "gitlab",
+      "dataset": "work-items",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"gitlab\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "personal_access_token"
+      ]
+    },
+    {
+      "provider": "jira",
+      "dataset": "incidents",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"jira\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "incidents",
+      "route_destinations": [
+        "operational_incidents"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "basic_api_token",
+        "oauth_bearer_token",
+        "oauth_refresh_token"
+      ]
+    },
+    {
+      "provider": "jira",
+      "dataset": "work-item-comments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"jira\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "basic_api_token",
+        "oauth_bearer_token",
+        "oauth_refresh_token"
+      ]
+    },
+    {
+      "provider": "jira",
+      "dataset": "work-item-history",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"jira\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "basic_api_token",
+        "oauth_bearer_token",
+        "oauth_refresh_token"
+      ]
+    },
+    {
+      "provider": "jira",
+      "dataset": "work-item-labels",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"jira\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "basic_api_token",
+        "oauth_bearer_token",
+        "oauth_refresh_token"
+      ]
+    },
+    {
+      "provider": "jira",
+      "dataset": "work-item-projects",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"jira\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "basic_api_token",
+        "oauth_bearer_token",
+        "oauth_refresh_token"
+      ]
+    },
+    {
+      "provider": "jira",
+      "dataset": "work-items",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"jira\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "basic_api_token",
+        "oauth_bearer_token",
+        "oauth_refresh_token"
+      ]
+    },
+    {
+      "provider": "launchdarkly",
+      "dataset": "feature-flags",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"launchdarkly\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "feature-flags"
+      ],
+      "processor_flags": {},
+      "go_executor": "native_go",
+      "native_shadow": false,
+      "route_dataset": "feature-flags",
+      "route_destinations": [
+        "feature_flag",
+        "feature_flag_event",
+        "feature_flag_link",
+        "work_graph_edges"
+      ],
+      "route_ready": true,
+      "credential_modes": [
+        "api_key"
+      ]
+    },
+    {
+      "provider": "linear",
+      "dataset": "work-item-comments",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"linear\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "api_key"
+      ]
+    },
+    {
+      "provider": "linear",
+      "dataset": "work-item-history",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"linear\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "api_key"
+      ]
+    },
+    {
+      "provider": "linear",
+      "dataset": "work-item-labels",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"linear\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "api_key"
+      ]
+    },
+    {
+      "provider": "linear",
+      "dataset": "work-item-projects",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"linear\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "api_key"
+      ]
+    },
+    {
+      "provider": "linear",
+      "dataset": "work-items",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"linear\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "work-items"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "work-items",
+      "route_destinations": [
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": false,
+      "credential_modes": [
+        "api_key"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "business-services",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "business-services",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "escalation-policies",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "escalation-policies",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "incident-alerts",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "incident-alerts",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "incident-log-entries",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "incident-log-entries",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "incident-notes",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "medium",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "incident-notes",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "incidents",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "light",
+      "watermark": "incremental",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {
+        "sync_incidents": true
+      },
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "incidents",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "on-calls",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "medium",
+      "watermark": "none",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "on-calls",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "schedules",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "schedules",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "services",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "services",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "teams",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "teams",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    },
+    {
+      "provider": "pagerduty",
+      "dataset": "users",
+      "python_source": "src/dev_health_ops/sync/datasets.py::_PROVIDER_SUPPORTED_DATASETS[\"pagerduty\"]",
+      "cost_class": "light",
+      "watermark": "none",
+      "legacy_targets": [
+        "operational"
+      ],
+      "processor_flags": {},
+      "go_executor": "none",
+      "native_shadow": false,
+      "route_dataset": "users",
+      "route_destinations": [],
+      "route_ready": false,
+      "credential_modes": [
+        "api_token",
+        "oauth_bearer_token",
+        "oauth_authorization_code"
+      ]
+    }
+  ]
+}

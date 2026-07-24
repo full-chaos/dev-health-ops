@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 147,
+  "row_count": 152,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -965,7 +965,7 @@
       "verification_status": "verified",
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
       "deletion_evidence_requirement": "Deleted once registry kind `operational.billing_notification` no longer routes through the HTTP compatibility bridge.",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
+      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_passes_only_durable_billing_reference",
       "notes": "registry kind operational.billing_notification; task name has no .tasks. prefix (dev_health_ops.workers.system_ops.send_billing_notification)"
     },
     {
@@ -1613,7 +1613,7 @@
       "verification_status": "verified",
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
+      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_passes_only_durable_billing_reference",
       "notes": "internal helper, not a direct HTTP-triggered endpoint by itself"
     },
     {
@@ -3149,7 +3149,7 @@
       "verification_status": "verified",
       "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
       "deletion_evidence_requirement": "registry.json kind `operational.billing_notification` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
+      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_passes_only_durable_billing_reference",
       "notes": ""
     },
     {
@@ -3360,7 +3360,7 @@
         "type": "native_process",
         "value": "stream-ingest"
       },
-      "target_kind_id": "stream:internal ingest stream",
+      "target_kind_id": "stream:ingest-consumers",
       "current_implementation_state": "native_go",
       "verification_status": "verified",
       "compatibility_dependency": "Python Celery Beat launcher remains active in tandem pending Celery-off cutover.",
@@ -3384,7 +3384,7 @@
         "type": "native_process",
         "value": "stream-ingest"
       },
-      "target_kind_id": "stream:product telemetry stream",
+      "target_kind_id": "stream:product-telemetry-consumers",
       "current_implementation_state": "native_go",
       "verification_status": "verified",
       "compatibility_dependency": "Python Celery Beat launcher remains active in tandem pending Celery-off cutover.",
@@ -3408,7 +3408,7 @@
         "type": "native_process",
         "value": "stream-external"
       },
-      "target_kind_id": "stream:external ingest stream",
+      "target_kind_id": "stream:external-ingest-consumers",
       "current_implementation_state": "native_go",
       "verification_status": "verified",
       "compatibility_dependency": "Python Celery Beat launcher remains active in tandem pending Celery-off cutover.",
@@ -3432,7 +3432,7 @@
         "type": "native_process",
         "value": "PagerDuty Go stream handler"
       },
-      "target_kind_id": "stream:PagerDuty webhook event stream",
+      "target_kind_id": "stream:pagerduty_direct_dispatch",
       "current_implementation_state": "dormant_go",
       "verification_status": "verified",
       "compatibility_dependency": "Python direct write-then-.delay dispatch (no poll consumer).",
@@ -3535,6 +3535,126 @@
       "deletion_evidence_requirement": "transport-routes.json route `reference_discovery` flips to a native Go route with durable route-row promotion evidence (route generation change recorded, not just a string edit) and a passing rollback rehearsal.",
       "acceptance_test_id": "tests/test_sync_units.py",
       "notes": "route=celery, rollback=celery"
+    },
+    {
+      "id": "celery_canvas_import:src/dev_health_ops/workers/metrics_partitioned.py:8",
+      "surface": "from celery import chord",
+      "class": "celery_canvas_import",
+      "source": {
+        "file": "src/dev_health_ops/workers/metrics_partitioned.py",
+        "line": 8
+      },
+      "queue_or_cadence": "n/a",
+      "dispatches": "chord([run_daily_metrics_batch.s(...) per batch], run_daily_metrics_finalize_task.s(...))() at line 91",
+      "dispatch_mechanism": "celery_canvas_import",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_kind",
+        "value": "metrics.daily_partition"
+      },
+      "target_kind_id": null,
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery canvas primitive; the actual fan-out is the bare chord(...)() invocation this import enables at metrics_partitioned.py:91.",
+      "deletion_evidence_requirement": "Deleted once dispatch_daily_metrics_partitioned's fan-out no longer imports celery canvas primitives (a native Go dispatcher replaces the chord).",
+      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
+      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed guard -- any celery canvas (chain/chord/group) import requires its own row so a future new canvas-based dispatch can't be added without CI forcing an ownership decision, even where the invocation shape can't be statically parsed."
+    },
+    {
+      "id": "call_site_literal:src/dev_health_ops/workers/metrics_partitioned.py:91",
+      "surface": "chord(...)() [run_daily_metrics_batch.s -> run_daily_metrics_finalize_task.s]",
+      "class": "call_site_literal",
+      "source": {
+        "file": "src/dev_health_ops/workers/metrics_partitioned.py",
+        "line": 91
+      },
+      "queue_or_cadence": "n/a",
+      "dispatches": "run_daily_metrics_batch (per batch, chord header) -> run_daily_metrics_finalize_task (chord callback)",
+      "dispatch_mechanism": "celery_canvas_bare_invocation",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_kind",
+        "value": "metrics.daily_partition"
+      },
+      "target_kind_id": null,
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Dispatch site only: a bare chord(...)() invocation (no .apply_async() suffix) inside dispatch_daily_metrics_partitioned's per-day fan-out loop.",
+      "deletion_evidence_requirement": "Deleted once dispatch_daily_metrics_partitioned's per-day fan-out is replaced by a native Go dispatcher for metrics.daily_partition/metrics.daily_finalize.",
+      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
+      "notes": "Added CUT-01 round-2 (Codex HIGH-1): a live chord(...)() dispatch the original scanner missed -- it only recognized .delay/.apply_async/.signature/send_task, not a bare celery-canvas invocation. Fans out to the same registry kinds (metrics.daily_partition, metrics.daily_finalize) already owned by the run_daily_metrics_batch/run_daily_metrics_finalize_task celery_task rows."
+    },
+    {
+      "id": "celery_canvas_import:src/dev_health_ops/workers/work_graph_tasks.py:9",
+      "surface": "from celery import chain, chord",
+      "class": "celery_canvas_import",
+      "source": {
+        "file": "src/dev_health_ops/workers/work_graph_tasks.py",
+        "line": 9
+      },
+      "queue_or_cadence": "n/a",
+      "dispatches": "chord(header,callback).apply_async() at line 654; chain(build_sig,backfill_sig).apply_async() at line 809",
+      "dispatch_mechanism": "celery_canvas_import",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_kind",
+        "value": "investment.chunk"
+      },
+      "target_kind_id": null,
+      "current_implementation_state": "python_compatibility",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery canvas primitives backing the already-inventoried chord/chain .apply_async() call sites at lines 654 and 809 in this file.",
+      "deletion_evidence_requirement": "Deleted once work_graph_tasks.py no longer imports celery canvas primitives (investment.* and membership-backfill fan-out both natively owned).",
+      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
+      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the two invocation call sites this import backs are already separately inventoried (call_site_literal rows at lines 654 and 809)."
+    },
+    {
+      "id": "celery_canvas_import:src/dev_health_ops/workers/post_sync_dispatch.py:9",
+      "surface": "from celery import chain",
+      "class": "celery_canvas_import",
+      "source": {
+        "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
+        "line": 9
+      },
+      "queue_or_cadence": "n/a",
+      "dispatches": "chain(*chain_sigs).apply_async() at line 263",
+      "dispatch_mechanism": "celery_canvas_import",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_process",
+        "value": "native Go coordinators / post_sync (transport-routes.json)"
+      },
+      "target_kind_id": null,
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery canvas primitive backing the already-inventoried chain(*chain_sigs).apply_async() call site at line 263 in this file.",
+      "deletion_evidence_requirement": "Deleted once post_sync_dispatch.py no longer imports celery canvas primitives (post_sync transport route natively owned).",
+      "acceptance_test_id": "tests/test_sync_units.py",
+      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the invocation call site this import backs is already separately inventoried (call_site_literal row at line 263)."
+    },
+    {
+      "id": "celery_canvas_import:src/dev_health_ops/external_ingest/recompute.py:27",
+      "surface": "from celery import chain",
+      "class": "celery_canvas_import",
+      "source": {
+        "file": "src/dev_health_ops/external_ingest/recompute.py",
+        "line": 27
+      },
+      "queue_or_cadence": "n/a",
+      "dispatches": "chain(daily_sig, build_sig).apply_async() at line 368",
+      "dispatch_mechanism": "celery_canvas_import",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_process",
+        "value": "native external recompute controller (stream-external runner, CUT-11)"
+      },
+      "target_kind_id": null,
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Celery canvas primitive backing the already-inventoried chain(daily_sig, build_sig).apply_async() call site at line 368 in this file.",
+      "deletion_evidence_requirement": "Deleted once recompute.py no longer imports celery canvas primitives (native external recompute owns the chain natively).",
+      "acceptance_test_id": "tests/test_external_ingest_recompute_dispatch.py",
+      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the invocation call site this import backs is already separately inventoried (call_site_literal row at line 368)."
     }
   ]
 }

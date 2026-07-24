@@ -22,14 +22,19 @@ alongside the final Celery cleanup once CI proves no legacy surface remains.
 
 ## What is in the contract
 
-`contracts/jobs/v1/transitional-inventory.json` has 147 rows, one per surface
-discovered in the Wave-0 audit: Celery task decorators, Beat schedule entries
-(19 unconditional + 1 conditional), literal dispatch calls (`.delay(`,
-`.apply_async(`, `send_task(`, `.signature(`), the `getattr(x, "delay"|
-"apply_async"|"send_task")` indirection form (12 of 34 dispatch call sites use
-this grep-evading form), API dispatch endpoints, job registry kinds
-(`contracts/jobs/v1/registry.json`), stream consumer surfaces, and
-sync-dispatch transport routes (`contracts/sync-dispatch/v1/transport-routes.json`).
+`contracts/jobs/v1/transitional-inventory.json` has 152 rows: the 147 surfaces
+discovered in the Wave-0 audit, plus 5 added during CUT-01 round-2 hardening
+(a Codex adversarial review found a live dispatch the original scanner
+missed -- see "Round-2 hardening" below). Classes: Celery task decorators,
+Beat schedule entries (19 unconditional + 1 conditional), literal dispatch
+calls (`.delay(`, `.apply_async(`, `send_task(`, `.signature(`, a bare
+celery-canvas invocation, or a bound-method/`functools.partial` alias), the
+`getattr(x, "delay"|"apply_async"|"send_task")` indirection form (12 of 34
+dispatch call sites use this grep-evading form), API dispatch endpoints (REST
+and GraphQL resolvers), job registry kinds (`contracts/jobs/v1/registry.json`),
+stream consumer surfaces, sync-dispatch transport routes
+(`contracts/sync-dispatch/v1/transport-routes.json`), and celery-canvas
+imports (a fail-closed guard, not a specific call site).
 
 Each row has:
 
@@ -37,7 +42,7 @@ Each row has:
 |---|---|
 | `id` | `<class>:<file>:<line>`, stable identity for the row |
 | `surface` | the task/entry/endpoint/kind name from the audit |
-| `class` | one of the 9 discovered surface kinds (see below) |
+| `class` | one of the 10 discovered surface kinds (see below) |
 | `source` | `{file, line}` anchor into the current tree |
 | `dispatch_mechanism` | how this surface is invoked |
 | `owner_role` | `primary` or `contributor` -- see "Ownership model" below |
@@ -129,19 +134,38 @@ fails when:
 2. an inventory row has no `target_owner.value`;
 3. two rows are both `owner_role: primary` for the same `target_kind_id`
    (**duplicate exclusive ownership**);
-4. a row's `source.file`/`source.line` anchor no longer exists on disk or is
-   past the end of the (possibly shrunk) file (**staleness**).
+4. a row's `target_kind_id` names something that was never actually
+   discovered in source (**closed-vocabulary check** -- a row can't dodge #3
+   by renaming its `target_kind_id` to an unregistered variant, e.g.
+   `kind:metrics.remaining.capacity-v2`);
+5. a row's `source.file`/`source.line` anchor no longer exists on disk, is
+   past the end of the (possibly shrunk) file, or its current line content no
+   longer matches the pattern expected for that row's class (**staleness /
+   content drift** -- e.g. the dispatch call at that exact line was replaced
+   by unrelated code).
 
 Discovery specifically re-derives, from scratch:
 
-- Celery task decorators (`@celery_app.task(` in `src/dev_health_ops/workers/`);
+- Celery task decorators, including the `@app.task(`/`@shared_task` aliased
+  forms (`src/dev_health_ops/workers/`);
 - Beat schedule entries, both the `beat_schedule = {...}` dict literal and the
-  conditional `beat_schedule["..."] = {...}` rollout seam;
+  conditional, indented `beat_schedule["..."] = {...}` rollout seam;
 - literal dispatch calls (`.delay(`, `.apply_async(`, `send_task(`,
-  `.signature(`), skipping docstring prose and multi-line-call continuations;
+  `.signature(`, a bare celery-canvas invocation `chord(...)()` /
+  `chain(...)()` / `group(...)()`, or a bound-method/`functools.partial`
+  dispatch alias), skipping docstring prose, trailing comments, and
+  multi-line-call continuations;
 - the `getattr(x, "delay"|"apply_async"|"send_task")` indirection form;
-- API trigger endpoints, by walking back from a dispatch call site under
-  `src/dev_health_ops/api/` to its nearest `@router.<method>(...)` decorator;
+- celery-canvas imports (`from celery import chain, chord, group` or
+  `from celery.canvas import ...`) as a fail-closed guard: any new use of a
+  canvas primitive requires its own row even where the exact invocation shape
+  downstream can't be statically enumerated;
+- API trigger endpoints: REST endpoints by finding the enclosing function's
+  `@router.<method>(...)` decorator (correctly handling both single- and
+  multi-line decorator argument lists via a bracket-depth-tracking scan, and a
+  dispatch call sitting in a shared undecorated helper via one hop of
+  same-file call-graph lookup), and GraphQL resolvers (which have no
+  per-function route decorator at all) by anchoring to the call site itself;
 - job registry kinds (`contracts/jobs/v1/registry.json`);
 - sync-dispatch transport routes (`contracts/sync-dispatch/v1/transport-routes.json`);
 - stream surfaces (`CONSUMER_GROUP` constants in `**/streams.py` modules, plus
@@ -157,11 +181,57 @@ python3 ci/check_transitional_inventory.py --root .
 It is also exercised as a pytest test
 (`tests/workers/test_transitional_inventory_contract.py::test_real_tree_passes_the_gate`),
 so it runs automatically in the existing unit test tier
-(`ci/run_tests.sh unit`) without any separate workflow wiring. The same test
-module proves the gate actually catches violations, using synthetic fixture
-trees under `tmp_path` (never a real unowned surface committed to the repo):
-an unowned Celery task, an unowned Beat entry, a duplicate exclusive-ownership
-claim, a row with no target owner, and two shapes of stale anchor.
+(`ci/run_tests.sh unit`) without any separate workflow wiring. That test module
+also asserts exact per-class parity between discovery and the inventory (not
+just "every discovered surface has a row" -- discovered-count must equal
+inventory-count per class), and proves the gate catches every violation kind
+using synthetic fixture trees under `tmp_path` (never a real unowned surface
+committed to the repo): one positive fixture per discovery class (literal
+dispatch, getattr indirection, canvas import, bare canvas invocation, bound-
+method alias, `functools.partial` alias, REST endpoint with a single-line and
+a multi-line decorator, the shared-helper fan-in shape, a GraphQL resolver,
+conditional Beat entry, registry kind, transport route, stream surface, and
+an aliased task decorator), plus an unowned Celery task, an unowned Beat
+entry, a duplicate exclusive-ownership claim, a row with no target owner, an
+unknown `target_kind_id`, and two shapes of stale/content-drifted anchor.
+
+### Round-2 hardening (Codex adversarial review)
+
+A first Codex review of the CUT-01 branch returned **BLOCK** with real gaps,
+since fixed:
+
+- **A live dispatch the scanner missed (HIGH):** `metrics_partitioned.py:91`
+  fans out via a bare `chord([...], cb)()` invocation -- no `.apply_async()`
+  suffix -- which the original literal-dispatch regex didn't recognize. Fixed
+  by adding a bare-canvas-invocation pattern, a new `celery_canvas_import`
+  class that fail-closes on any `chain`/`chord`/`group` import (defense in
+  depth against invocation shapes that can't be statically enumerated, e.g.
+  `partial(task.apply_async, ...)` or `enqueue = task.apply_async` bound-alias
+  forms, both now also detected), and 5 new inventory rows.
+- **Two discovery classes were silently dead (HIGH):** the API-trigger walker
+  found zero REST endpoints (it stopped at the endpoint's own `def` line
+  before reaching its decorator, and broke entirely on multi-line decorator
+  argument lists), and the conditional-Beat regex required column-zero while
+  the real entry is indented under an `if`. Runtime reconciliation was
+  silently 138/147, not 147/147. Fixed by a bracket-depth-tracking decorator
+  scan and a de-anchored conditional-Beat regex; the test suite now asserts
+  exact discovered-vs-inventory parity per class as a standing regression
+  guard.
+- **Staleness didn't check content (MED):** replacing the code at an anchored
+  line with something unrelated (while keeping the file the same length)
+  used to pass. Fixed by re-matching each row's class-specific pattern
+  against its anchor line's *current* content.
+- **`target_kind_id` wasn't a closed vocabulary (MED):** a row could dodge
+  duplicate-primary detection by renaming its `target_kind_id` to an
+  unregistered variant. Fixed by validating every `target_kind_id` against
+  the same source-derived discovery already used for the unowned-surface
+  check.
+- **Weak acceptance-test coverage (MED):** the billing rows pointed at
+  unrelated tests (e.g. the API call-site row referenced
+  `tests/test_sync_units.py`). Fixed those three rows to point at the real
+  `tests/api/test_worker_operational_bridge.py` billing test, added a
+  regression test for it, and added a check that any `acceptance_test_id`
+  naming a specific test (`path.py::test_name`) actually defines that test.
 
 ## Update procedure
 

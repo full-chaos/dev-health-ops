@@ -86,6 +86,8 @@ def test_build_chart_query_with_day_grouping_and_filters():
     query, params = build_chart_query(spec)
 
     assert "FROM testops_test_metrics_daily" in query
+    assert "ORDER BY computed_at DESC" in query
+    assert "LIMIT 1 BY org_id, repo_id, day" in query
     assert "toDate(day) AS x" in query
     assert "avg(flake_rate) AS y" in query
     assert "team_id IN {filter_teams:Array(String)}" in query
@@ -101,6 +103,32 @@ def test_build_chart_query_with_month_grouping_uses_time_bucket():
 
     assert "toStartOfMonth(day) AS x" in query
     assert "FROM testops_coverage_metrics_daily" in query
+    assert "LIMIT 1 BY org_id, repo_id, day" in query
+
+
+@pytest.mark.parametrize(
+    ("metric", "table", "key"),
+    [
+        ("loc_touched", "user_metrics_daily", "org_id, repo_id, author_email, day"),
+        ("total_loc_touched", "repo_metrics_daily", "org_id, repo_id, day"),
+        ("after_hours_commit_ratio", "team_metrics_daily", "org_id, team_id, day"),
+        (
+            "median_duration_seconds",
+            "testops_pipeline_metrics_daily",
+            "org_id, repo_id, day",
+        ),
+        ("pass_rate", "testops_test_metrics_daily", "org_id, repo_id, day"),
+        ("line_coverage_pct", "testops_coverage_metrics_daily", "org_id, repo_id, day"),
+    ],
+)
+def test_build_chart_query_dedups_every_append_only_daily_source(
+    metric: str, table: str, key: str
+) -> None:
+    query, _ = build_chart_query(_chart_spec(metric, chart_id=f"chart-{metric}"))
+
+    normalized = " ".join(query.split())
+    assert f"FROM {table}" in normalized
+    assert f"LIMIT 1 BY {key}" in normalized
 
 
 @pytest.mark.asyncio

@@ -155,9 +155,37 @@ class TestCompileTimeseries:
         sql, params = compile_timeseries(request, org_id="org1")
 
         assert "FROM repo_metrics_daily" in sql
+        assert "ORDER BY computed_at DESC" in sql
+        assert "LIMIT 1 BY org_id, repo_id, day" in sql
         assert "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)" in sql
         assert "repo_id AS dimension_value" in sql
         assert params["org_id"] == "org1"
+
+    @pytest.mark.parametrize(
+        ("measure", "table"),
+        [
+            ("pipeline_success_rate", "testops_pipeline_metrics_daily"),
+            ("test_pass_rate", "testops_test_metrics_daily"),
+            ("coverage_line_pct", "testops_coverage_metrics_daily"),
+            ("pr_rework_ratio", "repo_metrics_daily"),
+        ],
+    )
+    def test_daily_measure_source_dedups_append_only_generations(
+        self, measure: str, table: str
+    ):
+        request = TimeseriesRequest(
+            dimension="repo",
+            measure=measure,
+            interval="day",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+        )
+
+        sql, _ = compile_timeseries(request, org_id="org1")
+
+        assert f"FROM {table}" in sql
+        assert "ORDER BY computed_at DESC" in sql
+        assert "LIMIT 1 BY org_id, repo_id, day" in sql
 
     def test_invalid_dimension(self):
         """Test that invalid dimension raises ValidationError."""
@@ -209,6 +237,31 @@ class TestCompileBreakdown:
         assert "work_unit_investments.from_ts < %(end_date)s" in sql
         assert params["org_id"] == "org1"
         assert params["top_n"] == 20
+
+    @pytest.mark.parametrize(
+        ("measure", "table"),
+        [
+            ("pipeline_success_rate", "testops_pipeline_metrics_daily"),
+            ("test_pass_rate", "testops_test_metrics_daily"),
+            ("coverage_line_pct", "testops_coverage_metrics_daily"),
+            ("pr_rework_ratio", "repo_metrics_daily"),
+        ],
+    )
+    def test_daily_measure_breakdown_dedups_append_only_generations(
+        self, measure: str, table: str
+    ):
+        request = BreakdownRequest(
+            dimension="repo",
+            measure=measure,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+        )
+
+        sql, _ = compile_breakdown(request, org_id="org1")
+
+        assert f"FROM {table}" in sql
+        assert "ORDER BY computed_at DESC" in sql
+        assert "LIMIT 1 BY org_id, repo_id, day" in sql
 
     def test_org_id_always_in_params(self):
         """Test that org_id is always included in params."""

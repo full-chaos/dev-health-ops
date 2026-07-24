@@ -15,6 +15,7 @@ from dev_health_ops.api.queries.investment import (
     LATEST_WORK_UNIT_REPO_EFFORT_CTE,
     PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
 )
+from dev_health_ops.clickhouse_dedup import dedup_from
 
 from ..authz import enforce_org_scope
 from ..errors import ValidationError
@@ -338,7 +339,7 @@ def compile_timeseries(
 
     testops_table = Measure.source_table(measure)
     if testops_table:
-        ctx["source_table"] = testops_table
+        ctx["source_table"] = dedup_from(testops_table)
         ctx["date_filter"] = "day >= %(start_date)s AND day <= %(end_date)s"
 
     sql = timeseries_template(
@@ -382,7 +383,7 @@ def compile_breakdown(
 
     testops_table = Measure.source_table(measure)
     if testops_table:
-        ctx["source_table"] = testops_table
+        ctx["source_table"] = dedup_from(testops_table)
         ctx["date_filter"] = "day >= %(start_date)s AND day <= %(end_date)s"
 
     sql = breakdown_template(dimension, measure, filter_clause=filter_clause, **ctx)

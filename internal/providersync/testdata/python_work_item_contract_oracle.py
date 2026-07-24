@@ -21,11 +21,7 @@ WORK_ITEM_DATASETS = (
 
 
 def selected_module(source: pathlib.Path) -> dict[str, Any]:
-    module = load_live_module(
-        source,
-        relative_path="src/dev_health_ops/processors/dataset_adapters.py",
-        module_name="dev_health_ops.processors.dataset_adapters",
-    )
+    module = load_live_module(source)
     module._window_day = lambda _context: "day"
     module._window_backfill_days = lambda _context: 1
     module._credentials_mapping = lambda _context: {}

@@ -65,11 +65,7 @@ FeatureFlagEventRecord = make_dataclass(
 
 
 def selected_module(source: pathlib.Path) -> dict[str, Any]:
-    module = load_live_module(
-        source,
-        relative_path="src/dev_health_ops/processors/launchdarkly.py",
-        module_name="dev_health_ops.processors.launchdarkly",
-    )
+    module = load_live_module(source)
     module.datetime = FixedDateTime
     module.FeatureFlagRecord = FeatureFlagRecord
     module.FeatureFlagEventRecord = FeatureFlagEventRecord

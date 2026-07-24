@@ -3,15 +3,24 @@ from __future__ import annotations
 
 import json
 import pathlib
+import subprocess
 import sys
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from python_oracle_loader import load_live_module
 
+WORK_ITEM_DATASETS = (
+    "work-items",
+    "work-item-labels",
+    "work-item-projects",
+    "work-item-history",
+    "work-item-comments",
+)
 
-def _namespace(path: pathlib.Path, *, relative_path: str, module_name: str) -> Any:
-    return load_live_module(path, relative_path=relative_path, module_name=module_name)
+
+def _namespace(path: pathlib.Path) -> Any:
+    return load_live_module(path)
 
 
 def _render(estimates: tuple[Any, ...]) -> list[dict[str, object]]:
@@ -29,34 +38,10 @@ def _render(estimates: tuple[Any, ...]) -> list[dict[str, object]]:
     )
 
 
-def main() -> int:
-    if len(sys.argv) != 4:
-        return 2
-    linear = _namespace(
-        pathlib.Path(sys.argv[1]),
-        relative_path="src/dev_health_ops/providers/linear/budget.py",
-        module_name="dev_health_ops.providers.linear.budget",
-    )
-    jira = _namespace(
-        pathlib.Path(sys.argv[2]),
-        relative_path="src/dev_health_ops/providers/jira/budget.py",
-        module_name="dev_health_ops.providers.jira.budget",
-    )
-    launchdarkly = _namespace(
-        pathlib.Path(sys.argv[3]),
-        relative_path="src/dev_health_ops/providers/launchdarkly/budget.py",
-        module_name="dev_health_ops.providers.launchdarkly.budget",
-    )
+def _linear_cases(linear: Any) -> list[dict[str, object]]:
     cases: list[dict[str, object]] = []
-    work_item_datasets = (
-        "work-items",
-        "work-item-labels",
-        "work-item-projects",
-        "work-item-history",
-        "work-item-comments",
-    )
     for span_days in (1, 3):
-        for dataset in work_item_datasets:
+        for dataset in WORK_ITEM_DATASETS:
             cases.append(
                 {
                     "provider": "linear",
@@ -74,7 +59,13 @@ def main() -> int:
                     ),
                 }
             )
-        for dataset in (*work_item_datasets, "incidents"):
+    return cases
+
+
+def _jira_cases(jira: Any) -> list[dict[str, object]]:
+    cases: list[dict[str, object]] = []
+    for span_days in (1, 3):
+        for dataset in (*WORK_ITEM_DATASETS, "incidents"):
             for flags in ({}, {"jira_fetch_worklogs": True, "gql_enabled": True}):
                 cases.append(
                     {
@@ -94,6 +85,10 @@ def main() -> int:
                         ),
                     }
                 )
+    return cases
+
+
+def _launchdarkly_cases(launchdarkly: Any) -> list[dict[str, object]]:
     context = SimpleNamespace(
         provider="launchdarkly",
         dataset_key="feature-flags",
@@ -102,7 +97,7 @@ def main() -> int:
         integration_id="integration",
         org_id="org",
     )
-    cases.append(
+    return [
         {
             "provider": "launchdarkly",
             "dataset": "feature-flags",
@@ -112,7 +107,52 @@ def main() -> int:
                 launchdarkly.LaunchDarklyBudgetEstimator().estimate(context)
             ),
         }
+    ]
+
+
+def _provider_cases(provider: str, source: pathlib.Path) -> list[dict[str, object]]:
+    module = _namespace(source)
+    if provider == "linear":
+        return _linear_cases(module)
+    if provider == "jira":
+        return _jira_cases(module)
+    if provider == "launchdarkly":
+        return _launchdarkly_cases(module)
+    raise ValueError(f"unexpected provider: {provider}")
+
+
+def _provider_subprocess(
+    provider: str, source: pathlib.Path
+) -> list[dict[str, object]]:
+    output = subprocess.check_output(
+        [
+            sys.executable,
+            str(pathlib.Path(__file__).resolve()),
+            "--provider",
+            provider,
+            str(source.resolve(strict=True)),
+        ],
+        text=True,
     )
+    return cast(list[dict[str, object]], json.loads(output))
+
+
+def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == "--provider":
+        child_cases = _provider_cases(sys.argv[2], pathlib.Path(sys.argv[3]))
+        json.dump(child_cases, sys.stdout, sort_keys=True, separators=(",", ":"))
+        return 0
+    if len(sys.argv) != 4:
+        return 2
+
+    linear = _provider_subprocess("linear", pathlib.Path(sys.argv[1]))
+    jira = _provider_subprocess("jira", pathlib.Path(sys.argv[2]))
+    launchdarkly = _provider_subprocess("launchdarkly", pathlib.Path(sys.argv[3]))
+    cases: list[dict[str, object]] = []
+    for span_days in (1, 3):
+        cases.extend(case for case in linear if case["span_days"] == span_days)
+        cases.extend(case for case in jira if case["span_days"] == span_days)
+    cases.extend(launchdarkly)
     json.dump(cases, sys.stdout, sort_keys=True, separators=(",", ":"))
     return 0
 

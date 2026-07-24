@@ -1,102 +1,104 @@
-"""Load a named live Python module for a checked-in Go parity oracle.
+"""Load live Python modules for checked-in Go parity oracles.
 
-The Go tests pass source paths so a failure identifies the production contract
-being compared.  Those paths must not become an arbitrary-code input: each
-oracle admits only its fixed source file, then imports that known module from
-this checkout through Python's normal import machinery.
+This loader is for dedicated, short-lived oracle subprocesses only.  It clears
+all loaded ``dev_health_ops`` modules before each import so a caller cannot
+substitute a forged cached package or module.  The source argument must resolve
+to one of the five fixed production files below.
 """
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import io
 import sys
+from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[3]
+SOURCE_ROOT = (ROOT / "src").resolve(strict=True)
 
 
-def _is_within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
+def _import_launchdarkly_processor() -> Any:
+    return importlib.import_module("dev_health_ops.processors.launchdarkly")
 
 
-def _module_origins(module: ModuleType) -> set[Path]:
-    origins: set[Path] = set()
-    module_file = getattr(module, "__file__", None)
-    if module_file:
-        origins.add(Path(module_file).resolve())
-    module_path = getattr(module, "__path__", ())
-    origins.update(Path(path).resolve() for path in module_path)
-    return origins
+def _import_linear_budget() -> Any:
+    return importlib.import_module("dev_health_ops.providers.linear.budget")
 
 
-def _reject_conflicting_preloads(source_root: Path) -> None:
-    for name, module in tuple(sys.modules.items()):
+def _import_jira_budget() -> Any:
+    return importlib.import_module("dev_health_ops.providers.jira.budget")
+
+
+def _import_launchdarkly_budget() -> Any:
+    return importlib.import_module("dev_health_ops.providers.launchdarkly.budget")
+
+
+def _import_dataset_adapters() -> Any:
+    return importlib.import_module("dev_health_ops.processors.dataset_adapters")
+
+
+ALLOWED_MODULES: dict[Path, tuple[str, Callable[[], Any]]] = {
+    (SOURCE_ROOT / "dev_health_ops/processors/launchdarkly.py").resolve(strict=True): (
+        "dev_health_ops.processors.launchdarkly",
+        _import_launchdarkly_processor,
+    ),
+    (SOURCE_ROOT / "dev_health_ops/providers/linear/budget.py").resolve(strict=True): (
+        "dev_health_ops.providers.linear.budget",
+        _import_linear_budget,
+    ),
+    (SOURCE_ROOT / "dev_health_ops/providers/jira/budget.py").resolve(strict=True): (
+        "dev_health_ops.providers.jira.budget",
+        _import_jira_budget,
+    ),
+    (SOURCE_ROOT / "dev_health_ops/providers/launchdarkly/budget.py").resolve(
+        strict=True
+    ): (
+        "dev_health_ops.providers.launchdarkly.budget",
+        _import_launchdarkly_budget,
+    ),
+    (SOURCE_ROOT / "dev_health_ops/processors/dataset_adapters.py").resolve(
+        strict=True
+    ): ("dev_health_ops.processors.dataset_adapters", _import_dataset_adapters),
+}
+
+
+def _purge_dev_health_modules() -> None:
+    """Remove cached project modules by key without inspecting hostile values."""
+    for name in tuple(sys.modules):
         if name != "dev_health_ops" and not name.startswith("dev_health_ops."):
             continue
-        if module is None:
-            raise RuntimeError(f"preloaded module {name} has no module object")
-        origins = _module_origins(module)
-        if not origins or any(
-            not _is_within(origin, source_root) for origin in origins
-        ):
-            raise RuntimeError(
-                f"preloaded module {name} is outside checked-out source {source_root}"
-            )
+        sys.modules.pop(name, None)
 
 
-def _prioritize_source_root(source_root: Path) -> None:
-    canonical = str(source_root)
+def _prioritize_source_root() -> None:
     sys.path[:] = [
-        entry for entry in sys.path if Path(entry or ".").resolve() != source_root
+        entry for entry in sys.path if Path(entry or ".").resolve() != SOURCE_ROOT
     ]
-    sys.path.insert(0, canonical)
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 
-def _verified_module_path(module: ModuleType, expected: Path) -> None:
-    module_path = Path(getattr(module, "__file__", "")).resolve()
-    if module_path != expected:
-        raise RuntimeError(
-            f"oracle imported {module_path}, expected checked-out source {expected}"
-        )
-
-
-def load_live_module(source: Path, *, relative_path: str, module_name: str) -> Any:
-    """Import the allowlisted production module named by a parity oracle."""
-    source_root = (ROOT / "src").resolve()
-    expected = (ROOT / relative_path).resolve(strict=True)
-    if not _is_within(expected, source_root):
-        raise ValueError(f"oracle source is outside checked-out source: {expected}")
-    if source.resolve(strict=True) != expected:
+def load_live_module(source: Path) -> Any:
+    """Import the canonical module allowlisted for ``source``."""
+    expected = source.resolve(strict=True)
+    allowed = ALLOWED_MODULES.get(expected)
+    if allowed is None:
         raise ValueError(f"unexpected oracle source: {source}")
+    module_name, module_loader = allowed
 
-    _prioritize_source_root(source_root)
-    _reject_conflicting_preloads(source_root)
-
-    existing = sys.modules.get(module_name)
-    if existing is not None:
-        _verified_module_path(existing, expected)
-        return existing
-
-    spec = importlib.util.spec_from_file_location(module_name, expected)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load oracle module from {expected}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
+    _prioritize_source_root()
+    _purge_dev_health_modules()
+    importlib.invalidate_caches()
     # Production imports initialize observability in this test process.  Keep
     # that bootstrap chatter out of the JSON-only Go oracle protocol.
-    try:
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(module_name, None)
-        raise
-    _verified_module_path(module, expected)
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        module = module_loader()
+    spec = module.__spec__
+    if spec is None or spec.origin is None:
+        raise RuntimeError(f"oracle module {module_name} has no import origin")
+    origin = Path(spec.origin).resolve(strict=True)
+    if origin != expected:
+        raise RuntimeError(f"oracle imported {origin}, expected {expected}")
     return module

@@ -75,7 +75,7 @@ func TestWorkItemCompatibilityOracleRejectsUnexpectedSource(t *testing.T) {
 	packageDir := filepath.Dir(currentFile)
 	oracleScript := filepath.Join(packageDir, "testdata", "python_work_item_contract_oracle.py")
 	unexpectedSource := filepath.Join(
-		packageDir, "..", "..", "src", "dev_health_ops", "processors", "launchdarkly.py",
+		packageDir, "..", "..", "src", "dev_health_ops", "processors", "__init__.py",
 	)
 	output, err := exec.Command(python, oracleScript, unexpectedSource).CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "unexpected oracle source") {
@@ -130,5 +130,40 @@ func TestWorkItemCompatibilityOracleIgnoresSiblingPythonPath(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("sibling module executed: stat error=%v output=%s", err, output)
+	}
+}
+
+func TestPythonOracleLoaderPurgesForgedAndHostilePreloads(t *testing.T) {
+	python := pythonExecutable(t)
+	_, currentFile, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(currentFile)
+	adapterSource := filepath.Join(
+		packageDir, "..", "..", "src", "dev_health_ops", "processors", "dataset_adapters.py",
+	)
+	probeScript := filepath.Join(
+		packageDir, "testdata", "python_oracle_loader_probe.py",
+	)
+	output, err := exec.Command(python, probeScript, adapterSource).CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute Python oracle loader probe: %v: %s", err, output)
+	}
+	var result struct {
+		Canonical      bool     `json:"canonical"`
+		HostileTouches []string `json:"hostile_touches"`
+		Origin         string   `json:"origin"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode Python oracle loader probe: %v: %s", err, output)
+	}
+	if !result.Canonical || len(result.HostileTouches) != 0 {
+		t.Fatalf("unsafe Python oracle resolution: %+v", result)
+	}
+	expectedOrigin, err := filepath.EvalSymlinks(adapterSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if origin, err := filepath.EvalSymlinks(result.Origin); err != nil ||
+		origin != expectedOrigin {
+		t.Fatalf("Python oracle origin=%q err=%v", result.Origin, err)
 	}
 }

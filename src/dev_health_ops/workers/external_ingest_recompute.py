@@ -1,36 +1,230 @@
-"""Debounced recompute flush task (CHAOS-2699).
-
-# INTEGRATOR TODO (CHAOS-2693, master-spec CC20 -- Celery wiring has ONE
-# owner this wave): this task is intentionally NOT re-exported from
-# workers/tasks.py and NOT added to workers/config.py's
-# late_ack_excluded_tasks (both are hot files owned by CHAOS-2693 this
-# wave). At merge time, add exactly this one line to
-# workers/config.py's `late_ack_excluded_tasks` tuple (queue="default" is
-# already declared on the task decorator below -- no task_queues/compose
-# change needed, it reuses the existing `default` queue's worker coverage):
-#
-#     "dev_health_ops.workers.tasks.flush_external_ingest_recompute",
-#
-# No workers/tasks.py re-export needed -- the task name is pinned via the
-# `name=` kwarg on the decorator below (flat-namespace convention achieved
-# without the re-export line, per the synthesizer reconciliation on
-# brief-2699-recompute.md).
+"""Debounced recompute flush tasks (CHAOS-2699 / CHAOS-3043).
 
 Reads+clears the Valkey pending-scope blob that
 ``external_ingest.recompute.schedule_or_coalesce`` accumulated for
 ``(org_id, source_system, source_instance)``, plans + dispatches the
 bounded recompute, and persists the outcome onto every coalesced
 ingestion's ``external_ingest_batches`` row (D11/D12).
+
+The compatibility task drains only the fixed, typed bridge identity emitted
+by the dormant Go external-ingest runner, then invokes this same Python
+planner and dispatcher. It cannot select arbitrary Celery task names.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sqlalchemy import text
 
 from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+GO_COMPATIBILITY_BRIDGE_KIND = "external_ingest.recompute.compat.v1"
+GO_COMPATIBILITY_TASK_NAME = (
+    "dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge"
+)
+_GO_BRIDGE_CLAIM_TTL = timedelta(minutes=5)
+_GO_BRIDGE_BATCH_LIMIT = 50
+
+
+@dataclass(frozen=True)
+class _GoBridgeClaim:
+    job_id: str
+    bridge_id: str
+    org_id: str
+    source_system: str
+    source_instance: str
+
+
+def _claim_go_compatibility_bridges(*, limit: int) -> list[_GoBridgeClaim]:
+    """Claim only the fixed Go-to-Python recompute bridge identity.
+
+    The bridge rows live in the existing recompute job ledger and use a
+    deterministic primary key. ``FOR UPDATE SKIP LOCKED`` prevents concurrent
+    default-queue workers from dispatching the same bridge. A stale claim is
+    eligible again, covering worker death before the Python planner runs.
+    """
+    from dev_health_ops.db import get_postgres_session_sync
+
+    now = datetime.now(timezone.utc)
+    stale_before = now - _GO_BRIDGE_CLAIM_TTL
+    with get_postgres_session_sync() as session:
+        rows = (
+            session.execute(
+                text(
+                    """
+                    SELECT id, celery_task_id, org_id, source_system, source_instance
+                    FROM external_ingest_recompute_jobs
+                    WHERE celery_task_name = :task_name
+                      AND (
+                        status = 'bridge_pending'
+                        OR (status = 'bridge_claimed' AND dispatched_at < :stale_before)
+                      )
+                    ORDER BY dispatched_at, id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT :limit
+                    """
+                ),
+                {
+                    "task_name": GO_COMPATIBILITY_TASK_NAME,
+                    "stale_before": stale_before,
+                    "limit": max(1, min(limit, _GO_BRIDGE_BATCH_LIMIT)),
+                },
+            )
+            .mappings()
+            .all()
+        )
+        claims = [
+            _GoBridgeClaim(
+                job_id=str(row["id"]),
+                bridge_id=str(row["celery_task_id"]),
+                org_id=str(row["org_id"]),
+                source_system=str(row["source_system"]),
+                source_instance=str(row["source_instance"]),
+            )
+            for row in rows
+        ]
+        for claim in claims:
+            session.execute(
+                text(
+                    """
+                    UPDATE external_ingest_recompute_jobs
+                    SET status = 'bridge_claimed', dispatched_at = :claimed_at
+                    WHERE id = :job_id AND celery_task_name = :task_name
+                    """
+                ),
+                {
+                    "claimed_at": now,
+                    "job_id": claim.job_id,
+                    "task_name": GO_COMPATIBILITY_TASK_NAME,
+                },
+            )
+        session.commit()
+    return claims
+
+
+def _load_go_bridge_scope(claim: _GoBridgeClaim) -> dict[str, Any] | None:
+    """Load and validate the allowlisted bridge payload from batch status rows."""
+    from dev_health_ops.db import get_postgres_session_sync
+
+    with get_postgres_session_sync() as session:
+        rows = (
+            session.execute(
+                text(
+                    """
+                    SELECT ingestion_id, recompute_scope
+                    FROM external_ingest_batches
+                    WHERE org_id = :org_id
+                      AND source_system = :source_system
+                      AND source_instance = :source_instance
+                      AND recompute_status = 'pending'
+                    ORDER BY ingestion_id
+                    """
+                ),
+                {
+                    "org_id": claim.org_id,
+                    "source_system": claim.source_system,
+                    "source_instance": claim.source_instance,
+                },
+            )
+            .mappings()
+            .all()
+        )
+    ingestion_ids: list[str] = []
+    payload: dict[str, Any] | None = None
+    for row in rows:
+        candidate = row["recompute_scope"]
+        if isinstance(candidate, str):
+            candidate = json.loads(candidate)
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("bridgeId") != claim.bridge_id
+        ):
+            continue
+        if (
+            candidate.get("bridgeVersion") != 1
+            or candidate.get("bridgeKind") != GO_COMPATIBILITY_BRIDGE_KIND
+        ):
+            raise ValueError("unsupported Go external recompute bridge payload")
+        comparable = {
+            key: candidate.get(key)
+            for key in (
+                "bridgeVersion",
+                "bridgeKind",
+                "bridgeId",
+                "repoIds",
+                "teamIds",
+                "recordKinds",
+                "windowStartedAt",
+                "windowEndedAt",
+            )
+        }
+        if payload is not None and payload != comparable:
+            raise ValueError("inconsistent Go external recompute bridge scope")
+        payload = comparable
+        ingestion_ids.append(str(row["ingestion_id"]))
+    if payload is None:
+        return None
+    payload["ingestionIds"] = sorted(set(ingestion_ids))
+    return payload
+
+
+def _mark_go_bridge(job_id: str, status: str) -> None:
+    from dev_health_ops.db import get_postgres_session_sync
+
+    with get_postgres_session_sync() as session:
+        session.execute(
+            text(
+                """
+                UPDATE external_ingest_recompute_jobs
+                SET status = :status
+                WHERE id = :job_id AND celery_task_name = :task_name
+                """
+            ),
+            {
+                "status": status,
+                "job_id": job_id,
+                "task_name": GO_COMPATIBILITY_TASK_NAME,
+            },
+        )
+        session.commit()
+
+
+def _dispatch_go_bridge_claim(claim: _GoBridgeClaim) -> str:
+    """Invoke the current Python planner/dispatcher for one typed Go bridge."""
+    from dev_health_ops.external_ingest.recompute import (
+        _parse_iso,
+        dispatch_and_persist_scope,
+    )
+
+    payload = _load_go_bridge_scope(claim)
+    if payload is None:
+        # Crash-after-dispatch/before-bridge-mark: batch outcomes are already
+        # non-pending, so a stale claim is completed without re-emitting jobs.
+        _mark_go_bridge(claim.job_id, "bridge_dispatched")
+        return "already_terminal"
+    result = dispatch_and_persist_scope(
+        org_id=claim.org_id,
+        source_system=claim.source_system,
+        source_instance=claim.source_instance,
+        ingestion_ids=payload["ingestionIds"],
+        repo_ids=payload.get("repoIds") or [],
+        team_ids=payload.get("teamIds") or [],
+        record_kinds=payload.get("recordKinds") or [],
+        window_start=_parse_iso(payload.get("windowStartedAt")),
+        window_end=_parse_iso(payload.get("windowEndedAt")),
+    )
+    _mark_go_bridge(
+        claim.job_id,
+        "bridge_failed" if result.status == "failed" else "bridge_dispatched",
+    )
+    return result.status
 
 
 @celery_app.task(
@@ -116,4 +310,43 @@ def flush_external_ingest_recompute(
     }
 
 
-__all__ = ["flush_external_ingest_recompute"]
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="default",
+    name=GO_COMPATIBILITY_TASK_NAME,
+)
+def dispatch_external_ingest_recompute_bridge(
+    self,
+    limit: int = _GO_BRIDGE_BATCH_LIMIT,
+) -> dict[str, Any]:
+    """Drain deterministic Go bridge rows into the current Python planner."""
+    try:
+        claims = _claim_go_compatibility_bridges(limit=limit)
+    except Exception as exc:
+        logger.exception("external_ingest.recompute.go_bridge_claim_failed")
+        raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
+
+    outcomes: dict[str, int] = {}
+    for claim in claims:
+        try:
+            status = _dispatch_go_bridge_claim(claim)
+        except Exception:
+            # Leave bridge_claimed in place. Its bounded stale lease makes it
+            # retryable without failing or replaying the already-completed
+            # external-ingest batch itself.
+            logger.exception(
+                "external_ingest.recompute.go_bridge_dispatch_failed "
+                "bridge_id=%s org_id=%s",
+                claim.bridge_id,
+                claim.org_id,
+            )
+            status = "retryable_failure"
+        outcomes[status] = outcomes.get(status, 0) + 1
+    return {"claimed": len(claims), "outcomes": outcomes}
+
+
+__all__ = [
+    "dispatch_external_ingest_recompute_bridge",
+    "flush_external_ingest_recompute",
+]

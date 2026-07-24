@@ -53,6 +53,42 @@ The rendering engine is currently in the planning phase. It will be responsible 
 - **Narrative Generation**: Constructing a grounded narrative based on the `ReportPlan`.
 - **Insight Extraction**: Identifying trends and anomalies to populate `InsightBlock` records.
 
+## Execution handoff and retry contract
+
+`ReportRun` is the authoritative execution record. Creating either an on-demand
+or scheduled run writes a versioned `report.execute_on_demand` or
+`report.execute_scheduled` handoff in `worker_job_outbox` in the same database
+transaction. The payload carries only the report ID; the run ID is the domain
+link, and workers reload the report plan, data, and notification state from the
+semantic store.
+
+Scheduled reports additionally persist a deterministic occurrence identity
+(`report_id + scheduled_for`). Its uniqueness constraint means a duplicate
+scheduler tick can reuse the original run and handoff but cannot create a
+second artifact or notification. Retries reuse the same `ReportRun`; artifact
+fingerprints reject a different rendered result, and notification delivery is
+claimed by a durable per-run key before any external side effect.
+
+The checked-in Go implementation includes PostgreSQL `ReportRun` state and
+plan-loading adapters, bounded ClickHouse chart queries over the complete
+Python-owned metric registry, byte-stable Markdown and artifact metadata, and
+the current in-app report-ready notification. The registry is exported as a
+language-neutral JSON artifact and a drift test compares every metric name,
+display name, source table, unit, and dimension before either implementation
+can change independently. Both
+typed River handlers can be composed and registered independently, but the
+on-demand and scheduled routes remain `celery` with `celery` rollback and the
+heavy Go profile remains disabled. Golden parity and integration fixtures are
+implementation evidence only; there is no shadow, canary, or production
+activation evidence yet.
+
+The Go loader treats `chart_specs` as execution metadata adjacent to the
+serialized `ReportPlan`, then validates the plan fields independently. This is
+the intended planner/engine seam exercised by the Python engine fixtures; it
+does not preserve the current Celery task bug that passes `chart_specs` into
+the `ReportPlan` dataclass constructor. Celery remains authoritative until that
+producer shape and live parity are separately corrected and approved.
+
 ## Trust Model
 The architecture is built on a foundation of trust and verifiability.
 - **Data Grounding**: Only persisted metric data is used for report generation. Freeform LLM claims are forbidden.

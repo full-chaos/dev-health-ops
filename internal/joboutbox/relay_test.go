@@ -1,11 +1,26 @@
 package joboutbox
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
+
+type fakeRouteResolver struct {
+	deferred []string
+	route    string
+	err      error
+}
+
+func (resolver fakeRouteResolver) DeferredKinds(context.Context) ([]string, error) {
+	return append([]string(nil), resolver.deferred...), resolver.err
+}
+
+func (resolver fakeRouteResolver) Resolve(context.Context, string) (string, error) {
+	return resolver.route, resolver.err
+}
 
 type enumerableRegistry struct {
 	descriptors []jobruntime.Descriptor
@@ -90,6 +105,28 @@ func TestNewRelayRequiresEnumerableInserterPolicy(t *testing.T) {
 	inserter := &RiverInserter{registry: descriptorOnlyRegistry{}}
 	if _, err := NewRelay(&Repository{}, inserter, DefaultRelayConfig()); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("NewRelay() error = %v", err)
+	}
+}
+
+func TestNewRelayWithRoutesRequiresDurableResolver(t *testing.T) {
+	descriptors := []jobruntime.Descriptor{{Kind: "job.alpha", Route: "celery"}}
+	registry := enumerableRegistry{
+		descriptors: descriptors,
+		byKind: map[string]jobruntime.Descriptor{
+			"job.alpha": descriptors[0],
+		},
+	}
+	inserter := &RiverInserter{client: nil, registry: registry}
+	if _, err := NewRelayWithRoutes(&Repository{}, inserter, nil, DefaultRelayConfig()); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("nil resolver error=%v", err)
+	}
+	relay, err := NewRelayWithRoutes(
+		&Repository{}, inserter,
+		fakeRouteResolver{deferred: []string{"job.alpha"}},
+		DefaultRelayConfig(),
+	)
+	if err != nil || relay.routes == nil {
+		t.Fatalf("dynamic relay=%#v err=%v", relay, err)
 	}
 }
 

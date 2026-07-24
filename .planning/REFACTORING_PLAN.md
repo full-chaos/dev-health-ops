@@ -37,17 +37,20 @@ This plan merges two independent analyses to create a comprehensive refactoring 
 ```python
 """Database URL normalization utilities."""
 
+
 def normalize_sqlite_url(db_url: str) -> str:
     """Convert async SQLite URL to sync for clickhouse-connect compatibility."""
     if "sqlite+aiosqlite://" in db_url:
         return db_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
     return db_url
 
+
 def normalize_postgres_url(db_url: str) -> str:
     """Convert async Postgres URL to sync."""
     if "postgresql+asyncpg://" in db_url:
         return db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     return db_url
+
 
 def normalize_db_url(db_url: str) -> str:
     """Normalize any async DB URL to sync equivalent."""
@@ -76,6 +79,7 @@ def normalize_db_url(db_url: str) -> str:
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass
 
+
 @dataclass
 class MetricDefinition:
     metric: str
@@ -89,6 +93,7 @@ class MetricDefinition:
     group_by: Optional[str] = None
     identity_column: Optional[str] = None
     extra_where: Optional[str] = None
+
 
 # Single source of truth for all metrics
 METRIC_REGISTRY: Dict[str, MetricDefinition] = {
@@ -105,6 +110,7 @@ METRIC_REGISTRY: Dict[str, MetricDefinition] = {
     ),
     # ... additional metrics
 }
+
 
 def get_metric(name: str) -> MetricDefinition: ...
 def list_metrics(scope: Optional[str] = None) -> List[MetricDefinition]: ...
@@ -163,10 +169,10 @@ except (ValueError, KeyError, json.JSONDecodeError) as e:
 def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
     pass
 
+
 # After
 @abstractmethod
-def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
-    ...
+def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None: ...
 ```
 
 **Verification**: `python -c "from dev_health_ops.metrics.sinks.base import BaseMetricsSink"` (import check)
@@ -195,6 +201,7 @@ def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+
 def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
     """Normalize datetime to UTC timezone."""
     if dt is None:
@@ -202,6 +209,7 @@ def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
 
 def parse_datetime(value: Any) -> Optional[datetime]:
     """Parse various datetime formats to datetime object."""
@@ -217,9 +225,11 @@ def parse_datetime(value: Any) -> Optional[datetime]:
             return None
     return None
 
+
 def normalize_email(email: Optional[str]) -> Optional[str]:
     """Lowercase and strip email addresses."""
     return email.lower().strip() if email else None
+
 
 def update_transitions_work_item_id(transitions: list, work_item_id: str) -> list:
     """Set work_item_id on all transitions."""
@@ -256,6 +266,7 @@ import logging
 
 T = TypeVar("T")
 
+
 async def fetch_with_backoff(
     fetch_fn: Callable[..., AsyncIterator[T]],
     max_retries: int = 3,
@@ -263,6 +274,7 @@ async def fetch_with_backoff(
 ) -> AsyncIterator[T]:
     """Fetch with exponential backoff on rate limits."""
     ...
+
 
 async def batch_process(
     items: list,
@@ -272,6 +284,7 @@ async def batch_process(
 ) -> list:
     """Process items in batches with progress reporting."""
     ...
+
 
 def paginate_all(
     fetch_page: Callable[[int], list],
@@ -296,23 +309,24 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 from datetime import datetime
 
+
 class BaseProcessor(ABC):
     """Abstract base for all provider processors."""
-    
+
     def __init__(self, store: Any, since: Optional[datetime] = None):
         self.store = store
         self.since = since
-    
+
     @abstractmethod
     async def process_commits(self, **kwargs) -> int:
         """Process and store commits. Returns count."""
         ...
-    
+
     @abstractmethod
     async def process_pull_requests(self, **kwargs) -> int:
         """Process and store PRs/MRs. Returns count."""
         ...
-    
+
     async def run_full_sync(self, **kwargs) -> dict:
         """Run complete sync pipeline."""
         results = {}
@@ -388,7 +402,7 @@ src/dev_health_ops/metrics/sinks/
 
 **Location**: `src/dev_health_ops/metrics/job_daily.py:411`
 ```python
-team_map={},  # TODO: Pass actual team map if available
+team_map = ({},)  # TODO: Pass actual team map if available
 ```
 
 **Action**: 
@@ -446,6 +460,7 @@ team_map={},  # TODO: Pass actual team map if available
 def mock_github_client():
     with patch("dev_health_ops.providers.github.client.Github") as mock:
         yield mock
+
 
 def test_normalize_github_issue(mock_github_client):
     # Test normalization of GitHub issue to WorkItem

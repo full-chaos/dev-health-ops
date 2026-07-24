@@ -104,6 +104,8 @@ def _publish_discovery(
         finalize_sync_run=MagicMock(),
         run_sync_reference_discovery=discovery,
         upsert_outbox_wakeup=MagicMock(),
+        build_post_sync_dispatch_payload=MagicMock(),
+        dispatch_post_sync_tasks=MagicMock(),
     )
     marked = mark_outbox_dispatched(
         session,

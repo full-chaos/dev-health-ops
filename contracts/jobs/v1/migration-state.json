@@ -1,25 +1,168 @@
 {
   "schema_version": 1,
   "jobs": [
+    {"kind":"investment.chunk","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
+    {"kind":"investment.dispatch","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
+    {"kind":"investment.finalize","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
+    {"kind":"investment.materialize","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]},
     {
-      "kind": "system.heartbeat",
-      "state": "contract_frozen",
+      "kind": "metrics.daily_dispatch",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring"]
+    },
+    {
+      "kind": "metrics.daily_finalize",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "finalizer_outbox_kill_window", "handler_wiring"]
+    },
+    {
+      "kind": "metrics.daily_partition",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "finalizer_outbox_kill_window", "handler_wiring"]
+    },
+    {
+      "kind": "metrics.remaining.capacity", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "metrics.remaining.complexity", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "metrics.remaining.dora", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "metrics.remaining.extra_metrics", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "metrics.remaining.membership_backfill", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "metrics.remaining.recommendations", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "metrics.remaining.release_impact", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "metrics.remaining.team_metrics", "state": "go_implemented",
+      "producer_version": 1, "consumer_versions": [1], "required_profiles": ["heavy"],
+      "route": "celery", "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "family_inventory", "handler_wiring", "resource_budget_contract"]
+    },
+    {
+      "kind": "operational.billing_notification",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["ops"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden"]
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
+    },
+    {
+      "kind": "operational.webhook_delivery",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["ops"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
+    },
+    {
+      "kind": "report.execute_on_demand",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["artifact_golden", "contract_schema", "cross_language_golden", "metadata_parity"]
+    },
+    {
+      "kind": "report.execute_scheduled",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["heavy"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["artifact_golden", "contract_schema", "cross_language_golden", "metadata_parity"]
+    },
+    {
+      "kind": "sync.provider_unit",
+      "state": "canary",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["sync"],
+      "route": "river_canary",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery", "kill_window", "provider_parity"]
+    },
+    {
+      "kind": "sync.team_autoimport",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["sync"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery", "handler_wiring"]
+    },
+    {
+      "kind": "system.heartbeat",
+      "state": "go_implemented",
+      "producer_version": 1,
+      "consumer_versions": [1],
+      "required_profiles": ["ops"],
+      "route": "celery",
+      "rollback_route": "celery",
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
     },
     {
       "kind": "system.retention_cleanup",
-      "state": "contract_frozen",
+      "state": "go_implemented",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["ops"],
       "route": "celery",
       "rollback_route": "celery",
-      "evidence": ["contract_schema", "cross_language_golden"]
-    }
+      "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery"]
+    },
+    {"kind":"workgraph.build","state":"go_implemented","producer_version":1,"consumer_versions":[1],"required_profiles":["heavy"],"route":"celery","rollback_route":"celery","evidence":["contract_schema","cross_language_golden","family_inventory","fenced_request_ledger","handler_wiring","replay_recovery"]}
   ]
 }

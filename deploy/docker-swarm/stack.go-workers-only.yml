@@ -1,0 +1,8 @@
+# Explicit go-only Swarm overlay. Apply only after the route-owner gates;
+# definitions remain in stack.yml and are merely scaled to zero.
+services:
+  worker: {deploy: {replicas: 0}}
+  worker-ingest: {deploy: {replicas: 0}}
+  worker-external-ingest: {deploy: {replicas: 0}}
+  worker-heavy: {deploy: {replicas: 0}}
+  beat: {deploy: {replicas: 0}}

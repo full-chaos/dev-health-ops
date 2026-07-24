@@ -1,0 +1,241 @@
+# Additive, default-off Go/River workloads. This file is deliberately absent
+# from kustomization.yaml: apply it only after the migration Job is complete.
+# The checked-in route contract is still Celery-owned; these pods expose
+# /healthz, /readyz, and /metrics for a bounded coexistence canary.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dev-health-go-workers
+  namespace: dev-health
+  labels: {app.kubernetes.io/component: go-worker}
+spec:
+  selector: {app.kubernetes.io/component: go-worker}
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-go-worker-heavy
+  namespace: dev-health
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: heavy}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: heavy}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: heavy}}
+    spec:
+      terminationGracePeriodSeconds: 120
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: worker
+          image: ghcr.io/full-chaos/dev-health-go-worker:latest
+          env: [{name: DEV_HEALTH_PROFILE, value: heavy}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-go-worker-latency
+  namespace: dev-health
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: latency}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: latency}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: latency}}
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: worker
+          image: ghcr.io/full-chaos/dev-health-go-worker:latest
+          env: [{name: DEV_HEALTH_PROFILE, value: latency}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-go-worker-ops
+  namespace: dev-health
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: ops}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: ops}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: ops}}
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: worker
+          image: ghcr.io/full-chaos/dev-health-go-worker:latest
+          env: [{name: DEV_HEALTH_PROFILE, value: ops}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-go-worker-sync-provider
+  namespace: dev-health
+  labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: sync, dev-health.io/queue: sync.provider}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: sync}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: sync, dev-health.io/queue: sync.provider}}
+    spec:
+      terminationGracePeriodSeconds: 120
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: worker
+          image: ghcr.io/full-chaos/dev-health-go-worker:latest
+          env: [{name: DEV_HEALTH_PROFILE, value: sync}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-go-reconciler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: reconciler}}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: reconciler}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: reconciler}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: reconciler
+          image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-go-scheduler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: scheduler}}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: scheduler}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: scheduler}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: scheduler
+          image: ghcr.io/full-chaos/dev-health-go-scheduler:latest
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-go-stream-external, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-external}}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-external}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-external}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: stream-runner
+          image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+          env: [{name: DEV_HEALTH_PROFILE, value: external}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-go-stream-ingest, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-ingest}}
+spec:
+  replicas: 0
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-ingest}}
+  template:
+    metadata: {labels: {app.kubernetes.io/component: go-worker, dev-health.io/profile: stream-ingest}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: stream-runner
+          image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+          env: [{name: DEV_HEALTH_PROFILE, value: ingest}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+---
+# Requires a Prometheus Adapter mapping these metric names. All three signals
+# must be present: depth asks for capacity, oldest-age protects latency, and
+# execution saturation prevents a replica count from hiding a busy process.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: dev-health-go-worker-heavy, namespace: dev-health}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-heavy}
+  minReplicas: 0
+  maxReplicas: 1
+  metrics:
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: heavy}}}, target: {type: AverageValue, averageValue: "800m"}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: dev-health-go-worker-sync-provider, namespace: dev-health}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-sync-provider}
+  minReplicas: 0
+  maxReplicas: 2
+  metrics:
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: sync, queue: sync.provider}}}, target: {type: AverageValue, averageValue: "1"}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: sync, queue: sync.provider}}}, target: {type: AverageValue, averageValue: "60"}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: sync}}}, target: {type: AverageValue, averageValue: "800m"}}

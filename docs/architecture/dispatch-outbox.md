@@ -99,13 +99,13 @@ sequenceDiagram
     Relay->>Broker: Publish finalize_sync_run task
     Relay->>DB: Mark outbox row dispatched
 
-    Note over DB, Worker: Case 4: post_sync fanout lost (At-Most-Once)
+    Note over DB, Worker: Case 4: post_sync fanout re-drive (At-Least-Once)
     Worker->>DB: finalize_sync_run finishes, writes post_sync outbox row (pending)
     Relay->>DB: Scan for pending outbox rows (available_at <= now)
     Relay->>DB: Claim row
-    Relay->>DB: Mark outbox row dispatched (BEFORE publishing)
-    Note over Relay: If publish fails here, task is lost (At-Most-Once)
     Relay->>Broker: Publish post_sync fanout tasks
+    Relay->>DB: Mark outbox row dispatched
+    Note over Relay: Publish failure releases the claim with bounded backoff
 
     Note over DB, Worker: Case 5: Permanent feature denial (Consumed, no publication)
     Worker->>DB: Terminalize run, units, discovery, and observers atomically
@@ -146,7 +146,7 @@ graph TD
     
     N1[dispatch_sync_run outbox row:<br/>- Created in-txn by planner/trigger<br/>- Marked dispatched by relay<br/>- Re-armed by dispatch_sync_run if capped]:::note
     N2[finalize_sync_run outbox row:<br/>- Created in-txn by run_sync_unit<br/>- Marked dispatched by relay]:::note
-    N3[post_sync outbox row:<br/>- Created in-txn by finalize_sync_run<br/>- Marked dispatched by relay BEFORE publish]:::note
+    N3[post_sync outbox row:<br/>- Created in-txn by finalize_sync_run<br/>- Published before terminal mark<br/>- Re-armed after guarded publish failure]:::note
 
     Plan -.-> N1
     N1 -.-> Dispatch
@@ -167,7 +167,7 @@ The outbox kinds have different delivery guarantees depending on their idempoten
 | `reference_discovery` | At-Least-Once | The durable discovery ledger and lease allow an expired attempt to resume, while the successful transition arms dispatch once. |
 | `dispatch_sync_run` | At-Least-Once | Unit claim guards prevent duplicate execution. Capped units remain in `PLANNED` status. |
 | `finalize_sync_run` | At-Least-Once | The `SyncRunPostDispatch` ledger enforces once-only finalization. |
-| `post_sync` | At-Most-Once | The relay marks the row as dispatched before publishing. It never re-arms on publish failure. |
+| `post_sync` | At-Least-Once | A live claim is published before its terminal mark; failures re-arm with bounded backoff. Generation-safe readers select one logical compute generation. |
 
 A permanent authorization denial consumes the transition using the existing
 `dispatched` status and stores `feature_disabled` as the durable reason. These
@@ -205,13 +205,36 @@ cutoff and limit against a quiescent or otherwise correlated dataset.
 Independent live timestamps are operational evidence, not a promotion gate.
 Promotion still requires separately reviewed tandem evidence.
 
-### At-Most-Once post_sync Semantics
+### Guarded At-Least-Once post_sync Semantics
 
-Downstream metrics readers raw-aggregate `computed_at` generations. Duplicate post-sync fanouts would cause double-counting. To prevent this, the reconciler relay marks the `post_sync` outbox row as dispatched before publishing the tasks. If the publish fails, the row is not re-armed.
+The reconciler holds a live route-generation claim while it schedules the
+post-sync fanout, then terminally marks the row. A scheduling failure releases
+that claim and records bounded backoff, so the next relay pass can re-drive it.
+Duplicate deliveries are safe because supported readers select the newest
+`computed_at` generation per logical key (CHAOS-2596); no destructive rewrite
+of historical rows is required.
 
-### Deferred: Durable Exactly-Once post_sync (CHAOS-2596)
+For River delivery, the consumer rechecks the exact outbox ID, SyncRun,
+organization, dispatched transport, dispatched generation, and current
+unpaused route in PostgreSQL. A stale delivery commits no child state. A
+current delivery reconstructs the fanout from successful SyncRun units and
+stages all supported child domain rows plus `worker_job_outbox` handoffs in one
+transaction. Daily and remaining-metric runs, work-graph requests, and team
+autoimport each use deterministic identities. If any child writer or handoff
+fails, the transaction rolls back and the River delivery is retryable; no
+partial generation can escape.
 
-Durable exactly-once delivery for `post_sync` is deferred. It will be implemented under issue CHAOS-2596.
+Investment dispatch is currently such a fail-closed dependency. Its temporary
+Python compatibility executor creates a Celery chord, so native post-sync does
+not bind or call it. A run requiring investment fanout rolls back the complete
+transaction until a direct/native non-Celery dispatch writer is available.
+
+Child routes are evaluated independently. While a reviewed child remains
+`go_implemented` and Celery-routed, its generic outbox row is persisted as
+deferred and the relay cannot insert it into River. Promotion changes only the
+checked-in route policy; it does not change the post-sync payload or
+idempotency identity. Rolling back a child route to Celery likewise stops new
+River insertion without rewriting its domain generation.
 
 ---
 

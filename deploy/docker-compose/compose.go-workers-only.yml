@@ -1,0 +1,14 @@
+# Explicit go-only topology overlay. Use only after the route-owner release
+# gates in deploy/go-workers/README.md are satisfied. It scales the Celery
+# consumer services to zero; it does not delete Celery, Beat, or Valkey DB 0.
+services:
+  worker:
+    deploy: {replicas: 0}
+  worker-ingest:
+    deploy: {replicas: 0}
+  worker-external-ingest:
+    deploy: {replicas: 0}
+  worker-heavy:
+    deploy: {replicas: 0}
+  beat:
+    deploy: {replicas: 0}

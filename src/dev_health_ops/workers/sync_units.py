@@ -7,7 +7,7 @@ decorator. They take IDs ONLY (no credentials, no DTOs) in their payloads.
 Pipeline:
     plan_sync_run (CHAOS-2511)        -> persists SyncRun + units (status=planned)
     dispatch_sync_run(run_id)         -> DispatchGuard.authorize_run, then routes
-                                         + queues each unit (group/chord)
+                                         + queues each unit independently
     run_sync_unit(unit_id)            -> SyncTaskBootstrap.load + ProviderRuntime,
                                          executes ONE dataset, persists unit status,
                                          updates watermark ONLY if mode==incremental
@@ -26,10 +26,10 @@ Idempotency and Durability rules:
   * Metrics are never dispatched from individual units. Post-sync durability
     flows through the sync_dispatch_outbox table and the reconciler relay,
     rather than only the SyncRunPostDispatch ledger. The post_sync kind is
-    relayed at-most-once by the reconciler. It marks the outbox row dispatched
-    before publishing and never re-arms on publish failure. This prevents
-    downstream metrics readers from double-counting duplicate computed_at
-    generations. Durable exactly-once post-sync is deferred to CHAOS-2596.
+    relayed guarded at-least-once: the reconciler terminally marks it only
+    after scheduling succeeds, and a failure releases the claim with bounded
+    backoff. CHAOS-2596 made supported downstream readers generation-safe, so
+    a duplicate compute generation cannot inflate their results.
 Observability (CHAOS-2519):
   Every structured log line emitted by the three tasks carries the full unit
   context: sync_run_id, unit_id, source_id, dataset_key, provider, cost_class.
@@ -51,10 +51,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
 from billiard.exceptions import SoftTimeLimitExceeded
-from celery import chord, group
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, SessionTransactionOrigin
 
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models import (
@@ -105,7 +104,15 @@ from dev_health_ops.sync.trigger_routing import (
 )
 from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.job_contracts import ProviderUnitPayload
+from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_routes import (
+    RIVER_CANARY_ROUTE,
+    WorkerJobRouteError,
+    resolve_worker_job_route,
+)
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
+from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
 from dev_health_ops.workers.rate_limit_defer import (
     RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
@@ -748,7 +755,25 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         reference_discovery_succeeded,
     )
 
+    river_queued = 0
     with get_postgres_session_sync() as session:
+        # The provider-unit outbox row and DISPATCHING claim must share one
+        # explicit transaction. A process death therefore commits both or
+        # neither, closing the producer kill window without serializing
+        # credentials, callables, or route configuration into River.
+        transaction = session.get_transaction()
+        if (
+            transaction is not None
+            and transaction.origin is SessionTransactionOrigin.AUTOBEGIN
+        ):
+            # A task-owned fresh session begins implicitly when it first reads
+            # its run. Persist that read/fixture transaction rather than
+            # rolling it back: rollback can erase a just-planned run before
+            # dispatch sees it. The explicit producer transaction below then
+            # fences the unit claim and outbox row together.
+            session.commit()
+        if not session.in_transaction():
+            session.begin()
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is None:
@@ -922,9 +947,46 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         ):
             next_deferred_at = reconfirm_result.next_deferred_at
 
+        # The durable route row, not a process-local capability flag, owns the
+        # transport decision. This FOR SHARE lock remains held through the
+        # unit claim and outbox commit, serializing an operator FOR UPDATE
+        # transition with every producer, including a non-canary batch during
+        # a paused or drifted control-plane state.
+        provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
+        provider_unit_routes = (
+            ProviderUnitRouteSwitches.from_environment()
+            if provider_unit_route == RIVER_CANARY_ROUTE
+            else None
+        )
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
+            in_canary_scope = ProviderUnitRouteSwitches.is_canary_scope(
+                str(unit.provider), str(unit.dataset_key)
+            )
+            if in_canary_scope and provider_unit_route == RIVER_CANARY_ROUTE:
+                if (
+                    provider_unit_routes is None
+                    or not provider_unit_routes.routes_to_river(
+                        str(unit.provider), str(unit.dataset_key)
+                    )
+                ):
+                    # A checked-in canary route without its complete runtime
+                    # capability is an ownership fault, never a reason to
+                    # silently publish legacy Celery work.
+                    raise WorkerJobRouteError(
+                        "sync provider canary capability is unavailable"
+                    )
+                enqueue_worker_job(
+                    session,
+                    ProviderUnitPayload(unit_id=str(unit.id)),
+                    correlation_id=f"sync-run:{run.id}",
+                    idempotency_key=f"sync.provider_unit:{unit.id}",
+                    domain_id=str(unit.id),
+                    organization_id=str(unit.org_id),
+                )
+                river_queued += 1
+                continue
             dispatch_route = route(
                 org_id=str(unit.org_id),
                 provider=str(unit.provider),
@@ -937,7 +999,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 )
             )
 
-        if signatures:
+        if signatures or river_queued:
             now = datetime.now(timezone.utc)
             run.status = SyncRunStatus.DISPATCHING.value
             run.started_at = run.started_at or now
@@ -950,13 +1012,18 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             "dispatch_sync_run.dispatched",
             extra={
                 "sync_run_id": sync_run_id,
-                "queued_units": len(signatures),
+                "queued_units": len(signatures) + river_queued,
+                "celery_units": len(signatures),
+                "river_units": river_queued,
             },
         )
-        callback = getattr(finalize_sync_run, "si")(sync_run_id)
-        callback.set(queue="sync")
         try:
-            chord(group(signatures), callback).apply_async()
+            # Unit terminal writes materialize the durable finalize wakeup.
+            # Do not use a Celery chord/result backend as a coordinator: a
+            # retry or partial publish remains recoverable through the same
+            # SyncDispatchOutbox materializer that covers worker loss.
+            for signature in signatures:
+                getattr(signature, "apply_async")()
             if next_deferred_at is not None:
                 _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
             elif capped_ids:
@@ -967,7 +1034,26 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 extra={"sync_run_id": sync_run_id, "error": str(exc)},
             )
             raise
-        return {"status": "dispatched", "queued_units": len(signatures)}
+        return {
+            "status": "dispatched",
+            "queued_units": len(signatures) + river_queued,
+        }
+
+    if river_queued:
+        if next_deferred_at is not None:
+            _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
+        elif capped_ids:
+            _schedule_redispatch(sync_run_id)
+        logger.info(
+            "dispatch_sync_run.dispatched",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": river_queued,
+                "celery_units": 0,
+                "river_units": river_queued,
+            },
+        )
+        return {"status": "dispatched", "queued_units": river_queued}
 
     # Fix 2: no units were claimable this pass.  Distinguish two cases:
     #   a) Deferred work remains (PLANNED units exist, not all terminal) →
@@ -1871,11 +1957,9 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
 
     No-op until all units are terminal; once-only via the SyncRunPostDispatch
     ledger. The reconciler relay is the sole post-sync publisher. post_sync is
-    at-most-once: the relay marks dispatched before publishing and never re-arms
-    on publish failure because downstream raw-aggregation readers can
-    double-count duplicate computed_at generations. Durable exactly-once
-    post-sync re-drive is deferred to CHAOS-2596; dispatch/finalize wakeups
-    remain at-least-once because their consumers are idempotent.
+    at-least-once: a publish failure releases its guarded outbox claim for a
+    bounded re-drive. Downstream readers select the newest compute generation
+    per logical key, so duplicate deliveries cannot inflate supported metrics.
     """
 
     from dev_health_ops.db import get_postgres_session_sync

@@ -1,0 +1,64 @@
+# Additive Swarm topology. Deploy it with stack.yml as a second config file;
+# all replicas start at zero, so this is inert until an operator scales a
+# reviewed profile. The base stack keeps Celery, Beat, and Valkey DB 0.
+x-go-worker: &go-worker
+  image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
+  read_only: true
+  user: "65532:65532"
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp]
+  environment: &go-worker-env
+    DEV_HEALTH_HTTP_ADDR: ":8080"
+    POSTGRES_URI: ${POSTGRES_URI:?direct domain PostgreSQL URI is required}
+    WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:?queue-control PostgreSQL URI is required}
+    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    VALKEY_URI: redis://valkey:6379/1
+    RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+    RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+    RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    WORKER_DATABASE_MODE: ${WORKER_DATABASE_MODE:-direct}
+    DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+    AUTO_RUN_MIGRATIONS: "false"
+  networks: [dev-health-internal]
+  deploy: &go-worker-deploy
+    mode: replicated
+    replicas: 0
+    update_config: {parallelism: 1, delay: 15s, failure_action: rollback, order: start-first}
+    rollback_config: {parallelism: 1, delay: 15s, order: stop-first}
+    restart_policy: {condition: on-failure, delay: 5s, max_attempts: 3}
+    resources:
+      limits: {cpus: "1.0", memory: 1G}
+      reservations: {cpus: "0.25", memory: 256M}
+
+services:
+  go-worker-heavy:
+    <<: *go-worker
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: heavy}
+  go-worker-latency:
+    <<: *go-worker
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: latency}
+    deploy:
+      <<: *go-worker-deploy
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+        reservations: {cpus: "0.10", memory: 128M}
+  go-worker-ops:
+    <<: *go-worker
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ops}
+  go-worker-sync-provider:
+    <<: *go-worker
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: sync}
+  go-reconciler:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
+  go-scheduler:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
+  go-stream-external:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: external}
+  go-stream-ingest:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    environment: {<<: *go-worker-env, DEV_HEALTH_PROFILE: ingest}

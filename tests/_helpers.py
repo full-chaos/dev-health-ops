@@ -59,7 +59,7 @@ def closing_coroutine_runner(
 
 def seed_sync_dispatch_transport_routes(session: Session) -> None:
     """Seed the migration-default Celery routes for isolated outbox tests."""
-    from dev_health_ops.models import SyncDispatchTransportRoute
+    from dev_health_ops.models import SyncDispatchTransportRoute, WorkerJobRoute
 
     session.add_all(
         [
@@ -78,5 +78,13 @@ def seed_sync_dispatch_transport_routes(session: Session) -> None:
                 "reference_discovery",
             )
         ]
+    )
+    session.add(
+        WorkerJobRoute(
+            job_kind="sync.provider_unit",
+            transport="celery",
+            paused=False,
+            generation=1,
+        )
     )
     session.flush()

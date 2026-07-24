@@ -129,23 +129,40 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	if cfg.RiverJobCleanerTimeout != 30*time.Second {
 		t.Fatalf("cleaner timeout = %s", cfg.RiverJobCleanerTimeout)
 	}
+	if cfg.OperationalBridgeAllowInsecure {
+		t.Fatal("insecure operational bridge must default off")
+	}
+	if cfg.StreamConfiguredReplicas != 1 {
+		t.Fatalf("stream replicas = %d, want 1", cfg.StreamConfiguredReplicas)
+	}
+	if cfg.WorkerLinearWorkItemsEnabled || cfg.WorkerJiraWorkItemsEnabled ||
+		cfg.WorkerJiraIncidentsEnabled ||
+		cfg.WorkerLaunchDarklyFeatureFlagsEnabled {
+		t.Fatal("provider route switches must default off")
+	}
 }
 
 func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := Load(workerSpec(map[string]string{
-		"WORKER_DATABASE_MODE":             "transaction",
-		"PGBOUNCER_TRANSACTION_MODE":       "true",
-		"RIVER_DATABASE_SCHEMA":            "worker_queue",
-		"RIVER_DOMAIN_DATABASE_ROLE":       "worker_domain",
-		"RIVER_QUEUE_DATABASE_ROLE":        "worker_queue",
-		"WORKER_DATABASE_MAX_CONNS":        "4",
-		"WORKER_DOMAIN_DATABASE_MAX_CONNS": "12",
-		"RIVER_COMPLETED_JOB_RETENTION":    "48h",
-		"RIVER_CANCELLED_JOB_RETENTION":    "240h",
-		"RIVER_DISCARDED_JOB_RETENTION":    "336h",
-		"RIVER_JOB_CLEANER_TIMEOUT":        "45s",
+		"WORKER_DATABASE_MODE":                      "transaction",
+		"PGBOUNCER_TRANSACTION_MODE":                "true",
+		"RIVER_DATABASE_SCHEMA":                     "worker_queue",
+		"RIVER_DOMAIN_DATABASE_ROLE":                "worker_domain",
+		"RIVER_QUEUE_DATABASE_ROLE":                 "worker_queue",
+		"WORKER_DATABASE_MAX_CONNS":                 "4",
+		"WORKER_DOMAIN_DATABASE_MAX_CONNS":          "12",
+		"RIVER_COMPLETED_JOB_RETENTION":             "48h",
+		"RIVER_CANCELLED_JOB_RETENTION":             "240h",
+		"RIVER_DISCARDED_JOB_RETENTION":             "336h",
+		"RIVER_JOB_CLEANER_TIMEOUT":                 "45s",
+		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE":  "true",
+		"DEV_HEALTH_STREAM_REPLICAS":                "3",
+		"WORKER_LINEAR_WORK_ITEMS_ENABLED":          "true",
+		"WORKER_JIRA_WORK_ITEMS_ENABLED":            "true",
+		"WORKER_JIRA_INCIDENTS_ENABLED":             "true",
+		"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -165,17 +182,34 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 	if cfg.CompletedJobRetention != 48*time.Hour || cfg.RiverJobCleanerTimeout != 45*time.Second {
 		t.Fatalf("unexpected retention settings: %#v", cfg.SafeAttrs())
 	}
+	if !cfg.OperationalBridgeAllowInsecure {
+		t.Fatal("expected explicit insecure operational bridge opt-in")
+	}
+	if cfg.StreamConfiguredReplicas != 3 {
+		t.Fatalf("stream replicas = %d, want 3", cfg.StreamConfiguredReplicas)
+	}
+	if !cfg.WorkerLinearWorkItemsEnabled || !cfg.WorkerJiraWorkItemsEnabled ||
+		!cfg.WorkerJiraIncidentsEnabled ||
+		!cfg.WorkerLaunchDarklyFeatureFlagsEnabled {
+		t.Fatal("expected independent provider route opt-ins")
+	}
 
 	for key, value := range map[string]string{
-		"WORKER_DATABASE_MODE":             "arbitrary",
-		"WORKER_DATABASE_MAX_CONNS":        "5",
-		"WORKER_DOMAIN_DATABASE_MAX_CONNS": "0",
-		"RIVER_COMPLETED_JOB_RETENTION":    "23h",
-		"RIVER_JOB_CLEANER_TIMEOUT":        "4s",
-		"RIVER_DATABASE_SCHEMA":            "River-Bad",
-		"RIVER_DOMAIN_DATABASE_ROLE":       "Domain-Bad",
-		"RIVER_QUEUE_DATABASE_ROLE":        "Queue-Bad",
-		"PGBOUNCER_TRANSACTION_MODE":       "sometimes",
+		"WORKER_DATABASE_MODE":                      "arbitrary",
+		"WORKER_DATABASE_MAX_CONNS":                 "5",
+		"WORKER_DOMAIN_DATABASE_MAX_CONNS":          "0",
+		"RIVER_COMPLETED_JOB_RETENTION":             "23h",
+		"RIVER_JOB_CLEANER_TIMEOUT":                 "4s",
+		"RIVER_DATABASE_SCHEMA":                     "River-Bad",
+		"RIVER_DOMAIN_DATABASE_ROLE":                "Domain-Bad",
+		"RIVER_QUEUE_DATABASE_ROLE":                 "Queue-Bad",
+		"PGBOUNCER_TRANSACTION_MODE":                "sometimes",
+		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE":  "sometimes",
+		"DEV_HEALTH_STREAM_REPLICAS":                "9",
+		"WORKER_LINEAR_WORK_ITEMS_ENABLED":          "sometimes",
+		"WORKER_JIRA_WORK_ITEMS_ENABLED":            "sometimes",
+		"WORKER_JIRA_INCIDENTS_ENABLED":             "sometimes",
+		"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "sometimes",
 	} {
 		if _, err := Load(workerSpec(map[string]string{key: value})); err == nil {
 			t.Fatalf("expected %s=%q to fail", key, value)

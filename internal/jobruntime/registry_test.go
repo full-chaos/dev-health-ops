@@ -14,18 +14,14 @@ func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	heartbeat, ok := registry.Descriptor(jobcontract.KindHeartbeat)
-	if !ok {
-		t.Fatal("heartbeat descriptor missing")
-	}
-	retention, ok := registry.Descriptor(jobcontract.KindRetentionCleanup)
-	if !ok {
-		t.Fatal("retention descriptor missing")
-	}
+	heartbeat, _ := registry.Descriptor(jobcontract.KindHeartbeat)
+	retention, _ := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	billing, _ := registry.Descriptor(jobcontract.KindBillingNotification)
+	webhook, _ := registry.Descriptor(jobcontract.KindWebhookDelivery)
 	startup := StartupSpec{
 		Profile:  "ops",
-		Queues:   []string{"heartbeat", "retention"},
-		Handlers: []HandlerSpec{heartbeat, retention},
+		Queues:   []string{"heartbeat", "retention", "webhooks"},
+		Handlers: []HandlerSpec{billing, webhook, heartbeat, retention},
 	}
 	if err := registry.ValidateStartup(startup); err != nil {
 		t.Fatalf("ValidateStartup: %v", err)
@@ -109,13 +105,39 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 2 || descriptors[0].Kind != jobcontract.KindHeartbeat ||
-		descriptors[1].Kind != jobcontract.KindRetentionCleanup {
+	if len(descriptors) != 24 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
+		descriptors[1].Kind != jobcontract.KindInvestmentDispatch ||
+		descriptors[2].Kind != jobcontract.KindInvestmentFinalize ||
+		descriptors[3].Kind != jobcontract.KindInvestmentMaterialize ||
+		descriptors[4].Kind != jobcontract.KindDailyMetricsDispatch ||
+		descriptors[5].Kind != jobcontract.KindDailyMetricsFinalize ||
+		descriptors[6].Kind != jobcontract.KindDailyMetricsPartition ||
+		descriptors[7].Kind != jobcontract.KindRemainingCapacity ||
+		descriptors[8].Kind != jobcontract.KindRemainingComplexity ||
+		descriptors[9].Kind != jobcontract.KindRemainingDORA ||
+		descriptors[10].Kind != jobcontract.KindRemainingExtraMetrics ||
+		descriptors[11].Kind != jobcontract.KindRemainingMembership ||
+		descriptors[12].Kind != jobcontract.KindRemainingRecommendations ||
+		descriptors[13].Kind != jobcontract.KindRemainingReleaseImpact ||
+		descriptors[14].Kind != jobcontract.KindRemainingTeamMetrics ||
+		descriptors[15].Kind != jobcontract.KindBillingNotification ||
+		descriptors[16].Kind != jobcontract.KindWebhookDelivery ||
+		descriptors[17].Kind != jobcontract.KindReportExecuteOnDemand ||
+		descriptors[18].Kind != jobcontract.KindReportExecuteScheduled ||
+		descriptors[19].Kind != jobcontract.KindSyncProviderUnit ||
+		descriptors[20].Kind != jobcontract.KindTeamAutoimport ||
+		descriptors[21].Kind != jobcontract.KindHeartbeat ||
+		descriptors[22].Kind != jobcontract.KindRetentionCleanup ||
+		descriptors[23].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	for _, descriptor := range descriptors {
-		if descriptor.Route != "celery" || descriptor.Executable() {
-			t.Fatalf("checked-in production policy became executable: %#v", descriptor)
+		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
+			if descriptor.Route != "river_canary" || !descriptor.Executable() {
+				t.Fatalf("provider-unit canary policy is not executable: %#v", descriptor)
+			}
+		} else if descriptor.Route != "celery" || descriptor.Executable() {
+			t.Fatalf("checked-in compatibility policy became executable: %#v", descriptor)
 		}
 	}
 

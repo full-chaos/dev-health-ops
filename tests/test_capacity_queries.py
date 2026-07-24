@@ -16,10 +16,15 @@ class FakeClickHouseSink:
 
     def query_dicts(
         self, query: str, parameters: dict[str, str]
-    ) -> list[dict[str, int]]:
+    ) -> list[dict[str, object]]:
         self.query = query
         self.parameters = parameters
 
+        if "items_completed" in query:
+            return [
+                {"day": day, "items_completed": items_completed}
+                for day, items_completed in self.rows
+            ]
         if "sum(wip_count_end_of_day)" not in query.lower():
             return [{"wip_count_end_of_day": self.rows[0][1]}]
 
@@ -52,3 +57,15 @@ async def test_get_backlog_aggregates_latest_day_for_org_scope() -> None:
     assert "sum(wip_count_end_of_day)" in sink.query.lower()
     assert "max(day)" in sink.query.lower()
     assert sink.parameters == {"org_id": "org-1"}
+
+
+@pytest.mark.asyncio
+async def test_capacity_throughput_reader_uses_rmt_final() -> None:
+    from dev_health_ops.metrics.job_capacity import load_throughput_from_sink
+
+    sink = FakeClickHouseSink(rows=[(date(2026, 1, 1), 3)])
+    sink.org_id = "org-1"
+
+    await load_throughput_from_sink(sink, history_days=7)
+
+    assert "FROM work_item_metrics_daily FINAL" in sink.query

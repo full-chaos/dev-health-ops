@@ -27,8 +27,7 @@ const (
 	KindPostSync           = "post_sync"
 	KindReferenceDiscovery = "reference_discovery"
 
-	DeliveryAtLeastOnce          = "at_least_once"
-	DeliveryAtMostOnceMarkBefore = "at_most_once_mark_before"
+	DeliveryAtLeastOnce = "at_least_once"
 
 	RouteCelery = "celery"
 	RouteRiver  = "river"
@@ -125,7 +124,7 @@ func (parsed artifact) validate() error {
 var frozenDeliveries = map[string]string{
 	KindDispatchSyncRun:    DeliveryAtLeastOnce,
 	KindFinalizeSyncRun:    DeliveryAtLeastOnce,
-	KindPostSync:           DeliveryAtMostOnceMarkBefore,
+	KindPostSync:           DeliveryAtLeastOnce,
 	KindReferenceDiscovery: DeliveryAtLeastOnce,
 }
 

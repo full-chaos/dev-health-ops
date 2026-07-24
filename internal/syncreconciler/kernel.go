@@ -24,13 +24,6 @@ var (
 	// ErrPublisherRequired means mutation reached an at-least-once claim without
 	// an injected same-transaction River publisher.
 	ErrPublisherRequired = errors.New("sync dispatch transport publisher required")
-	// ErrPostSyncHandoffRequired means mutation can claim the special at-most-once
-	// post_sync kind without an explicit post-commit external handoff.
-	ErrPostSyncHandoffRequired = errors.New("sync dispatch post-sync handoff required")
-	// ErrPostSyncHandoffFailed reports one or more post-commit handoff failures
-	// without exposing an adapter's potentially sensitive error text. The
-	// associated terminal marks are already durable and must never be rearmed.
-	ErrPostSyncHandoffFailed = errors.New("sync dispatch post-sync handoff failed")
 )
 
 // KernelMode selects a strictly bounded reconciler behavior. Shadow is the
@@ -60,23 +53,20 @@ type TransportClaim struct {
 // released through the bounded persisted failure recorder.
 type AtLeastOncePublisher func(context.Context, pgx.Tx, TransportClaim) (string, error)
 
-// PostSyncHandoff is deliberately separate from AtLeastOncePublisher. The
-// kernel commits the terminal dispatched mark before invoking this callback,
-// so it cannot accidentally perform an external effect in the mark
-// transaction. A callback failure is surfaced but never re-arms post_sync.
+// PostSyncHandoff is retained as an inert source-compatibility parameter for
+// dormant compositions. All post_sync delivery goes through AtLeastOncePublisher
+// and this callback has no dispatch, retry, or readiness effect.
 type PostSyncHandoff func(context.Context, TransportClaim) error
 
 // KernelResult is bounded to one requested claim window. Shadow includes the
 // existing read-only observation; mutation reports only aggregate counts.
 type KernelResult struct {
-	Mode                  KernelMode
-	Observation           Observation
-	Claimed               int
-	Dispatched            int
-	PostSyncMark          int
-	PostSyncHandoffFailed int
-	Retried               int
-	LeaseLost             int
+	Mode        KernelMode
+	Observation Observation
+	Claimed     int
+	Dispatched  int
+	Retried     int
+	LeaseLost   int
 }
 
 type beginFunc func(context.Context) (pgx.Tx, error)
@@ -155,9 +145,8 @@ func newKernel(
 
 // Step runs exactly one bounded unit of work. Shadow delegates to the existing
 // read-only observer and never begins a transaction. Mutation first commits one
-// bounded set of River claims. Each at-least-once claim is then delivered and
-// terminally marked in its own fresh transaction. post_sync is terminally
-// marked and committed before its external handoff is invoked.
+// bounded set of River claims. Each at-least-once claim is then inserted and
+// terminally marked in its own fresh transaction, including post_sync.
 func (kernel *Kernel) Step(
 	ctx context.Context,
 	now time.Time,
@@ -175,6 +164,7 @@ func (kernel *Kernel) Step(
 		return KernelResult{}, err
 	}
 	now = now.UTC()
+	_ = postSyncHandoff
 	if kernel.mode == KernelModeShadow {
 		observation, err := kernel.observer.Step(ctx, now, limit)
 		return KernelResult{Mode: KernelModeShadow, Observation: observation}, err
@@ -188,20 +178,8 @@ func (kernel *Kernel) Step(
 	if len(kernel.riverKinds) == 0 {
 		return KernelResult{Mode: KernelModeMutation}, nil
 	}
-	for _, kind := range kernel.riverKinds {
-		descriptor := kernel.descriptors[kind]
-		switch descriptor.Delivery {
-		case syncdispatchcontract.DeliveryAtLeastOnce:
-			if publish == nil {
-				return KernelResult{}, ErrPublisherRequired
-			}
-		case syncdispatchcontract.DeliveryAtMostOnceMarkBefore:
-			if postSyncHandoff == nil {
-				return KernelResult{}, ErrPostSyncHandoffRequired
-			}
-		default:
-			return KernelResult{}, ErrInvalidConfiguration
-		}
+	if publish == nil {
+		return KernelResult{}, ErrPublisherRequired
 	}
 
 	claims, err := kernel.commitClaims(ctx, now, limit, leaseDuration)
@@ -209,33 +187,13 @@ func (kernel *Kernel) Step(
 		return KernelResult{}, err
 	}
 	result := KernelResult{Mode: KernelModeMutation, Claimed: len(claims)}
-	handoffFailed := false
 	for _, claim := range claims {
 		descriptor, known := kernel.descriptors[claim.Kind]
 		if !known || descriptor.Route != syncdispatchcontract.RouteRiver {
-			return result, kernelStepError(handoffFailed, ErrLeaseLost)
-		}
-		if descriptor.Delivery == syncdispatchcontract.DeliveryAtMostOnceMarkBefore {
-			if err := kernel.commitPostSyncMark(ctx, claim, now); err != nil {
-				// Only the unadorned exact-CAS miss is safely skippable. A joined
-				// persistence error (for example, an ambiguous commit plus a CAS
-				// probe miss) remains fatal.
-				if err == ErrLeaseLost {
-					result.LeaseLost++
-					continue
-				}
-				return result, kernelStepError(handoffFailed, err)
-			}
-			result.Dispatched++
-			result.PostSyncMark++
-			if err := postSyncHandoff(ctx, claim); err != nil {
-				handoffFailed = true
-				result.PostSyncHandoffFailed++
-			}
-			continue
+			return result, ErrLeaseLost
 		}
 		if descriptor.Delivery != syncdispatchcontract.DeliveryAtLeastOnce {
-			return result, kernelStepError(handoffFailed, ErrInvalidConfiguration)
+			return result, ErrInvalidConfiguration
 		}
 		outcome, err := kernel.deliverAtLeastOnce(ctx, claim, now, publish)
 		switch outcome {
@@ -246,26 +204,16 @@ func (kernel *Kernel) Step(
 		case deliveryLeaseLost:
 			result.LeaseLost++
 		}
-		// See the post_sync branch above: do not mask a compound error that
-		// merely contains ErrLeaseLost alongside an unavailable dependency.
+		// A lease loss is a normal concurrent-owner outcome. Do not mask a
+		// compound failure from an unavailable dependency as a lease loss.
 		if err == ErrLeaseLost {
 			continue
 		}
 		if err != nil {
-			return result, kernelStepError(handoffFailed, err)
+			return result, err
 		}
 	}
-	return result, kernelStepError(handoffFailed, nil)
-}
-
-func kernelStepError(handoffFailed bool, laterErr error) error {
-	if !handoffFailed {
-		return laterErr
-	}
-	if laterErr == nil {
-		return ErrPostSyncHandoffFailed
-	}
-	return errors.Join(ErrPostSyncHandoffFailed, laterErr)
+	return result, nil
 }
 
 type deliveryOutcome uint8
@@ -363,25 +311,6 @@ func lockRiverClaim(
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
-	}
-	return nil
-}
-
-func (kernel *Kernel) commitPostSyncMark(
-	ctx context.Context,
-	claim TransportClaim,
-	now time.Time,
-) error {
-	tx, err := kernel.begin(ctx)
-	if err != nil || tx == nil {
-		return ErrUnavailable
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := markRiverDispatched(ctx, tx, claim, now, ""); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrUnavailable
 	}
 	return nil
 }

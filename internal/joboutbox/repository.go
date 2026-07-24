@@ -219,6 +219,33 @@ func (repository *Repository) recordFailure(
 	return nil
 }
 
+// releaseClaim returns work claimed from a stale route snapshot to pending.
+// A subsequent reconciliation step refreshes durable routes and excludes it.
+func (repository *Repository) releaseClaim(
+	ctx context.Context,
+	claim Claim,
+	now time.Time,
+) error {
+	if repository == nil || repository.pool == nil || now.IsZero() ||
+		!uuidPattern.MatchString(claim.ID) || !uuidPattern.MatchString(claim.ClaimToken) {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.pool.Exec(ctx, `
+		UPDATE public.worker_job_outbox
+		SET status = 'pending', claim_token = NULL, claimed_at = NULL,
+			claim_expires_at = NULL, next_attempt_at = $3, updated_at = $3
+		WHERE id = $1 AND status = 'claimed' AND claim_token = $2
+			AND claim_expires_at > statement_timestamp()`,
+		claim.ID, claim.ClaimToken, now.UTC())
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
 // DeleteTerminalBefore performs bounded retention without exposing args.
 func (repository *Repository) DeleteTerminalBefore(
 	ctx context.Context,

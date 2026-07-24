@@ -71,3 +71,23 @@ Notes:
   migration DSN, the River step is skipped. ClickHouse migrations always run.
   See
   `docs/ops/database-connection-pooling.md`.
+
+## Additive Go/River topology (CHAOS-3052)
+
+`go-workers.yaml` is intentionally not listed in `kustomization.yaml`; apply
+it only for a reviewed coexistence canary after the migration Job has completed:
+
+```bash
+kubectl -n dev-health apply -f deploy/kubernetes/go-workers.yaml
+kubectl -n dev-health scale deployment/dev-health-go-worker-heavy --replicas=1
+kubectl -n dev-health rollout status deployment/dev-health-go-worker-heavy
+```
+
+The workloads are non-root, read-only, start-first rolling Deployments with
+zero replicas by default. Their HPA requires a Prometheus Adapter for
+`worker_jobs_available`, `worker_job_oldest_age_seconds`, and
+`worker_execution_saturation_ratio`; scrape the shared
+`dev-health-go-workers` Service before enabling a profile. Do not apply
+`go-workers-only.yaml` until the route-owner gates in
+`../go-workers/README.md` are complete; it scales the retained Celery/Beat
+Deployments to zero and is not an activation mechanism by itself.

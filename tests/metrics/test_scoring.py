@@ -172,6 +172,12 @@ class TestWellbeingScorer:
         assert signal_map["weekend_ratio_inverse"].normalized_value == pytest.approx(
             0.95
         )
+        team_query = next(
+            query for query in client.queries if "team_metrics_daily" in query
+        )
+        assert "argMax(after_hours_commit_ratio, computed_at)" in team_query
+        assert "argMax(weekend_commit_ratio, computed_at)" in team_query
+        assert "GROUP BY day, team_id" in team_query
 
     def test_no_data(self) -> None:
         client = FakeClickHouseClient()

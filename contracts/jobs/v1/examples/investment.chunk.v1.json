@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000009",
+  "correlation_id": "investment-chunk-2026-07-23",
+  "idempotency_key": "investment:chunk:00000000-0000-4000-8000-000000000104",
+  "domain": {
+    "type": "investment_chunk",
+    "id": "00000000-0000-4000-8000-000000000104"
+  },
+  "payload": {
+    "chunk_id": "00000000-0000-4000-8000-000000000104"
+  }
+}

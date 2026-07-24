@@ -373,7 +373,7 @@ A separate dormant transaction kernel now locks an existing-marker due window,
 calls an injected coordinator through the same PostgreSQL transaction, and
 advances the marker only after that durable handoff succeeds. A second dormant
 kernel can claim River-routed sync outbox rows and invoke transaction-local
-at-least-once or `post_sync` mark-before seams. The Go reconciler image packages
+at-least-once seams, including `post_sync`. The Go reconciler image packages
 the sync-dispatch contract needed to construct that kernel. Nothing imports
 either kernel from a command or deployment profile, and every checked-in and
 persisted route remains Celery, so these additions are failure-tested
@@ -399,24 +399,28 @@ state in the canonical order before materializing the authoritative plan. It
 validates the versioned identity, applies persisted retry backoff to transient
 planner failures, and quarantines malformed or exhausted occurrences so a
 poisoned prefix cannot strand later work. Both its Beat entry and call-time
-execution gate default off. No command constructs the Go coordinator and the
-consumer is not enabled by any checked-in profile, so this is still not
-authorization to advance production markers. The public scheduler repository
+execution gate default off. The scheduler command retains a production factory
+that can construct the Go coordinator and mutation repository, but both
+private source-review activation gates remain checked-in false; the consumer
+is not enabled by any checked-in profile. This is still not authorization to
+advance production markers. The public scheduler repository
 constructor embeds an opaque Celery/`coexistence_disabled` ownership policy,
 and `HandoffDue` rejects mutation before opening a transaction. Only
 package-private test and future activation composition can construct Go
 mutation authority. Scheduler activation needs a reviewed source change,
-lifecycle factory composition, unsupported-cron policy parity, remaining
+unsupported-cron policy parity, remaining
 coordinator policy parity, and an explicit review that enables the consumer
 before Go may own a marker. The dormant loop currently rolls back a whole
 locked window and keeps readiness closed if any cron requires Celery fallback.
 
-The Go reconciler command now constructs only an explicit no-begin shadow
-adapter around the transport kernel. A separate command-unwired materializer
+The Go reconciler command still selects an explicit no-begin shadow adapter.
+Its retained source-gated mutation factory composes lease repair,
+materialization, transport delivery, and post-mutation observation, but the
+private activation gate remains checked-in false. The materializer
 can reconstruct bounded dispatch, finalize, discovery, and missing post-sync
 wakeups in one domain transaction. It never reads routes, claims rows, or
-publishes work; existing pending rows and at-most-once post-sync rows retain
-their current semantics. A second command-unwired repair step preserves the
+publishes work; existing pending rows, including guarded at-least-once
+post-sync rows, retain their current semantics. The composed repair step preserves the
 current eligible Linear-backfill expired-lease transition, including bounded
 retry exhaustion and provider/org/cost-class serialization. A persisted
 publish-failure recorder can rearm an already committed River claim with the
@@ -453,9 +457,9 @@ sync-domain outbox remains part of the work below.
 - Port the sync reconciler loops:
   - expired lease handling;
   - materialization of missing dispatch/finalize/post-sync rows;
-  - outbox claiming;
-  - River insertion;
-  - current mark-before/mark-after semantics.
+	- outbox claiming;
+	- River insertion;
+	- guarded insert-and-terminal-mark semantics for every replay-safe kind.
 - Add no-op/shadow transport mode.
 - Keep Celery transport selectable until sync cutover.
 - Expose schedule/reconciler metrics and readiness.
@@ -465,20 +469,21 @@ kernels exist with unit/failure-injection coverage, the reconciler image
 packages its sync-dispatch contract, and a containerized parity target exists.
 The Python scheduler now persists idempotent occurrences and its complete plan
 atomically. A durable, default-off Python consumer can finish Go-authored
-occurrences without retrying poison rows forever. The reconciler command is
-wired only to the shadow adapter, while the Go outbox materializer and
-expired-lease repair remain command-unwired. Persisted transport-failure
+occurrences without retrying poison rows forever. The reconciler command
+selects the shadow adapter by default; its retained source-gated mutation
+factory composes expired-lease repair, outbox materialization, delivery, and
+observation but remains unreachable while the private activation gate is
+false. Persisted transport-failure
 backoff and the least-privilege River transaction boundary are implemented as
 dormant primitives, but the kernel now claims first and then performs fresh
-per-claim insert/mark transactions, with `post_sync` committed before its
-external handoff. The scheduler has an opaque default-Celery
+per-claim insert/mark transactions, including `post_sync`. The scheduler has an opaque default-Celery
 ownership fence, the remaining Python policy-parity blockers are organization
 existence, entitlement, occurrence claiming, catch-up, and unsupported-cron
 policy; an unsupported or invalid cron currently rolls back the whole Go
 window and keeps readiness closed. The typed `syncdispatchruntime` generation
 tracker is only a publisher-owned local drain API today. Audited route pause/drain/resume
 controls are implemented with an empty activation-capability registry. Every
-route remains Celery-only; scheduler lifecycle factory/coordinator parity,
+route remains Celery-only; scheduler coordinator policy parity,
 concrete River delivery capabilities, and the cross-process `post_sync`
 quiescer/controller plus external-handoff binding remain open.
 
@@ -487,7 +492,7 @@ quiescer/controller plus external-handoff binding remain open.
 - Two replicas cannot duplicate a schedule occurrence.
 - Every documented outbox crash window passes failure-injection tests.
 - Existing eligible Linear expired-lease behavior is unchanged.
-- Post-sync remains at-most-once.
+- Post-sync is guarded at-least-once after the CHAOS-2596 reader remediation.
 - Transport can route per outbox kind to Celery or River for rollback.
 - Scheduler contains no heavy business work.
 
@@ -614,6 +619,11 @@ quiescer/controller plus external-handoff binding remain open.
 - Implement lease heartbeats and cancellation.
 - Shadow provider reads and compare normalized/sink-ready batches.
 - Canary by organization, dataset, and cost class.
+- Treat ClickHouse insert-token deduplication as a finite engine window, not
+  an exactly-once ledger. Persist each deterministic block transition
+  (`pending` → `writing` → `committed`) under the leased sync unit. A recovered
+  `writing` block is ambiguous and must pass durable readback reconciliation;
+  it is never automatically replayed based only on the ClickHouse window.
 
 #### Acceptance
 
@@ -621,6 +631,8 @@ quiescer/controller plus external-handoff binding remain open.
 - Provider call counts and rate-limit behavior do not regress beyond approved tolerance.
 - Kill tests prove claim/lease recovery.
 - No duplicate ClickHouse generation or provider side effect occurs.
+- Recovery outside the ClickHouse deduplication window refuses ambiguous block
+  replay and records a reconciliation-required outcome.
 - GitHub and GitLab queues can be independently rolled back.
 
 ### CHAOS-3046 — Migrate Linear, Jira, and LaunchDarkly sync unit execution
@@ -668,6 +680,22 @@ quiescer/controller plus external-handoff binding remain open.
 
 ### CHAOS-3048 — Establish analytics replay matrix and migrate daily metrics
 
+#### Executable wiring (still Celery-routed)
+
+The heavy worker now compiles the three daily adapters, their fixed
+`/internal/worker/daily-metrics/v1/execute` compatibility client, PostgreSQL
+stores, and generic outbox publisher. The checked-in route remains `celery`,
+so the River component is not constructed and no queue is fetched until all
+three daily route controls move together to an executable route.
+
+Partition completion serializes on the durable run row. The last partition
+success and the deduplicated `metrics.daily_finalize` outbox row commit in the
+same PostgreSQL transaction. A failure after the outbox insert rolls back both
+changes; the partition lease is then reclaimed and the same finalizer identity
+is published exactly once. The live PostgreSQL test exercises this kill
+window. This closes finalizer liveness but does not establish numerical parity
+or authorize promotion.
+
 #### Work
 
 - Inventory every ClickHouse table and reader touched by daily metrics.
@@ -687,6 +715,85 @@ quiescer/controller plus external-handoff binding remain open.
 - A kill at each write boundary has a documented outcome.
 
 ### CHAOS-3049 — Migrate remaining metrics, backfills, recommendations, and membership jobs
+
+#### Current compatibility foundation (not promotion)
+
+The checked-in compatibility bridge is a dormant, fail-closed foundation. Its
+HTTP requests carry only durable run/partition identifiers and a fixed
+operation; PostgreSQL supplies the organization, generation, scope, claim, and
+lease. Celery remains the production owner. No remaining-metrics family is
+promoted merely because its reviewed Python callable appears in the bridge
+allowlist. Each family now has a distinct versioned job kind and route/rollback
+pair, but every checked-in route remains `celery`.
+
+Each output identity has one durable execution row. A new row starts at attempt
+one. A completed row returns `skipped`; an `executing` or `ambiguous` row never
+silently re-enters compute. Operators first use the authenticated readback
+endpoint and inspect the output named by the generation/scope digest. The
+repair endpoint requires a distinct, operator-only
+`WORKER_METRIC_REPAIR_TOKEN`; the compute/readback bridge token cannot
+authorize repair, and the repair token cannot execute compute. Both secrets
+are bounded, compared in constant time, and fail closed when missing,
+oversized, or configured to the same value. Configure the repair secret
+wherever operator repair is enabled. Rotate it independently with a coordinated
+API/client switch; the old value stops authorizing repairs as soon as the API
+changes. Operators may then submit one exact-state repair:
+
+- `confirm_succeeded` records bounded reviewed output evidence and makes the
+  next worker call return `skipped`;
+- `retry_safe` records why no effect exists and moves the row to
+  `retry_authorized`; only the next matching durable claim may consume that
+  authorization and increment the execution attempt;
+- an `executing` or `ambiguous` attempt cannot be repaired while its original
+  claim and lease remain active.
+
+Repairs require the expected state and attempt count, use a deterministic
+repair identity, and persist an immutable repair audit row. This is the bounded
+repair path required for a single-attempt effect boundary; it is not a generic
+task/command executor.
+
+The shared heavy metrics River client now registers each executable family
+independently, rejects registry/inventory drift, and enforces the inventory's
+per-organization concurrency plus process-wide ClickHouse read/write budgets.
+The reviewed PostgreSQL deployment contract keeps the metrics queue at two
+workers within its domain and queue-control pool ceilings. Last-partition
+completion and run finalization commit atomically. Promotion remains blocked
+until per-family shadow/parity evidence is reviewed, each route's
+Celery/River transition and rollback is approved, and the four
+`inventory_only` families have independent compute/write parity rather than
+broad shared-job coverage.
+
+Native post-sync fanout uses `remaining.PostgresStore.StartRunTx` inside its
+existing domain transaction. That API does not commit: it derives the run ID
+from organization, family, generation, and scope key, derives partition IDs
+from the run ID plus one-based scope ordinal, and creates/verifies both domain
+rows and their deferred or executable outbox handoffs before returning the
+canonical `Run`.
+
+The `post_sync` River consumer now validates the exact dispatched outbox ID,
+tenant, SyncRun, route generation, and live unpaused River route before it
+does any work. It then reloads only successful `sync_run_units` and the
+canonical parent sync configuration. Daily metrics, complexity, DORA,
+work-graph build, and team autoimport use package-owned transaction writers in
+one caller-owned PostgreSQL transaction. A failure in any writer rolls back
+every domain request and handoff; River retries the same guarded delivery.
+Replays use deterministic generation/request IDs and outbox dedupe keys, and
+reject a reused identity whose immutable scope changed.
+
+Investment dispatch deliberately remains fail-closed in native post-sync. Its
+temporary compatibility endpoint still invokes the legacy Python dispatcher,
+which creates a Celery chord; binding that endpoint would hide a second
+transport inside River execution. The post-sync transaction therefore returns
+a retryable error and commits none of its earlier children whenever investment
+fanout is required. CHAOS-3050 must supply a direct/native non-Celery dispatch
+writer before this dependency can be bound.
+
+Child contracts remain `go_implemented` with `route=celery` and
+`rollback_route=celery` until their individual parity/canary gates are
+approved. Native post-sync therefore records those handoffs as deferred
+`worker_job_outbox` rows; it does not bypass route policy or promote a child
+consumer. The legacy Celery chain remains the production path while
+`post_sync` itself is also Celery-routed.
 
 #### Work
 
@@ -729,6 +836,13 @@ quiescer/controller plus external-handoff binding remain open.
 ### CHAOS-3051 — Complete post-sync idempotency and enable durable Go fanout
 
 **Blocked by:** CHAOS-2596.
+
+Implementation status: the guarded native consumer and atomic, deterministic
+fanout are implemented for daily, remaining metrics, work-graph build, and
+team autoimport. Investment dispatch remains an explicit fail-closed
+dependency until its direct/native non-Celery fanout lands. Production
+activation remains blocked until that dependency and the downstream child
+contracts complete their independent promotion evidence.
 
 #### Work
 
@@ -957,7 +1071,7 @@ Before each family enters canary:
 | River UI deployment | P6 infra | do not deploy; use sanitized CLI/endpoints |
 | temporary Python algorithm service | before affected P5 issue | keep task on Celery |
 | external ingest horizontal scaling | separate future design | singleton |
-| post-sync durable retry | CHAOS-2596 | preserve at-most-once |
+| post-sync durable retry | CHAOS-3051 | guarded at-least-once relay |
 | Celery removal approval | P7 stability gate | retain fallback |
 
 ## 20. Definition of done for the program

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -603,7 +602,7 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		}
 	})
 
-	t.Run("post_sync handoff observes committed mark and failure never rearms", func(t *testing.T) {
+	t.Run("post_sync failed insert releases its guarded claim for retry", func(t *testing.T) {
 		resetKernelIntegrationTables(t, ctx, adminPool)
 		now := time.Date(2026, time.July, 23, 12, 4, 0, 0, time.UTC)
 		if _, err := adminPool.Exec(ctx, `
@@ -629,43 +628,32 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		handoffErr := errors.New("injected post-sync handoff failure")
+		publishErr := errors.New("injected post-sync River insert failure")
 		result, err := postKernel.Step(
 			ctx,
 			now,
 			1,
 			time.Minute,
-			nil,
-			func(_ context.Context, claim TransportClaim) error {
-				var status string
-				var claimToken *string
-				if err := adminPool.QueryRow(ctx, `
-					SELECT status, claim_token
-					FROM public.sync_dispatch_outbox WHERE id = $1`,
-					claim.ID,
-				).Scan(&status, &claimToken); err != nil {
-					return err
-				}
-				if status != "dispatched" || claimToken != nil {
-					return fmt.Errorf("handoff observed row %s/%v", status, claimToken)
-				}
-				return handoffErr
+			func(context.Context, pgx.Tx, TransportClaim) (string, error) {
+				return "", publishErr
 			},
+			nil,
 		)
-		if !errors.Is(err, ErrPostSyncHandoffFailed) || errors.Is(err, handoffErr) ||
-			strings.Contains(err.Error(), handoffErr.Error()) ||
-			result.Dispatched != 1 || result.PostSyncMark != 1 || result.PostSyncHandoffFailed != 1 {
+		if err != nil || result.Claimed != 1 || result.Retried != 1 || result.Dispatched != 0 {
 			t.Fatalf("post_sync Step() = %#v, %v", result, err)
 		}
 		var status string
+		var claimToken *string
+		var availableAt time.Time
 		if err := adminPool.QueryRow(ctx, `
-			SELECT status FROM public.sync_dispatch_outbox WHERE id = $1`,
+			SELECT status, claim_token, available_at
+			FROM public.sync_dispatch_outbox WHERE id = $1`,
 			integrationStaleID,
-		).Scan(&status); err != nil {
+		).Scan(&status, &claimToken, &availableAt); err != nil {
 			t.Fatal(err)
 		}
-		if status != "dispatched" {
-			t.Fatalf("post_sync handoff failure rearmed status %q", status)
+		if status != "pending" || claimToken != nil || !availableAt.Equal(now.Add(time.Minute)) {
+			t.Fatalf("post_sync retry row status:%s claim:%v available:%s", status, claimToken, availableAt)
 		}
 	})
 }

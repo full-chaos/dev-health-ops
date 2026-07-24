@@ -199,6 +199,74 @@ workerHeavy:
   affinity: {}
 
 # =============================================================================
+# Go/River workers (CHAOS-3052)
+# =============================================================================
+# This topology is additive and default-off. It deploys no Go pod until an
+# operator explicitly sets goWorkers.enabled=true after the route-owner gates
+# in deploy/go-workers/README.md. The go-only values file scales Celery/Beat
+# to zero but retains their definitions and Valkey DB 0.
+goWorkers:
+  enabled: false
+  profiles:
+    - name: heavy
+      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      runtimeProfile: heavy
+      replicas: 0
+      terminationGracePeriodSeconds: 120
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 1, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+    - name: latency
+      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      runtimeProfile: latency
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 30, saturationMilli: 800m}
+    - name: ops
+      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      runtimeProfile: ops
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 1, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+    - name: sync
+      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      runtimeProfile: sync
+      queue: sync.provider
+      replicas: 0
+      terminationGracePeriodSeconds: 120
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+    - name: reconciler
+      image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
+      runtimeProfile: ""
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: false}
+    - name: scheduler
+      image: ghcr.io/full-chaos/dev-health-go-scheduler:latest
+      runtimeProfile: ""
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+      autoscaling: {enabled: false}
+    - name: stream-external
+      image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+      runtimeProfile: external
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: false}
+    - name: stream-ingest
+      image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+      runtimeProfile: ingest
+      replicas: 0
+      terminationGracePeriodSeconds: 60
+      resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      autoscaling: {enabled: false}
+
+# =============================================================================
 # Celery Beat (scheduler)
 # =============================================================================
 beat:

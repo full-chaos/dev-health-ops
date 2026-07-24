@@ -91,7 +91,15 @@ func TestCapabilityRolloutChecksEveryLiveReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckRollout(root, registry, state, []CapabilityReport{report, report}); err != nil {
+	heavy, err := CapabilitiesForProfile(root, registry, "heavy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync, err := CapabilitiesForProfile(root, registry, "sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRollout(root, registry, state, []CapabilityReport{report, report, heavy, heavy, sync, sync}); err != nil {
 		t.Fatalf("CheckRollout() error = %v", err)
 	}
 	oldReplica := report
@@ -100,13 +108,13 @@ func TestCapabilityRolloutChecksEveryLiveReport(t *testing.T) {
 		Kind: KindHeartbeat, Versions: []int{2},
 		SchemaDigests: map[string]string{"2": "sha256:" + strings.Repeat("a", 64)},
 	}
-	if err := CheckRollout(root, registry, state, []CapabilityReport{report, oldReplica}); err == nil {
+	if err := CheckRollout(root, registry, state, []CapabilityReport{report, oldReplica, heavy, heavy, sync, sync}); err == nil {
 		t.Fatal("CheckRollout() accepted a live report without producer support")
 	}
 	staleDigest := report
 	staleDigest.Contracts = append([]ContractCapability(nil), report.Contracts...)
 	staleDigest.Contracts[0].SchemaDigests = map[string]string{"1": "sha256:" + strings.Repeat("0", 64)}
-	if err := CheckRollout(root, registry, state, []CapabilityReport{report, staleDigest}); err == nil {
+	if err := CheckRollout(root, registry, state, []CapabilityReport{report, staleDigest, heavy, heavy, sync, sync}); err == nil {
 		t.Fatal("CheckRollout() accepted an old schema revision")
 	}
 	if err := CheckRollout(root, registry, state, nil); err == nil {
@@ -194,10 +202,26 @@ func TestBreakingChangeDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckRollout(candidate, candidateRegistry, state, []CapabilityReport{oldBinary, newBinary}); err == nil {
+	oldHeavy, err := CapabilitiesForProfile(base, baseRegistry, "heavy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newHeavy, err := CapabilitiesForProfile(candidate, candidateRegistry, "heavy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSync, err := CapabilitiesForProfile(base, baseRegistry, "sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSync, err := CapabilitiesForProfile(candidate, candidateRegistry, "sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckRollout(candidate, candidateRegistry, state, []CapabilityReport{oldBinary, newBinary, oldHeavy, newHeavy, oldSync, newSync}); err == nil {
 		t.Fatal("same-version optional edit advanced while an old schema digest was live")
 	}
-	if err := CheckRollout(candidate, candidateRegistry, state, []CapabilityReport{newBinary}); err != nil {
+	if err := CheckRollout(candidate, candidateRegistry, state, []CapabilityReport{newBinary, newHeavy, newSync}); err != nil {
 		t.Fatalf("same-version optional edit did not advance after old digest drained: %v", err)
 	}
 

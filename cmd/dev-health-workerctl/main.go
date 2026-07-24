@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
+	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -26,8 +27,10 @@ import (
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -196,11 +199,15 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "contract_registry_invalid")
 	}
-	routeCapabilities, err := syncroute.NewCapabilities(nil)
+	routeCapabilities, err := syncroute.NewCapabilities(syncdispatchruntime.RouteCapabilities())
 	if err != nil {
 		return nil, writeError(stderr, "contract_registry_invalid")
 	}
 	routeController, err := syncroute.NewController(pools.Domain, routeRegistry, routeCapabilities)
+	if err != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
+	jobRouteController, err := newJobRouteController(pools.Domain, pools.QueueControl, schema, registry)
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
@@ -232,7 +239,8 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: backend, Authorizer: authentication.Authorizer(),
 		DomainGuard: guard, Auditor: auditor,
-		RouteController: routeController,
+		RouteController:    routeController,
+		JobRouteController: jobRouteController,
 	})
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
@@ -243,6 +251,28 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
 		streamDeploymentState: manifest.DeploymentState, streams: streams,
 	}, 0
+}
+
+// newJobRouteController composes the only currently approved forward cutover:
+// sync.provider_unit from its legacy Celery owner to the checked-in River
+// canary. The controller remains fail-closed for every other kind because the
+// Celery quiescer accepts that exact durable unit ledger only.
+func newJobRouteController(
+	domainPool, queuePool *pgxpool.Pool,
+	schema string,
+	registry *jobruntime.Registry,
+) (*jobroute.Controller, error) {
+	riverQuiescer, err := jobroute.NewPostgresRiverQuiescer(queuePool, schema)
+	if err != nil {
+		return nil, err
+	}
+	celeryQuiescer, err := jobroute.NewPostgresCelerySyncProviderQuiescer(domainPool)
+	if err != nil {
+		return nil, err
+	}
+	return jobroute.NewControllerWithCeleryQuiescer(
+		domainPool, registry, riverQuiescer, celeryQuiescer,
+	)
 }
 
 func rollbackOperatorLock(lockTx pgx.Tx) {
@@ -278,6 +308,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchContracts(ctx, runtime, args[1:], stdout, stderr)
 	case "routes":
 		return dispatchRoutes(ctx, runtime, args[1:], stdout, stderr)
+	case "job-routes":
+		return dispatchJobRoutes(ctx, runtime, args[1:], stdout, stderr)
 	case "streams":
 		if len(args) != 2 || args[1] != "status" {
 			return writeError(stderr, "invalid_request")
@@ -292,6 +324,42 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+func dispatchJobRoutes(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 2 && args[0] == "status" {
+		state, err := runtime.service.InspectJobRoute(ctx, runtime.principal, args[1])
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, state)
+	}
+	if len(args) == 0 || (args[0] != "apply" && args[0] != "rollback") {
+		return writeError(stderr, "invalid_request")
+	}
+	flags := quietFlags("job-routes " + args[0])
+	reason := flags.String("reason", "", "bounded reason code")
+	correlation := flags.String("correlation-id", "", "bounded correlation ID")
+	if flags.Parse(args[1:]) != nil || flags.NArg() != 1 || *reason == "" || *correlation == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	var (
+		state jobroute.State
+		err   error
+	)
+	if args[0] == "apply" {
+		state, err = runtime.service.ApplyCheckedInJobRoute(
+			ctx, runtime.principal, flags.Arg(0), *reason, *correlation,
+		)
+	} else {
+		state, err = runtime.service.RollbackJobRoute(
+			ctx, runtime.principal, flags.Arg(0), *reason, *correlation,
+		)
+	}
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, state)
 }
 
 func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
@@ -312,7 +380,7 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	reason := flags.String("reason", "", "bounded reason code")
 	correlation := flags.String("correlation-id", "", "bounded correlation ID")
 	transport := flags.String("transport", "", "checked-in target transport")
-	quiescenceTimeout := flags.Duration("quiescence-timeout", 10*time.Second, "bounded external quiescence timeout")
+	quiescenceTimeout := flags.Duration("quiescence-timeout", 10*time.Second, "legacy compatibility; no-op for sync-dispatch routes")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 1 || *reason == "" || *correlation == "" {
 		return writeError(stderr, "invalid_request")
 	}

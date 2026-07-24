@@ -37,6 +37,7 @@ func (config RelayConfig) validate() error {
 
 type StepResult struct {
 	Claimed   int
+	Deferred  int
 	Delivered int
 	Retried   int
 	Dead      int
@@ -50,6 +51,12 @@ type Relay struct {
 	inserter      *RiverInserter
 	config        RelayConfig
 	deferredKinds []string
+	routes        RouteResolver
+}
+
+type RouteResolver interface {
+	DeferredKinds(context.Context) ([]string, error)
+	Resolve(context.Context, string) (string, error)
 }
 
 func NewRelay(repository *Repository, inserter *RiverInserter, config RelayConfig) (*Relay, error) {
@@ -70,6 +77,23 @@ func NewRelay(repository *Repository, inserter *RiverInserter, config RelayConfi
 		config:        config,
 		deferredKinds: deferredKinds,
 	}, nil
+}
+
+func NewRelayWithRoutes(
+	repository *Repository,
+	inserter *RiverInserter,
+	routes RouteResolver,
+	config RelayConfig,
+) (*Relay, error) {
+	if routes == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	relay, err := NewRelay(repository, inserter, config)
+	if err != nil {
+		return nil, err
+	}
+	relay.routes = routes
+	return relay, nil
 }
 
 func deferredRelayKinds(registry RelayPolicyRegistry) ([]string, error) {
@@ -110,12 +134,37 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 	if relay == nil || now.IsZero() {
 		return StepResult{}, ErrInvalidConfiguration
 	}
-	claims, err := relay.repository.claimDueExcept(ctx, now, limit, relay.config.LeaseDuration, relay.deferredKinds)
+	deferred := relay.deferredKinds
+	if relay.routes != nil {
+		var err error
+		deferred, err = relay.routes.DeferredKinds(ctx)
+		if err != nil {
+			return StepResult{}, ErrUnavailable
+		}
+		if len(deferred) > maxRelayPolicyKinds {
+			return StepResult{}, ErrInvalidConfiguration
+		}
+		sort.Strings(deferred)
+	}
+	claims, err := relay.repository.claimDueExcept(ctx, now, limit, relay.config.LeaseDuration, deferred)
 	if err != nil {
 		return StepResult{}, err
 	}
 	result := StepResult{Claimed: len(claims)}
 	for _, claim := range claims {
+		if relay.routes != nil {
+			transport, routeErr := relay.routes.Resolve(ctx, claim.JobKind)
+			if routeErr != nil {
+				return result, ErrUnavailable
+			}
+			if transport == "celery" {
+				if releaseErr := relay.repository.releaseClaim(ctx, claim, now); releaseErr != nil {
+					return result, releaseErr
+				}
+				result.Deferred++
+				continue
+			}
+		}
 		_, dispatchErr := relay.repository.Dispatch(ctx, claim, now, relay.inserter.Insert)
 		switch {
 		case dispatchErr == nil:

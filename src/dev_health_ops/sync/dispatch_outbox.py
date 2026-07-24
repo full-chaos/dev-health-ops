@@ -67,7 +67,7 @@ _SYNC_DISPATCH_PARITY_MAX_LIMIT = 100
 _SYNC_DISPATCH_PARITY_DELIVERY = {
     OUTBOX_KIND_DISPATCH: "at_least_once",
     OUTBOX_KIND_FINALIZE: "at_least_once",
-    OUTBOX_KIND_POST_SYNC: "at_most_once_mark_before",
+    OUTBOX_KIND_POST_SYNC: "at_least_once",
     OUTBOX_KIND_DISCOVERY: "at_least_once",
 }
 

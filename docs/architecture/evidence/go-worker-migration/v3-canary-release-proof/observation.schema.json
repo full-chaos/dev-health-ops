@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.fullchaos.dev/evidence/go-worker-migration/v3/observation.schema.json",
+  "title": "Canary release proof observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "runtime", "dataset_scope", "run_scope", "build", "route", "checks", "quiescence", "rollback"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "runtime": {"enum": ["celery", "go"]},
+    "dataset_scope": {"$ref": "#/$defs/digest"},
+    "run_scope": {"$ref": "#/$defs/digest"},
+    "build": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "image_digest"],
+      "properties": {"revision": {"type": "string"}, "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+    },
+    "route": {"$ref": "#/$defs/route"},
+    "checks": {
+      "type": "object", "additionalProperties": false,
+      "required": ["input_digest", "output_digest", "state_digest", "idempotency_digest", "lag_seconds", "error_count", "cpu_cores", "memory_bytes"],
+      "properties": {
+        "input_digest": {"$ref": "#/$defs/digest"}, "output_digest": {"$ref": "#/$defs/digest"},
+        "state_digest": {"$ref": "#/$defs/digest"}, "idempotency_digest": {"$ref": "#/$defs/digest"},
+        "lag_seconds": {"type": "number", "minimum": 0}, "error_count": {"type": "integer", "minimum": 0},
+        "cpu_cores": {"type": "number", "minimum": 0}, "memory_bytes": {"type": "number", "minimum": 0}
+      }
+    },
+    "quiescence": {"$ref": "#/$defs/quiescence"},
+    "rollback": {"$ref": "#/$defs/rollback"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "generation", "transport", "paused", "source", "observed_at"],
+      "properties": {
+        "kind": {"type": "string"}, "generation": {"type": "integer", "minimum": 1},
+        "transport": {"enum": ["celery", "river_canary"]}, "paused": {"const": false},
+        "source": {"const": "worker_job_routes"}, "observed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "rollback_route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "generation", "transport", "paused"],
+      "properties": {
+        "kind": {"type": "string"}, "generation": {"type": "integer", "minimum": 1},
+        "transport": {"enum": ["celery", "river_canary"]}, "paused": {"const": false}
+      }
+    },
+    "quiescence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["outbox_pending_or_claimed", "semantic_runs_running", "river_jobs_active", "external_quiescer", "evidence_digest"],
+      "properties": {
+        "outbox_pending_or_claimed": {"type": "integer", "minimum": 0}, "semantic_runs_running": {"type": "integer", "minimum": 0},
+        "river_jobs_active": {"type": "integer", "minimum": 0}, "external_quiescer": {"enum": ["passed", "failed"]},
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "rollback": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "source_route", "restored_route", "completed", "success", "operation_digest", "evidence_digest", "completed_at", "quiescence", "post_rollback"],
+      "properties": {
+        "kind": {"type": "string"}, "source_route": {"$ref": "#/$defs/rollback_route"},
+        "restored_route": {"$ref": "#/$defs/rollback_route"}, "completed": {"type": "boolean"},
+        "success": {"type": "boolean"}, "operation_digest": {"$ref": "#/$defs/digest"},
+        "evidence_digest": {"$ref": "#/$defs/digest"}, "completed_at": {"type": "string", "format": "date-time"},
+        "quiescence": {"$ref": "#/$defs/quiescence"},
+        "post_rollback": {
+          "type": "object", "additionalProperties": false,
+          "required": ["served_by", "observed", "route_generation", "observation_digest", "observed_at"],
+          "properties": {
+            "served_by": {"const": "celery"}, "observed": {"type": "boolean"},
+            "route_generation": {"type": "integer", "minimum": 1}, "observation_digest": {"$ref": "#/$defs/digest"},
+            "observed_at": {"type": "string", "format": "date-time"}
+          }
+        }
+      }
+    }
+  }
+}

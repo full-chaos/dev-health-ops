@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import importlib
 import json
 
 import pytest
@@ -30,6 +31,13 @@ def gitlab_token(monkeypatch):
 @pytest.fixture
 def mock_celery(monkeypatch):
     calls = []
+    webhook_router = importlib.import_module("dev_health_ops.api.webhooks.router")
+
+    async def fake_persist(event):
+        return event.id
+
+    async def fake_route(event, delivery_id):
+        return "celery"
 
     def fake_delay(**kwargs):
         calls.append(kwargs)
@@ -37,11 +45,9 @@ def mock_celery(monkeypatch):
     class FakeTask:
         delay = staticmethod(fake_delay)
 
-    monkeypatch.setattr(
-        "dev_health_ops.api.webhooks.router.process_webhook_event",
-        FakeTask(),
-        raising=False,
-    )
+    monkeypatch.setattr(webhook_router, "process_webhook_event", FakeTask())
+    monkeypatch.setattr(webhook_router, "_persist_webhook_delivery", fake_persist)
+    monkeypatch.setattr(webhook_router, "_route_webhook_delivery", fake_route)
     return calls
 
 
@@ -102,6 +108,7 @@ class TestGitHubWebhook:
         data = response.json()
         assert data["status"] == "accepted"
         assert data["event_id"] is not None
+        assert mock_celery == [{"durable_delivery_id": data["event_id"]}]
 
     def test_accepts_pull_request_event(self, client, github_secret, mock_celery):
         payload = {

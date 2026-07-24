@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000010",
+  "correlation_id": "post-sync-00000000-0000-4000-8000-000000000051",
+  "idempotency_key": "post-sync:00000000-0000-4000-8000-000000000051:sync.team_autoimport",
+  "domain": {
+    "type": "sync_run",
+    "id": "00000000-0000-4000-8000-000000000051"
+  },
+  "payload": {
+    "sync_run_id": "00000000-0000-4000-8000-000000000051"
+  }
+}

@@ -21,6 +21,7 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from tests._helpers import seed_sync_dispatch_transport_routes
 
 
 @contextmanager
@@ -38,8 +39,6 @@ class _Signature:
         self.queued.append(f"{queue}:{self.value}")
         return self
 
-
-class _Chord:
     def apply_async(self) -> None:
         return None
 
@@ -54,6 +53,7 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
     Base.metadata.create_all(engine)
     queued: list[str] = []
     with Session(engine) as session:
+        seed_sync_dispatch_transport_routes(session)
         org_id = str(uuid.uuid4())
         integration = Integration(
             org_id=org_id,
@@ -119,14 +119,6 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
             "s",
             lambda unit_id: _Signature(unit_id, queued),
         )
-        monkeypatch.setattr(
-            sync_units.finalize_sync_run,
-            "si",
-            lambda run_id: _Signature(run_id, queued),
-        )
-        monkeypatch.setattr(sync_units, "group", list)
-        monkeypatch.setattr(sync_units, "chord", lambda *_args: _Chord())
-
         # When
         dispatch_result = sync_units.dispatch_sync_run(plan.sync_run_id)
 

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestOwnershipPolicyHasNoExportedConstructionFields(t *testing.T) {
@@ -13,6 +15,24 @@ func TestOwnershipPolicyHasNoExportedConstructionFields(t *testing.T) {
 		if field.IsExported() {
 			t.Fatalf("ownership policy field %s is exported", field.Name)
 		}
+	}
+}
+
+func TestMutationRepositoryRequiresExplicitReviewedConstructor(t *testing.T) {
+	pool := &pgxpool.Pool{}
+	shadow, err := NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shadow.ownership.allowsMutation() {
+		t.Fatal("default repository unexpectedly allows mutation")
+	}
+	mutation, err := NewMutationRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mutation.ownership.allowsMutation() {
+		t.Fatal("reviewed mutation repository did not retain mutation ownership")
 	}
 }
 

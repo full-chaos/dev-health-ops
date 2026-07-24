@@ -32,10 +32,21 @@ setting, not a Python database alias. Long-running processes never apply River
 migrations; `MIGRATION_DATABASE_URI` is injected only into the one-shot
 migration job.
 
-All Go profiles have zero minimum replicas and the current registry routes
-remain `celery`. Their readiness stays closed until a profile has complete
-compiled handler coverage and its database/schema checks pass. The canonical
-disabled topology and its connection budget live in
+All Go profiles have zero minimum replicas. `sync.provider_unit` is the sole
+checked-in `river_canary` policy and retains a Celery rollback route, but its
+durable route starts at `celery` until an authenticated operator applies that
+policy; every other current route is also `celery`. The disabled topology still
+prevents a Go worker deployment from starting by default, and a route policy
+alone is not canary approval. Readiness stays closed until a profile has
+complete compiled handler coverage and its database/schema checks pass. The
+provider-unit producer takes that durable route row with `FOR SHARE` before it
+claims units, and holds the lock through the claim/outbox commit. A durable
+`celery` row forces every provider unit to Celery regardless of process flags.
+For durable `river_canary`, only the reviewed LaunchDarkly `feature-flags`
+scope may enter `worker_job_outbox`, and it requires the matching complete
+runtime capability; a missing capability fails the transaction closed rather
+than falling back to Celery. Units outside that scope remain Celery-owned.
+canonical disabled topology and its connection budget live in
 `deploy/go-workers/profiles.json`.
 
 The Go worker exposes `/healthz` for process liveness, `/readyz` for required
@@ -48,9 +59,89 @@ dedicated DSN/mode/role-separation contract without exposing a DSN. Queue
 depth, oldest eligible age, execution
 saturation, and both PostgreSQL pool saturation ratios are sampled from the
 live database on each metrics scrape. A database sampling failure makes that
-scrape unavailable instead of publishing a misleading zero. Because Phase 1
-does not compile or start any migrated River handlers, this observability does
-not transfer queue ownership away from Celery.
+scrape unavailable instead of publishing a misleading zero. Operational
+adapters are compiled into the `ops` binary, but are registered with River only
+when their checked-in route is executable. The seeded durable routes remain
+Celery, so this observability does not transfer queue ownership.
+
+### Operational-job idempotency foundation (CHAOS-3040)
+
+`worker_job_runs` is the semantic execution record for a logical Go job. It is
+separate from River and `worker_job_outbox`: queue rows say whether work was
+transported, while a run row owns the durable idempotency claim, bounded lease,
+terminal result, and safe error category. A retry may reclaim only an expired
+lease; a completed or terminal key never invokes the handler again. This is
+the required precondition for future provider, billing, webhook, and
+maintenance adapters to make external effects replay-safe.
+
+Migration `0055` adds `worker_job_routes`, the runtime source of truth for each
+job transport and generation. Producers read the route with `FOR SHARE` in the
+same transaction that stages `worker_job_outbox`; rollback takes `FOR UPDATE`
+and refuses pending/claimed outbox rows, running semantic claims, or active
+River jobs. Missing, paused, or policy-drifted rows fail closed.
+
+Before `sync.provider_unit` can move from its seeded Celery route to
+`river_canary`, the operator additionally checks the durable legacy unit ledger
+for `DISPATCHING` or `RUNNING` LaunchDarkly `feature-flags` rows. The check uses
+a bounded PostgreSQL query and a partial index; unavailable database evidence
+is an unavailable precondition, never a successful quiescence result. The
+producer lock and operator `FOR UPDATE` serialize the final producer commit
+with this check, so a just-committed old-route unit blocks the transition.
+
+The first concrete handler is the bounded `system.retention_cleanup` adapter.
+It deletes only one `worker_job_terminal` checkpoint-sized batch and marks the
+same maintenance-run claim through the common idempotency middleware. The
+`system.heartbeat` policy remains explicitly non-retryable. Heartbeat and
+retention now have concrete Go handlers, typed adapters, idempotency guards,
+and bounded stores/dispatchers. Generic webhook and billing email likewise have
+persisted reference rows and concrete Go handlers. The `ops` profile factory
+wires all four handlers only when the entire profile is executable; while the
+checked-in routes remain Celery it starts no operational River consumer. This
+foundation creates no producer, route, schedule, or deployment change.
+PagerDuty remains
+Celery-owned until Go proves the
+read/delete/retry crash windows.
+
+The current operational inventory is intentionally a coexistence boundary, not
+an activation claim:
+
+| Family | Current side-effect guard | Go migration disposition |
+| --- | --- | --- |
+| Generic provider webhooks | Durable `webhook_deliveries` row keyed by provider delivery identity; Celery receives only its UUID, while the 24-hour cache remains a compatibility marker | Go can consume the same payload reference once provider reconciliation is ported and shadow parity is recorded. |
+| PagerDuty webhooks | Valkey receipt plus stream entry; delete only after success or terminal dead-letter | Dormant Go stream handler uses a leased, token-fenced `worker_job_runs` receipt and `streamrunner` ACK-after-completion semantics; Celery remains owner until locked-graph parity and a shadow/canary prove read/delete/retry behavior. |
+| Billing email | Durable `billing_notifications` intent keyed by Stripe event where available, otherwise canonical notification attributes; Celery receives only its UUID | Go can own delivery after mail-provider idempotency-header parity and sandbox evidence. |
+| Phone-home heartbeat | explicit `max_attempts=1`, unique schedule-occurrence claim, and authenticated compatibility dispatch | Go handler is implemented and dormant; `system.heartbeat` remains Celery-routed. |
+| Worker-outbox terminal retention | durable `maintenance_run_checkpoint` claim and bounded SQL delete | Go handler is implemented and dormant; policy remains Celery-routed. |
+| Team autoimport | terminal sync-run post-sync work | Remains coupled to the sync cutover and is out of this independent operational route. |
+
+The authenticated operator surface applies only checked-in policy:
+
+```bash
+dev-health-workerctl job-routes status operational.webhook_delivery
+dev-health-workerctl job-routes apply \
+  --reason canary_start --correlation-id change-123 \
+  operational.webhook_delivery
+dev-health-workerctl job-routes rollback \
+  --reason canary_abort --correlation-id incident-456 \
+  operational.webhook_delivery
+```
+
+`apply` can move Celery only to the exact route committed in migration policy;
+it cannot select an arbitrary transport. A forward transition fails closed
+until a concrete Celery quiescence probe is supplied, so checked-in policy
+cannot cut ownership away while old Celery work may still execute. `rollback`
+returns to the checked-in
+rollback route and refuses to succeed until outbox, semantic-run, and River
+work are quiescent. Both mutations are authenticated, serialized,
+generation-fenced, and durably audited. The six operational/report/system rows
+and the seeded `sync.provider_unit` route start at Celery; only the latter has
+a checked-in canary transition with Celery rollback. That transition remains
+default-off until its bounded evidence protocol records Celery generation `G`,
+River generation `G+1`, and restored Celery generation `G+2`; see
+[`v3 canary release proof`](../architecture/evidence/go-worker-migration/v3-canary-release-proof/README.md).
+Neither that local protocol nor the checked-in policy authorizes River
+ownership or production release acceptance without the enabled sync deployment
+and separately required canary evidence.
 
 `dev-health-workerctl` is the Phase 1 payload-redacted operator surface. It is
 shipped as a dedicated non-root image target and serialized to one invocation
@@ -96,6 +187,28 @@ is fail-closed: the loop only opens readiness after one successful step, and
 persistence failures close it instead of being reported as harmless lease
 races.
 
+The operational effect bridge is an authenticated internal API. Set
+`WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
+`WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the
+optional `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` is bounded from 100ms to 30s and
+defaults to 10s. Plain HTTP defaults to loopback-only. Local container stacks
+may explicitly set `WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
+permits only private IPs and single-label/`.internal`/`.local` service-discovery
+names, while public HTTP origins remain rejected. Production must leave the
+opt-in unset and use TLS. Requests contain durable UUID references and bounded
+routing metadata only. Webhook `success`/duplicate `skipped`, billing `sent`,
+and heartbeat `ok` are success; deterministic `error`/`dropped` results become
+permanent 422 rejections, while transport failures, timeouts, 429, 5xx, and
+malformed upstream responses remain retryable.
+
+Metric execution repair is a separate operator boundary. Configure
+`WORKER_METRIC_REPAIR_TOKEN` on the API only when reviewed repair is enabled;
+it is required by the repair endpoint and must differ from
+`WORKER_OPERATIONAL_BRIDGE_TOKEN`. Neither token authorizes the other's
+operation. Rotate the repair token independently with a coordinated API/client
+switch; the old value stops working immediately when the API changes. Missing,
+oversized, or equal secrets fail closed.
+
 The typed `syncdispatchruntime` package is dormant and all-or-nothing. Its
 claim projection drops the claim token, its River args validate the exact
 contract/version/UUID/generation tuple, its publisher only calls `InsertTx`
@@ -114,21 +227,21 @@ so the checked-in scheduler state stays non-authoritative and avoids silent
 candidate starvation.
 
 The checked-in deployment profile still keeps the topology disabled
-(`coexistence_disabled`, all replicas `0`), both registered kinds still route
-to Celery, no current domain producer calls the bridge, and no Go handler is
-compiled. Celery therefore remains the only production writer. Migration
-policy is loaded at process startup: before a future rollback changes the
-checked-in route, stop new production, drain or classify in-flight River work,
-restore Celery routing, and restart the reconciler. Deferred generic-outbox
-rows remain auditable; the bridge does not silently republish them to Celery.
+(`coexistence_disabled`, all replicas `0`), all registered kinds still route
+to Celery, and no operational adapter is registered with River. Celery
+therefore remains the only production writer. Durable route policy is
+refreshed by producers and the relay; a successful audited rollback requires
+quiescence and takes effect without a reconciler restart. Deferred
+generic-outbox rows remain auditable; the bridge does not silently republish
+them to Celery.
 The Go foundations now also include bounded read-only sync-outbox observation,
 sync-schedule evaluation, and a database-backed sync-dispatch ownership fence.
 Migration `0049` seeds the four fixed sync wakeup kinds as active Celery routes
 at generation 1. Each Python claim binds the route and generation. For
 dispatch, finalize, and discovery, the publish transaction locks both the
 outbox row and route row through publish and mark; success/failure writes must
-still match that active generation. `post_sync` preserves its existing
-mark-before-publish commit, so its route lock ends at that commit. Unknown,
+still match that active generation. `post_sync` uses the same guarded
+publish-or-retry boundary as every other wakeup. Unknown,
 paused, and River-routed kinds are not claimable by Python. The Go reconciler
 checks the persisted four-row set against the checked-in contract and closes
 readiness on a pause, missing row, generation error, or route drift.
@@ -154,22 +267,25 @@ schedule marker only after that durable handoff succeeds. Its public
 repository constructor embeds an opaque Celery/`coexistence_disabled`
 ownership policy, so `HandoffDue` rejects mutation before beginning a
 transaction; Go mutation authority requires a reviewed package-private source
-change. The dormant lifecycle loop exists, but its checked-in composition has
-no mutation repository or coordinator factory. An unsupported or invalid cron
-candidate rolls back the entire locked window with readiness closed, so Celery
-remains sole owner instead of allowing a healthy-but-starved Go window. The
-sync reconciler kernel first commits a bounded claim set, then
-delivers and terminally marks each at-least-once claim in its own fresh
-transaction, while `post_sync` is terminally marked and committed before the
-external handoff begins. Neither kernel is constructed by the scheduler or
-reconciler command.
+change. The scheduler command now retains a production loop factory that
+composes the mutation repository, occurrence coordinator, database lifecycle,
+and readiness checks. Both private activation gates remain checked-in false,
+so the factory is unreachable and the disabled command does not open
+PostgreSQL. An unsupported or invalid cron candidate rolls back the entire
+locked window with readiness closed, so Celery remains sole owner instead of
+allowing a healthy-but-starved Go window. The sync reconciler kernel first commits a bounded claim set, then
+delivers and terminally marks every claim, including `post_sync`, in its own
+fresh transaction. The reconciler command retains a complete
+repair-materialize-deliver-observe mutation-pipeline factory, but its private
+activation gate remains checked-in false and the running command selects the
+read-only shadow stepper.
 
 This remains a fail-closed selector foundation, not River activation. All
 persisted and checked-in routes remain Celery, deployment profiles remain
 `coexistence_disabled` with zero replicas, and no Go sync handler is compiled.
 Do not change a route to River: it would strand the wakeup. Activation still
-requires scheduler coordinator/policy composition, reconciler loop wiring,
-concrete River publishers, handlers, and capabilities, and a cross-process
+requires scheduler coordinator policy parity, concrete River publishers,
+handlers, and capabilities, and a cross-process
 `post_sync` quiescer/controller plus external-handoff binding.
 
 For a read-only same-snapshot comparison, set `POSTGRES_URI` or `DATABASE_URI`
@@ -201,8 +317,9 @@ timing or activate the Go command loop. The default-off consumer now provides
 the authoritative Python planner path for a valid pending identity, while the
 dormant transaction kernel still needs organization existence, entitlement, and
 occurrence-claim parity, catch-up, and unsupported-cron policy parity. Its
-checked-in lifecycle composition has no mutation factory, and its ownership
-fence prevents the current command from mutating production markers.
+checked-in lifecycle composition includes a dormant mutation factory, but its
+ownership and policy-parity fences prevent the current command from mutating
+production markers.
 
 The rest of this page documents the active Celery runtime. See the
 [Go worker runtime TRD](../architecture/go-worker-runtime-trd.md) for the target
@@ -242,7 +359,8 @@ Operators can trigger background operations on-demand through three primary API 
 
 3. **Report Execution Trigger**
    * **Trigger**: GraphQL `triggerReport` mutation or the "Run Now" button in the Report Center UI.
-   * **Flow**: Creates a `ReportRun` record and enqueues `execute_saved_report` onto the `reports` queue.
+   * **Flow**: Atomically creates a `ReportRun` and its versioned durable handoff, then enqueues `execute_saved_report` onto the `reports` queue only after the transaction commits. The current production route remains Celery; the durable handoff is deferred until a separately approved Go route activation.
+   * **Dormant Go capability**: The disabled `heavy` profile now compiles separate on-demand and scheduled handlers backed by PostgreSQL run-state/plan adapters, bounded ClickHouse chart queries over the complete Python-owned metric registry, deterministic Markdown/artifact metadata, and the current in-app notification transition. A checked-in language-neutral registry artifact has an exhaustive Python drift guard. Both route and rollback entries remain independently set to `celery`; no Go process is enabled or consuming the queue.
 
 ### Affected Operations Quick Reference
 

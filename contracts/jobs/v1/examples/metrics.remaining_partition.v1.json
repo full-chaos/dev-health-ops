@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000009",
+  "correlation_id": "remaining-partition-generation-v1",
+  "idempotency_key": "remaining:partition:00000000-0000-4000-8000-000000000102",
+  "domain": {
+    "type": "remaining_metric_partition",
+    "id": "00000000-0000-4000-8000-000000000102"
+  },
+  "payload": {
+    "partition_id": "00000000-0000-4000-8000-000000000102"
+  }
+}

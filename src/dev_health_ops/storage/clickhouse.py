@@ -101,15 +101,35 @@ if TYPE_CHECKING:
 class ClickHouseStore:
     """Async storage implementation backed by ClickHouse (via clickhouse-connect)."""
 
-    def __init__(self, conn_string: str, settings: dict | None = None) -> None:
+    def __init__(
+        self,
+        conn_string: str,
+        settings: dict | None = None,
+        *,
+        operational_ordering_contract: OperationalOrderingContract | None = None,
+    ) -> None:
         if not conn_string:
             raise ValueError("ClickHouse connection string is required")
+        if operational_ordering_contract is not None and not isinstance(
+            operational_ordering_contract, OperationalOrderingContract
+        ):
+            raise TypeError(
+                "operational_ordering_contract must be an OperationalOrderingContract"
+            )
         self.conn_string = conn_string
         self.client: Any | None = None
         self.org_id: str | None = None
         self._lock = asyncio.Lock()
         self._settings = settings or {}
-        self._operational_ordering_contract = configured_operational_ordering_contract()
+        self._operational_ordering_contract_is_explicit = (
+            operational_ordering_contract is not None
+            or operational_ordering_contract_is_explicit()
+        )
+        self._operational_ordering_contract = (
+            configured_operational_ordering_contract()
+            if operational_ordering_contract is None
+            else operational_ordering_contract
+        )
 
     async def __aenter__(self) -> ClickHouseStore:
         import clickhouse_connect
@@ -119,7 +139,7 @@ class ClickHouseStore:
         )
         self.client = client
         await self._ensure_tables()
-        if operational_ordering_contract_is_explicit():
+        if self._operational_ordering_contract_is_explicit:
             await asyncio.to_thread(
                 guard_operational_writer_tables,
                 client,
@@ -447,8 +467,28 @@ class ClickHouseStore:
         SELECT
           f.repo_id, f.as_of_day, f.ref, f.file_path, f.language, f.loc,
           f.functions_count, f.cyclomatic_total, f.cyclomatic_avg,
-          f.high_complexity_functions, f.very_high_complexity_functions, f.computed_at
-        FROM file_complexity_snapshots AS f
+          f.high_complexity_functions, f.very_high_complexity_functions,
+          f.latest_computed_at AS computed_at
+        FROM (
+          SELECT
+            repo_id,
+            as_of_day,
+            file_path,
+            argMax(ref, computed_at) AS ref,
+            argMax(language, computed_at) AS language,
+            argMax(loc, computed_at) AS loc,
+            argMax(functions_count, computed_at) AS functions_count,
+            argMax(cyclomatic_total, computed_at) AS cyclomatic_total,
+            argMax(cyclomatic_avg, computed_at) AS cyclomatic_avg,
+            argMax(high_complexity_functions, computed_at)
+              AS high_complexity_functions,
+            argMax(very_high_complexity_functions, computed_at)
+              AS very_high_complexity_functions,
+            max(computed_at) AS latest_computed_at
+          FROM file_complexity_snapshots
+          WHERE as_of_day <= {{day:Date}} {repo_filter}
+          GROUP BY repo_id, as_of_day, file_path
+        ) AS f
         INNER JOIN (
           SELECT repo_id, max(as_of_day) AS max_day
           FROM file_complexity_snapshots

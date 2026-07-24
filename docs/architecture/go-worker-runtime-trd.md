@@ -88,7 +88,7 @@ This means the queue is not the workflow system of record. It is a delivery tran
 - Long-running units can approach one hour and must remain deploy-safe.
 - Provider limits are fleet-wide and organization-scoped.
 - External ingest is intentionally singleton until pending-entry reclaim semantics are redesigned.
-- `post_sync` is intentionally at-most-once until CHAOS-2596 makes downstream reads/writes replay-safe.
+- `post_sync` is guarded at-least-once; CHAOS-2596 made supported downstream readers generation-safe.
 
 ## 3. Alternatives considered
 
@@ -582,8 +582,8 @@ constructs the Go coordinator. The public scheduler repository constructor
 embeds an opaque Celery/`coexistence_disabled` ownership policy, and its
 transaction kernel rejects mutation before opening a transaction. Constructing
 Go mutation authority requires a reviewed package-private source change. Until
-an activation review enables the consumer and supplies the remaining scheduler
-lifecycle composition, unsupported-cron policy parity, and coordinator policy
+an activation review enables the consumer and supplies the remaining
+unsupported-cron policy parity and coordinator policy
 parity, Celery Beat plus `dispatch_scheduled_syncs` remains the only mutation
 owner; a Go scheduler must not advance a production marker or claim schedule
 ownership. The dormant loop rolls back the entire locked window and keeps
@@ -595,8 +595,11 @@ snapshot in memory. Beside it, an unregistered transaction kernel now locks a
 bounded due window with `FOR UPDATE ... SKIP LOCKED`, derives the shared
 config-and-occurrence identity, invokes an injected coordinator through the
 same PostgreSQL transaction, and advances `next_run_at` only after that
-coordinator reports a durable handoff. No scheduler command constructs or
-calls this kernel. The active Python path remains responsible for
+coordinator reports a durable handoff. The scheduler command retains a
+production factory that composes this kernel, the occurrence coordinator, and
+database lifecycle, but both private source-review activation gates remain
+checked-in false, so the factory is unreachable and the disabled command does
+not open PostgreSQL. The active Python path remains responsible for
 missing-marker creation, organization and entitlement policy, authoritative
 plan materialization, and catch-up behavior. Celery Beat and
 `dispatch_scheduled_syncs` therefore remain the sole production scheduler.
@@ -678,12 +681,11 @@ updates also require the same active generation. A claim that loses the race
 to a route change cannot publish and becomes reclaimable after its bounded
 lease expires.
 
-`post_sync` remains the deliberate exception: its mark-before-publish commit
-releases the route lock before the broker call. That preserves the current
-at-most-once loss window but means live-claim drain alone cannot prove a safe
-post-sync transport cutover. Before that kind can change route, the operator
-surface must add a bounded quiescence barrier that proves no marked publisher
-from the old generation can still issue its broker call.
+`post_sync` follows the same guarded publish-then-terminal-mark sequence as
+the other wakeups. Its consumers are generation-safe, so a failed insert can
+be retried without double-counting. Route cutover still needs the normal bounded
+generation drain and a concrete River handler, but it has no mark-before loss
+window.
 
 The Go reconciler treats the checked-in transport registry and persisted route
 set as one readiness contract. Missing, extra, paused, malformed, or divergent
@@ -720,14 +722,15 @@ pre-commit window before it changes the route generation.
 An unregistered sync-reconciler transaction kernel now implements the narrow
 transport boundary: it first commits a bounded set of River claims, then each
 at-least-once claim is delivered and terminally marked in its own fresh
-transaction. For the at-most-once `post_sync` kind the terminal mark is
-committed before the external handoff is invoked. Route generation and
+transaction, including `post_sync`. Route generation and
 claim-token predicates fail closed at the terminal write. The checked-in
 contract currently contains no River route, so even explicit mutation mode
 returns without opening a write transaction.
 
-The reconciler command now reaches this package only through a shadow adapter
-whose kernel retains no transaction-begin function. The existing observer
+The reconciler command still selects a shadow adapter whose kernel retains no
+transaction-begin function. It also retains a source-gated mutation factory
+that composes lease repair, materialization, delivery, and observation. The
+private activation gate remains checked-in false, the existing observer
 readiness and metrics contract is unchanged, and there is no environment
 toggle that can select mutation.
 
@@ -739,8 +742,9 @@ materializer does not inspect route ownership, claim an outbox row, or publish a
 transport job, so running its tests beside Celery does not create a second
 execution owner.
 
-This kernel is not the complete reconciler loop. A command-unwired
-expired-domain-lease repair step now preserves the eligible Linear-backfill
+The source-gated mutation pipeline is the bounded reconciler step, but it has
+no checked-in activation authority or River callbacks. Its
+expired-domain-lease repair stage preserves the eligible Linear-backfill
 retry matrix and serializes provider/org/cost-class mutations. A separate
 persisted failure recorder can rearm an already committed River claim with
 bounded Python-parity backoff. The queue-control trust boundary is proven with
@@ -758,12 +762,14 @@ available at runtime; that packaging does not change route ownership.
 
 - `dispatch_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; unit claims prevent duplicate provider work.
 - `finalize_sync_run`: at-least-once queue insertion via a committed claim set and fresh per-claim River `InsertTx`; finalization ledger prevents duplicate finalization.
-- `post_sync`: mark-before-external-handoff/at-most-once, with the terminal mark committed before the external handoff begins, until CHAOS-2596 closes.
+- `post_sync`: guarded at-least-once insertion; generation-safe readers make duplicate fanout replay-safe.
 - eligible Linear backfill expired leases: continue `RUNNING -> RETRYING` with current eligibility matrix.
 
 No second generic sync workflow is introduced in River.
 
-`post_sync` is the deliberate exception to atomic insert-and-mark during coexistence: its current mark-before-insert loss window and non-retryable behavior remain until CHAOS-2596 makes every downstream consumer replay-safe.
+`post_sync` uses the same guarded publish-then-terminal-mark boundary as the
+other sync wakeups. CHAOS-2596 established reader compatibility for existing and
+re-driven compute generations.
 
 ## 12. Post-sync and analytics idempotency
 
@@ -774,7 +780,7 @@ The Go migration must preserve current delivery semantics, not “improve” the
 | sync dispatch | at-least-once | guarded at-least-once | same |
 | sync unit | duplicate wake-up possible; one lease owner | guarded at-least-once | same |
 | finalization | at-least-once + ledger | guarded at-least-once | same |
-| post-sync fan-out | at-most-once | at-most-once | durable guarded at-least-once |
+| post-sync fan-out | guarded at-least-once | guarded at-least-once | same |
 | metric partitions | mixed by table/read path | migrate only with explicit matrix | replay-safe where proven |
 | billing/email | task-specific | idempotency key or non-retryable | same |
 | reports | run-row uniqueness required | guarded at-least-once | same |
@@ -917,6 +923,51 @@ Retention policy must preserve enough history for:
 Exact durations are configuration, not contract, and must be validated against PostgreSQL growth.
 
 ## 15. Provider concurrency and rate limits
+
+CHAOS-3044 supplies the additive, dormant Go provider boundary. A sync-unit
+claim supplies its tenant scope; the resolver verifies that lease before lookup
+and decryption, then reads the existing organization/provider-scoped
+`integration_credentials` row. It is wire-compatible with the current v1
+Fernet ciphertext (and the legacy format), never reads or writes provider
+credentials through process-global environment mutation, and only reveals a
+typed secret at explicit HTTP-auth construction.
+Typed constructors cover GitHub (PAT or App), GitLab, Jira, Linear,
+LaunchDarkly, and PagerDuty (API token, OAuth bearer, or client-credentials
+exchange). Every token and refresh cache belongs to the constructed client;
+none of these constructors consults or mutates process-global environment
+state.
+
+The shared Valkey backoff gate uses the current Python key exactly:
+`rate_limit:<provider>:<org-or-_>:<host-or-_>`. Its Lua operation preserves the
+maximum next-allowed timestamp during Celery/Go coexistence. Budget admission
+uses the current Python SHA-256-derived PostgreSQL advisory-lock key for each
+provider/org/host/credential-fingerprint/dimension/route-family bucket; the
+authoritative durable reservation remains the unit's `DISPATCHING`/`RUNNING`
+lease. Provider/org/host/cost local concurrency counters use bounded Valkey Lua
+counters and must be released in `defer`; an unavailable reservation causes
+unit deferral rather than a sleeping worker. Release uses a separate bounded
+cleanup context and exposes failures through
+`dev_health_provider_budget_release_errors_total`.
+HTTP retry has a total-attempt budget, bounded backoff, bounded integer or HTTP
+date `Retry-After`, and job context cancellation. A 429 without a
+`Retry-After` value publishes the same computed local wait to the shared gate.
+Successful response bodies remain unread for the dataset adapter. Errors
+return a sanitized class, never a raw response body or credentials.
+
+Provider adapters emit versioned normalized envelopes containing tenant and
+source identity, dedupe key, observation time, and provenance. Postgres writes
+run in one transaction and ClickHouse writes use a fixed provenance-preserving
+column set. The sanitized `internal/providerfoundation/testdata/provider_parity.json`
+corpus covers auth, not-found, conflict, rate-limit, transient, and pagination
+cases. `go run ./cmd/dev-health-provider-fixture` emits the evaluated canonical
+JSON result for Python shadow comparison and fails if any computed class differs
+from the checked-in expectation. The separate
+`tests/compatibility/provider/run.sh` harness compares Go sink-ready envelopes
+with actual Python `WorkItem`, feature-flag, and canonical operational models
+across all six covered providers. Both runtimes derive the envelope from the
+checked-in model input; the expected envelope is a drift oracle, never an
+output shortcut. This foundation is not a worker activation; provider-specific
+canary gates remain required.
 
 River queue concurrency is insufficient for global provider limits because it is local to each client/process.
 
@@ -1397,7 +1448,7 @@ Measure:
 | External stream singleton is duplicated | readiness/config validation fails deployment |
 | New producer emits unsupported contract | insertion/routing gate rejects before execution |
 | Queue migration mismatch | process fails readiness and does not consume |
-| Post-sync insert fails | preserve current at-most-once marking order until CHAOS-2596 |
+| Post-sync River insert fails | roll back the insert transaction, exact-CAS rearm the guarded outbox claim with bounded backoff, then re-drive safely under the recorded generation |
 | Operator retries unsafe job | command is rejected with audited reason |
 
 ## 27. Performance and capacity requirements

@@ -1,0 +1,26 @@
+# Apply only after the route-owner release gates. This intentionally scales
+# baseline consumers to zero without deleting the Celery/Beat/Valkey surfaces.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-worker, namespace: dev-health}
+spec: {replicas: 0}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-worker-ingest, namespace: dev-health}
+spec: {replicas: 0}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-worker-external-ingest, namespace: dev-health}
+spec: {replicas: 0}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-worker-heavy, namespace: dev-health}
+spec: {replicas: 0}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dev-health-beat, namespace: dev-health}
+spec: {replicas: 0}

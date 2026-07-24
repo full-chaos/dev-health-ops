@@ -27,6 +27,7 @@ from dev_health_ops.api.queries import aggregated_flame, explain, metrics, sanke
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 _NATURAL_KEY_GROUP_BY = "GROUP BY day, provider, work_scope_id, team_id, status"
+_REPO_NATURAL_KEY_GROUP_BY = "GROUP BY day, repo_id"
 
 
 def _assert_dedup_before_sum(query: str) -> None:
@@ -206,11 +207,11 @@ async def test_fetch_metric_series_dedups_state_durations(
 
 
 @pytest.mark.asyncio
-async def test_fetch_metric_value_leaves_other_tables_flat(
+async def test_fetch_metric_value_dedups_repo_metrics_generations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The generic reader must NOT add argMax dedup for unaffected tables.
-    # (repo_metrics_daily is plain MergeTree, not in _DEDUP_BY_COMPUTED_AT.)
+    # repo_metrics_daily is an append-only MergeTree, so post-sync re-drives
+    # require an explicit latest-computed_at projection before aggregation.
     captured: dict[str, str] = {}
 
     async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
@@ -225,16 +226,18 @@ async def test_fetch_metric_value_leaves_other_tables_flat(
         column="items_completed",
         start_day=date(2026, 5, 1),
         end_day=date(2026, 5, 2),
-        scope_filter=" AND team_id IN %(team_ids)s",
-        scope_params={"team_ids": ["core"]},
+        scope_filter=" AND repo_id IN %(repo_ids)s",
+        scope_params={"repo_ids": ["r1"]},
         aggregator="sum",
         org_id="org-a",
     )
 
     normalized = " ".join(captured["query"].split())
-    assert "argMax" not in normalized
-    assert _NATURAL_KEY_GROUP_BY not in normalized
-    assert "FROM repo_metrics_daily WHERE" in normalized
+    assert "argMax(items_completed, computed_at)" in normalized
+    assert _REPO_NATURAL_KEY_GROUP_BY in normalized
+    assert normalized.index("org_id = %(org_id)s") < normalized.index(
+        _REPO_NATURAL_KEY_GROUP_BY
+    )
 
 
 # --- /explain root-cause readers (CHAOS-2377 re-review) ----------------------
@@ -335,10 +338,9 @@ async def test_fetch_metric_contributors_dedups_state_durations(
 
 
 @pytest.mark.asyncio
-async def test_fetch_metric_driver_delta_leaves_other_tables_flat(
+async def test_fetch_metric_driver_delta_dedups_repo_metrics_generations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The driver reader must NOT add argMax dedup for unaffected tables.
     captured: dict[str, str] = {}
 
     async def fake_query_dicts(_client: Any, query: str, _params: Any) -> list[Any]:
@@ -362,13 +364,14 @@ async def test_fetch_metric_driver_delta_leaves_other_tables_flat(
     )
 
     normalized = " ".join(captured["query"].split())
-    assert "argMax" not in normalized
-    assert _NATURAL_KEY_GROUP_BY not in normalized
-    assert "FROM repo_metrics_daily WHERE" in normalized
+    assert normalized.count("argMax(change_failure_rate, computed_at)") == 2
+    assert normalized.count(_REPO_NATURAL_KEY_GROUP_BY) == 2
+    assert "day >= %(start_day)s AND day < %(end_day)s" in normalized
+    assert "day >= %(compare_start)s AND day < %(compare_end)s" in normalized
 
 
 @pytest.mark.asyncio
-async def test_fetch_metric_contributors_leaves_other_tables_flat(
+async def test_fetch_metric_contributors_dedups_repo_metrics_generations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, str] = {}
@@ -392,6 +395,8 @@ async def test_fetch_metric_contributors_leaves_other_tables_flat(
     )
 
     normalized = " ".join(captured["query"].split())
-    assert "argMax" not in normalized
-    assert _NATURAL_KEY_GROUP_BY not in normalized
-    assert "FROM repo_metrics_daily WHERE" in normalized
+    assert "argMax(change_failure_rate, computed_at)" in normalized
+    assert _REPO_NATURAL_KEY_GROUP_BY in normalized
+    assert normalized.index("org_id = %(org_id)s") < normalized.index(
+        _REPO_NATURAL_KEY_GROUP_BY
+    )

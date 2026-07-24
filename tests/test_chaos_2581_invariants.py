@@ -221,17 +221,20 @@ def _patch_reconciler_enqueues(
     return dispatches, finalizers, post_sync
 
 
-def _patch_chord_apply_async(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+def _patch_unit_publish(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     from dev_health_ops.workers import sync_units
 
-    chord_calls: list[str] = []
+    publishes: list[str] = []
 
-    class FakeChord:
+    class FakeSignature:
+        def set(self, *, queue: str) -> FakeSignature:
+            return self
+
         def apply_async(self) -> None:
-            chord_calls.append("apply_async")
+            publishes.append("apply_async")
 
-    monkeypatch.setattr(sync_units, "chord", lambda *_args, **_kwargs: FakeChord())
-    return chord_calls
+    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda _unit_id: FakeSignature())
+    return publishes
 
 
 def _mark_units_success(session: Session, run: SyncRun) -> None:
@@ -300,13 +303,7 @@ def test_b2_redispatch_loss_after_cap_defer_reconciler_drains_overflow(
     run, units = _seed_run(db_session, unit_count=3, status=SyncRunStatus.PLANNED.value)
     _patch_db_session(monkeypatch, db_session)
     _patch_reconciler_enqueues(monkeypatch)
-    chord_calls: list[str] = []
-
-    class FakeChord:
-        def apply_async(self) -> None:
-            chord_calls.append("apply_async")
-
-    monkeypatch.setattr(sync_units, "chord", lambda *_args, **_kwargs: FakeChord())
+    publish_calls = _patch_unit_publish(monkeypatch)
 
     dispatch_result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -316,7 +313,7 @@ def test_b2_redispatch_loss_after_cap_defer_reconciler_drains_overflow(
     ]
     dispatch_row = _outbox(db_session, run, OUTBOX_KIND_DISPATCH)
     assert dispatch_result == {"status": "dispatched", "queued_units": 1}
-    assert len(chord_calls) == 1
+    assert len(publish_calls) == 1
     assert len(planned_after_cap) == 2
     assert run.status == SyncRunStatus.DISPATCHING.value
     assert dispatch_row.status == OUTBOX_STATUS_PENDING
@@ -450,10 +447,10 @@ def test_b4_post_sync_continuation_loss_relays_finalize_then_post_sync_once(
     assert units[0].status == SyncRunUnitStatus.SUCCESS.value
 
 
-def test_b4_post_sync_partial_fanout_failure_is_at_most_once_and_lossy(
+def test_b4_post_sync_partial_fanout_failure_is_retried_safely(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Post-sync is at-most-once; publish failure is loss, not re-send."""
+    """Post-sync re-arms after partial fanout failure and safely re-drives."""
     from dev_health_ops.workers import sync_reconciler
 
     run, units = _seed_run(db_session, unit_count=1, status=SyncRunStatus.SUCCESS.value)
@@ -495,27 +492,31 @@ def test_b4_post_sync_partial_fanout_failure_is_at_most_once_and_lossy(
     db_session.refresh(run)
     post_sync_row = _outbox(db_session, run, OUTBOX_KIND_POST_SYNC)
     assert first["relayed_post_sync"] == 0
-    assert first["publish_failures"] == 0
+    assert first["publish_failures"] == 1
     assert len(post_sync) == 1
     assert fanout_attempts == 1
     assert run.status == SyncRunStatus.SUCCESS.value
     assert run.completed_units == 1
     assert units[0].status == SyncRunUnitStatus.SUCCESS.value
-    assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
+    assert post_sync_row.status == OUTBOX_STATUS_PENDING
     assert post_sync_row.attempts == 1
     assert post_sync_row.claim_token is None
-    assert post_sync_row.dispatched_at is not None
-    assert post_sync_row.last_error is None
-    assert _aware(post_sync_row.available_at) <= before
+    assert post_sync_row.dispatched_at is None
+    assert post_sync_row.last_error == "RuntimeError: partial fanout send failure"
+    assert _aware(post_sync_row.available_at) > before
+
+    post_sync_row.available_at = datetime.now(timezone.utc)
+    db_session.commit()
 
     second = sync_reconciler.reconcile_sync_dispatch(limit=10)
 
     db_session.refresh(post_sync_row)
-    assert second["relayed_post_sync"] == 0
+    assert second["relayed_post_sync"] == 1
     assert second["publish_failures"] == 0
-    assert len(post_sync) == 1
+    assert len(post_sync) == 2
+    assert fanout_attempts == 2
     assert post_sync_row.status == OUTBOX_STATUS_DISPATCHED
-    assert post_sync_row.attempts == 1
+    assert post_sync_row.attempts == 2
     assert post_sync_row.claim_token is None
     assert post_sync_row.last_error is None
 
@@ -614,7 +615,7 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     db_session.commit()
     _patch_db_session(monkeypatch, db_session)
     dispatches, _finalizers, post_sync = _patch_reconciler_enqueues(monkeypatch)
-    chord_calls = _patch_chord_apply_async(monkeypatch)
+    publish_calls = _patch_unit_publish(monkeypatch)
 
     first = sync_reconciler.reconcile_sync_dispatch(limit=10)
     sync_units.dispatch_sync_run(str(dispatch_run.id))
@@ -627,7 +628,7 @@ def test_b6_idempotency_two_reconciler_passes_do_not_double_claim_or_post_sync(
     assert first["relayed_dispatch"] == 1
     assert second["relayed_dispatch"] == 0
     assert dispatches == [((str(dispatch_run.id),), "sync")]
-    assert chord_calls == ["apply_async"]
+    assert publish_calls == ["apply_async"]
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
     assert dispatch_row.attempts == 1
     assert dispatch_units[0].attempts == 0
@@ -789,11 +790,7 @@ def test_a3_over_cap_backfill_queues_overflow_rearm_and_reconciler_drains(
     _patch_db_session(monkeypatch, db_session)
     _patch_reconciler_enqueues(monkeypatch)
 
-    class FakeChord:
-        def apply_async(self) -> None:
-            return None
-
-    monkeypatch.setattr(sync_units, "chord", lambda *_args, **_kwargs: FakeChord())
+    _patch_unit_publish(monkeypatch)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -868,11 +865,11 @@ def test_a4_worker_dies_after_running_bucket_frees_and_run_redrives_terminal(
     assert dispatch_row.status == OUTBOX_STATUS_DISPATCHED
 
     monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
-    chord_calls = _patch_chord_apply_async(monkeypatch)
+    publish_calls = _patch_unit_publish(monkeypatch)
     sync_units.dispatch_sync_run(str(run.id))
     db_session.refresh(units[1])
     assert units[1].status == SyncRunUnitStatus.DISPATCHING.value
-    assert chord_calls == ["apply_async"]
+    assert publish_calls == ["apply_async"]
     units[1].status = SyncRunUnitStatus.SUCCESS.value
     units[1].lease_owner = None
     units[1].lease_expires_at = None

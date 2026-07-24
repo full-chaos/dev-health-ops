@@ -58,12 +58,13 @@ def _canonical_incident_ingestion_allowed(org_id: str) -> bool:
 )
 def process_webhook_event(
     self,
-    provider: str,
-    event_type: str,
+    provider: str = "",
+    event_type: str = "",
     delivery_id: str | None = None,
     payload: dict | None = None,
     org_id: str | None = None,
     repo_name: str | None = None,
+    durable_delivery_id: str | None = None,
 ) -> dict:
     """
     Process a webhook event asynchronously.
@@ -82,6 +83,16 @@ def process_webhook_event(
     Returns:
         dict with processing status and summary
     """
+
+    if durable_delivery_id:
+        durable = _load_webhook_delivery(durable_delivery_id)
+        if durable is None:
+            return {
+                "status": "error",
+                "reason": "missing_durable_delivery",
+                "durable_delivery_id": durable_delivery_id,
+            }
+        provider, event_type, delivery_id, payload, org_id, repo_name = durable
 
     logger.info(
         "Processing webhook event: provider=%s type=%s delivery=%s repo=%s",
@@ -161,6 +172,46 @@ def process_webhook_event(
         ):
             countdown = min(math.ceil(retry_after), _MAX_RETRY_COUNTDOWN_SECONDS)
         raise self.retry(exc=exc, countdown=countdown)
+
+
+def _load_webhook_delivery(
+    durable_delivery_id: str,
+) -> tuple[str, str, str | None, dict, str | None, str | None] | None:
+    """Load a verified payload from durable state for the legacy Celery owner.
+
+    This compatibility path deliberately keeps Python/Celery as the executor;
+    its queue message contains a UUID reference only, so a broker replay cannot
+    become the payload source of truth.
+    """
+    try:
+        delivery_uuid = uuid.UUID(durable_delivery_id)
+    except ValueError:
+        return None
+    try:
+        from sqlalchemy import select
+
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.operational_deliveries import WebhookDelivery
+
+        with get_postgres_session_sync() as session:
+            delivery = session.scalar(
+                select(WebhookDelivery).where(WebhookDelivery.id == delivery_uuid)
+            )
+            if delivery is None:
+                return None
+            return (
+                delivery.provider,
+                delivery.event_type,
+                delivery.delivery_key,
+                dict(delivery.payload),
+                delivery.org_ref,
+                delivery.repo_name,
+            )
+    except Exception:
+        logger.exception(
+            "Unable to load durable webhook delivery id=%s", durable_delivery_id
+        )
+        raise
 
 
 def _is_duplicate_delivery(provider: str, delivery_id: str) -> bool:

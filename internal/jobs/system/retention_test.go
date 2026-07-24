@@ -151,9 +151,16 @@ func TestRetentionHandlerRefusesAFutureCutoff(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "well inside the retention window", cutoff: now.Add(-14 * 24 * time.Hour)},
+		// A zero-day horizon ("retain nothing") is a legitimate posture and
+		// emits a cutoff equal to the due time, so it sits at the boundary
+		// rather than days behind it. It must survive a trailing worker clock.
 		{name: "cutoff at the occurrence due time", cutoff: now},
-		{name: "within tolerated scheduler clock skew", cutoff: now.Add(30 * time.Second)},
-		{name: "beyond tolerated skew", cutoff: now.Add(2 * time.Minute), wantErr: true},
+		{name: "worker clock trails the scheduler", cutoff: now.Add(retentionClockSkew / 2)},
+		{name: "beyond tolerated skew", cutoff: now.Add(retentionClockSkew + time.Minute), wantErr: true},
+		// The inversion the guard exists for: "due + horizon" instead of
+		// "due - horizon". Every real horizon is orders of magnitude larger
+		// than the skew tolerance, so all of them are caught.
+		{name: "sign error on the smallest 14 day horizon", cutoff: now.Add(14 * 24 * time.Hour), wantErr: true},
 		{name: "sign error on a 90 day horizon", cutoff: now.Add(90 * 24 * time.Hour), wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -186,5 +193,20 @@ func TestRetentionHandlerRefusesAFutureCutoff(t *testing.T) {
 				t.Fatal("valid cutoff never reached storage")
 			}
 		})
+	}
+}
+
+// TestRetentionSkewToleranceStaysFarBelowEveryRealHorizon pins the sizing
+// argument rather than the number: the guard may be loosened for clock skew
+// only while it still refuses an inversion of the shortest retention window
+// anyone configures.
+func TestRetentionSkewToleranceStaysFarBelowEveryRealHorizon(t *testing.T) {
+	t.Parallel()
+	const shortestConfiguredHorizon = 14 * 24 * time.Hour
+	if retentionClockSkew >= shortestConfiguredHorizon/100 {
+		t.Fatalf(
+			"skew tolerance %s is not comfortably below the shortest horizon %s",
+			retentionClockSkew, shortestConfiguredHorizon,
+		)
 	}
 }

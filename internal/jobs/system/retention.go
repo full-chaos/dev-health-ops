@@ -47,7 +47,18 @@ func (adapter terminalOutboxRetention) DeleteBefore(
 // time minus a retention horizon, so a correct cutoff is always in the past by
 // the time the job runs; only clock skew between the scheduler host and this
 // one can push it marginally forward.
-const retentionClockSkew = time.Minute
+//
+// It is sized for clock skew, deliberately not for horizon precision. The
+// inversion this guard exists to catch is horizon-scale -- the smallest
+// retention window in use is fourteen days -- so a tolerance three orders of
+// magnitude smaller than that still refuses every inversion it is meant to
+// refuse. Sizing it tighter would buy no additional coverage and would make one
+// legitimate configuration fragile: a zero-day horizon ("retain nothing") emits
+// a cutoff equal to the occurrence's due time, which sits at this boundary
+// rather than days behind it, so a trailing worker clock would start failing it
+// permanently. Found by the scheduler lane comparing its producer against this
+// guard.
+const retentionClockSkew = 15 * time.Minute
 
 type RetentionHandler struct {
 	stores map[string]RetentionStore

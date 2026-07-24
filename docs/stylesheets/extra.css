@@ -437,15 +437,7 @@ input {
 }
 
 .fc-topic-card {
-  background: var(--fc-doc-surface);
-  border: 1px solid var(--fc-doc-border);
-  border-radius: var(--fc-radius);
   min-width: 0;
-  padding: 0.82rem 0.88rem;
-}
-
-.fc-topic-card:hover {
-  border-color: var(--fc-doc-link);
 }
 
 .fc-topic-card h2,

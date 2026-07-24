@@ -141,16 +141,21 @@ func (sink GitHubRepositoryClickHouseEffects) inspectRepository(
 ) (EffectInspection, error) {
 	// ifNull keeps Nullable(String)/Nullable(UUID) out of the scan contract;
 	// the native sink always writes ref and source_id as NULL.
+	//
+	// The version aggregate is aliased `winning_version`, never `last_synced`:
+	// an alias that shadows the column makes the sibling argMax calls resolve
+	// their weight argument to that alias, and ClickHouse rejects the whole
+	// query as an aggregate nested inside an aggregate (code 184).
 	rows, err := sink.Conn.Query(ctx, `
 SELECT
-  argMax(repo, last_synced)                     AS repo,
-  argMax(ifNull(ref, ''), last_synced)          AS ref,
-  argMax(created_at, last_synced)               AS created_at,
-  argMax(ifNull(settings, ''), last_synced)     AS settings,
-  argMax(ifNull(tags, ''), last_synced)         AS tags,
-  argMax(provider, last_synced)                 AS provider,
-  argMax(ifNull(toString(source_id), ''), last_synced) AS source_id,
-  max(last_synced)                              AS last_synced
+  argMax(repo, last_synced)                            AS winning_repo,
+  argMax(ifNull(ref, ''), last_synced)                 AS winning_ref,
+  argMax(created_at, last_synced)                      AS winning_created_at,
+  argMax(ifNull(settings, ''), last_synced)            AS winning_settings,
+  argMax(ifNull(tags, ''), last_synced)                AS winning_tags,
+  argMax(provider, last_synced)                        AS winning_provider,
+  argMax(ifNull(toString(source_id), ''), last_synced) AS winning_source_id,
+  max(last_synced)                                     AS winning_version
 FROM repos
 WHERE org_id = ? AND id = ?`,
 		expected.OrgID, expected.ID,

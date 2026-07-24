@@ -211,13 +211,16 @@ check_contract() {
 }
 
 check_integration() {
-	printf 'go test integration: PostgreSQL roles, River, outbox, and operator\n'
+	printf 'go test integration: PostgreSQL roles, River, outbox, operator, and provider sync\n'
 	(
 		cd "${ROOT}"
-		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=10m \
+		# This list is explicit. A package holding integration-tagged tests but
+		# missing from this list is silently skipped — it is never reported as
+		# uncovered — so every new integration suite must be added here.
+		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=15m \
 			./internal/testsupport/containers ./internal/storage/postgres ./internal/storage/river \
 			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute \
-			./internal/scheduler/sync ./internal/syncdispatchruntime
+			./internal/scheduler/sync ./internal/syncdispatchruntime ./internal/providersync
 	)
 }
 

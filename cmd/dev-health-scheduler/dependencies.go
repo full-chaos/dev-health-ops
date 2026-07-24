@@ -95,6 +95,11 @@ func (database *postgresSchedulerDatabase) Close() {
 // it: a lifecycle component that also supplies its own readiness checks. The
 // checks are supplied rather than self-registered so exactly one place owns the
 // readiness names.
+//
+// Readiness and Coverage are invoked while the gate holds a read lock, so both
+// must be bounded and must never call back into the gate. Neither performs I/O
+// today: Readiness reads an atomic, and Coverage compares in-memory schedule
+// declarations.
 type fixedScheduleRuntime interface {
 	lifecycle.Component
 	Readiness(context.Context) error
@@ -131,26 +136,45 @@ func (gate *fixedScheduleGate) detach() {
 	gate.runtime = nil
 }
 
-func (gate *fixedScheduleGate) attached() fixedScheduleRuntime {
+// check runs one delegated readiness check under the gate's read lock.
+//
+// The lock is deliberately held across the delegated call rather than released
+// after copying the runtime. Copying first and calling after would let a poll
+// observe a healthy runtime, have detach complete, and only then report
+// healthy — a result attributable to no point in time, and specifically a
+// healthy answer produced after shutdown had already begun. Holding the read
+// lock makes detach wait for in-flight checks, so every result is either
+// entirely before detach or entirely after it.
+//
+// Attach was already fail-closed by construction, since an unattached gate
+// reports unavailable. This makes detach symmetric.
+func (gate *fixedScheduleGate) check(
+	ctx context.Context,
+	delegate func(fixedScheduleRuntime, context.Context) error,
+) error {
 	gate.mu.RLock()
 	defer gate.mu.RUnlock()
-	return gate.runtime
+	if gate.runtime == nil {
+		return errFixedScheduleUnavailable
+	}
+	return delegate(gate.runtime, ctx)
 }
 
 func (gate *fixedScheduleGate) readiness(ctx context.Context) error {
-	runtime := gate.attached()
-	if runtime == nil {
-		return errFixedScheduleUnavailable
-	}
-	return runtime.Readiness(ctx)
+	return gate.check(ctx, fixedScheduleRuntime.Readiness)
 }
 
 func (gate *fixedScheduleGate) coverage(ctx context.Context) error {
-	runtime := gate.attached()
-	if runtime == nil {
-		return errFixedScheduleUnavailable
-	}
-	return runtime.Coverage(ctx)
+	return gate.check(ctx, fixedScheduleRuntime.Coverage)
+}
+
+// attached reports whether a runtime is currently bound. It is only for
+// assertions that do not delegate; a caller that needs to invoke a check must
+// go through check so the result stays linearized against detach.
+func (gate *fixedScheduleGate) attached() bool {
+	gate.mu.RLock()
+	defer gate.mu.RUnlock()
+	return gate.runtime != nil
 }
 
 type schedulerRuntimeSources struct {

@@ -66,6 +66,47 @@ func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
 	}
 }
 
+func TestRegistryInvestmentDispatchStartupBudgetMatchesMaterialization(t *testing.T) {
+	t.Parallel()
+	registry, err := Load("../../contracts/jobs/v1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	handlers := registry.Profile("heavy")
+	queueSet := make(map[string]struct{})
+	var dispatch Descriptor
+	for _, handler := range handlers {
+		queueSet[handler.Queue] = struct{}{}
+		if handler.Kind == jobcontract.KindInvestmentDispatch {
+			dispatch = handler
+		}
+	}
+	queues := make([]string, 0, len(queueSet))
+	for queue := range queueSet {
+		queues = append(queues, queue)
+	}
+	if err := registry.ValidateStartup(StartupSpec{
+		Profile:  "heavy",
+		Queues:   queues,
+		Handlers: handlers,
+	}); err != nil {
+		t.Fatalf("ValidateStartup: %v", err)
+	}
+	if dispatch.Kind == "" {
+		t.Fatal("heavy startup is missing investment.dispatch")
+	}
+	if dispatch.Timeout != 2*time.Hour {
+		t.Fatalf("investment.dispatch timeout = %s, want 2h", dispatch.Timeout)
+	}
+	if dispatch.CurrentVersion != 1 || dispatch.Route != "celery" {
+		t.Fatalf(
+			"investment.dispatch rollout contract drifted: version=%d route=%q",
+			dispatch.CurrentVersion,
+			dispatch.Route,
+		)
+	}
+}
+
 func TestRegistryValidateStartupRejectsCoverageDrift(t *testing.T) {
 	t.Parallel()
 	registry, err := Load("../../contracts/jobs/v1")

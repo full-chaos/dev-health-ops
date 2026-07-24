@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -171,6 +172,17 @@ WHERE request_id = $5::uuid AND state = 'executing' AND claim_token = $6::uuid`,
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	if state == "succeeded" {
+		completionKey, keyErr := joboutbox.CompletionKey(
+			"work_graph_execution_request", claim.Request.ID,
+		)
+		if keyErr != nil {
+			return ErrInvalidState
+		}
+		if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+			return ErrUnavailable
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrUnavailable

@@ -90,7 +90,10 @@ func buildOperationalWorker(
 	if err != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	outboxStore, err := joboutbox.NewRepository(postgresDatabase.pools.Domain)
+	// Retention deletes relay-owned outbox rows and completion fences. Use the
+	// queue-control role, whose intentionally narrow grants own that cleanup;
+	// the domain role is producer-only for worker_job_outbox.
+	outboxStore, err := joboutbox.NewRepository(postgresDatabase.pools.QueueControl)
 	if err != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}

@@ -774,19 +774,36 @@ The `post_sync` River consumer now validates the exact dispatched outbox ID,
 tenant, SyncRun, route generation, and live unpaused River route before it
 does any work. It then reloads only successful `sync_run_units` and the
 canonical parent sync configuration. Daily metrics, complexity, DORA,
-work-graph build, and team autoimport use package-owned transaction writers in
-one caller-owned PostgreSQL transaction. A failure in any writer rolls back
-every domain request and handoff; River retries the same guarded delivery.
-Replays use deterministic generation/request IDs and outbox dedupe keys, and
-reject a reused identity whose immutable scope changed.
+work-graph build, investment materialization, membership backfill, and team
+autoimport use package-owned transaction writers in one caller-owned
+PostgreSQL transaction. A failure in any writer rolls back every domain request
+and handoff; River retries the same guarded delivery. Replays use deterministic
+generation/request IDs and outbox dedupe keys, and reject a reused identity
+whose immutable scope changed.
 
-Investment dispatch deliberately remains fail-closed in native post-sync. Its
-temporary compatibility endpoint still invokes the legacy Python dispatcher,
-which creates a Celery chord; binding that endpoint would hide a second
-transport inside River execution. The post-sync transaction therefore returns
-a retryable error and commits none of its earlier children whenever investment
-fanout is required. CHAOS-3050 must supply a direct/native non-Celery dispatch
-writer before this dependency can be bound.
+Native post-sync persists the exact durable sequence `complexity -> daily ->
+workgraph.build -> investment.materialize -> membership_backfill` (with
+unselected complexity/daily stages omitted). Each successor outbox row names
+its predecessor's canonical completion key. The relay leaves it unclaimed
+until the predecessor's fenced success and completion-fence insert commit in
+one transaction, so waiting cannot exhaust a retry budget. Each stage therefore
+resumes from its own existing run/request ledger instead of replaying a combined
+investment effect. A pre-commit crash re-drives the current stage; a post-commit
+crash releases the successor on the next relay poll. Bounded terminal-outbox
+retention prunes only aged fences with no referencing outbox row, and replay of
+an already-terminal deterministic stage restores a pruned fence. The legacy
+Celery route keeps its existing partitioned chord unchanged.
+
+For every long compatibility operation, the API releases its read transaction
+before execution so the Go worker can renew the lease. Compatibility clients
+take their whole-request deadlines from the River execution context; the shared
+short bridge budget is connection/TLS setup only. The API runs legacy metric
+and work-graph effects in fixed child processes and, on POSIX, terminates their
+process groups, kills them if needed, and reaps them on cancellation or
+disconnect. The
+standalone `investment.dispatch` descriptor remains at contract version `1`
+with a 7,200-second execution budget and a checked-in Celery route; native
+post-sync no longer depends on that combined effect.
 
 Child contracts remain `go_implemented` with `route=celery` and
 `rollback_route=celery` until their individual parity/canary gates are
@@ -837,12 +854,13 @@ consumer. The legacy Celery chain remains the production path while
 
 **Blocked by:** CHAOS-2596.
 
-Implementation status: the guarded native consumer and atomic, deterministic
-fanout are implemented for daily, remaining metrics, work-graph build, and
-team autoimport. Investment dispatch remains an explicit fail-closed
-dependency until its direct/native non-Celery fanout lands. Production
-activation remains blocked until that dependency and the downstream child
-contracts complete their independent promotion evidence.
+Implementation status: the guarded native consumer, atomic deterministic
+fanout, reader generation deduplication, and completion-fenced stage chain are
+implemented for daily, remaining metrics, work-graph build, investment
+materialization, membership backfill, and team autoimport. The River investment
+path is free of Celery chords; the legacy Celery route remains unchanged.
+Production activation remains blocked until the downstream child contracts
+complete their independent promotion evidence.
 
 #### Work
 

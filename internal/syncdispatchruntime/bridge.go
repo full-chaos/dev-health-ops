@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -47,10 +48,26 @@ func NewHTTPBridge(config HTTPBridgeConfig) (*HTTPBridge, error) {
 		return nil, ErrInvalidBridge
 	}
 	return &HTTPBridge{
-		client:      &http.Client{Timeout: config.Timeout},
+		client:      bridgeHTTPClient(config.Timeout),
 		baseURL:     base,
 		bearerToken: config.BearerToken,
 	}, nil
+}
+
+func bridgeHTTPClient(connectTimeout time.Duration) *http.Client {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		transport = &http.Transport{}
+	} else {
+		transport = transport.Clone()
+	}
+	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
+	transport.DialContext = dialer.DialContext
+	transport.TLSHandshakeTimeout = connectTimeout
+	// Compatibility endpoints do not return headers until execution completes.
+	// Their River context, not this connection budget, owns the operation
+	// deadline.
+	return &http.Client{Transport: transport}
 }
 
 type bridgeReference struct {

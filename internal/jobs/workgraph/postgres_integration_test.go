@@ -74,6 +74,53 @@ func TestPostgresStoreCrashRecoveryReplacesRequestAndLedgerToken(t *testing.T) {
 	if err := fresh.Complete(ctx, *reclaimed, []byte(`{"edges":1}`)); err != nil {
 		t.Fatal(err)
 	}
+	var completionFences int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM worker_job_completion_fences
+WHERE completion_key = $1`,
+		"work_graph_execution_request:"+testRequestID,
+	).Scan(&completionFences); err != nil {
+		t.Fatal(err)
+	}
+	if completionFences != 1 {
+		t.Fatalf("completion fences=%d want=1", completionFences)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM worker_job_completion_fences`); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewRequestWriter(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteTx(ctx, tx, Request{
+		ID: testRequestID, OrganizationID: testOrgID, Kind: KindBuild,
+		Scope: []byte(`{}`), LLMConcurrency: 1, SpendLimitMicrounits: 0,
+		CorrelationID: "crash-recovery", IdempotencyKey: "workgraph:crash-recovery",
+	}); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("terminal replay: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM worker_job_completion_fences
+WHERE completion_key = $1`,
+		"work_graph_execution_request:"+testRequestID,
+	).Scan(&completionFences); err != nil {
+		t.Fatal(err)
+	}
+	if completionFences != 1 {
+		t.Fatalf("restored completion fences=%d want=1", completionFences)
+	}
 	if completed, err := fresh.Claim(ctx, testRequestID, KindBuild); err != nil || completed != nil {
 		t.Fatalf("terminal request re-claimed = %#v, %v", completed, err)
 	}
@@ -141,6 +188,36 @@ func TestRequestWriterUsesCanonicalDeferredOutboxPolicyInsideCallerTransaction(t
 	if requests != 1 || handoffs != 1 {
 		t.Fatalf("requests=%d handoffs=%d", requests, handoffs)
 	}
+	activeWriter, err := NewRequestWriter(activeWorkgraphRegistry{Registry: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRequest := request
+	activeRequest.ID = "00000000-0000-4000-8000-000000000103"
+	activeRequest.Kind = KindMaterialize
+	activeRequest.IdempotencyKey = "investment:post-sync:1"
+	activeRequest.PrerequisiteCompletionKey = "work_graph_execution_request:" + testRequestID
+	activeTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := activeWriter.WriteTx(ctx, activeTx, activeRequest); err != nil {
+		_ = activeTx.Rollback(ctx)
+		t.Fatalf("active route publish: %v", err)
+	}
+	if err := activeTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var prerequisite string
+	if err := pool.QueryRow(ctx, `
+SELECT prerequisite_completion_key
+FROM worker_job_outbox
+WHERE dedupe_key=$1`, activeRequest.IdempotencyKey).Scan(&prerequisite); err != nil {
+		t.Fatal(err)
+	}
+	if prerequisite != activeRequest.PrerequisiteCompletionKey {
+		t.Fatalf("prerequisite=%q want=%q", prerequisite, activeRequest.PrerequisiteCompletionKey)
+	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -152,6 +229,17 @@ func TestRequestWriterUsesCanonicalDeferredOutboxPolicyInsideCallerTransaction(t
 		t.Fatalf("mutated duplicate err=%v", err)
 	}
 	_ = tx.Rollback(ctx)
+}
+
+type activeWorkgraphRegistry struct{ *jobruntime.Registry }
+
+func (registry activeWorkgraphRegistry) Descriptor(kind string) (jobruntime.Descriptor, bool) {
+	descriptor, ok := registry.Registry.Descriptor(kind)
+	if ok && (kind == string(KindBuild) || kind == string(KindMaterialize)) {
+		descriptor.MigrationState = "go_default"
+		descriptor.Route = "river"
+	}
+	return descriptor, ok
 }
 
 func createExecutionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -174,7 +262,12 @@ CREATE TABLE worker_job_outbox (
  contract_version integer NOT NULL, args json NOT NULL, payload_hash varchar(71) NOT NULL,
  queue varchar(96) NOT NULL, priority smallint NOT NULL, max_attempts smallint NOT NULL,
  scheduled_at timestamptz NOT NULL, status varchar(16) NOT NULL, attempt_count integer NOT NULL,
- next_attempt_at timestamptz NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+ next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
+ created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+) ;
+CREATE TABLE worker_job_completion_fences (
+ completion_key text PRIMARY KEY,
+ completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 )`)
 	if err != nil {
 		t.Fatal(err)

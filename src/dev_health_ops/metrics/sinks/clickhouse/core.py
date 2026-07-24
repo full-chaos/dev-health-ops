@@ -20,6 +20,7 @@ from typing import Any
 
 import clickhouse_connect
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.schemas import (
     ManualAttributionFallbackRecord,
     MemberRecord,
@@ -622,7 +623,7 @@ class ClickHouseCore(BaseMetricsSink):
             sum(delivery_units) as delivery_units_30d,
             quantile(0.5)(if(cycle_p50_hours > 0, cycle_p50_hours, null)) as cycle_p50_30d_hours,
             max(work_items_active) as wip_max_30d
-        FROM user_metrics_daily
+        FROM {dedup_from("user_metrics_daily")}
         WHERE {where_clause}
         GROUP BY identity_id
         HAVING identity_id != ''

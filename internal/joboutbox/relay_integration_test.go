@@ -105,6 +105,46 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Run("prerequisite fences do not consume relay attempts", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		seed := normalSeed(1, now)
+		seedOutbox(t, ctx, adminPool, seed)
+		const completionKey = "daily_metrics_run:00000000-0000-4000-8000-000000000099"
+		if _, err := adminPool.Exec(ctx, `
+UPDATE public.worker_job_outbox
+SET prerequisite_completion_key = $1
+WHERE id = $2::uuid`, completionKey, seed.ID); err != nil {
+			t.Fatal(err)
+		}
+		claims, err := repository.ClaimDue(ctx, now, 10, 30*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(claims) != 0 {
+			t.Fatalf("blocked successor claims=%d want=0", len(claims))
+		}
+		var attempts int
+		if err := adminPool.QueryRow(ctx, `
+SELECT attempt_count FROM public.worker_job_outbox WHERE id=$1::uuid`, seed.ID).Scan(&attempts); err != nil {
+			t.Fatal(err)
+		}
+		if attempts != 0 {
+			t.Fatalf("blocked successor attempts=%d want=0", attempts)
+		}
+		if _, err := adminPool.Exec(ctx, `
+INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)`, completionKey); err != nil {
+			t.Fatal(err)
+		}
+		claims, err = repository.ClaimDue(ctx, now, 10, 30*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(claims) != 1 || claims[0].ID != seed.ID {
+			t.Fatalf("released claims=%#v", claims)
+		}
+	})
+
 	t.Run("concurrent claimers never overlap", func(t *testing.T) {
 		resetOutboxTables(t, ctx, adminPool)
 		now := time.Now().UTC().Truncate(time.Microsecond)
@@ -475,8 +515,13 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	t.Run("terminal retention is bounded", func(t *testing.T) {
 		resetOutboxTables(t, ctx, adminPool)
 		now := time.Now().UTC().Truncate(time.Microsecond)
+		var retainedOutboxID string
 		for index := 100; index < 103; index++ {
-			seedOutbox(t, ctx, adminPool, normalSeed(index, now))
+			seed := normalSeed(index, now)
+			seedOutbox(t, ctx, adminPool, seed)
+			if index == 102 {
+				retainedOutboxID = seed.ID
+			}
 			claim := claimOne(t, ctx, repository, now, 2*time.Second)
 			if _, err := repository.Dispatch(ctx, claim, now, inserter.Insert); err != nil {
 				t.Fatal(err)
@@ -488,11 +533,38 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 			WHERE status='delivered'`, now.Add(-48*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
+		for index := 100; index < 103; index++ {
+			key := fmt.Sprintf(
+				"daily_metrics_run:00000000-0000-4000-8000-%012d",
+				index,
+			)
+			if _, err := adminPool.Exec(ctx, `
+INSERT INTO public.worker_job_completion_fences (completion_key, completed_at)
+VALUES ($1, $2)`, key, now.Add(-48*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if index == 102 {
+				if _, err := adminPool.Exec(ctx, `
+UPDATE public.worker_job_outbox
+SET prerequisite_completion_key=$1
+WHERE id=$2::uuid`, key, retainedOutboxID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		deleted, err := repository.DeleteTerminalBefore(ctx, now.Add(-24*time.Hour), 2)
 		if err != nil || deleted != 2 {
 			t.Fatalf("DeleteTerminalBefore() = %d, %v", deleted, err)
 		}
 		assertCounts(t, ctx, adminPool, statusDelivered, 1, 3)
+		var fences int
+		if err := adminPool.QueryRow(ctx, `
+SELECT count(*) FROM public.worker_job_completion_fences`).Scan(&fences); err != nil {
+			t.Fatal(err)
+		}
+		if fences != 1 {
+			t.Fatalf("retained completion fences=%d want=1", fences)
+		}
 	})
 }
 
@@ -653,7 +725,7 @@ func injectedFault() error { return errors.New("simulated process crash") }
 
 func resetOutboxTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, "TRUNCATE public.worker_job_outbox, river.river_job RESTART IDENTITY"); err != nil {
+	if _, err := pool.Exec(ctx, "TRUNCATE public.worker_job_outbox, public.worker_job_completion_fences, river.river_job RESTART IDENTITY"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -698,6 +770,7 @@ func createOutboxSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			last_error_at timestamptz,
 			river_job_id bigint UNIQUE,
 			delivered_at timestamptz,
+			prerequisite_completion_key text NULL,
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL,
 			CONSTRAINT worker_job_outbox_status CHECK (status IN ('pending','claimed','delivered','dead')),
@@ -709,6 +782,10 @@ func createOutboxSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 				(status='delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL)
 				OR (status<>'delivered' AND river_job_id IS NULL AND delivered_at IS NULL)
 			)
+		);
+		CREATE TABLE public.worker_job_completion_fences (
+			completion_key text PRIMARY KEY,
+			completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 		)`)
 	if err != nil {
 		t.Fatal(err)

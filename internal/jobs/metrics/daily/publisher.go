@@ -30,6 +30,7 @@ func (publisher *PostgresPublisher) PublishDispatchTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	run Run,
+	prerequisiteCompletionKey string,
 ) error {
 	if publisher == nil || publisher.producer == nil || publisher.registry == nil || tx == nil {
 		return ErrUnavailable
@@ -49,9 +50,21 @@ func (publisher *PostgresPublisher) PublishDispatchTx(
 	}
 	var err error
 	if descriptor.Executable() {
-		err = publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope)
+		if prerequisiteCompletionKey == "" {
+			err = publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope)
+		} else {
+			err = publisher.producer.PublishAfter(
+				ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope, prerequisiteCompletionKey,
+			)
+		}
 	} else {
-		err = publisher.producer.PublishDeferred(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope)
+		if prerequisiteCompletionKey == "" {
+			err = publisher.producer.PublishDeferred(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope)
+		} else {
+			err = publisher.producer.PublishDeferredAfter(
+				ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope, prerequisiteCompletionKey,
+			)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {

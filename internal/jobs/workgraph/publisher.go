@@ -14,18 +14,22 @@ import (
 // RequestWriter is safe to use inside a caller-owned transaction. In
 // particular, native post-sync fanout can create the immutable request and its
 // outbox handoff atomically, so a crash cannot produce only one half.
-type RequestWriter struct{ producer *joboutbox.Producer }
+type RequestWriter struct {
+	producer *joboutbox.Producer
+	registry joboutbox.PolicyRegistry
+}
 
 func NewRequestWriter(registry joboutbox.PolicyRegistry) (*RequestWriter, error) {
 	producer, err := joboutbox.NewTransactionProducer(registry)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	return &RequestWriter{producer: producer}, nil
+	return &RequestWriter{producer: producer, registry: registry}, nil
 }
 
 func (writer *RequestWriter) WriteTx(ctx context.Context, tx pgx.Tx, request Request) error {
-	if writer == nil || writer.producer == nil || tx == nil || !validRequest(request) {
+	if writer == nil || writer.producer == nil || writer.registry == nil ||
+		tx == nil || !validRequest(request) {
 		return ErrInvalidState
 	}
 	encodedScope := string(request.Scope)
@@ -46,20 +50,51 @@ ON CONFLICT (id) DO NOTHING`, request.ID, request.OrganizationID, string(request
 	if command.RowsAffected() == 0 {
 		var existing Request
 		var existingScope []byte
+		var existingState string
 		err = tx.QueryRow(ctx, `
 SELECT id::text, org_id::text, kind, scope::text, COALESCE(model_ref, ''),
        COALESCE(prompt_ref, ''), llm_concurrency, spend_limit_microunits,
-       correlation_id, idempotency_key
+       correlation_id, idempotency_key, state
 FROM public.work_graph_execution_requests WHERE id = $1::uuid`, request.ID).Scan(
 			&existing.ID, &existing.OrganizationID, &existing.Kind, &existingScope,
 			&existing.ModelRef, &existing.PromptRef, &existing.LLMConcurrency,
 			&existing.SpendLimitMicrounits, &existing.CorrelationID, &existing.IdempotencyKey,
+			&existingState,
 		)
 		if err != nil || !sameRequest(existing, request, existingScope) {
 			return ErrInvalidState
 		}
+		if existingState == "succeeded" {
+			completionKey, keyErr := joboutbox.CompletionKey(
+				"work_graph_execution_request", request.ID,
+			)
+			if keyErr != nil {
+				return ErrInvalidState
+			}
+			if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+				return ErrUnavailable
+			}
+		}
 	}
-	return writer.producer.PublishDeferred(ctx, tx, string(request.Kind), envelopeFor(request))
+	descriptor, ok := writer.registry.Descriptor(string(request.Kind))
+	if !ok {
+		return ErrUnavailable
+	}
+	if descriptor.Executable() {
+		if request.PrerequisiteCompletionKey == "" {
+			return writer.producer.Publish(ctx, tx, string(request.Kind), envelopeFor(request))
+		}
+		return writer.producer.PublishAfter(
+			ctx, tx, string(request.Kind), envelopeFor(request),
+			request.PrerequisiteCompletionKey,
+		)
+	}
+	if request.PrerequisiteCompletionKey == "" {
+		return writer.producer.PublishDeferred(ctx, tx, string(request.Kind), envelopeFor(request))
+	}
+	return writer.producer.PublishDeferredAfter(
+		ctx, tx, string(request.Kind), envelopeFor(request), request.PrerequisiteCompletionKey,
+	)
 }
 
 func validRequest(request Request) bool {
@@ -69,7 +104,8 @@ func validRequest(request Request) bool {
 		request.SpendLimitMicrounits >= 0 && len(request.ModelRef) <= 128 &&
 		len(request.PromptRef) <= 128 && len(request.CorrelationID) > 0 &&
 		len(request.CorrelationID) <= 128 && len(request.IdempotencyKey) > 0 &&
-		len(request.IdempotencyKey) <= 256
+		len(request.IdempotencyKey) <= 256 &&
+		len(request.PrerequisiteCompletionKey) <= 256
 }
 
 func sameRequest(existing, expected Request, scope []byte) bool {

@@ -51,6 +51,7 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 	tx pgx.Tx,
 	run Run,
 	partition Partition,
+	prerequisiteCompletionKey string,
 ) error {
 	if publisher == nil || publisher.producer == nil || publisher.registry == nil ||
 		tx == nil || run.ID == "" || run.OrganizationID == "" ||
@@ -79,9 +80,21 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 	}
 	var err error
 	if descriptor.Executable() {
-		err = publisher.producer.Publish(ctx, tx, kind, envelope)
+		if prerequisiteCompletionKey == "" {
+			err = publisher.producer.Publish(ctx, tx, kind, envelope)
+		} else {
+			err = publisher.producer.PublishAfter(
+				ctx, tx, kind, envelope, prerequisiteCompletionKey,
+			)
+		}
 	} else {
-		err = publisher.producer.PublishDeferred(ctx, tx, kind, envelope)
+		if prerequisiteCompletionKey == "" {
+			err = publisher.producer.PublishDeferred(ctx, tx, kind, envelope)
+		} else {
+			err = publisher.producer.PublishDeferredAfter(
+				ctx, tx, kind, envelope, prerequisiteCompletionKey,
+			)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, joboutbox.ErrContractRejected) ||

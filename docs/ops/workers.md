@@ -187,12 +187,31 @@ is fail-closed: the loop only opens readiness after one successful step, and
 persistence failures close it instead of being reported as harmless lease
 races.
 
+Ordered post-sync successors remain persisted but unclaimable until their
+predecessor commits a canonical completion fence. The exact native sequence is
+`complexity -> daily -> workgraph.build -> investment.materialize ->
+membership_backfill`, omitting only the first two stages when the sync plan
+does not select them. Each stage has its own durable run/request checkpoint;
+blocked successors consume no retry attempts. Terminal-outbox retention also
+deletes old, unreferenced completion fences in bounded batches, while replay of
+an already-succeeded deterministic stage restores its fence before re-staging
+a successor.
+
 The operational effect bridge is an authenticated internal API. Set
 `WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
 `WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the
 optional `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` is bounded from 100ms to 30s and
-defaults to 10s. Plain HTTP defaults to loopback-only. Local container stacks
-may explicitly set `WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
+defaults to 10s. For River compatibility clients it limits connection and TLS
+handshake setup only; it never caps the whole request. The River handler
+execution context and its contract-specific budget remain authoritative for
+daily, remaining-metric, work-graph, and investment execution. The API runs
+those legacy Python calls in fixed, killable child processes with bounded JSON
+input/output (stdout is the protocol; diagnostics retain inherited stderr). On
+POSIX each child has its own process group, which River cancellation or client
+disconnect terminates, kills if needed, and reaps before the fenced execution
+becomes ambiguous. Plain HTTP defaults to
+loopback-only. Local container stacks may explicitly set
+`WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
 permits only private IPs and single-label/`.internal`/`.local` service-discovery
 names, while public HTTP origins remain rejected. Production must leave the
 opt-in unset and use TLS. Requests contain durable UUID references and bounded

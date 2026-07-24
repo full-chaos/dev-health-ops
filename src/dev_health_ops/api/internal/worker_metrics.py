@@ -8,15 +8,19 @@ ledger fences retries that arrive after an effect may already have happened.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import os
+import signal
+import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +48,14 @@ router = APIRouter(prefix="/internal/worker", include_in_schema=False)
 
 _EXECUTION_NAMESPACE = uuid.UUID("e6678cc4-a4e9-55c5-9354-9c6202a1834e")
 _MAX_EVIDENCE_BYTES = 4096
+_MAX_COMPATIBILITY_PROCESS_BYTES = 1024 * 1024
+_PROCESS_TERMINATION_TIMEOUT_SECONDS = 1.0
+_DISCONNECT_POLL_SECONDS = 0.1
+_COMPATIBILITY_RUNNER_COMMAND = (
+    sys.executable,
+    "-m",
+    "dev_health_ops.api.internal.worker_metrics_runner",
+)
 
 
 class _StrictRequest(BaseModel):
@@ -104,6 +116,107 @@ class _Execution:
     scope: dict[str, Any]
     scope_digest: str
     generation_seed: int | None = None
+
+
+def _execution_process_payload(execution: _Execution) -> dict[str, Any]:
+    return {
+        "worker_kind": execution.worker_kind,
+        "operation": execution.operation,
+        "run_id": str(execution.run_id),
+        "partition_id": (
+            str(execution.partition_id) if execution.partition_id is not None else None
+        ),
+        "organization_id": execution.organization_id,
+        "family": execution.family,
+        "generation": execution.generation,
+        "claim_token": str(execution.claim_token),
+        "scope": execution.scope,
+        "generation_seed": execution.generation_seed,
+    }
+
+
+def _execution_from_process_payload(payload: object) -> _Execution:
+    expected_fields = {
+        "worker_kind",
+        "operation",
+        "run_id",
+        "partition_id",
+        "organization_id",
+        "family",
+        "generation",
+        "claim_token",
+        "scope",
+        "generation_seed",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_fields:
+        raise ValueError("metric compatibility process input is invalid")
+    worker_kind = payload["worker_kind"]
+    operation = payload["operation"]
+    if worker_kind not in {"daily", "remaining"} or operation not in {
+        "partition",
+        "finalize",
+    }:
+        raise ValueError("metric compatibility process operation is invalid")
+    if worker_kind == "remaining" and operation != "partition":
+        raise ValueError("remaining metrics only support partition execution")
+    for field in ("run_id", "organization_id", "family", "generation", "claim_token"):
+        if not isinstance(payload[field], str) or not payload[field]:
+            raise ValueError("metric compatibility process identity is invalid")
+    if not isinstance(payload["scope"], dict):
+        raise ValueError("metric compatibility process scope is invalid")
+    seed = payload["generation_seed"]
+    if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
+        raise ValueError("metric compatibility process seed is invalid")
+
+    run_id = uuid.UUID(payload["run_id"])
+    claim_token = uuid.UUID(payload["claim_token"])
+    if str(run_id) != payload["run_id"] or str(claim_token) != payload["claim_token"]:
+        raise ValueError("metric compatibility process identity is not canonical")
+    raw_partition_id = payload["partition_id"]
+    partition_id: uuid.UUID | None = None
+    if raw_partition_id is not None:
+        if not isinstance(raw_partition_id, str):
+            raise ValueError("metric compatibility process partition is invalid")
+        partition_id = uuid.UUID(raw_partition_id)
+        if str(partition_id) != raw_partition_id:
+            raise ValueError("metric compatibility process partition is not canonical")
+    if (operation == "partition") != (partition_id is not None):
+        raise ValueError("metric compatibility process partition identity is invalid")
+
+    scope = payload["scope"]
+    if worker_kind == "daily":
+        if (
+            payload["family"] != "daily"
+            or seed is not None
+            or set(scope) != {"target_day", "repo_ids"}
+            or not isinstance(scope["target_day"], str)
+            or not isinstance(scope["repo_ids"], list)
+        ):
+            raise ValueError("daily metric compatibility scope is invalid")
+        row: dict[str, Any] = {
+            "run_id": run_id,
+            "org_id": payload["organization_id"],
+            "target_day": date.fromisoformat(scope["target_day"]),
+            "generation": payload["generation"],
+            "repo_ids": scope["repo_ids"],
+            "claim_token": claim_token,
+        }
+    else:
+        row = {
+            "run_id": run_id,
+            "org_id": payload["organization_id"],
+            "family": payload["family"],
+            "generation": payload["generation"],
+            "generation_seed": seed,
+            "scope": scope,
+            "claim_token": claim_token,
+        }
+    return _execution_from_row(
+        worker_kind=worker_kind,
+        operation=operation,
+        row=row,
+        partition_id=partition_id,
+    )
 
 
 def _canonical_json(value: Any) -> str:
@@ -971,16 +1084,142 @@ async def _run_remaining_direct(execution: _Execution) -> dict[str, Any]:
     return await runner(execution, scope)
 
 
+async def _run_execution_direct(execution: _Execution) -> dict[str, Any]:
+    if execution.worker_kind == "daily":
+        return await _run_daily_direct(execution)
+    if execution.worker_kind == "remaining":
+        return await _run_remaining_direct(execution)
+    raise RuntimeError("metric compatibility worker kind is not allowlisted")
+
+
+async def _read_bounded_process_stream(
+    stream: asyncio.StreamReader, maximum_bytes: int
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await stream.read(64 * 1024):
+        total += len(chunk)
+        if total > maximum_bytes:
+            raise ValueError("metric compatibility process output exceeds the bound")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _terminate_compatibility_process(
+    process: asyncio.subprocess.Process,
+) -> None:
+    if process.returncode is not None:
+        return
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+    else:
+        process.terminate()
+    try:
+        await asyncio.wait_for(
+            process.wait(), timeout=_PROCESS_TERMINATION_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        if os.name == "posix":
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+        await process.wait()
+
+
+async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
+    payload = _canonical_json(_execution_process_payload(execution)).encode()
+    if len(payload) > _MAX_COMPATIBILITY_PROCESS_BYTES:
+        raise ValueError("metric compatibility process input exceeds the bound")
+    process = await asyncio.create_subprocess_exec(
+        *_COMPATIBILITY_RUNNER_COMMAND,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        # The child reserves stdout for the bounded JSON protocol and inherits
+        # stderr so compatibility diagnostics remain visible to operators.
+        stderr=None,
+        start_new_session=os.name == "posix",
+    )
+    if process.stdin is None or process.stdout is None:
+        await _terminate_compatibility_process(process)
+        raise RuntimeError("metric compatibility process pipes are unavailable")
+    stdout_task = asyncio.create_task(
+        _read_bounded_process_stream(process.stdout, _MAX_COMPATIBILITY_PROCESS_BYTES)
+    )
+    input_error: BrokenPipeError | ConnectionResetError | None = None
+    try:
+        try:
+            process.stdin.write(payload)
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            input_error = exc
+        finally:
+            process.stdin.close()
+        stdout, return_code = await asyncio.gather(stdout_task, process.wait())
+    except BaseException:
+        await _terminate_compatibility_process(process)
+        raise
+    finally:
+        if not stdout_task.done():
+            stdout_task.cancel()
+        await asyncio.gather(stdout_task, return_exceptions=True)
+    if return_code != 0:
+        raise RuntimeError("metric compatibility process failed")
+    if input_error is not None:
+        raise RuntimeError(
+            "metric compatibility process rejected its input"
+        ) from input_error
+    try:
+        decoded = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("metric compatibility process returned invalid JSON") from exc
+    if (
+        not isinstance(decoded, dict)
+        or set(decoded) != {"outcome"}
+        or not isinstance(decoded["outcome"], dict)
+    ):
+        raise ValueError("metric compatibility process returned an invalid response")
+    return decoded["outcome"]
+
+
+async def _wait_for_client_disconnect(connection: Request) -> None:
+    while not await connection.is_disconnected():
+        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+
+
+async def _run_until_client_disconnect(
+    connection: Request, execution: _Execution
+) -> dict[str, Any]:
+    process_task = asyncio.create_task(_run_compatibility_process(execution))
+    disconnect_task = asyncio.create_task(_wait_for_client_disconnect(connection))
+    try:
+        done, _pending = await asyncio.wait(
+            {process_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if process_task in done:
+            return process_task.result()
+        process_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await process_task
+        raise ConnectionError("metric compatibility request client disconnected")
+    finally:
+        for task in (process_task, disconnect_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(process_task, disconnect_task, return_exceptions=True)
+
+
 async def _execute(
     session: AsyncSession,
     execution: _Execution,
-    runner: Callable[[_Execution], Awaitable[dict[str, Any]]],
+    connection: Request,
 ) -> dict[str, str]:
     reservation = await _reserve_execution(session, execution)
     if reservation == "skipped":
         return {"status": "skipped", "execution_id": str(execution.id)}
     try:
-        evidence = await runner(execution)
+        evidence = await _run_until_client_disconnect(connection, execution)
     except asyncio.CancelledError:
         await _mark_ambiguous(session, execution, "request canceled during execution")
         raise
@@ -1004,22 +1243,24 @@ async def _execute(
 async def execute_daily_metrics(
     request: DailyMetricsExecutionRequest,
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    connection: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, str]:
     authorize_worker_bridge(authorization)
     execution = await _load_daily_execution(session, request)
-    return await _execute(session, execution, _run_daily_direct)
+    return await _execute(session, execution, connection)
 
 
 @router.post("/remaining-metrics/v1/execute")
 async def execute_remaining_metrics(
     request: RemainingMetricsExecutionRequest,
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    connection: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, str]:
     authorize_worker_bridge(authorization)
     execution = await _load_remaining_execution(session, request)
-    return await _execute(session, execution, _run_remaining_direct)
+    return await _execute(session, execution, connection)
 
 
 @router.get("/metric-executions/v1/{execution_id}")

@@ -123,6 +123,15 @@ func TestPostgresStoreResumesPartitionsAndFencesCancellationAndExpiry(t *testing
 	if err := store.CompletePartition(ctx, *reclaimed, "rows=1;sha256=golden"); err != nil {
 		t.Fatal(err)
 	}
+	var completionFences int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM worker_job_completion_fences
+WHERE completion_key = $1`, "remaining_metric_run:"+runID).Scan(&completionFences); err != nil {
+		t.Fatal(err)
+	}
+	if completionFences != 1 {
+		t.Fatalf("completion fences=%d want=1", completionFences)
+	}
 	run, err = store.LoadRun(ctx, runID)
 	if err != nil || run.Status != "succeeded" {
 		t.Fatalf("last partition did not atomically finalize run=%#v err=%v", run, err)
@@ -321,6 +330,7 @@ func (publisher *fakePartitionPublisher) PublishPartitionTx(
 	pgx.Tx,
 	Run,
 	Partition,
+	string,
 ) error {
 	publisher.calls++
 	if publisher.calls == publisher.failAt {
@@ -357,6 +367,10 @@ CREATE TABLE remaining_metric_partitions (
  scope jsonb NOT NULL, status text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
  attempt_count integer NOT NULL, output_evidence text NULL, completed_at timestamptz NULL,
  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, UNIQUE(run_id,ordinal)
+) ;
+CREATE TABLE worker_job_completion_fences (
+ completion_key text PRIMARY KEY,
+ completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 )`)
 	if err != nil {
 		t.Fatal(err)

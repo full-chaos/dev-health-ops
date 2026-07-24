@@ -1,6 +1,7 @@
 package daily
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -104,6 +105,29 @@ func TestHTTPCompatibilityRetryUsesAuthoritativeGenerationAndSkipsCompletedOutpu
 	}
 	if writes["daily-v1:"+testRunID+":"+testPartitionID] != 1 {
 		t.Fatalf("compatibility retry duplicated authoritative output: %#v", writes)
+	}
+}
+
+func TestHTTPCompatibilityExecutorAllowsContractOwnedDeadlineBeyondThirtySeconds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"status":"success"}`))
+	}))
+	defer server.Close()
+	executor, err := NewHTTPCompatibilityExecutor(
+		&http.Client{},
+		HTTPCompatibilityConfig{
+			Endpoint:    server.URL + "/internal/worker/daily-metrics/v1/execute",
+			BearerToken: "token",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 31*time.Second)
+	defer cancel()
+	run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
+	if err := executor.ComputePartition(ctx, run, Partition{ID: testPartitionID, RunID: testRunID}); err != nil {
+		t.Fatal(err)
 	}
 }
 

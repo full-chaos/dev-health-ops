@@ -1,7 +1,9 @@
 package workgraph
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -45,4 +47,37 @@ func TestHTTPCompatibilityExecutorRejectsGenericOrUntrustedEndpoints(t *testing.
 			t.Fatalf("accepted unsafe endpoint %q", endpoint)
 		}
 	}
+}
+
+func TestHTTPCompatibilityExecutorHonorsExecutionContextCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})}
+	executor, err := NewHTTPCompatibilityExecutor(client, HTTPCompatibilityConfig{
+		Endpoint:    "https://worker.example/internal/worker/workgraph/v1/execute",
+		BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, executeErr := executor.Execute(ctx, *testClaim(time.Second))
+		result <- executeErr
+	}()
+	<-requestStarted
+	cancel()
+	if executeErr := <-result; !errors.Is(executeErr, ErrUnavailable) {
+		t.Fatalf("Execute() error=%v", executeErr)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
 }

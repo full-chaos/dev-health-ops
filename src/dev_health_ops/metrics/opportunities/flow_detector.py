@@ -420,7 +420,7 @@ class FlowOpportunityDetector:
             avg(rework_churn_ratio_30d) AS rework_churn_ratio_30d,
             avg(change_failure_rate) AS change_failure_rate,
             sum(total_loc_touched) AS total_loc_touched
-        FROM repo_metrics_daily
+        FROM {dedup_from("repo_metrics_daily")}
         WHERE {where_clause}
         GROUP BY repo_id
         HAVING data_days >= {_MIN_DATA_DAYS}

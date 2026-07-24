@@ -119,6 +119,10 @@ async def test_load_user_metrics_includes_org_filter(mock_query_dicts):
     params = mock_query_dicts.call_args.args[2]
     assert params["org_id"] == "org-metrics"
     assert "org_id" in sql
+    assert (
+        "ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day"
+        in " ".join(sql.split())
+    )
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/providerunit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -23,7 +22,10 @@ import (
 )
 
 const (
+	// providerUnitQueue and its worker budget must match the deployment manifest
+	// entry for the sync process; exact startup validation compares the two.
 	providerUnitQueue         = "sync_provider"
+	providerUnitQueueWorkers  = 2
 	providerUnitLeaseDuration = 2 * time.Minute
 	providerUnitHeartbeat     = 30 * time.Second
 	providerUnitBudgetTTL     = 15 * time.Minute
@@ -72,47 +74,47 @@ func buildProviderSyncWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
-) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+) (workerFamily, error) {
 	if cfg.Profile != "sync" || !cfg.WorkerLaunchDarklyFeatureFlagsEnabled {
-		return nil, nil, nil
+		return workerFamily{}, nil
 	}
 	if registry == nil || observer == nil || logger == nil ||
 		!cfg.SettingsEncryptionKey.Configured() {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	spec, ok := registry.Descriptor(jobcontract.KindSyncProviderUnit)
 	if !ok || !spec.Executable() || spec.Route != "river_canary" ||
 		spec.RollbackRoute != "celery" {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	repository, err := providersync.NewPostgresRepository(
 		postgresDatabase.pools.Domain,
 	)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	decryptor, err := providerfoundation.NewFernetDecryptor(
 		cfg.SettingsEncryptionKey, "",
 	)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	clickhouseConnection, err := clickhousestore.Open(
 		ctx, clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
 	)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	valkeyClient, err := valkeystore.Open(
 		ctx, valkeystore.DefaultConfig(cfg.ValkeyURI.Reveal()),
 	)
 	if err != nil {
 		_ = clickhouseConnection.Close()
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	closeDependencies := func() {
 		valkeyClient.Close()
@@ -191,12 +193,12 @@ func buildProviderSyncWorker(
 	)
 	if err != nil {
 		closeDependencies()
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	workers := river.NewWorkers()
 	if err := river.AddWorkerSafely(workers, adapter); err != nil {
 		closeDependencies()
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
@@ -206,11 +208,17 @@ func buildProviderSyncWorker(
 	)
 	if err != nil {
 		closeDependencies()
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	return &providerSyncWorkerComponent{
-		client: client, clickhouse: clickhouseConnection, valkey: valkeyClient,
-	}, []jobruntime.HandlerSpec{adapter.Spec()}, nil
+	return workerFamily{
+		component: &providerSyncWorkerComponent{
+			client: client, clickhouse: clickhouseConnection, valkey: valkeyClient,
+		},
+		handlers: []jobruntime.HandlerSpec{adapter.Spec()},
+		queues: []jobruntime.QueueBudget{
+			{Queue: providerUnitQueue, MaxWorkers: providerUnitQueueWorkers},
+		},
+	}, nil
 }
 
 func providerSyncRiverConfig(
@@ -221,7 +229,7 @@ func providerSyncRiverConfig(
 	return &river.Config{
 		Logger: logger,
 		Queues: map[string]river.QueueConfig{
-			providerUnitQueue: {MaxWorkers: 2},
+			providerUnitQueue: {MaxWorkers: providerUnitQueueWorkers},
 		},
 		Schema:  schema,
 		Workers: workers,

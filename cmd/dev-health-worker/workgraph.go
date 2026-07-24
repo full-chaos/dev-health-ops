@@ -11,7 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -27,34 +26,34 @@ func (component workgraphWorkerComponent) Shutdown(ctx context.Context) error {
 	return component.client.Stop(ctx)
 }
 
-func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *jobruntime.Registry, observer jobruntime.Observer, logger *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *jobruntime.Registry, observer jobruntime.Observer, logger *slog.Logger) (workerFamily, error) {
 	if cfg.Profile != "heavy" || registry == nil {
-		return nil, nil, nil
+		return workerFamily{}, nil
 	}
 	kinds := []string{jobcontract.KindWorkGraphBuild, jobcontract.KindInvestmentMaterialize, jobcontract.KindInvestmentDispatch, jobcontract.KindInvestmentChunk, jobcontract.KindInvestmentFinalize}
 	specs := make([]jobruntime.HandlerSpec, 0, len(kinds))
 	for _, kind := range kinds {
 		descriptor, ok := registry.Descriptor(kind)
 		if !ok {
-			return nil, nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		if descriptor.Executable() {
 			specs = append(specs, descriptor)
 		}
 	}
 	if len(specs) == 0 {
-		return nil, nil, nil
+		return workerFamily{}, nil
 	}
 	if len(specs) != len(kinds) {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	store, err := workgraph.NewPostgresStore(postgresDatabase.pools.Domain)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	compatibility, err := workgraph.NewHTTPCompatibilityExecutor(
 		workgraphCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
@@ -64,26 +63,38 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		},
 	)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	dependencies := jobruntime.Dependencies{Logger: logger, Observer: observer, TenantScope: operationalTenantScope{}, Budget: newOperationalBudget(), Idempotency: idempotency}
 	workers := river.NewWorkers()
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
 		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, dependencies); err != nil {
-			return nil, nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		registered = append(registered, spec)
 	}
-	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{Logger: logger, Queues: map[string]river.QueueConfig{"workgraph": {MaxWorkers: 1}, "investment": {MaxWorkers: 1}}, Schema: cfg.RiverDatabaseSchema, Workers: workers})
-	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+	budgets := []jobruntime.QueueBudget{
+		{Queue: "workgraph", MaxWorkers: 1},
+		{Queue: "investment", MaxWorkers: 1},
 	}
-	return workgraphWorkerComponent{client: client}, registered, nil
+	queues := make(map[string]river.QueueConfig, len(budgets))
+	for _, budget := range budgets {
+		queues[budget.Queue] = river.QueueConfig{MaxWorkers: budget.MaxWorkers}
+	}
+	client, err := river.NewClient(riverpgxv5.New(postgresDatabase.pools.QueueControl), &river.Config{Logger: logger, Queues: queues, Schema: cfg.RiverDatabaseSchema, Workers: workers})
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	return workerFamily{
+		component: workgraphWorkerComponent{client: client},
+		handlers:  registered,
+		queues:    budgets,
+	}, nil
 }
 
 func workgraphCompatibilityHTTPClient(connectTimeout time.Duration) *http.Client {

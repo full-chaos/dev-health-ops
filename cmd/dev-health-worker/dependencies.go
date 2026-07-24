@@ -114,18 +114,36 @@ func (database *postgresWorkerDatabase) Close() {
 	}
 }
 
+// workerFamily is everything one constructed handler family contributes to the
+// process: its lifecycle component, the adapters it concretely registered, and
+// the River queue budget it actually consumes. Runtime capability is only ever
+// what a builder constructed here — never what a compiled list advertises.
+type workerFamily struct {
+	component lifecycle.Component
+	handlers  []jobruntime.HandlerSpec
+	queues    []jobruntime.QueueBudget
+}
+
+type workerFamilyBuilder func(
+	config.Config,
+	workerDatabase,
+	*jobruntime.Registry,
+	jobruntime.Observer,
+	*slog.Logger,
+) (workerFamily, error)
+
 type workerDependencySources struct {
 	openDatabase         func(context.Context, config.Config) (workerDatabase, error)
 	loadRuntimeRegistry  func(string) (*jobruntime.Registry, error)
 	loadJobRegistry      func(string) (jobcontract.Registry, error)
 	loadDeployment       func(string, jobcontract.Registry) (deploymentcontract.Manifest, deploymentcontract.BudgetSummary, error)
-	compiledHandlers     func(string) []jobruntime.HandlerSpec
 	newRiverClientID     func() string
-	buildOperational     func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildOperational     workerFamilyBuilder
 	buildSyncCoordinator func(config.Config, workerDatabase, *slog.Logger) (lifecycle.Component, error)
-	buildDaily           func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
-	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
-	buildWorkgraph       func(config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (lifecycle.Component, []jobruntime.HandlerSpec, error)
+	buildDaily           workerFamilyBuilder
+	buildReports         func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (workerFamily, error)
+	buildProviderSync    func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger) (workerFamily, error)
+	buildWorkgraph       workerFamilyBuilder
 	contractRoot         string
 	deploymentProfile    string
 }
@@ -135,7 +153,6 @@ var productionWorkerDependencySources = workerDependencySources{
 	loadRuntimeRegistry:  jobruntime.Load,
 	loadJobRegistry:      jobcontract.LoadRegistry,
 	loadDeployment:       deploymentcontract.Load,
-	compiledHandlers:     compiledWorkerHandlers,
 	newRiverClientID:     defaultRiverClientID,
 	buildOperational:     buildOperationalWorker,
 	buildSyncCoordinator: buildSyncCoordinatorWorker,
@@ -148,61 +165,6 @@ var productionWorkerDependencySources = workerDependencySources{
 
 func defaultRiverClientID() string {
 	return (&river.Config{}).WithDefaults().ID
-}
-
-// compiledWorkerHandlers advertises code capability independently of routing.
-// Report, daily, and remaining-metrics adapters are complete for the disabled
-// heavy profile, but their checked-in routes remain Celery and cannot fetch.
-func compiledWorkerHandlers(profile string) []jobruntime.HandlerSpec {
-	return compiledWorkerHandlersFromRoot(profile, defaultContractRoot)
-}
-
-var compiledHeavyHandlerKinds = []string{
-	jobcontract.KindDailyMetricsDispatch,
-	jobcontract.KindDailyMetricsFinalize,
-	jobcontract.KindDailyMetricsPartition,
-	jobcontract.KindRemainingCapacity,
-	jobcontract.KindRemainingComplexity,
-	jobcontract.KindRemainingDORA,
-	jobcontract.KindRemainingExtraMetrics,
-	jobcontract.KindRemainingMembership,
-	jobcontract.KindRemainingRecommendations,
-	jobcontract.KindRemainingReleaseImpact,
-	jobcontract.KindRemainingTeamMetrics,
-	jobcontract.KindReportExecuteOnDemand,
-	jobcontract.KindReportExecuteScheduled,
-	jobcontract.KindWorkGraphBuild,
-	jobcontract.KindInvestmentMaterialize,
-	jobcontract.KindInvestmentDispatch,
-	jobcontract.KindInvestmentChunk,
-	jobcontract.KindInvestmentFinalize,
-}
-
-var compiledHandlerKinds = map[string][]string{
-	"heavy": compiledHeavyHandlerKinds,
-	"sync":  {jobcontract.KindTeamAutoimport},
-}
-
-func compiledWorkerHandlersFromRoot(profile, contractRoot string) []jobruntime.HandlerSpec {
-	kinds := compiledHandlerKinds[profile]
-	if len(kinds) == 0 {
-		return nil
-	}
-	registry, err := jobruntime.Load(contractRoot)
-	if err != nil {
-		return nil
-	}
-	handlers := make([]jobruntime.HandlerSpec, 0, len(kinds))
-	for _, kind := range kinds {
-		handler, ok := registry.Descriptor(kind)
-		if !ok || handler.Profile != profile ||
-			handler.MigrationState != "go_implemented" || handler.Route != "celery" ||
-			handler.RollbackRoute != "celery" {
-			return nil
-		}
-		handlers = append(handlers, handler)
-	}
-	return handlers
 }
 
 type workerDependencies struct {
@@ -296,45 +258,77 @@ func configureWorkerDependenciesWithSources(
 		return nil, nil
 	}
 	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
-	var activeHandlers []jobruntime.HandlerSpec
-	for _, build := range []func(
+	var active workerFamily
+	build := func(family workerFamily, err error) error {
+		if err != nil {
+			return err
+		}
+		active, err = composeWorkerFamily(active, family)
+		if err != nil {
+			return err
+		}
+		if family.component != nil {
+			components = append(components, family.component)
+		}
+		return nil
+	}
+	for _, builder := range []workerFamilyBuilder{
+		sources.buildOperational,
+		sources.buildDaily,
+		sources.buildWorkgraph,
+	} {
+		if builder == nil {
+			continue
+		}
+		if err := build(builder(
+			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger,
+		)); err != nil {
+			dependencies.close()
+			return nil, errWorkerDependencyUnavailable
+		}
+	}
+	for _, builder := range []func(
+		context.Context,
 		config.Config,
 		workerDatabase,
 		*jobruntime.Registry,
 		jobruntime.Observer,
 		*slog.Logger,
-	) (lifecycle.Component, []jobruntime.HandlerSpec, error){
-		sources.buildOperational,
-		sources.buildDaily,
-		sources.buildWorkgraph,
+	) (workerFamily, error){
+		sources.buildReports,
+		sources.buildProviderSync,
 	} {
-		if build == nil {
+		if builder == nil {
 			continue
 		}
-		component, handlers, err := build(
-			cfg, dependencies.database, dependencies.runtimeRegistry, dependencies.metrics, logger,
-		)
-		if err != nil {
+		if err := build(builder(
+			ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
+			dependencies.metrics, logger,
+		)); err != nil {
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
-		}
-		activeHandlers, err = composeHandlerSpecs(activeHandlers, handlers)
-		if err != nil {
-			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
-		}
-		if component != nil {
-			components = append(components, component)
 		}
 	}
-	if len(activeHandlers) > 0 {
-		dependencies.startup.Handlers = activeHandlers
+	for _, handler := range active.handlers {
+		if handler.Kind == jobcontract.KindSyncProviderUnit {
+			providerRuntimeConstructed = true
+		}
+	}
+	// Constructed capability is the only capability. Publish it before the
+	// readiness gate opens so exact startup validation sees what this binary
+	// actually built, then refuse to start when it does not cover the profile.
+	dependencies.startup.Handlers = active.handlers
+	dependencies.startup.Queues = active.queues
+	if len(active.handlers) > 0 || len(active.queues) > 0 {
 		if err := dependencies.profileReady(ctx); err != nil {
 			dependencies.close()
 			return nil, errWorkerDependencyUnavailable
 		}
 	}
 	if sources.buildSyncCoordinator != nil {
+		// The sync coordinator hosts River workers that are outside the bounded
+		// job registry, so its queue is deliberately not part of registry startup
+		// validation. CUT-10 moves those coordinators into registered kinds.
 		component, err := sources.buildSyncCoordinator(cfg, dependencies.database, logger)
 		if err != nil {
 			dependencies.close()
@@ -344,54 +338,46 @@ func configureWorkerDependenciesWithSources(
 			components = append(components, component)
 		}
 	}
-	if sources.buildProviderSync != nil {
-		component, handlers, err := sources.buildProviderSync(
-			ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
-			dependencies.metrics, logger,
-		)
-		if err != nil {
-			dependencies.close()
-			return nil, errWorkerDependencyUnavailable
-		}
-		if len(handlers) > 0 {
-			dependencies.startup.Handlers = handlers
-			for _, handler := range handlers {
-				if handler.Kind == jobcontract.KindSyncProviderUnit {
-					providerRuntimeConstructed = true
-				}
-			}
-		}
-		if component != nil {
-			components = append(components, component)
-		}
-	}
 	return components, nil
 }
 
-func composeHandlerSpecs(
-	existing []jobruntime.HandlerSpec,
-	additional []jobruntime.HandlerSpec,
-) ([]jobruntime.HandlerSpec, error) {
-	result := append([]jobruntime.HandlerSpec(nil), existing...)
-	seen := make(map[string]struct{}, len(existing)+len(additional))
-	for _, handler := range existing {
+func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error) {
+	result := workerFamily{
+		handlers: append([]jobruntime.HandlerSpec(nil), existing.handlers...),
+		queues:   append([]jobruntime.QueueBudget(nil), existing.queues...),
+	}
+	seen := make(map[string]struct{}, len(result.handlers)+len(additional.handlers))
+	for _, handler := range result.handlers {
 		if handler.Kind == "" {
-			return nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		if _, duplicate := seen[handler.Kind]; duplicate {
-			return nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		seen[handler.Kind] = struct{}{}
 	}
-	for _, handler := range additional {
+	for _, handler := range additional.handlers {
 		if handler.Kind == "" {
-			return nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		if _, duplicate := seen[handler.Kind]; duplicate {
-			return nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		seen[handler.Kind] = struct{}{}
-		result = append(result, handler)
+		result.handlers = append(result.handlers, handler)
+	}
+	queues := make(map[string]struct{}, len(result.queues)+len(additional.queues))
+	for _, queue := range result.queues {
+		queues[queue.Queue] = struct{}{}
+	}
+	for _, queue := range additional.queues {
+		if _, duplicate := queues[queue.Queue]; duplicate {
+			// Two families cannot both own one queue's worker budget: the
+			// deployment manifest budgets each queue exactly once.
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		queues[queue.Queue] = struct{}{}
+		result.queues = append(result.queues, queue)
 	}
 	return result, nil
 }
@@ -511,7 +497,7 @@ func buildWorkerDependencies(
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
-	if sources.loadJobRegistry == nil || sources.loadDeployment == nil || sources.compiledHandlers == nil || sources.deploymentProfile == "" {
+	if sources.loadJobRegistry == nil || sources.loadDeployment == nil || sources.deploymentProfile == "" {
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
@@ -530,10 +516,26 @@ func buildWorkerDependencies(
 		dependencies.startupErr = errWorkerDependencyUnavailable
 		return dependencies
 	}
+	// Queues and Handlers stay empty here on purpose: they are filled in only by
+	// concretely constructed handler families. Everything the manifest declares
+	// is an expectation to prove against, never a capability claim.
+	manifestQueues := make([]jobruntime.QueueBudget, 0, len(process.QueueWorkers))
+	for _, queue := range process.QueueWorkers {
+		manifestQueues = append(manifestQueues, jobruntime.QueueBudget{
+			Queue: queue.Queue, MaxWorkers: queue.MaxWorkers,
+		})
+	}
 	dependencies.startup = jobruntime.StartupSpec{
-		Profile:  cfg.Profile,
-		Queues:   append([]string(nil), process.Queues...),
-		Handlers: sources.compiledHandlers(cfg.Profile),
+		Profile:        cfg.Profile,
+		ManifestQueues: manifestQueues,
+		Connections: jobruntime.ConnectionBudget{
+			QueueControl: int(cfg.QueueDatabaseMaxConns),
+			Domain:       int(cfg.DomainDatabaseMaxConns),
+		},
+		ManifestConnections: jobruntime.ConnectionBudget{
+			QueueControl: process.QueueControlMaxConnections,
+			Domain:       process.DomainMaxConnections,
+		},
 	}
 	dependencies.buildQueueTelemetry(cfg, process, sources)
 	return dependencies
@@ -677,37 +679,17 @@ func (dependencies *workerDependencies) jobRegistryReady(context.Context) error 
 	return nil
 }
 
+// profileReady is the production call site for exact startup validation. It
+// proves the registry's executable coverage, the constructed queue consumers,
+// and the deployment budget in one place, so no other readiness path can
+// approve a partially constructed profile.
 func (dependencies *workerDependencies) profileReady(context.Context) error {
-	if dependencies == nil || dependencies.registryErr != nil || dependencies.runtimeRegistry == nil || dependencies.startupErr != nil {
+	if dependencies == nil || dependencies.registryErr != nil ||
+		dependencies.runtimeRegistry == nil || dependencies.startupErr != nil {
 		return errWorkerDependencyUnavailable
 	}
-	expected := make(map[string]jobruntime.Descriptor)
-	for _, descriptor := range dependencies.runtimeRegistry.Profile(dependencies.startup.Profile) {
-		if descriptor.Executable() {
-			expected[descriptor.Kind] = descriptor
-		}
-	}
-	if len(expected) == 0 || len(dependencies.startup.Handlers) != len(expected) {
+	if err := dependencies.runtimeRegistry.ValidateStartup(dependencies.startup); err != nil {
 		return errWorkerDependencyUnavailable
-	}
-	seen := make(map[string]struct{}, len(dependencies.startup.Handlers))
-	for _, handler := range dependencies.startup.Handlers {
-		descriptor, ok := expected[handler.Kind]
-		if !ok || descriptor.Kind == "" {
-			return errWorkerDependencyUnavailable
-		}
-		if _, duplicate := seen[handler.Kind]; duplicate {
-			return errWorkerDependencyUnavailable
-		}
-		seen[handler.Kind] = struct{}{}
-		if err := dependencies.runtimeRegistry.ValidateHandler(handler); err != nil {
-			return errWorkerDependencyUnavailable
-		}
-	}
-	for kind := range expected {
-		if _, ok := seen[kind]; !ok {
-			return errWorkerDependencyUnavailable
-		}
 	}
 	return nil
 }

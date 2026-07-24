@@ -13,10 +13,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+)
+
+// metricsQueue and its worker budget must match the deployment manifest entry
+// for the heavy process; exact startup validation compares the two.
+const (
+	metricsQueue        = "metrics"
+	metricsQueueWorkers = 2
 )
 
 type metricsWorkerComponent struct{ client *river.Client[pgx.Tx] }
@@ -35,9 +41,9 @@ func buildDailyWorker(
 	registry *jobruntime.Registry,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
-) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+) (workerFamily, error) {
 	if cfg.Profile != "heavy" || registry == nil {
-		return nil, nil, nil
+		return workerFamily{}, nil
 	}
 	dailyKinds := []string{
 		jobcontract.KindDailyMetricsDispatch,
@@ -48,26 +54,26 @@ func buildDailyWorker(
 	for _, kind := range dailyKinds {
 		descriptor, ok := registry.Descriptor(kind)
 		if !ok {
-			return nil, nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		if descriptor.Executable() {
 			dailySpecs = append(dailySpecs, descriptor)
 		}
 	}
 	if len(dailySpecs) != 0 && len(dailySpecs) != len(dailyKinds) {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 
 	inventory, err := remaining.Load()
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	remainingSpecs := make([]jobruntime.HandlerSpec, 0, len(inventory.Families))
 	remainingFamilies := make(map[string]remaining.Family, len(inventory.Families))
 	for _, family := range inventory.Families {
 		descriptor, ok := registry.Descriptor(family.RouteKey)
 		if !ok || validateRemainingFamilyDescriptor(family, descriptor) != nil {
-			return nil, nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		remainingFamilies[family.RouteKey] = family
 		if descriptor.Executable() {
@@ -75,16 +81,16 @@ func buildDailyWorker(
 		}
 	}
 	if len(dailySpecs) == 0 && len(remainingSpecs) == 0 {
-		return nil, nil, nil
+		return workerFamily{}, nil
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	baseURL := strings.TrimRight(cfg.OperationalBridgeURL, "/")
 	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	dailyDependencies := jobruntime.Dependencies{
 		Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
@@ -103,44 +109,44 @@ func buildDailyWorker(
 			},
 		)
 		if storeErr != nil || publisherErr != nil || compatibilityErr != nil {
-			return nil, nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		for _, spec := range dailySpecs {
 			switch spec.Kind {
 			case jobcontract.KindDailyMetricsDispatch:
 				handler, handlerErr := daily.NewDispatcher(store, publisher)
 				if handlerErr != nil {
-					return nil, nil, errWorkerDependencyUnavailable
+					return workerFamily{}, errWorkerDependencyUnavailable
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsDispatchArgs](
 					registry, spec, handler, dailyDependencies,
 				)
 				if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
-					return nil, nil, errWorkerDependencyUnavailable
+					return workerFamily{}, errWorkerDependencyUnavailable
 				}
 				registered = append(registered, adapter.Spec())
 			case jobcontract.KindDailyMetricsPartition:
 				handler, handlerErr := daily.NewPartitionHandler(store, publisher, compatibility)
 				if handlerErr != nil {
-					return nil, nil, errWorkerDependencyUnavailable
+					return workerFamily{}, errWorkerDependencyUnavailable
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsPartitionArgs](
 					registry, spec, handler, dailyDependencies,
 				)
 				if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
-					return nil, nil, errWorkerDependencyUnavailable
+					return workerFamily{}, errWorkerDependencyUnavailable
 				}
 				registered = append(registered, adapter.Spec())
 			case jobcontract.KindDailyMetricsFinalize:
 				handler, handlerErr := daily.NewFinalizeHandler(store, compatibility)
 				if handlerErr != nil {
-					return nil, nil, errWorkerDependencyUnavailable
+					return workerFamily{}, errWorkerDependencyUnavailable
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsFinalizeArgs](
 					registry, spec, handler, dailyDependencies,
 				)
 				if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
-					return nil, nil, errWorkerDependencyUnavailable
+					return workerFamily{}, errWorkerDependencyUnavailable
 				}
 				registered = append(registered, adapter.Spec())
 			}
@@ -158,7 +164,7 @@ func buildDailyWorker(
 		)
 		budget, budgetErr := remaining.NewBudget(inventory)
 		if storeErr != nil || compatibilityErr != nil || budgetErr != nil {
-			return nil, nil, errWorkerDependencyUnavailable
+			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		dependencies := jobruntime.Dependencies{
 			Logger: logger, Observer: observer, TenantScope: operationalTenantScope{},
@@ -205,7 +211,7 @@ func buildDailyWorker(
 				registrationErr = errWorkerDependencyUnavailable
 			}
 			if registrationErr != nil {
-				return nil, nil, errWorkerDependencyUnavailable
+				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, registeredSpec)
 		}
@@ -216,16 +222,20 @@ func buildDailyWorker(
 		&river.Config{
 			Logger: logger,
 			Queues: map[string]river.QueueConfig{
-				"metrics": {MaxWorkers: 2},
+				metricsQueue: {MaxWorkers: metricsQueueWorkers},
 			},
 			Schema:  cfg.RiverDatabaseSchema,
 			Workers: workers,
 		},
 	)
 	if err != nil {
-		return nil, nil, errWorkerDependencyUnavailable
+		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	return metricsWorkerComponent{client: client}, registered, nil
+	return workerFamily{
+		component: metricsWorkerComponent{client: client},
+		handlers:  registered,
+		queues:    []jobruntime.QueueBudget{{Queue: metricsQueue, MaxWorkers: metricsQueueWorkers}},
+	}, nil
 }
 
 func contractDeadlineHTTPClient(connectTimeout time.Duration) *http.Client {

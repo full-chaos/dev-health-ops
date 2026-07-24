@@ -154,7 +154,6 @@ flowchart TB
     end
 
     subgraph GoRuntime["Go worker runtime"]
-        Latency[profile: latency]
         Sync[profile: sync]
         Heavy[profile: heavy]
         Ops[profile: ops]
@@ -205,10 +204,13 @@ flowchart TB
 ### 4.1 Process topology
 
 One binary may implement multiple profiles, but profiles remain separate deployments.
+The worker has no default profile: an operator must name one, and every named
+profile owns registered job kinds. The `latency` profile was removed in CUT-02
+because it registered nothing and could therefore never satisfy exact startup
+validation; webhook, report, and billing kinds are owned by `ops` and `heavy`.
 
 | Process/profile | Execution mode | Default work | Scaling model |
 |---|---|---|---|
-| `dev-health-worker --profile latency` | River client | webhooks, reports, billing, lightweight coordinators | HPA on oldest available age and saturation |
 | `dev-health-worker --profile sync` | River client | sync coordinators and provider units | HPA by provider/cost queue age with DB/provider budget caps |
 | `dev-health-worker --profile heavy` | River client | metrics, complexity, work graph, investment, backfills | HPA on backlog age plus CPU/memory; conservative DB/CH caps |
 | `dev-health-worker --profile ops` | River client | retention, heartbeat, low-volume operational commands | fixed small replica count |

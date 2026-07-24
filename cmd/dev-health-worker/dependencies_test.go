@@ -18,7 +18,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
-	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -26,10 +25,10 @@ import (
 )
 
 func TestWorkerSpecConfiguresDependencies(t *testing.T) {
-	if workerSpec.Service != "dev-health-worker" || workerSpec.DefaultProfile != "latency" {
+	if workerSpec.Service != "dev-health-worker" || workerSpec.DefaultProfile != "" {
 		t.Fatalf("unexpected worker spec: %#v", workerSpec)
 	}
-	if !slices.Equal(workerSpec.Profiles, []string{"latency", "sync", "heavy", "ops"}) {
+	if !slices.Equal(workerSpec.Profiles, []string{"sync", "heavy", "ops"}) {
 		t.Fatalf("unexpected worker profiles: %v", workerSpec.Profiles)
 	}
 	if workerSpec.ConfigureDependenciesWithLogger == nil {
@@ -42,7 +41,7 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	registry := health.NewRegistry(100 * time.Millisecond)
 	components, err := configureWorkerDependencies(
 		context.Background(),
-		config.Config{Profile: "latency", RiverDatabaseSchema: "river"},
+		config.Config{Profile: "ops", RiverDatabaseSchema: "river"},
 		registry,
 	)
 	if err != nil {
@@ -54,24 +53,28 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	if registry.RequiredCount() != 8 {
 		t.Fatalf("required checks = %d, want 8", registry.RequiredCount())
 	}
+	// Every accepted profile now owns registered kinds, so queue telemetry is
+	// always required and a worker without a database cannot serve a complete
+	// scrape. Partial metrics would understate a backlog, so the scrape fails
+	// closed instead.
 	var metrics bytes.Buffer
-	if err := registry.WriteMetrics(&metrics); err != nil {
-		t.Fatalf("write worker metrics: %v", err)
+	if err := registry.WriteMetrics(&metrics); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("write worker metrics error = %v, want stable unavailable error", err)
 	}
-	for _, metric := range []string{
-		`,profile="latency"} 1`,
-		`worker_execution_saturation_ratio{profile="latency"} 0`,
-		`worker_database_pool_saturation_ratio{pool="domain"} 0`,
-	} {
-		if !bytes.Contains(metrics.Bytes(), []byte(metric)) {
-			t.Fatalf("worker metrics missing %q:\n%s", metric, metrics.String())
-		}
+	if metrics.Len() != 0 {
+		t.Fatalf("failed scrape emitted partial metrics:\n%s", metrics.String())
 	}
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
 	status := registry.Readiness(context.Background())
-	want := []string{"domain_postgres", "profile_completeness", "queue_postgres", "river_schema"}
+	want := []string{
+		"domain_postgres",
+		"profile_completeness",
+		"queue_postgres",
+		"queued_contract_versions",
+		"river_schema",
+	}
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -147,18 +150,25 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		_ *jobruntime.Registry,
 		_ jobruntime.Observer,
 		_ *slog.Logger,
-	) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+	) (workerFamily, error) {
 		spec, ok := runtimeRegistry.Descriptor("sync.provider_unit")
 		if !ok {
 			t.Fatal("sync.provider_unit descriptor missing")
 		}
-		return nil, []jobruntime.HandlerSpec{spec}, nil
+		return workerFamily{
+			handlers: []jobruntime.HandlerSpec{spec},
+			queues: []jobruntime.QueueBudget{
+				{Queue: "sync_provider", MaxWorkers: 2},
+			},
+		}, nil
 	}
 	registry := health.NewRegistry(100 * time.Millisecond)
 	_, err = configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
 			Profile: "sync", RiverDatabaseSchema: "river",
+			DomainDatabaseMaxConns:                4,
+			QueueDatabaseMaxConns:                 2,
 			WorkerLaunchDarklyFeatureFlagsEnabled: true,
 		},
 		registry, sources,
@@ -180,6 +190,8 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		context.Background(),
 		config.Config{
 			Profile: "sync", RiverDatabaseSchema: "river",
+			DomainDatabaseMaxConns:                4,
+			QueueDatabaseMaxConns:                 2,
 			WorkerLaunchDarklyFeatureFlagsEnabled: true,
 		},
 		missingRegistry, sources,
@@ -288,23 +300,21 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 
 func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
-	if err != nil {
-		t.Fatalf("load runtime registry: %v", err)
-	}
 	database := &fakeWorkerDatabase{domainSaturation: 0.25, queueSaturation: 0.5}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
 		return database, nil
 	}
-	sources.compiledHandlers = func(profile string) []jobruntime.HandlerSpec {
-		return runtimeRegistry.Profile(profile)
-	}
 
 	registry := health.NewRegistry(100 * time.Millisecond)
 	components, err := configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{Profile: "ops", RiverDatabaseSchema: "river"},
+		config.Config{
+			Profile:                "ops",
+			RiverDatabaseSchema:    "river",
+			DomainDatabaseMaxConns: 4,
+			QueueDatabaseMaxConns:  2,
+		},
 		registry,
 		sources,
 	)
@@ -350,45 +360,15 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 	}
 }
 
-func TestHeavyHandlersAdvertiseDormantCompiledCapability(t *testing.T) {
-	t.Chdir(filepath.Join("..", ".."))
-	handlers := compiledWorkerHandlers("heavy")
-	if len(handlers) != len(compiledHeavyHandlerKinds) {
-		t.Fatalf("heavy handlers = %d, want %d", len(handlers), len(compiledHeavyHandlerKinds))
-	}
-	kinds := make(map[string]struct{}, len(handlers))
-	for _, handler := range handlers {
-		if handler.Profile != "heavy" || handler.MigrationState != "go_implemented" ||
-			handler.Route != "celery" || handler.RollbackRoute != "celery" ||
-			handler.Executable() {
-			t.Fatalf("handler unexpectedly active: %#v", handler)
-		}
-		kinds[handler.Kind] = struct{}{}
-	}
-	if len(kinds) != len(handlers) {
-		t.Fatalf("heavy kinds are not independently compiled: %#v", handlers)
-	}
-}
-
-func TestHeavyHandlersIgnoreUnrelatedFrozenContracts(t *testing.T) {
-	t.Chdir(filepath.Join("..", ".."))
-	root := frozenHeavyContractRoot(t)
-	registry, err := jobruntime.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := len(registry.Profile("heavy")); got <= len(compiledHeavyHandlerKinds) {
-		t.Fatalf("fixture has %d heavy descriptors, want more than %d", got, len(compiledHeavyHandlerKinds))
-	}
-
-	handlers := compiledWorkerHandlersFromRoot("heavy", root)
-	if len(handlers) != len(compiledHeavyHandlerKinds) {
-		t.Fatalf("compiled heavy handlers = %d, want %d: %#v", len(handlers), len(compiledHeavyHandlerKinds), handlers)
-	}
-	for index, handler := range handlers {
-		if handler.Kind != compiledHeavyHandlerKinds[index] {
-			t.Fatalf("compiled handler %d = %q, want %q", index, handler.Kind, compiledHeavyHandlerKinds[index])
-		}
+// TestNoCompiledCapabilityClaimSurvives pins the CUT-02 removal of the
+// compiled-kind advertisement. Capability is what a builder constructed; there
+// is no list a dormant package can appear on to look registered.
+func TestNoCompiledCapabilityClaimSurvives(t *testing.T) {
+	t.Parallel()
+	sources := productionWorkerDependencySources
+	if sources.buildOperational == nil || sources.buildDaily == nil ||
+		sources.buildWorkgraph == nil || sources.buildProviderSync == nil {
+		t.Fatal("production dependency sources lost a concrete builder")
 	}
 }
 
@@ -404,9 +384,6 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 		return runtimeRegistry, nil
 	}
-	sources.compiledHandlers = func(string) []jobruntime.HandlerSpec {
-		return runtimeRegistry.Profile("heavy")
-	}
 	reportKinds := map[string]bool{
 		jobcontract.KindReportExecuteOnDemand:  true,
 		jobcontract.KindReportExecuteScheduled: true,
@@ -418,14 +395,21 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 	}
 	sources.buildOperational = fakeHandlerBuilder(
 		"reports", selectSpecs(runtimeRegistry.Profile("heavy"), reportKinds),
+		jobruntime.QueueBudget{Queue: "reports", MaxWorkers: 2},
 	)
 	sources.buildDaily = fakeHandlerBuilder(
 		"daily", selectSpecs(runtimeRegistry.Profile("heavy"), dailyKinds),
+		jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
 	)
 
 	components, err := configureWorkerDependenciesWithSources(
 		context.Background(),
-		config.Config{Profile: "heavy", RiverDatabaseSchema: "river"},
+		config.Config{
+			Profile:                "heavy",
+			RiverDatabaseSchema:    "river",
+			DomainDatabaseMaxConns: 4,
+			QueueDatabaseMaxConns:  2,
+		},
 		health.NewRegistry(time.Second),
 		sources,
 	)
@@ -481,14 +465,13 @@ func TestHeavyProfileRejectsDuplicateOrMissingBuilderHandlers(t *testing.T) {
 			sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 				return runtimeRegistry, nil
 			}
-			sources.compiledHandlers = func(string) []jobruntime.HandlerSpec {
-				return runtimeRegistry.Profile("heavy")
-			}
 			sources.buildOperational = fakeHandlerBuilder(
 				"first", selectNamedSpecs(runtimeRegistry, test.first),
+				jobruntime.QueueBudget{Queue: "reports", MaxWorkers: 2},
 			)
 			sources.buildDaily = fakeHandlerBuilder(
 				"second", selectNamedSpecs(runtimeRegistry, test.second),
+				jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
 			)
 			_, err := configureWorkerDependenciesWithSources(
 				context.Background(),
@@ -527,14 +510,13 @@ func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T
 	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
 		return runtimeRegistry, nil
 	}
-	sources.compiledHandlers = func(string) []jobruntime.HandlerSpec {
-		return runtimeRegistry.Profile("heavy")
-	}
 	components, err := configureWorkerDependenciesWithSources(
 		ctx,
 		config.Config{
 			Profile:                  "heavy",
 			RiverDatabaseSchema:      "river",
+			DomainDatabaseMaxConns:   4,
+			QueueDatabaseMaxConns:    2,
 			OperationalBridgeURL:     "http://localhost",
 			OperationalBridgeToken:   secrets.NewValue("test-bridge-token"),
 			OperationalBridgeTimeout: time.Second,
@@ -710,21 +692,18 @@ func (namedComponent) Shutdown(context.Context) error { return nil }
 func fakeHandlerBuilder(
 	name string,
 	specs []jobruntime.HandlerSpec,
-) func(
-	config.Config,
-	workerDatabase,
-	*jobruntime.Registry,
-	jobruntime.Observer,
-	*slog.Logger,
-) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
+	queues ...jobruntime.QueueBudget,
+) workerFamilyBuilder {
 	return func(
 		config.Config,
 		workerDatabase,
 		*jobruntime.Registry,
 		jobruntime.Observer,
 		*slog.Logger,
-	) (lifecycle.Component, []jobruntime.HandlerSpec, error) {
-		return namedComponent(name), specs, nil
+	) (workerFamily, error) {
+		return workerFamily{
+			component: namedComponent(name), handlers: specs, queues: queues,
+		}, nil
 	}
 }
 
@@ -769,66 +748,6 @@ func executableHeavyRegistry(
 		t.Fatal(err)
 	}
 	return registry, root
-}
-
-func frozenHeavyContractRoot(t *testing.T) string {
-	t.Helper()
-	root := filepath.Join(t.TempDir(), "v1")
-	if err := os.CopyFS(root, os.DirFS(defaultContractRoot)); err != nil {
-		t.Fatal(err)
-	}
-	compiled := make(map[string]struct{}, len(compiledHeavyHandlerKinds))
-	for _, kind := range compiledHeavyHandlerKinds {
-		compiled[kind] = struct{}{}
-	}
-
-	registryPath := filepath.Join(root, "registry.json")
-	registryData, err := os.ReadFile(registryPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var contracts jobcontract.Registry
-	if err := json.Unmarshal(registryData, &contracts); err != nil {
-		t.Fatal(err)
-	}
-	for index := range contracts.Jobs {
-		if _, ok := compiled[contracts.Jobs[index].Kind]; !ok {
-			contracts.Jobs[index].Profile = "heavy"
-		}
-	}
-	registryData, err = json.Marshal(contracts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(registryPath, registryData, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	migrationPath := filepath.Join(root, "migration-state.json")
-	migrationData, err := os.ReadFile(migrationPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var migration jobcontract.MigrationState
-	if err := json.Unmarshal(migrationData, &migration); err != nil {
-		t.Fatal(err)
-	}
-	for index := range migration.Jobs {
-		if _, ok := compiled[migration.Jobs[index].Kind]; !ok {
-			migration.Jobs[index].State = "contract_frozen"
-			migration.Jobs[index].Route = "celery"
-			migration.Jobs[index].RollbackRoute = "celery"
-			migration.Jobs[index].RequiredProfiles = []string{"heavy"}
-		}
-	}
-	migrationData, err = json.Marshal(migration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(migrationPath, migrationData, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return root
 }
 
 func selectSpecs(
@@ -908,4 +827,201 @@ func (telemetry *fakeQueueTelemetry) Snapshot(context.Context) (riverstore.Queue
 
 func (telemetry *fakeQueueTelemetry) CheckAvailableContractVersions(context.Context) error {
 	return telemetry.checkErr
+}
+
+// TestExecutableReportKindsWithoutAdaptersCloseReadiness is the CUT-02
+// acceptance proof. With both report kinds routed to River, a heavy worker that
+// constructs only the daily adapters must refuse to start: the registry says
+// two more kinds are fetchable and nothing in this binary can execute them.
+func TestExecutableReportKindsWithoutAdaptersCloseReadiness(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, contractRoot := executableHeavyRegistry(t, true)
+	ctx := context.Background()
+	domainPool, err := pgxpool.New(ctx, "postgresql://domain@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer domainPool.Close()
+	queuePool, err := pgxpool.New(ctx, "postgresql://queue@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queuePool.Close()
+	database := &postgresWorkerDatabase{
+		pools: &postgres.RuntimePools{Domain: domainPool, QueueControl: queuePool},
+	}
+	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return database, nil
+	}
+	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+		return runtimeRegistry, nil
+	}
+	// The report family is deliberately absent, exactly as production was
+	// before CUT-03 wired it.
+	sources.buildReports = nil
+
+	_, err = configureWorkerDependenciesWithSources(
+		ctx,
+		config.Config{
+			Profile:                  "heavy",
+			RiverDatabaseSchema:      "river",
+			DomainDatabaseMaxConns:   4,
+			QueueDatabaseMaxConns:    2,
+			OperationalBridgeURL:     "http://localhost",
+			OperationalBridgeToken:   secrets.NewValue("test-bridge-token"),
+			OperationalBridgeTimeout: time.Second,
+		},
+		health.NewRegistry(time.Second),
+		sources,
+		slog.Default(),
+	)
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("configure error = %v, want unconstructed report kinds to close readiness", err)
+	}
+}
+
+// TestFakeBuilderCannotSatisfyProfileCoverage proves a builder cannot buy
+// readiness by inventing handler specs. Coverage counts alone are not enough:
+// every constructed spec is compared field by field with the registry.
+func TestFakeBuilderCannotSatisfyProfileCoverage(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, contractRoot := executableHeavyRegistry(t, true)
+	heavy := runtimeRegistry.Profile("heavy")
+	reports := selectSpecs(heavy, map[string]bool{
+		jobcontract.KindReportExecuteOnDemand:  true,
+		jobcontract.KindReportExecuteScheduled: true,
+	})
+	daily := selectSpecs(heavy, map[string]bool{
+		jobcontract.KindDailyMetricsDispatch:  true,
+		jobcontract.KindDailyMetricsPartition: true,
+		jobcontract.KindDailyMetricsFinalize:  true,
+	})
+
+	for _, test := range []struct {
+		name   string
+		mutate func([]jobruntime.HandlerSpec)
+	}{
+		{"drifted timeout", func(specs []jobruntime.HandlerSpec) {
+			specs[0].Timeout += time.Second
+		}},
+		{"drifted route", func(specs []jobruntime.HandlerSpec) {
+			specs[0].Route = "celery"
+		}},
+		{"drifted queue", func(specs []jobruntime.HandlerSpec) {
+			specs[0].Queue = "metrics"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			forged := append([]jobruntime.HandlerSpec(nil), reports...)
+			test.mutate(forged)
+			database := &fakeWorkerDatabase{}
+			sources := productionWorkerDependencySources
+			sources.contractRoot = contractRoot
+			sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+				return database, nil
+			}
+			sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+				return runtimeRegistry, nil
+			}
+			sources.buildReports = nil
+			sources.buildOperational = fakeHandlerBuilder(
+				"forged-reports", forged,
+				jobruntime.QueueBudget{Queue: "reports", MaxWorkers: 2},
+			)
+			sources.buildDaily = fakeHandlerBuilder(
+				"daily", daily,
+				jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
+			)
+			sources.buildWorkgraph = nil
+			_, err := configureWorkerDependenciesWithSources(
+				context.Background(),
+				config.Config{
+					Profile:                "heavy",
+					RiverDatabaseSchema:    "river",
+					DomainDatabaseMaxConns: 4,
+					QueueDatabaseMaxConns:  2,
+				},
+				health.NewRegistry(time.Second),
+				sources,
+			)
+			if !errors.Is(err, errWorkerDependencyUnavailable) {
+				t.Fatalf("configure error = %v, want forged handler rejection", err)
+			}
+		})
+	}
+}
+
+// TestConstructedQueueBudgetMustMatchDeploymentManifest proves the runtime
+// cannot quietly consume a queue at a capacity the reviewed manifest never
+// budgeted.
+func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, contractRoot := executableHeavyRegistry(t, false)
+	daily := selectSpecs(runtimeRegistry.Profile("heavy"), map[string]bool{
+		jobcontract.KindDailyMetricsDispatch:  true,
+		jobcontract.KindDailyMetricsPartition: true,
+		jobcontract.KindDailyMetricsFinalize:  true,
+	})
+	for _, test := range []struct {
+		name    string
+		queue   jobruntime.QueueBudget
+		conns   jobruntime.ConnectionBudget
+		wantErr bool
+	}{
+		{
+			name:  "matching budget",
+			queue: jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
+			conns: jobruntime.ConnectionBudget{QueueControl: 2, Domain: 4},
+		},
+		{
+			name:    "over-budget workers",
+			queue:   jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 8},
+			conns:   jobruntime.ConnectionBudget{QueueControl: 2, Domain: 4},
+			wantErr: true,
+		},
+		{
+			name:    "unbudgeted queue",
+			queue:   jobruntime.QueueBudget{Queue: "metrics_shadow", MaxWorkers: 2},
+			conns:   jobruntime.ConnectionBudget{QueueControl: 2, Domain: 4},
+			wantErr: true,
+		},
+		{
+			name:    "over-budget connections",
+			queue:   jobruntime.QueueBudget{Queue: "metrics", MaxWorkers: 2},
+			conns:   jobruntime.ConnectionBudget{QueueControl: 4, Domain: 8},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database := &fakeWorkerDatabase{}
+			sources := productionWorkerDependencySources
+			sources.contractRoot = contractRoot
+			sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+				return database, nil
+			}
+			sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+				return runtimeRegistry, nil
+			}
+			sources.buildReports = nil
+			sources.buildWorkgraph = nil
+			sources.buildOperational = nil
+			sources.buildDaily = fakeHandlerBuilder("daily", daily, test.queue)
+			_, err := configureWorkerDependenciesWithSources(
+				context.Background(),
+				config.Config{
+					Profile:                "heavy",
+					RiverDatabaseSchema:    "river",
+					DomainDatabaseMaxConns: int32(test.conns.Domain),
+					QueueDatabaseMaxConns:  int32(test.conns.QueueControl),
+				},
+				health.NewRegistry(time.Second),
+				sources,
+			)
+			if test.wantErr != errors.Is(err, errWorkerDependencyUnavailable) {
+				t.Fatalf("configure error = %v, wantErr = %t", err, test.wantErr)
+			}
+		})
+	}
 }

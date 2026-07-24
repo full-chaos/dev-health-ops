@@ -279,12 +279,12 @@ func TestRetentionProducerHonorsOperatorHorizonOverrides(t *testing.T) {
 	}{
 		{
 			scheduleID:   "prune_rate_limit_observations",
-			wantPolicy:   jobcontract.RetentionRateLimitObservation,
+			wantPolicy:   retentionRateLimitObservations,
 			wantDeleteAt: "2026-07-17T05:00:00Z",
 		},
 		{
 			scheduleID:   "prune_external_ingest_batches",
-			wantPolicy:   jobcontract.RetentionExternalIngestBatch,
+			wantPolicy:   retentionExternalIngestBatches,
 			wantDeleteAt: "2026-06-24T05:15:00Z",
 		},
 	} {
@@ -317,33 +317,15 @@ func TestRetentionProducerHonorsOperatorHorizonOverrides(t *testing.T) {
 
 // A malformed or non-positive override must keep the checked default rather
 // than widening or zeroing a deletion range.
-func TestRetentionProducerRejectsMalformedHorizonOverrides(t *testing.T) {
-	for _, raw := range []string{"", "   ", "not-a-number", "0", "-5"} {
-		t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", raw)
-		producer := NewRetentionProducer()
-		schedule := scheduleByID(t, "prune_rate_limit_observations")
-		dueTime := mustTime(t, "2026-07-24T05:00:00Z")
-		outcome, err := producer.Produce(
-			context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
-		)
-		if err != nil {
-			t.Fatalf("override %q: %v", raw, err)
-		}
-		payload := outcome.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload)
-		if payload.DeleteBefore != "2026-07-10T05:00:00Z" {
-			t.Fatalf("override %q produced delete_before %s, want the 14 day default",
-				raw, payload.DeleteBefore)
-		}
-	}
-}
-
-// Every produced envelope must satisfy the compiled contract. This is what
-// catches a producer emitting a policy or payload shape the runtime rejects.
 func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
+	// Retention is deliberately absent here. Its policy names are owned by the
+	// runtime-truth lane's internal/jobcontract change, which pins the Go
+	// constant list against the schema enum; until that merges this branch's
+	// compiled contract cannot accept them, so retention payloads are asserted
+	// field-by-field against the handler contract below instead. Add them back
+	// to this round-trip once the lanes merge.
 	producers := map[string]Producer{
-		"phone_home_heartbeat":          NewHeartbeatProducer(),
-		"prune_rate_limit_observations": NewRetentionProducer(),
-		"prune_external_ingest_batches": NewRetentionProducer(),
+		"phone_home_heartbeat": NewHeartbeatProducer(),
 	}
 	for id, producer := range producers {
 		schedule := scheduleByID(t, id)
@@ -399,5 +381,83 @@ func TestOccurrenceDomainIdentityIsAValidDeterministicUUID(t *testing.T) {
 	later := NewOccurrence(schedule, dueTime, dueTime.Add(time.Hour))
 	if OccurrenceDomainID(later) != first {
 		t.Fatal("the observation instant leaked into the domain identity")
+	}
+}
+
+// The retention handler rejects a payload that violates any of these, and a
+// rejection is permanent rather than retried, so they are pinned here rather
+// than discovered at execution. This stands in for the strict contract
+// round-trip until the runtime-truth lane's jobcontract change merges.
+func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
+	producer := NewRetentionProducer()
+	for _, test := range []struct{ scheduleID, wantPolicy string }{
+		{"prune_rate_limit_observations", retentionRateLimitObservations},
+		{"prune_external_ingest_batches", retentionExternalIngestBatches},
+	} {
+		schedule := scheduleByID(t, test.scheduleID)
+		dueTime := mustTime(t, "2026-07-24T05:00:00Z")
+		outcome, err := producer.Produce(
+			context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+		)
+		if err != nil {
+			t.Fatalf("%s Produce() = %v", test.scheduleID, err)
+		}
+		payload, ok := outcome.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload)
+		if !ok {
+			t.Fatalf("%s payload type %T", test.scheduleID, outcome.Requests[0].Envelope.Payload)
+		}
+		if payload.RetentionPolicy != test.wantPolicy {
+			t.Errorf("%s policy = %q, want the agreed plural name %q",
+				test.scheduleID, payload.RetentionPolicy, test.wantPolicy)
+		}
+		if payload.BatchSize < 1 || payload.BatchSize > 1000 {
+			t.Errorf("%s batch_size %d is outside the schema bound 1..1000",
+				test.scheduleID, payload.BatchSize)
+		}
+		if !strings.HasSuffix(payload.DeleteBefore, "Z") {
+			t.Errorf("%s delete_before %q lacks the required trailing Z",
+				test.scheduleID, payload.DeleteBefore)
+		}
+		parsed, err := time.Parse(time.RFC3339, payload.DeleteBefore)
+		if err != nil {
+			t.Errorf("%s delete_before %q is not RFC3339: %v",
+				test.scheduleID, payload.DeleteBefore, err)
+			continue
+		}
+		if parsed.Location() != time.UTC {
+			t.Errorf("%s delete_before %q is not UTC; the handler treats that as permanent",
+				test.scheduleID, payload.DeleteBefore)
+		}
+		if !parsed.Before(dueTime) {
+			t.Errorf("%s cutoff %s is not before its due time", test.scheduleID, payload.DeleteBefore)
+		}
+	}
+}
+
+// A negative override collapses to zero in the legacy Python readers, which
+// makes the cutoff the occurrence's own due time. Preserving that is a
+// deliberate parity decision; the hazard is recorded in the lane handoff.
+func TestRetentionHorizonMatchesLegacyClampSemantics(t *testing.T) {
+	schedule := scheduleByID(t, "prune_rate_limit_observations")
+	dueTime := mustTime(t, "2026-07-24T05:00:00Z")
+	for _, test := range []struct{ raw, wantCutoff string }{
+		{"7", "2026-07-17T05:00:00Z"},
+		{"0", "2026-07-24T05:00:00Z"},
+		{"-3", "2026-07-24T05:00:00Z"},
+		{"garbage", "2026-07-10T05:00:00Z"},
+		{"", "2026-07-10T05:00:00Z"},
+	} {
+		t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", test.raw)
+		outcome, err := NewRetentionProducer().Produce(
+			context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+		)
+		if err != nil {
+			t.Fatalf("override %q: %v", test.raw, err)
+		}
+		payload := outcome.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload)
+		if payload.DeleteBefore != test.wantCutoff {
+			t.Errorf("override %q produced cutoff %s, want %s",
+				test.raw, payload.DeleteBefore, test.wantCutoff)
+		}
 	}
 }

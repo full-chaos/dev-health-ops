@@ -22,6 +22,27 @@ import (
 // organization to schedule.
 const SkipNoActiveOrganizations = "no_active_organizations"
 
+// Retention policy names.
+//
+// These are agreed cross-lane values, not this package's to define: the
+// canonical list lives in internal/jobcontract on the runtime-truth lane, where
+// internal/jobcontract/registry.go pins it element-by-element against the
+// system.retention_cleanup schema enum so the constant list and the contract
+// cannot drift apart. They are declared here only so the producer compiles
+// before that lane merges, and this block is deleted in favour of the
+// jobcontract constants at merge.
+//
+// The names are plural because the policy IS the table scope. Each retention
+// store holds its table as a compile-time literal, never a constructor argument
+// or payload field, so no operator input and no future policy can widen the
+// target. A reviewer reading the policy name knows exactly which table can lose
+// rows: `external_ingest_batches` is the table, and
+// `rate_limit_observations` is the tail of `provider_rate_limit_observations`.
+const (
+	retentionRateLimitObservations = "rate_limit_observations"
+	retentionExternalIngestBatches = "external_ingest_batches"
+)
+
 // occurrenceDomainNamespace derives the synthetic domain identity for job
 // kinds whose domain link has no backing table. `schedule_occurrence` and
 // `maintenance_run` are declared in the job contract but no table exists for
@@ -87,18 +108,28 @@ type RetentionSpec struct {
 	RetentionDaysEnv string
 }
 
-// retentionDays resolves the operator-configurable horizon. An unset, empty,
-// unparseable, or non-positive value keeps the checked default rather than
-// widening or zeroing a deletion range, because a malformed override that
-// silently became "delete everything" is unrecoverable.
-func retentionDays(name string, fallback time.Duration) time.Duration {
-	raw, present := os.LookupEnv(name)
-	if !present || strings.TrimSpace(raw) == "" {
-		return fallback
+// retentionDays resolves the operator-configurable horizon with the same
+// semantics as the Python tasks being replaced, because a cutover must not
+// silently change how long data is kept.
+//
+// Both legacy readers behave identically once normalized: an unset or empty
+// value takes the default, an unparseable value takes the default, and a parsed
+// value is clamped with max(0, days). The clamp is preserved deliberately even
+// though it means a negative override collapses to zero, which deletes
+// everything older than the occurrence rather than erroring. That is the
+// current production behavior; changing it here would be an undeclared
+// behavioral change during a cutover, so it is preserved and flagged in the
+// lane handoff instead.
+func retentionDays(name string, fallbackDays int) time.Duration {
+	days := fallbackDays
+	if raw, present := os.LookupEnv(name); present && strings.TrimSpace(raw) != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err == nil {
+			days = parsed
+		}
 	}
-	days, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || days < 1 {
-		return fallback
+	if days < 0 {
+		days = 0
 	}
 	return time.Duration(days) * 24 * time.Hour
 }
@@ -119,14 +150,17 @@ func NewRetentionProducer() Producer {
 	)
 	return &RetentionProducer{byScheduleID: map[string]RetentionSpec{
 		"prune_rate_limit_observations": {
-			Policy:           jobcontract.RetentionRateLimitObservation,
-			Retention:        retentionDays(rateLimitEnv, 14*24*time.Hour), // CHAOS-2758
+			Policy:    retentionRateLimitObservations,
+			Retention: retentionDays(rateLimitEnv, 14), // CHAOS-2758
+			// The handler drains one occurrence chunk-by-chunk until the work is
+			// gone, so this bounds a single pass rather than the total deletion.
+			// No catch-up occurrence is needed to clear a first-run backlog.
 			BatchSize:        500,
 			RetentionDaysEnv: rateLimitEnv,
 		},
 		"prune_external_ingest_batches": {
-			Policy:           jobcontract.RetentionExternalIngestBatch,
-			Retention:        retentionDays(externalIngestEnv, 90*24*time.Hour), // CHAOS-2694
+			Policy:           retentionExternalIngestBatches,
+			Retention:        retentionDays(externalIngestEnv, 90), // CHAOS-2694
 			BatchSize:        500,
 			RetentionDaysEnv: externalIngestEnv,
 		},
@@ -149,6 +183,10 @@ func (producer *RetentionProducer) Produce(
 			ErrProducerUnavailable, schedule.ID,
 		)
 	}
+	// The handler reads no environment and requires a UTC RFC3339 cutoff with a
+	// trailing Z: a non-UTC offset is a permanent failure there. Deriving it
+	// from the occurrence's canonical due time also makes the cutoff immutable
+	// across retries, so an interrupted drain resumes against the same range.
 	deleteBefore := occurrence.ScheduledFor.UTC().Add(-spec.Retention).Format(time.RFC3339)
 	envelope := jobcontract.Envelope{
 		ContractVersion: jobcontract.ContractVersionV1,

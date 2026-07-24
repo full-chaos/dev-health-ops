@@ -437,7 +437,21 @@ input {
 }
 
 .fc-topic-card {
+  background: var(--fc-doc-surface);
+  border: 1px solid var(--fc-doc-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 0.125rem 0.4rem color-mix(in srgb, var(--fc-doc-text), transparent 92%);
+  cursor: pointer;
   min-width: 0;
+  padding: 1rem;
+  position: relative;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.fc-topic-card:hover {
+  background: var(--fc-doc-surface-muted);
+  box-shadow: 0 0.25rem 0.6rem color-mix(in srgb, var(--fc-doc-text), transparent 88%);
+  transform: translateY(-0.0625rem);
 }
 
 .fc-topic-card h2,
@@ -452,6 +466,23 @@ input {
 .fc-topic-card h2 a,
 .fc-topic-card h3 a {
   text-decoration: none;
+}
+
+.fc-topic-card :is(h2, h3) a:not(.headerlink)::after {
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  position: absolute;
+  z-index: 1;
+}
+
+.fc-topic-card :is(h2, h3) a:not(.headerlink):focus-visible::after {
+  box-shadow: 0 0 0 0.14rem var(--fc-doc-surface), 0 0 0 0.32rem var(--fc-doc-focus);
+}
+
+.fc-topic-card :is(h2, h3) a.headerlink {
+  position: relative;
+  z-index: 2;
 }
 
 .fc-topic-card p {

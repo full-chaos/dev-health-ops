@@ -8,7 +8,12 @@ import sys
 from types import SimpleNamespace
 from typing import Any, cast
 
-from python_oracle_loader import load_live_module
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+
+from internal.providersync.testdata.python_oracle_loader import (  # noqa: E402
+    load_live_module,
+)
 
 WORK_ITEM_DATASETS = (
     "work-items",

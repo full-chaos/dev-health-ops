@@ -8,7 +8,12 @@ from dataclasses import asdict, make_dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from python_oracle_loader import load_live_module
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+
+from internal.providersync.testdata.python_oracle_loader import (  # noqa: E402
+    load_live_module,
+)
 
 FIXED_NOW = datetime(2026, 7, 23, 12, 34, 56, 789000, tzinfo=timezone.utc)
 

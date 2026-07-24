@@ -2,7 +2,7 @@
 
 Generated deterministically by `scripts/docs_inventory_review.py`.
 
-- Inventory rows: **542**
+- Inventory rows: **541**
 - Current-site Markdown pages: **171**
 - Prototype pages: **0**
 - Pages treated as public today: **171**
@@ -11,7 +11,7 @@ Generated deterministically by `scripts/docs_inventory_review.py`.
 
 ## Publication classifications
 
-- `archived-source`: 271
+- `archived-source`: 270
 - `excluded-internal`: 50
 - `external-entry-point`: 2
 - `gap-unverified`: 1
@@ -25,7 +25,7 @@ Generated deterministically by `scripts/docs_inventory_review.py`.
 - `external-gap`: 1
 - `internal-program`: 50
 - `legacy-asset`: 6
-- `legacy-page`: 229
+- `legacy-page`: 228
 - `legacy-support`: 36
 - `markdown-page`: 171
 - `publication-configuration`: 1

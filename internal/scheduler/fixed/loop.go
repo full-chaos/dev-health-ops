@@ -94,6 +94,13 @@ type scheduleState struct {
 	failures   uint64
 	overdue    bool
 	missingFor time.Duration
+	// degraded names a bounded no-work condition, for example an installation
+	// with no active organizations. It is exported so an operator can
+	// distinguish "nothing to do" from "producing work".
+	degraded string
+	// coldStarts counts baseline records, which are expected exactly once per
+	// schedule on a new deployment and never again.
+	coldStarts uint64
 }
 
 // Loop runs the fixed-schedule engine on a bounded cadence and owns its
@@ -280,6 +287,10 @@ func (loop *Loop) record(result WindowResult, now time.Time) {
 		state.handoffs += uint64(schedule.Handoffs)
 		state.skipped += uint64(schedule.Skipped)
 		state.missingFor = schedule.MissingFor
+		state.degraded = schedule.Degraded
+		if schedule.ColdStart {
+			state.coldStarts++
+		}
 		if schedule.Err != nil {
 			state.failures++
 		}
@@ -438,6 +449,25 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	text.WriteString("# HELP fixed_scheduler_handoffs_total Durable job handoffs produced by fixed schedules.\n# TYPE fixed_scheduler_handoffs_total counter\n")
 	for _, identifier := range identifiers {
 		fmt.Fprintf(&text, "fixed_scheduler_handoffs_total{schedule=%q} %d\n", identifier, snapshot[identifier].handoffs)
+	}
+	text.WriteString("# HELP fixed_scheduler_cold_starts_total Baseline occurrences recorded for a schedule with no history.\n# TYPE fixed_scheduler_cold_starts_total counter\n")
+	for _, identifier := range identifiers {
+		fmt.Fprintf(&text, "fixed_scheduler_cold_starts_total{schedule=%q} %d\n", identifier, snapshot[identifier].coldStarts)
+	}
+	// A degraded schedule is not a failure and must not close readiness, but it
+	// is also not healthy work. Exporting the reason as a labelled gauge lets an
+	// operator alert on, for example, an installation whose organization table
+	// is empty and whose nightly fan-outs therefore schedule nothing.
+	text.WriteString("# HELP fixed_scheduler_schedule_degraded Whether a schedule produced no work for a bounded, named reason.\n# TYPE fixed_scheduler_schedule_degraded gauge\n")
+	for _, identifier := range identifiers {
+		reason := snapshot[identifier].degraded
+		value := 0
+		if reason != "" {
+			value = 1
+		} else {
+			reason = "none"
+		}
+		fmt.Fprintf(&text, "fixed_scheduler_schedule_degraded{schedule=%q,reason=%q} %d\n", identifier, reason, value)
 	}
 	text.WriteString("# HELP fixed_scheduler_missing_occurrence_seconds How long the newest occurrence has lagged its due time.\n# TYPE fixed_scheduler_missing_occurrence_seconds gauge\n")
 	for _, identifier := range identifiers {

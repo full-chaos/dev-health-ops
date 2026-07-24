@@ -104,6 +104,11 @@ type schedulerRuntimeSources struct {
 	// Celery Beat's non-product entries. It shares this process because two
 	// processes must never both believe they own periodic work.
 	newFixedLoop func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error)
+	// newOccurrences builds the consumer for the occurrences the sync loop
+	// hands off. It is constructed in the same process for the same reason:
+	// the marker advances on handoff, so an unconsumed occurrence is stranded
+	// work rather than a delayed one.
+	newOccurrences func(*pgxpool.Pool) (schedulersync.OccurrenceStepper, error)
 }
 
 var productionSchedulerRuntimeSources = schedulerRuntimeSources{
@@ -114,6 +119,13 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 	newCoordinator: schedulersync.NewOccurrenceCoordinator,
 	newLoop:        schedulersync.NewLoop,
 	newFixedLoop:   buildFixedScheduleLoop,
+	newOccurrences: func(pool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+		// The native planner does not exist yet, so this is deliberately the
+		// explicit missing-planner seam rather than a stub that succeeds. A
+		// scheduler with no pending occurrences stays healthy; the first real
+		// pending occurrence closes readiness until CUT-09/CUT-10 lands.
+		return schedulersync.NewOccurrenceReconciler(pool, schedulersync.NewUnavailableMaterializer())
+	},
 }
 
 func buildProductionSchedulerLoop(
@@ -137,7 +149,8 @@ func buildSchedulerLoopWithSources(
 ) (lifecycle.Component, error) {
 	if ctx == nil || registry == nil || sources.openDatabase == nil ||
 		sources.newRepository == nil || sources.newCoordinator == nil ||
-		sources.newLoop == nil || sources.newFixedLoop == nil {
+		sources.newLoop == nil || sources.newFixedLoop == nil ||
+		sources.newOccurrences == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
 	database, err := sources.openDatabase(ctx, cfg)
@@ -172,10 +185,14 @@ func buildSchedulerLoopWithSources(
 	if coordinator == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
+	occurrences, err := sources.newOccurrences(database.DomainPool())
+	if err != nil || occurrences == nil {
+		return nil, errSchedulerActivationUnavailable
+	}
 	loop, err := sources.newLoop(
 		repository,
 		coordinator,
-		schedulersync.DefaultLoopConfig(registry),
+		schedulersync.DefaultLoopConfig(registry).WithOccurrences(occurrences),
 	)
 	if err != nil || loop == nil {
 		return nil, errSchedulerActivationUnavailable

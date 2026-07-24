@@ -33,6 +33,15 @@ type HandoffStepper interface {
 	HandoffDueResult(context.Context, time.Time, int, Coordinator) (HandoffResult, error)
 }
 
+// OccurrenceStepper consumes pending scheduled-sync occurrences. The scheduler
+// loop drives it directly: the same process that hands an occurrence off is the
+// one that must materialize it, or an activated scheduler would advance
+// next_run_at and leave the occurrence pending forever with the optional Python
+// consumer switched off.
+type OccurrenceStepper interface {
+	Reconcile(context.Context, time.Time, int) (OccurrenceReconcileResult, error)
+}
+
 // LoopConfig bounds each scheduler transaction and its retry cadence. A
 // timeout is an error, never a successful empty handoff window.
 type LoopConfig struct {
@@ -41,6 +50,10 @@ type LoopConfig struct {
 	MaxBackoff   time.Duration
 	Limit        int
 	Registry     *health.Registry
+	// Occurrences consumes the occurrences this loop hands off. It is required:
+	// a loop that can create pending occurrences but not consume them is the
+	// exact gap that leaves work stranded after the marker advances.
+	Occurrences OccurrenceStepper
 }
 
 func DefaultLoopConfig(registry *health.Registry) LoopConfig {
@@ -53,8 +66,14 @@ func DefaultLoopConfig(registry *health.Registry) LoopConfig {
 	}
 }
 
+// WithOccurrences returns the config bound to an occurrence consumer.
+func (config LoopConfig) WithOccurrences(stepper OccurrenceStepper) LoopConfig {
+	config.Occurrences = stepper
+	return config
+}
+
 func (config LoopConfig) validate() error {
-	if config.Registry == nil ||
+	if config.Registry == nil || config.Occurrences == nil ||
 		config.PollInterval < minLoopPollInterval || config.PollInterval > maxLoopPollInterval ||
 		config.StepTimeout < minLoopStepTimeout || config.StepTimeout > maxLoopStepTimeout ||
 		config.MaxBackoff < config.PollInterval || config.MaxBackoff > maxLoopPollInterval ||
@@ -112,6 +131,10 @@ type Loop struct {
 	consecutive     uint64
 	lastOK          time.Time
 	up              bool
+
+	occurrencesCompleted   uint64
+	occurrencesRetried     uint64
+	occurrencesQuarantined uint64
 }
 
 func NewLoop(stepper HandoffStepper, coordinator Coordinator, config LoopConfig) (*Loop, error) {
@@ -230,11 +253,20 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	// Consume in the same window that produced. A separate cadence would let
+	// the marker advance while the occurrence it handed off sat unconsumed.
+	reconciled, err := loop.config.Occurrences.Reconcile(stepCtx, now.UTC(), loop.config.Limit)
+	if err != nil {
+		return fmt.Errorf("consume pending scheduled sync occurrences: %w", err)
+	}
 	loop.mu.Lock()
 	if loop.stopping {
 		loop.mu.Unlock()
 		return context.Canceled
 	}
+	loop.occurrencesCompleted += uint64(reconciled.Completed)
+	loop.occurrencesRetried += uint64(reconciled.Retried)
+	loop.occurrencesQuarantined += uint64(reconciled.Quarantined)
 	loop.cycles++
 	loop.handoffs += uint64(len(result.HandedOff))
 	loop.unsupportedCron += uint64(result.UnsupportedCron)
@@ -314,6 +346,8 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	unsupported, invalid := loop.unsupportedCron, loop.invalidCron
 	failures, consecutive := loop.failures, loop.consecutive
 	lastOK, up, now := loop.lastOK, loop.up, loop.clock.Now()
+	completed, retried := loop.occurrencesCompleted, loop.occurrencesRetried
+	quarantined := loop.occurrencesQuarantined
 	loop.mu.Unlock()
 
 	age := 0.0
@@ -326,6 +360,9 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_unsupported_cron_fallback_total", "Unsupported cron candidates left for the existing scheduler owner.", unsupported)
 	writeLoopCounter(&text, "sync_scheduler_invalid_cron_total", "Invalid cron candidates left without marker mutation.", invalid)
 	writeLoopCounter(&text, "sync_scheduler_failures_total", "Failed bounded scheduler handoff windows.", failures)
+	writeLoopCounter(&text, "sync_scheduler_occurrences_completed_total", "Pending scheduled sync occurrences materialized.", completed)
+	writeLoopCounter(&text, "sync_scheduler_occurrences_retried_total", "Pending scheduled sync occurrences deferred for retry.", retried)
+	writeLoopCounter(&text, "sync_scheduler_occurrences_quarantined_total", "Pending scheduled sync occurrences terminally quarantined.", quarantined)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_consecutive_failures Consecutive failed handoff windows.\n# TYPE sync_scheduler_consecutive_failures gauge\nsync_scheduler_consecutive_failures %d\n", consecutive)
 	fmt.Fprint(&text, "# HELP sync_scheduler_up Whether the scheduler has completed a current successful handoff window.\n# TYPE sync_scheduler_up gauge\nsync_scheduler_up ")
 	if up {

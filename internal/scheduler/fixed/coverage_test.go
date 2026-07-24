@@ -307,3 +307,93 @@ func TestLegacyInventoryReplacementsAreNotSilentlyDropped(t *testing.T) {
 		}
 	}
 }
+
+// The cadence fingerprint alone is not the whole timing contract. Beat resolves
+// every crontab against the Celery `timezone` setting, and the missed-run
+// policy decides what happens after an outage. A change to either would alter
+// when work runs without changing a single cadence value, so both are pinned
+// here against the Python source and against a checked policy table.
+
+var pythonSettingPattern = regexp.MustCompile(`^([a-z_]+)\s*=\s*"([^"]*)"\s*$`)
+
+func parseBeatSettings(t *testing.T) map[string]string {
+	t.Helper()
+	path := filepath.Join(repositoryRoot(t), beatConfigRelativePath)
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", beatConfigRelativePath, err)
+	}
+	settings := map[string]string{}
+	for _, line := range strings.Split(string(source), "\n") {
+		if match := pythonSettingPattern.FindStringSubmatch(line); match != nil {
+			settings[match[1]] = match[2]
+		}
+	}
+	return settings
+}
+
+func TestScheduleCoverageFingerprintsTheBeatTimezone(t *testing.T) {
+	settings := parseBeatSettings(t)
+	zone, ok := settings["timezone"]
+	if !ok {
+		t.Fatalf("%s no longer declares a Celery timezone", beatConfigRelativePath)
+	}
+	if zone != inventoryTimezone {
+		t.Fatalf(
+			"Beat resolves crontabs in %q but the fixed inventory declares %q; "+
+				"every schedule would fire at a different wall-clock time",
+			zone, inventoryTimezone,
+		)
+	}
+	schedules, err := Schedules()
+	if err != nil {
+		t.Fatalf("Schedules() = %v", err)
+	}
+	for _, schedule := range schedules {
+		if schedule.Timezone != zone {
+			t.Errorf(
+				"schedule %s declares timezone %q but Beat resolves in %q",
+				schedule.ID, schedule.Timezone, zone,
+			)
+		}
+	}
+}
+
+// The missed-run policy is a reviewed decision per schedule, not a default.
+// Pinning it here means flipping a safety net to skip, or making telemetry
+// catch up, has to be an explicit edit to this table.
+func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
+	want := map[string]CatchUpPolicy{
+		"scheduled_metrics_dispatch":       CatchUpSkip,
+		"scheduled_reports_dispatch":       CatchUpSkip,
+		"phone_home_heartbeat":             CatchUpSkip,
+		"prune_rate_limit_observations":    CatchUpSkip,
+		"prune_external_ingest_batches":    CatchUpSkip,
+		"daily_metrics_fanout":             CatchUpBounded,
+		"complexity_daily_fanout":          CatchUpBounded,
+		"release_impact_daily_fanout":      CatchUpBounded,
+		"recommendations_daily_fanout":     CatchUpBounded,
+		"membership_backfill_daily_fanout": CatchUpBounded,
+		"capacity_forecast_weekly_fanout":  CatchUpBounded,
+	}
+	schedules, err := Schedules()
+	if err != nil {
+		t.Fatalf("Schedules() = %v", err)
+	}
+	if len(schedules) != len(want) {
+		t.Fatalf("%d schedules declared but %d policies pinned", len(schedules), len(want))
+	}
+	for _, schedule := range schedules {
+		expected, ok := want[schedule.ID]
+		if !ok {
+			t.Errorf("schedule %s has no pinned missed-run policy", schedule.ID)
+			continue
+		}
+		if schedule.CatchUp != expected {
+			t.Errorf(
+				"schedule %s missed-run policy changed to %q (pinned %q)",
+				schedule.ID, schedule.CatchUp, expected,
+			)
+		}
+	}
+}

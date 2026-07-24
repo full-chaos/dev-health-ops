@@ -67,6 +67,9 @@ func (publisher *OutboxPublisher) Publish(
 	}
 }
 
+// coldStartBaselineReason marks the first recorded occurrence of a schedule.
+const coldStartBaselineReason = "cold_start_baseline"
+
 // ScheduleResult is the bounded outcome for one schedule in one window.
 type ScheduleResult struct {
 	ScheduleID string
@@ -75,6 +78,15 @@ type ScheduleResult struct {
 	Duplicate  int
 	Handoffs   int
 	Skipped    int
+	// ColdStart records that this window wrote the schedule's baseline.
+	ColdStart bool
+	// StaleSkipped records that the newest due time was past this schedule's
+	// staleness horizon and was deliberately not run.
+	StaleSkipped bool
+	// Degraded names a bounded condition that produced no work but is not a
+	// failure, for example an installation with no active organizations. It is
+	// exported so an operator can tell "nothing to do" from "working".
+	Degraded string
 	// MissingFor is how long the newest recorded occurrence has been older
 	// than the schedule expects. It drives missing-occurrence alerting.
 	MissingFor time.Duration
@@ -226,30 +238,68 @@ func (engine *Engine) stepSchedule(
 	observedAt time.Time,
 ) ScheduleResult {
 	outcome := ScheduleResult{ScheduleID: schedule.ID}
-	occurrences, err := DueOccurrences(schedule, observedAt)
+	lastRecorded, err := engine.lastRecorded(ctx, schedule)
 	if err != nil {
 		outcome.Err = err
 		return outcome
 	}
-	outcome.Due = len(occurrences)
-	for _, occurrence := range occurrences {
-		claimed, duplicate, handoffs, skipped, err := engine.runOccurrence(ctx, schedule, occurrence)
+	decision, err := DueOccurrence(schedule, observedAt, lastRecorded)
+	if err != nil {
+		outcome.Err = err
+		return outcome
+	}
+	if decision.SkippedStale {
+		outcome.StaleSkipped = true
+	}
+	if decision.Occurrence != nil {
+		outcome.Due = 1
+		// A cold start and a resumed-after-gap skip both record the boundary
+		// without producing work, so they take the same baseline path.
+		baseline := decision.ColdStart || decision.SkippedStale
+		claimed, duplicate, handoffs, skipped, degraded, err := engine.runOccurrence(
+			ctx, schedule, *decision.Occurrence, baseline,
+		)
 		outcome.Claimed += claimed
 		outcome.Duplicate += duplicate
 		outcome.Handoffs += handoffs
 		outcome.Skipped += skipped
+		outcome.ColdStart = decision.ColdStart
+		if degraded != "" && degraded != coldStartBaselineReason {
+			outcome.Degraded = degraded
+		}
 		if err != nil {
 			outcome.Err = err
 			return outcome
 		}
 	}
-	missing, err := engine.missingFor(ctx, schedule, observedAt)
-	if err != nil {
-		outcome.Err = err
-		return outcome
-	}
-	outcome.MissingFor = missing
+	outcome.MissingFor = engine.missingFor(schedule, observedAt, lastRecorded)
 	return outcome
+}
+
+// lastRecorded reads the schedule's newest durable due time. It is the anchor
+// both for deciding what is owed and for missing-occurrence alerting, so it is
+// read once per schedule per window rather than twice.
+func (engine *Engine) lastRecorded(
+	ctx context.Context,
+	schedule Schedule,
+) (*time.Time, error) {
+	tx, err := engine.beginner.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin fixed schedule read: %w", err)
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	last, present, err := engine.ledger.LastScheduledFor(ctx, tx, schedule.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, nil
+	}
+	return &last, nil
 }
 
 // runOccurrence performs the single transaction that owns one occurrence:
@@ -260,14 +310,15 @@ func (engine *Engine) runOccurrence(
 	ctx context.Context,
 	schedule Schedule,
 	occurrence Occurrence,
-) (claimed, duplicate, handoffs, skipped int, err error) {
+	baseline bool,
+) (claimed, duplicate, handoffs, skipped int, degraded string, err error) {
 	producer, ok := engine.producers.Producer(schedule.ProducerID)
 	if !ok {
-		return 0, 0, 0, 0, fmt.Errorf("%w: %s", ErrProducerUnavailable, schedule.ProducerID)
+		return 0, 0, 0, 0, "", fmt.Errorf("%w: %s", ErrProducerUnavailable, schedule.ProducerID)
 	}
 	tx, err := engine.beginner.Begin(ctx)
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("begin fixed schedule transaction: %w", err)
+		return 0, 0, 0, 0, "", fmt.Errorf("begin fixed schedule transaction: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -281,36 +332,54 @@ func (engine *Engine) runOccurrence(
 
 	claim, err := engine.ledger.Claim(ctx, tx, occurrence)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, "", err
 	}
 	if claim == ClaimDuplicate {
 		// Another replica or an earlier tick owns this due time. Rolling back
 		// is correct: the winner's transaction already carries the production
 		// work, and repeating it here would double the product effect.
-		return 0, 1, 0, 0, nil
+		return 0, 1, 0, 0, "", nil
+	}
+
+	if baseline {
+		// A cold-start baseline records where this schedule begins so the next
+		// window has an anchor. It deliberately produces no work: the ledger
+		// carries none of Beat's history, so treating the boundary this process
+		// started inside as owed would fire a schedule that Beat had already
+		// run, or run one a full period early.
+		if err := engine.ledger.Complete(
+			ctx, tx, occurrence, OccurrenceSkipped, 0, coldStartBaselineReason,
+		); err != nil {
+			return 0, 0, 0, 0, "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, 0, 0, 0, "", fmt.Errorf("commit fixed schedule baseline %s: %w", occurrence.Key, err)
+		}
+		committed = true
+		return 1, 0, 0, 1, coldStartBaselineReason, nil
 	}
 
 	result, err := producer.Produce(ctx, tx, schedule, occurrence)
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("produce occurrence %s: %w", occurrence.Key, err)
+		return 0, 0, 0, 0, "", fmt.Errorf("produce occurrence %s: %w", occurrence.Key, err)
 	}
 	published := 0
 	for _, request := range result.Requests {
 		descriptor, ok := engine.registry.Descriptor(request.Kind)
 		if !ok {
-			return 0, 0, 0, 0, fmt.Errorf(
+			return 0, 0, 0, 0, "", fmt.Errorf(
 				"%w: producer %s emitted unregistered kind %s",
 				ErrInvalidSchedule, schedule.ProducerID, request.Kind,
 			)
 		}
 		if request.Kind != schedule.TargetKind {
-			return 0, 0, 0, 0, fmt.Errorf(
+			return 0, 0, 0, 0, "", fmt.Errorf(
 				"%w: schedule %s targets %s but produced %s",
 				ErrInvalidSchedule, schedule.ID, schedule.TargetKind, request.Kind,
 			)
 		}
 		if err := engine.publisher.Publish(ctx, tx, request, descriptor.Executable()); err != nil {
-			return 0, 0, 0, 0, fmt.Errorf("publish %s for occurrence %s: %w", request.Kind, occurrence.Key, err)
+			return 0, 0, 0, 0, "", fmt.Errorf("publish %s for occurrence %s: %w", request.Kind, occurrence.Key, err)
 		}
 		published++
 	}
@@ -325,52 +394,49 @@ func (engine *Engine) runOccurrence(
 		}
 	}
 	if err := engine.ledger.Complete(ctx, tx, occurrence, status, total, reason); err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("commit fixed schedule occurrence %s: %w", occurrence.Key, err)
+		return 0, 0, 0, 0, "", fmt.Errorf("commit fixed schedule occurrence %s: %w", occurrence.Key, err)
 	}
 	committed = true
 	if status == OccurrenceSkipped {
-		return 1, 0, 0, 1, nil
+		return 1, 0, 0, 1, reason, nil
 	}
-	return 1, 0, total, 0, nil
+	return 1, 0, total, 0, "", nil
 }
 
-// missingFor reports how far the newest recorded occurrence lags the newest
-// due time. A schedule that has never produced an occurrence reports the full
-// age of its first expected due time, which is what makes a never-started
-// producer alert instead of looking idle.
+// missingFor reports how far the newest recorded occurrence lags the newest due
+// time, using the anchor already read for this window.
+//
+// It is measured against the anchor observed at the start of the window, so a
+// schedule that just claimed its occurrence still reports the lag it had. That
+// is deliberate: the value drives alerting on a schedule that stopped
+// producing, and reporting zero the instant a catch-up ran would hide exactly
+// the outage an operator needs to see.
 func (engine *Engine) missingFor(
-	ctx context.Context,
 	schedule Schedule,
 	observedAt time.Time,
-) (time.Duration, error) {
+	lastRecorded *time.Time,
+) time.Duration {
 	location, err := schedule.Location()
 	if err != nil {
-		return 0, err
+		return 0
 	}
 	expected, ok := schedule.Cadence.Previous(observedAt, location)
 	if !ok {
-		return 0, fmt.Errorf("%w: %s", ErrInvalidCadence, schedule.ID)
+		return 0
 	}
-	tx, err := engine.beginner.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("begin fixed schedule read: %w", err)
+	if lastRecorded == nil {
+		// No history at all is not yet a missed occurrence: the very first
+		// window records a baseline. Alerting on it would make every fresh
+		// deployment start unhealthy.
+		return 0
 	}
-	defer func() {
-		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = tx.Rollback(rollbackCtx)
-	}()
-	last, present, err := engine.ledger.LastScheduledFor(ctx, tx, schedule.ID)
-	if err != nil {
-		return 0, err
+	if lastRecorded.Before(expected) {
+		return observedAt.Sub(expected)
 	}
-	if !present || last.Before(expected) {
-		return observedAt.Sub(expected), nil
-	}
-	return 0, nil
+	return 0
 }
 
 // Schedules returns the engine's validated schedule table.

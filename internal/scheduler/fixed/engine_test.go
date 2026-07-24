@@ -218,6 +218,14 @@ func heartbeatSchedule(t *testing.T) Schedule {
 	return Schedule{}
 }
 
+// seedAnchor records a prior boundary so a test exercises steady state instead
+// of the cold-start baseline path.
+func seedAnchor(ledger *memoryLedger, schedule Schedule, scheduledFor time.Time) {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	ledger.byTime[schedule.ID] = scheduledFor.UTC()
+}
+
 func newTestEngine(
 	t *testing.T,
 	schedule Schedule,
@@ -247,6 +255,7 @@ func TestTwoReplicasProduceExactlyOneOccurrencePerDueTime(t *testing.T) {
 	ctx := context.Background()
 	schedule := heartbeatSchedule(t)
 	ledger := newMemoryLedger()
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
 	firstPublisher := &recordingPublisher{}
 	secondPublisher := &recordingPublisher{}
 	first := newTestEngine(t, schedule, ledger, firstPublisher, &stubTx{})
@@ -291,6 +300,7 @@ func TestRepeatedWindowsInTheSameBucketDoNotDuplicateWork(t *testing.T) {
 	ctx := context.Background()
 	schedule := heartbeatSchedule(t)
 	ledger := newMemoryLedger()
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
 	publisher := &recordingPublisher{}
 	engine := newTestEngine(t, schedule, ledger, publisher, &stubTx{})
 
@@ -314,6 +324,7 @@ func TestRestartAfterCommitDoesNotReproduceTheOccurrence(t *testing.T) {
 	ctx := context.Background()
 	schedule := heartbeatSchedule(t)
 	ledger := newMemoryLedger()
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
 	publisher := &recordingPublisher{}
 	observedAt := mustTime(t, "2026-07-24T00:05:00Z")
 
@@ -330,8 +341,11 @@ func TestRestartAfterCommitDoesNotReproduceTheOccurrence(t *testing.T) {
 	if publisher.count() != 1 {
 		t.Fatalf("restart published %d handoffs, want 1", publisher.count())
 	}
-	if result.Schedules[0].Duplicate != 1 {
-		t.Fatalf("restart claimed a new occurrence: %+v", result.Schedules[0])
+	// The durable anchor means a restart does not even attempt the boundary it
+	// already owns. The duplicate-claim path still matters for two replicas
+	// racing the same window and is covered separately.
+	if result.Schedules[0].Due != 0 || result.Schedules[0].Claimed != 0 {
+		t.Fatalf("restart re-attempted an owned occurrence: %+v", result.Schedules[0])
 	}
 }
 
@@ -339,6 +353,7 @@ func TestCrashBeforeCommitLeavesTheOccurrenceEligible(t *testing.T) {
 	ctx := context.Background()
 	schedule := heartbeatSchedule(t)
 	ledger := newMemoryLedger()
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
 	publisher := &recordingPublisher{}
 	observedAt := mustTime(t, "2026-07-24T00:05:00Z")
 
@@ -347,7 +362,10 @@ func TestCrashBeforeCommitLeavesTheOccurrenceEligible(t *testing.T) {
 	// claim so the next window can retry the same due time.
 	crashing := &stubTx{failCommit: true}
 	occurrence := NewOccurrence(schedule, mustTime(t, "2026-07-24T00:00:00Z"), observedAt)
-	crashing.onRollback = func() { ledger.rollback(occurrence.Key) }
+	crashing.onRollback = func() {
+		ledger.rollback(occurrence.Key)
+		seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
+	}
 	engine := newTestEngine(t, schedule, ledger, publisher, crashing)
 	result, err := engine.Step(ctx, observedAt)
 	if err != nil {
@@ -383,28 +401,44 @@ func TestSkipPolicyDoesNotReplayOccurrencesMissedDuringAnOutage(t *testing.T) {
 	publisher := &recordingPublisher{}
 	engine := newTestEngine(t, schedule, ledger, publisher, &stubTx{})
 
-	// The scheduler was down for three days and starts back up mid-morning.
-	// Skip policy emits only the newest due time, never three days of
-	// backdated telemetry.
+	// The scheduler was down for three days. Skip policy resumes rather than
+	// catching up: a heartbeat for a day the process was absent would misstate
+	// that day, so the boundary is re-baselined and no telemetry is emitted.
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-21T00:00:00Z"))
 	result, err := engine.Step(ctx, mustTime(t, "2026-07-24T09:00:00Z"))
 	if err != nil || result.Failed() {
 		t.Fatalf("Step() = %v / %v", err, result.Err())
 	}
-	if result.Schedules[0].Due != 1 || publisher.count() != 1 {
-		t.Fatalf("skip policy produced due=%d published=%d, want 1/1",
-			result.Schedules[0].Due, publisher.count())
+	if !result.Schedules[0].StaleSkipped || publisher.count() != 0 {
+		t.Fatalf("skip policy after a long gap published %d handoffs (%+v)",
+			publisher.count(), result.Schedules[0])
 	}
-	envelope := publisher.requests[0].Envelope
-	payload, ok := envelope.Payload.(jobcontract.HeartbeatPayload)
+
+	// One missed period is not a gap: the schedule runs normally.
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-24T00:00:00Z"))
+	next, err := engine.Step(ctx, mustTime(t, "2026-07-25T09:00:00Z"))
+	if err != nil || next.Failed() {
+		t.Fatalf("Step() = %v / %v", err, next.Err())
+	}
+	if publisher.count() != 1 {
+		t.Fatalf("published %d handoffs after a single period, want 1", publisher.count())
+	}
+	payload, ok := publisher.requests[0].Envelope.Payload.(jobcontract.HeartbeatPayload)
 	if !ok {
-		t.Fatalf("unexpected payload %T", envelope.Payload)
+		t.Fatalf("unexpected payload %T", publisher.requests[0].Envelope.Payload)
 	}
-	if payload.ScheduledFor != "2026-07-24T00:00:00Z" {
-		t.Fatalf("skip policy emitted %s, want the newest due time", payload.ScheduledFor)
+	if payload.ScheduledFor != "2026-07-25T00:00:00Z" {
+		t.Fatalf("emitted %s, want the newest due time", payload.ScheduledFor)
 	}
 }
 
-func TestBoundedCatchUpReplaysMissedNightlyOccurrences(t *testing.T) {
+func anchor(t *testing.T, value string) *time.Time {
+	t.Helper()
+	parsed := mustTime(t, value)
+	return &parsed
+}
+
+func TestBoundedCatchUpEmitsOneOverdueOccurrenceNotTheWholeGap(t *testing.T) {
 	schedule := Schedule{
 		ID:               "catch_up_probe",
 		LegacyBeatEntry:  "run-daily-metrics",
@@ -414,51 +448,136 @@ func TestBoundedCatchUpReplaysMissedNightlyOccurrences(t *testing.T) {
 		UniquenessWindow: 72 * time.Hour,
 		TargetKind:       jobcontract.KindHeartbeat,
 		ProducerID:       ProducerHeartbeat,
-		MaxAttempts:      3,
+		MaxAttempts:      1,
 		AlertThreshold:   72 * time.Hour,
 		Rationale:        "probe",
 	}
-	occurrences, err := DueOccurrences(schedule, mustTime(t, "2026-07-24T09:00:00Z"))
+	// Three nights were missed. Celery Beat fires one overdue task and resumes;
+	// replaying all three would turn a restart into a burst of backdated
+	// nightly fan-outs.
+	decision, err := DueOccurrence(
+		schedule, mustTime(t, "2026-07-24T09:00:00Z"), anchor(t, "2026-07-21T01:00:00Z"),
+	)
 	if err != nil {
-		t.Fatalf("DueOccurrences() = %v", err)
+		t.Fatalf("DueOccurrence() = %v", err)
 	}
-	if len(occurrences) != 3 {
-		t.Fatalf("bounded catch-up returned %d occurrences, want the 3 inside the window", len(occurrences))
+	if decision.Occurrence == nil {
+		t.Fatal("a missed nightly safety net produced no occurrence")
 	}
-	// Ascending order matters: a catch-up that ran newest-first would leave the
-	// oldest safety net racing the next tick.
-	for index := 1; index < len(occurrences); index++ {
-		if !occurrences[index].ScheduledFor.After(occurrences[index-1].ScheduledFor) {
-			t.Fatalf("catch-up occurrences are not ascending: %v", occurrences)
-		}
+	if !decision.Occurrence.ScheduledFor.Equal(mustTime(t, "2026-07-24T01:00:00Z")) {
+		t.Fatalf("emitted %s, want only the newest owed boundary", decision.Occurrence.ScheduledFor)
+	}
+	if decision.ColdStart {
+		t.Fatal("an anchored schedule reported a cold start")
 	}
 }
 
-func TestOccurrencesOlderThanTheUniquenessWindowAreNotEmitted(t *testing.T) {
+func TestColdStartRecordsABaselineInsteadOfFiring(t *testing.T) {
 	schedule := heartbeatSchedule(t)
-	// Four days after the last observed due time the newest occurrence is
-	// still within one day, so this probes the boundary directly instead.
-	occurrences, err := DueOccurrences(Schedule{
-		ID:               "narrow_window_probe",
-		LegacyBeatEntry:  schedule.LegacyBeatEntry,
-		Cadence:          DailyAt(0, 0),
+	decision, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T09:00:00Z"), nil)
+	if err != nil {
+		t.Fatalf("DueOccurrence() = %v", err)
+	}
+	if decision.Occurrence == nil || !decision.ColdStart {
+		t.Fatalf("cold start = %+v, want a baseline occurrence", decision)
+	}
+}
+
+func TestAnchoredScheduleDoesNotRefireAnOwnedBoundary(t *testing.T) {
+	schedule := heartbeatSchedule(t)
+	decision, err := DueOccurrence(
+		schedule, mustTime(t, "2026-07-24T09:00:00Z"), anchor(t, "2026-07-24T00:00:00Z"),
+	)
+	if err != nil {
+		t.Fatalf("DueOccurrence() = %v", err)
+	}
+	if decision.Occurrence != nil {
+		t.Fatalf("re-fired an already recorded boundary: %+v", decision.Occurrence)
+	}
+}
+
+// A 300 second schedule started mid-bucket must wait a full period rather than
+// immediately firing the bucket it started inside, which is Beat's behavior.
+func TestIntervalScheduleWaitsAPeriodAfterItsBaseline(t *testing.T) {
+	schedule := Schedule{
+		ID:               "interval_probe",
+		LegacyBeatEntry:  "dispatch-scheduled-metrics",
+		Cadence:          EveryInterval(300 * time.Second),
 		Timezone:         "UTC",
 		CatchUp:          CatchUpSkip,
+		UniquenessWindow: time.Hour,
+		TargetKind:       jobcontract.KindHeartbeat,
+		ProducerID:       ProducerHeartbeat,
+		MaxAttempts:      1,
+		AlertThreshold:   30 * time.Minute,
+		Rationale:        "probe",
+	}
+	baseline, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:02:00Z"), nil)
+	if err != nil || !baseline.ColdStart {
+		t.Fatalf("cold start = %+v err=%v", baseline, err)
+	}
+	recorded := baseline.Occurrence.ScheduledFor
+	// Still inside the baseline bucket: nothing owed.
+	held, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:04:59Z"), &recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Occurrence != nil {
+		t.Fatalf("fired inside the baseline bucket: %+v", held.Occurrence)
+	}
+	// Next boundary is owed.
+	next, err := DueOccurrence(schedule, mustTime(t, "2026-07-24T10:05:01Z"), &recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Occurrence == nil ||
+		!next.Occurrence.ScheduledFor.Equal(mustTime(t, "2026-07-24T10:05:00Z")) {
+		t.Fatalf("next boundary = %+v", next.Occurrence)
+	}
+}
+
+// Skip-policy schedules must refuse a boundary older than their staleness
+// horizon: a heartbeat reported a day late misstates the day it describes.
+func TestSkipPolicyRefusesAStaleBoundary(t *testing.T) {
+	schedule := heartbeatSchedule(t)
+	decision, err := DueOccurrence(
+		schedule, mustTime(t, "2026-08-01T09:00:00Z"), anchor(t, "2026-07-01T00:00:00Z"),
+	)
+	if err != nil {
+		t.Fatalf("DueOccurrence() = %v", err)
+	}
+	if !decision.SkippedStale {
+		t.Fatalf("skip policy caught up across a month-long gap: %+v", decision)
+	}
+	if decision.Occurrence == nil {
+		t.Fatal("a resumed schedule must still record where it resumed")
+	}
+}
+
+// Bounded catch-up has no staleness horizon: a nightly safety net must run
+// however late, which is the whole point of a backstop.
+func TestBoundedCatchUpRunsHoweverLate(t *testing.T) {
+	schedule := Schedule{
+		ID:               "late_probe",
+		LegacyBeatEntry:  "run-membership-backfill-daily",
+		Cadence:          DailyAt(3, 30),
+		Timezone:         "UTC",
+		CatchUp:          CatchUpBounded,
 		UniquenessWindow: 25 * time.Hour,
-		TargetKind:       schedule.TargetKind,
-		ProducerID:       schedule.ProducerID,
-		MaxAttempts:      schedule.MaxAttempts,
+		TargetKind:       jobcontract.KindHeartbeat,
+		ProducerID:       ProducerHeartbeat,
+		MaxAttempts:      1,
 		AlertThreshold:   25 * time.Hour,
 		Rationale:        "probe",
-	}, mustTime(t, "2026-07-25T02:00:00Z"))
+	}
+	decision, err := DueOccurrence(
+		schedule, mustTime(t, "2026-08-01T09:00:00Z"), anchor(t, "2026-07-01T03:30:00Z"),
+	)
 	if err != nil {
-		t.Fatalf("DueOccurrences() = %v", err)
+		t.Fatalf("DueOccurrence() = %v", err)
 	}
-	if len(occurrences) != 1 {
-		t.Fatalf("expected the in-window occurrence only, got %d", len(occurrences))
-	}
-	if !occurrences[0].ScheduledFor.Equal(mustTime(t, "2026-07-25T00:00:00Z")) {
-		t.Fatalf("emitted %s, want the newest in-window due time", occurrences[0].ScheduledFor)
+	if decision.Occurrence == nil || decision.SkippedStale {
+		t.Fatalf("bounded catch-up refused a late safety net: %+v", decision)
 	}
 }
 
@@ -514,10 +633,12 @@ func TestNotImplementedProducerFailsLoudlyRatherThanSilently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProducerSet() = %v", err)
 	}
+	ledger := newMemoryLedger()
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
 	engine, err := newEngine(EngineConfig{
 		Schedules: []Schedule{schedule},
 		Producers: producers,
-		Ledger:    newMemoryLedger(),
+		Ledger:    ledger,
 		Publisher: &recordingPublisher{},
 		Registry:  testRegistry(t),
 	}, stubBeginner{tx: &stubTx{}})
@@ -537,7 +658,9 @@ func TestDeferredRouteIsChosenFromTheRegistryNotTheProducer(t *testing.T) {
 	ctx := context.Background()
 	schedule := heartbeatSchedule(t)
 	publisher := &recordingPublisher{}
-	engine := newTestEngine(t, schedule, newMemoryLedger(), publisher, &stubTx{})
+	ledger := newMemoryLedger()
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
+	engine := newTestEngine(t, schedule, ledger, publisher, &stubTx{})
 	if _, err := engine.Step(ctx, mustTime(t, "2026-07-24T00:05:00Z")); err != nil {
 		t.Fatalf("Step() = %v", err)
 	}

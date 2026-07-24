@@ -98,6 +98,32 @@ type Materializer interface {
 	Materialize(ctx context.Context, tx pgx.Tx, occurrence PendingOccurrence) (PlanResult, error)
 }
 
+// unavailableMaterializer stands in until a native sync planner exists.
+//
+// It is not a stub that quietly succeeds. Every invocation reports that the
+// planner is missing, which leaves the occurrence untouched and closes
+// scheduler readiness the moment real pending work appears. A scheduler with no
+// pending occurrences stays healthy, so this does not make a correctly idle
+// deployment look broken; it makes work that cannot be completed impossible to
+// ignore.
+type unavailableMaterializer struct{}
+
+// NewUnavailableMaterializer constructs the explicit missing-planner seam.
+// Replace it with the native planner in CUT-09/CUT-10; do not replace it with
+// anything that returns success.
+func NewUnavailableMaterializer() Materializer { return unavailableMaterializer{} }
+
+func (unavailableMaterializer) Materialize(
+	context.Context,
+	pgx.Tx,
+	PendingOccurrence,
+) (PlanResult, error) {
+	return PlanResult{}, fmt.Errorf(
+		"%w: the native scheduled-sync planner is not implemented",
+		ErrMaterializerUnavailable,
+	)
+}
+
 // OccurrenceReconcileResult is the bounded outcome of one batch.
 type OccurrenceReconcileResult struct {
 	Scanned         int
@@ -266,6 +292,14 @@ func (reconciler *OccurrenceReconciler) reconcileOne(
 	}
 
 	plan, materializeErr := reconciler.materializer.Materialize(ctx, tx, occurrence)
+	if errors.Is(materializeErr, ErrMaterializerUnavailable) {
+		// The planner itself is absent, not failing. Consuming an attempt here
+		// would march healthy occurrences toward quarantine for a reason that
+		// has nothing to do with them, so the occurrence is left exactly as it
+		// was and the failure is surfaced to the caller, which closes
+		// readiness until a planner exists.
+		return "", materializeErr
+	}
 	if materializeErr != nil {
 		// The planner may have left partial state in this transaction, so the
 		// failure has to be recorded in a clean one. Rolling back first is

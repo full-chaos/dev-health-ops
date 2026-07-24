@@ -462,3 +462,59 @@ func TestOccurrenceReconcilerRejectsAMissingMaterializer(t *testing.T) {
 		t.Fatalf("NewOccurrenceReconciler() = %v, want ErrMaterializerUnavailable", err)
 	}
 }
+
+// A missing planner is not a failing occurrence. Consuming an attempt here
+// would march healthy pending work toward quarantine for a reason that has
+// nothing to do with it, so the occurrence must be left exactly as it was and
+// the condition surfaced to the caller instead.
+func TestUnavailableMaterializerLeavesTheOccurrenceUntouched(t *testing.T) {
+	ctx := context.Background()
+	fixture := startOccurrencePostgres(t)
+	reconciler, err := NewOccurrenceReconciler(fixture.pool, NewUnavailableMaterializer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := fixture.state(t, fixture.occurrence.ID)
+
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, err := reconciler.Reconcile(ctx, at("2026-07-24T01:05:00Z"), 10); !errors.Is(
+			err, ErrMaterializerUnavailable,
+		) {
+			t.Fatalf("attempt %d Reconcile() = %v, want ErrMaterializerUnavailable", attempt, err)
+		}
+	}
+
+	after := fixture.state(t, fixture.occurrence.ID)
+	if after.Status != before.Status || after.AttemptCount != before.AttemptCount {
+		t.Fatalf("a missing planner mutated the occurrence: before=%+v after=%+v", before, after)
+	}
+	if after.Status != OccurrenceReconcilePending || after.AttemptCount != 0 {
+		t.Fatalf("occurrence state = %+v, want an untouched pending occurrence", after)
+	}
+	if after.ErrorCode != nil {
+		t.Fatalf("a missing planner recorded error code %v on the occurrence", *after.ErrorCode)
+	}
+}
+
+// With no pending work a missing planner is not an error: an idle scheduler
+// must not report itself broken.
+func TestUnavailableMaterializerIsSilentWithNoPendingWork(t *testing.T) {
+	ctx := context.Background()
+	fixture := startOccurrencePostgres(t)
+	if _, err := fixture.pool.Exec(
+		ctx, "DELETE FROM public.scheduled_sync_occurrences",
+	); err != nil {
+		t.Fatal(err)
+	}
+	reconciler, err := NewOccurrenceReconciler(fixture.pool, NewUnavailableMaterializer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := reconciler.Reconcile(ctx, at("2026-07-24T01:05:00Z"), 10)
+	if err != nil {
+		t.Fatalf("an idle scheduler reported %v", err)
+	}
+	if result.Scanned != 0 {
+		t.Fatalf("Reconcile() = %+v", result)
+	}
+}

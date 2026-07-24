@@ -56,6 +56,20 @@ func (database *fakeSchedulerDatabase) RiverSchemaReady(context.Context, string)
 func (database *fakeSchedulerDatabase) DomainPool() *pgxpool.Pool { return database.pool }
 func (database *fakeSchedulerDatabase) Close()                    { database.closed.Store(true) }
 
+// stubOccurrenceStepper stands in for the pending-occurrence consumer the
+// scheduler loop now requires.
+type stubOccurrenceStepper struct{}
+
+func (stubOccurrenceStepper) Reconcile(
+	context.Context, time.Time, int,
+) (schedulersync.OccurrenceReconcileResult, error) {
+	return schedulersync.OccurrenceReconcileResult{}, nil
+}
+
+func stubOccurrenceSource(*pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+	return stubOccurrenceStepper{}, nil
+}
+
 // fakeFixedLoop records the fixed maintenance schedule lifecycle so the
 // composition test can prove the scheduler process owns both schedulers.
 type fakeFixedLoop struct {
@@ -107,7 +121,8 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 				return nil
 			})
 		},
-		newLoop: schedulersync.NewLoop,
+		newLoop:        schedulersync.NewLoop,
+		newOccurrences: stubOccurrenceSource,
 		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry) (lifecycle.Component, error) {
 			if pool != database.pool {
 				t.Fatal("fixed schedule loop received the wrong domain pool")
@@ -183,6 +198,7 @@ func TestSchedulerRuntimeRefusesToStartWithoutTheFixedScheduleLoop(t *testing.T)
 			},
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
+			newOccurrences: stubOccurrenceSource,
 			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error) {
 				return nil, errors.New("producers unavailable")
 			},
@@ -211,6 +227,7 @@ func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing
 			},
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
+			newOccurrences: stubOccurrenceSource,
 			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error) {
 				return nil, errors.New("fixed schedule loop unavailable")
 			},

@@ -176,58 +176,84 @@ func NewOccurrence(schedule Schedule, scheduledFor, observedAt time.Time) Occurr
 	}
 }
 
-// DueOccurrences enumerates the occurrences a scheduler should attempt at
-// observedAt under the schedule's catch-up policy. It is a pure function so
-// the two-replica and restart behaviors are unit-testable without a database.
+// DueDecision is what a scheduler should do for one schedule at one instant.
+type DueDecision struct {
+	// Occurrence is the single occurrence to attempt, if any.
+	Occurrence *Occurrence
+	// ColdStart means this schedule has no durable history. The occurrence is
+	// a baseline to record, not work to produce.
+	ColdStart bool
+	// SkippedStale records that the newest due time was too old to run under
+	// this schedule's policy. It is reported rather than silently dropped.
+	SkippedStale bool
+}
+
+// DueOccurrence decides what to attempt at observedAt given the newest due time
+// already recorded in the durable ledger.
 //
-// An occurrence older than the uniqueness window is never emitted: its
-// identity may no longer be distinguishable in the durable ledger, so
-// re-emitting it could duplicate a product effect. Such an occurrence is
-// reported through Missing, not silently dropped.
-func DueOccurrences(schedule Schedule, observedAt time.Time) ([]Occurrence, error) {
+// At most one occurrence is ever emitted. That is Celery Beat's missed-run
+// behavior: after an outage Beat fires one overdue task and resumes, it does
+// not replay every boundary it slept through. Emitting the whole missed window
+// would turn a scheduler restart into a burst of backdated nightly fan-outs.
+//
+// lastRecorded is the anchor. Its absence means cold start: a brand-new ledger
+// carries none of Beat's history, so the current due time is recorded as a
+// baseline and produces no work. Without that, first activation at 01:30 would
+// treat both yesterday's and today's 01:00 boundary as owed, and a freshly
+// started 300 second schedule would immediately fire the bucket it started
+// inside instead of waiting a full period.
+//
+// The epoch-aligned cadence grid is still what makes an occurrence key
+// deterministic across replicas. Anchoring only decides which grid point is
+// owed, so replica agreement is preserved.
+func DueOccurrence(
+	schedule Schedule,
+	observedAt time.Time,
+	lastRecorded *time.Time,
+) (DueDecision, error) {
 	if err := schedule.Validate(); err != nil {
-		return nil, err
+		return DueDecision{}, err
 	}
 	location, err := schedule.Location()
 	if err != nil {
-		return nil, err
+		return DueDecision{}, err
 	}
 	observedAt = observedAt.UTC().Truncate(time.Second)
-	horizon := observedAt.Add(-schedule.UniquenessWindow)
+	scheduledFor, ok := schedule.Cadence.Previous(observedAt, location)
+	if !ok {
+		return DueDecision{}, fmt.Errorf("%w: %s", ErrInvalidCadence, schedule.ID)
+	}
 
+	if lastRecorded == nil {
+		occurrence := NewOccurrence(schedule, scheduledFor, observedAt)
+		return DueDecision{Occurrence: &occurrence, ColdStart: true}, nil
+	}
+	anchor := lastRecorded.UTC()
+	if !scheduledFor.After(anchor) {
+		// The newest boundary is already durably owned.
+		return DueDecision{}, nil
+	}
+
+	occurrence := NewOccurrence(schedule, scheduledFor, observedAt)
 	switch schedule.CatchUp {
 	case CatchUpSkip:
-		scheduledFor, ok := schedule.Cadence.Previous(observedAt, location)
-		if !ok || scheduledFor.Before(horizon) {
-			return nil, nil
+		// Telemetry and cumulative retention resume rather than catch up. If
+		// more than one boundary was missed the anchor sits behind the boundary
+		// before this one, and running now would report a heartbeat for a day
+		// the process was absent, or prune under a cutoff the next night
+		// supersedes anyway. Re-baselining records where the schedule resumed
+		// without claiming work happened.
+		priorBoundary, ok := schedule.Cadence.Previous(scheduledFor.Add(-time.Second), location)
+		if ok && anchor.Before(priorBoundary) {
+			return DueDecision{Occurrence: &occurrence, SkippedStale: true}, nil
 		}
-		return []Occurrence{NewOccurrence(schedule, scheduledFor, observedAt)}, nil
 	case CatchUpBounded:
-		limit := catchUpLimit(schedule)
-		dueTimes, _ := schedule.Cadence.Between(horizon, observedAt, location, limit)
-		occurrences := make([]Occurrence, 0, len(dueTimes))
-		for _, scheduledFor := range dueTimes {
-			occurrences = append(occurrences, NewOccurrence(schedule, scheduledFor, observedAt))
-		}
-		return occurrences, nil
+		// A safety net must run however late: that is the entire reason it
+		// exists. Exactly one occurrence is owed regardless of gap size.
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrInvalidSchedule, schedule.ID)
+		return DueDecision{}, fmt.Errorf("%w: %s", ErrInvalidSchedule, schedule.ID)
 	}
-}
-
-// catchUpLimit bounds one catch-up enumeration so a long outage cannot emit an
-// unbounded burst. The window over the period is the exact number of
-// occurrences the uniqueness window can distinguish, plus one for the boundary.
-func catchUpLimit(schedule Schedule) int {
-	period := schedule.Cadence.Period()
-	if period <= 0 {
-		return 1
-	}
-	limit := int(schedule.UniquenessWindow/period) + 1
-	if limit > 64 {
-		return 64
-	}
-	return limit
+	return DueDecision{Occurrence: &occurrence}, nil
 }
 
 func writeDigestField(hasher interface{ Write([]byte) (int, error) }, name, value string) {

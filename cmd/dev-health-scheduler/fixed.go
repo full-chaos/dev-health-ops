@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	schedulerfixed "github.com/full-chaos/dev-health-ops/internal/scheduler/fixed"
@@ -39,10 +40,18 @@ func buildFixedScheduleProducers(
 	if err != nil {
 		return nil, err
 	}
+	// The membership safety net chains a work-graph build before its
+	// projection, so the fan-out producer needs the same request writer the
+	// post-sync path uses.
+	graphWriter, err := workgraph.NewRequestWriter(registry)
+	if err != nil {
+		return nil, err
+	}
 	remainingFanout, err := schedulerfixed.NewRemainingMetricsFanoutProducer(
 		remainingStore,
 		remainingPublisher,
 		schedulerfixed.NewPostgresOrganizationLister(),
+		graphWriter,
 	)
 	if err != nil {
 		return nil, err

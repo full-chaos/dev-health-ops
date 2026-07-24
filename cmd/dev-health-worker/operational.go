@@ -100,6 +100,25 @@ func buildOperationalWorker(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// Rate-limit observations and external-ingest batches live in the domain
+	// database, so their retention runs with the domain role. Worker-outbox
+	// retention keeps the queue-control role because it also removes the
+	// relay-owned completion fences.
+	terminalRetention, terminalErr := systemjobs.NewTerminalOutboxRetentionStore(outboxStore)
+	rateLimitRetention, rateLimitErr := systemjobs.NewRateLimitObservationStore(
+		postgresDatabase.pools.Domain,
+	)
+	externalIngestRetention, externalIngestErr := systemjobs.NewExternalIngestBatchStore(
+		postgresDatabase.pools.Domain,
+	)
+	if terminalErr != nil || rateLimitErr != nil || externalIngestErr != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	retentionStores := map[string]systemjobs.RetentionStore{
+		jobcontract.RetentionWorkerTerminal:        terminalRetention,
+		jobcontract.RetentionRateLimitObservations: rateLimitRetention,
+		jobcontract.RetentionExternalIngestBatches: externalIngestRetention,
+	}
 	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
@@ -149,7 +168,7 @@ func buildOperationalWorker(
 			}
 			registered = append(registered, adapter.Spec())
 		case jobcontract.KindRetentionCleanup:
-			handler, handlerErr := systemjobs.NewRetentionHandler(outboxStore)
+			handler, handlerErr := systemjobs.NewRetentionHandler(retentionStores)
 			if handlerErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}

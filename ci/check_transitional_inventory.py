@@ -110,10 +110,6 @@ IMPORTLIB_CANVAS_IMPORT_RE = re.compile(
 # through a simple local alias (`c = chord` or `cv = canvas`).
 _BARE_NAME_ALIAS_RE = re.compile(r"^(\w+)\s*=\s*(\w+)\s*$")
 ROUTER_DECORATOR_RE = re.compile(r"^\s*@router\.(get|post|put|patch|delete)\(")
-# Loose (alias-agnostic) shape check used only for content-drift re-validation
-# of an already-discovered add_api_route/add_route row; discovery itself uses
-# the alias-exact `_add_route_re_for`.
-_ADD_ROUTE_ANCHOR_RE = re.compile(r"^\s*\w+\.(?:add_api_route|add_route)\(")
 DEF_RE = re.compile(r"^\s*(async\s+def|def)\s+\w+\(")
 DEF_NAME_RE = re.compile(r"^\s*(?:async\s+def|def)\s+(\w+)\(")
 CONSUMER_GROUP_VALUE_RE = re.compile(r'^CONSUMER_GROUP\s*=\s*"([^"]+)"')
@@ -413,14 +409,32 @@ def _aliased_canvas_bare_invocation_re(direct_names: set[str]) -> re.Pattern | N
     return re.compile(rf"^\s*(?:{alt})\(\s*$|^\s*(?:{alt})\(.*\)\(\s*\)\s*$")
 
 
+def _call_site_bare_invocation_patterns(lines: list[str]) -> list[re.Pattern]:
+    """The complete, per-file set of patterns that make a line a bare
+    celery-canvas invocation (direct, aliased, or module-qualified). This is
+    the SINGLE source of truth shared by discover_call_sites (fresh
+    discovery) and the call_site_literal content-drift re-verifier -- Codex
+    round-3 HIGH-3 found the two had drifted apart, so discovery would find
+    a qualified/aliased canvas call, but re-verifying the row the gate then
+    demanded for it would fail with STALE ANCHOR because the re-verifier
+    only knew the bare, unaliased pattern."""
+    _, direct_names, module_aliases = _scan_celery_canvas(lines)
+    patterns = [CANVAS_BARE_INVOCATION_RE]
+    qualified_re = _qualified_canvas_bare_invocation_re(module_aliases)
+    if qualified_re is not None:
+        patterns.append(qualified_re)
+    aliased_re = _aliased_canvas_bare_invocation_re(direct_names)
+    if aliased_re is not None:
+        patterns.append(aliased_re)
+    return patterns
+
+
 def discover_call_sites(root: Path) -> tuple[list[Surface], list[Surface]]:
     literal, getattr_indirection = [], []
     for path in _iter_py_files(root / "src/dev_health_ops"):
         relpath = _relpath(root, path)
         lines = path.read_text().splitlines()
-        _, direct_names, module_aliases = _scan_celery_canvas(lines)
-        qualified_re = _qualified_canvas_bare_invocation_re(module_aliases)
-        aliased_re = _aliased_canvas_bare_invocation_re(direct_names)
+        canvas_patterns = _call_site_bare_invocation_patterns(lines)
         last_match_line = -10
         for i, line in _iter_code_lines_from(lines):
             if not _is_code_line(line):
@@ -432,11 +446,7 @@ def discover_call_sites(root: Path) -> tuple[list[Surface], list[Surface]]:
                 getattr_indirection.append(Surface(CLASS_CALL_SITE_GETATTR, relpath, i))
                 last_match_line = i
                 continue
-            if (
-                CANVAS_BARE_INVOCATION_RE.match(code)
-                or (qualified_re is not None and qualified_re.match(code))
-                or (aliased_re is not None and aliased_re.match(code))
-            ):
+            if any(p.match(code) for p in canvas_patterns):
                 literal.append(Surface(CLASS_CALL_SITE_LITERAL, relpath, i))
                 last_match_line = i
                 continue
@@ -599,6 +609,54 @@ def discover_api_trigger_endpoints(
                 return d
         return None
 
+    def _transitive_router_anchor(
+        decorators_by_def: dict[int, list[int]],
+        text: list[str],
+        def_lines: list[int],
+        start_def: int,
+        router_re: re.Pattern,
+        max_hops: int = 12,
+    ) -> int | None:
+        """Same-file call-graph BFS: a dispatch two (or more) helper calls
+        away from its @router-decorated endpoint is an ORDINARY shape in
+        this codebase (e.g. billing/router.py's stripe_webhook ->
+        _process_subscription_event -> _enqueue_billing_notification), not
+        an exotic one -- so this is a fixed-point search over same-file call
+        edges, not a single hop. Bounded by max_hops purely as a runaway
+        backstop (real call chains here are 1-3 hops); an unbounded search
+        would be fine too on files this size. Cross-file call graphs remain
+        out of scope (see docs/architecture/transitional-workload-inventory.md
+        Known limitations)."""
+        visited = {start_def}
+        frontier = [start_def]
+        found: list[int] = []
+        for _ in range(max_hops):
+            if not frontier or found:
+                break
+            next_frontier: list[int] = []
+            for def_line in frontier:
+                name_match = DEF_NAME_RE.match(text[def_line - 1])
+                if not name_match:
+                    continue
+                fname = name_match.group(1)
+                call_re = re.compile(rf"\b{re.escape(fname)}\(")
+                for i, line in enumerate(text, start=1):
+                    if i == def_line or not call_re.search(line):
+                        continue
+                    caller_def = _enclosing_def_line(def_lines, i)
+                    if caller_def is None or caller_def in visited:
+                        continue
+                    visited.add(caller_def)
+                    caller_anchor = _router_anchor(
+                        decorators_by_def, text, caller_def, router_re
+                    )
+                    if caller_anchor is not None:
+                        found.append(caller_anchor)
+                    else:
+                        next_frontier.append(caller_def)
+            frontier = next_frontier
+        return min(found) if found else None
+
     out: list[Surface] = []
     seen: set[tuple[str, int]] = set()
     for relfile, lines in sorted(by_file.items()):
@@ -629,26 +687,12 @@ def discover_api_trigger_endpoints(
                 anchor = target_line
 
             if anchor is None:
-                # One-hop call-graph fallback: this dispatch sits in an
-                # undecorated helper -- find its callers in the same file.
-                name_match = DEF_NAME_RE.match(text[own_def - 1])
-                if name_match:
-                    fname = name_match.group(1)
-                    call_re = re.compile(rf"\b{re.escape(fname)}\(")
-                    caller_anchors = []
-                    for i, line in enumerate(text, start=1):
-                        if i == own_def or not call_re.search(line):
-                            continue
-                        caller_def = _enclosing_def_line(def_lines, i)
-                        if caller_def is None:
-                            continue
-                        caller_anchor = _router_anchor(
-                            decorators_by_def, text, caller_def, router_re
-                        )
-                        if caller_anchor is not None:
-                            caller_anchors.append(caller_anchor)
-                    if caller_anchors:
-                        anchor = min(caller_anchors)
+                # Transitive call-graph fallback: this dispatch sits in an
+                # undecorated helper, possibly several calls deep, inside a
+                # @router-decorated endpoint.
+                anchor = _transitive_router_anchor(
+                    decorators_by_def, text, def_lines, own_def, router_re
+                )
 
             if anchor is None:
                 continue
@@ -747,10 +791,11 @@ def load_inventory(path: Path) -> dict:
 # row through discovery in the first place.
 # ---------------------------------------------------------------------------
 
-# How many lines forward of the anchor to search for a call site's specific
-# task-name token -- covers the multi-line-statement shapes actually present
-# in this codebase (e.g. `celery_app.signature(\n    "name", ...\n)`).
-_TOKEN_WINDOW = 6
+# Hard backstop on how many lines a single logical statement may span before
+# _statement_window gives up extending it (real statements here are a
+# handful of lines; this only guards against a pathological unbalanced-
+# bracket file).
+_MAX_STATEMENT_LINES = 20
 
 _SKIP_TOKEN_SURFACE_MARKERS = (
     "chain(",
@@ -818,20 +863,39 @@ def _beat_entry_conditional_content_ok(
     return not expected or m.group(1) == expected
 
 
+def _statement_window(lines: list[str], line_no: int) -> str:
+    """The logical statement starting at `line_no`: lines that are all part
+    of one bracket-balanced expression, with each line's trailing `#`
+    comment (and any whole one-line docstring/string) stripped BEFORE
+    matching -- so a comment or log message mentioning an old task name
+    can't false-pass content-drift (Codex round-3 HIGH-2: an unrestricted
+    forward window matched the old name anywhere, including comments).
+    Bounded by _MAX_STATEMENT_LINES as a runaway backstop."""
+    parts = []
+    depth = 0
+    for i in range(line_no - 1, min(line_no - 1 + _MAX_STATEMENT_LINES, len(lines))):
+        code = _strip_line_noise(lines[i])
+        parts.append(code)
+        depth += code.count("(") + code.count("[") + code.count("{")
+        depth -= code.count(")") + code.count("]") + code.count("}")
+        if depth <= 0:
+            break
+    return "\n".join(parts)
+
+
 def _dispatch_token_present(lines: list[str], line_no: int, row: dict) -> bool:
     token = _expected_dispatch_token(row)
     if token is None:
         return True
-    window = "\n".join(lines[line_no - 1 : line_no - 1 + _TOKEN_WINDOW])
-    return token in window
+    return token in _statement_window(lines, line_no)
 
 
 def _call_site_literal_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
-    line = lines[line_no - 1]
-    code = _strip_line_noise(line)
+    code = _strip_line_noise(lines[line_no - 1])
+    canvas_patterns = _call_site_bare_invocation_patterns(lines)
     shape_ok = bool(
         CALL_SITE_LITERAL_RE.search(code)
-        or CANVAS_BARE_INVOCATION_RE.match(code)
+        or any(p.match(code) for p in canvas_patterns)
         or BOUND_ALIAS_RE.match(code)
         or PARTIAL_ALIAS_RE.search(code)
     )
@@ -846,15 +910,61 @@ def _call_site_getattr_content_ok(lines: list[str], line_no: int, row: dict) -> 
     return _dispatch_token_present(lines, line_no, row)
 
 
+_REST_SURFACE_RE = re.compile(r"^(?:GET|POST|PUT|PATCH|DELETE)\s+(\S+)$")
+
+
+def _expected_rest_path(row: dict) -> str | None:
+    """The specific route path a REST api_trigger_endpoint row records, so
+    content-drift can confirm the SAME path still appears near the anchor,
+    not just that some decorator/registration is still there (Codex
+    round-3 MED: editing the path string used to pass). Returns None for
+    surfaces that don't cleanly encode one path -- e.g. the compressed
+    `POST /webhooks/github|gitlab|jira` notation for three sibling routes
+    sharing one dispatch helper, which isn't a single literal to check --
+    that stays shape-only, a documented known limitation."""
+    surface = row.get("surface", "")
+    if "|" in surface:
+        return None
+    m = _REST_SURFACE_RE.match(surface)
+    return m.group(1) if m else None
+
+
+_ROUTE_PATH_LITERAL_RE = re.compile(r"""["']([^"']+)["']""")
+
+
+def _actual_route_path(lines: list[str], line_no: int) -> str | None:
+    """The first quoted string literal in the decorator/registration
+    statement -- the route's local path argument. APIRouter path arguments
+    are frequently only a *suffix* of the row's recorded full effective path
+    (the router's own `prefix=` mount, declared elsewhere, supplies the
+    rest -- e.g. `@router.post("/{binding_id}")` under a router mounted at
+    `/webhooks/pagerduty`), so this is compared to the row's expected path
+    via a suffix relationship, not exact equality."""
+    m = _ROUTE_PATH_LITERAL_RE.search(_statement_window(lines, line_no))
+    return m.group(1) if m else None
+
+
 def _api_trigger_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
     line = lines[line_no - 1]
+    aliases = _router_aliases(lines)
+    router_re = _router_decorator_re_for(aliases)
+    add_route_re = _add_route_re_for(aliases)
     code = _strip_line_noise(line)
-    if ROUTER_DECORATOR_RE.match(line) or _ADD_ROUTE_ANCHOR_RE.match(line):
-        # REST registration (decorator or add_api_route/add_route): the HTTP
-        # method/registration shape is verified; the specific path string is
-        # not cross-checked here (documented known limitation -- see
-        # docs/architecture/transitional-workload-inventory.md).
-        return True
+    if router_re.match(line) or add_route_re.match(code):
+        # REST registration (decorator or add_api_route/add_route): also
+        # confirm the specific path still appears near the anchor, when the
+        # row's surface encodes exactly one path. Compared via a suffix
+        # relationship (see _actual_route_path) to tolerate router mount
+        # prefixes composing with a locally-declared path suffix.
+        expected_path = _expected_rest_path(row)
+        if expected_path is None:
+            return True
+        actual_path = _actual_route_path(lines, line_no)
+        if actual_path is None:
+            return False
+        return expected_path.endswith(actual_path) or actual_path.endswith(
+            expected_path
+        )
     if CALL_SITE_LITERAL_RE.search(code) or GETATTR_INDIRECTION_RE.search(code):
         # GraphQL-resolver-anchored row: the anchor line IS the dispatch call
         # site, so the same specific-name check applies.
@@ -877,9 +987,58 @@ def _stream_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
     return bool(PAGERDUTY_ENQUEUE_RE.match(line))
 
 
+_IMPORT_SURFACE_NAMES_RE = re.compile(r"^from celery(?:\.canvas)?\s+import\s+(.+)$")
+
+
+def _expected_import_names(row: dict) -> set[str] | None:
+    """The specific name(s) a celery_canvas_import row's `surface` records
+    (e.g. `from celery import chain, chord` -> {"chain", "chord"}), so
+    content-drift can catch swapping the imported names (Codex round-3 MED:
+    `from celery import chain, chord` -> `from celery import group` used to
+    still pass, since the old check only asked "is this still some canvas
+    import"). Returns None for a surface shape this can't cleanly parse
+    (e.g. a future row describing `import celery.canvas as X` or an
+    importlib form) -- those stay shape-only, a documented known
+    limitation."""
+    m = _IMPORT_SURFACE_NAMES_RE.match(row.get("surface", ""))
+    if not m:
+        return None
+    return {
+        part.strip().split(" as ")[0].strip()
+        for part in m.group(1).split(",")
+        if part.strip()
+    }
+
+
 def _canvas_import_content_ok(lines: list[str], line_no: int, row: dict) -> bool:
     import_lines, _, _ = _scan_celery_canvas(lines)
-    return line_no in import_lines
+    if line_no not in import_lines:
+        return False
+    expected = _expected_import_names(row)
+    if expected is None:
+        return True
+    safe_lines = _docstring_safe_lines(lines)
+    for start, text in _join_logical_import_lines(safe_lines):
+        if start != line_no:
+            continue
+        m = CELERY_FROM_IMPORT_RE.match(text)
+        if not m:
+            # Not a `from celery import ...` shape at this line (e.g. it's
+            # now `import celery.canvas` or an importlib form instead) --
+            # the row's surface text no longer describes this line's shape
+            # at all, which is itself a form of drift.
+            return False
+        body = m.group(1).strip()
+        if body.startswith("("):
+            body = body[1:]
+        body = body.rstrip(")").rstrip(",")
+        actual = {
+            part.strip().split(" as ")[0].strip()
+            for part in body.split(",")
+            if part.strip()
+        }
+        return actual == expected
+    return True
 
 
 _CONTENT_CHECKERS = {

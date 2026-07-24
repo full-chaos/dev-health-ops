@@ -22,10 +22,12 @@ alongside the final Celery cleanup once CI proves no legacy surface remains.
 
 ## What is in the contract
 
-`contracts/jobs/v1/transitional-inventory.json` has 152 rows: the 147 surfaces
+`contracts/jobs/v1/transitional-inventory.json` has 153 rows: the 147 surfaces
 discovered in the Wave-0 audit, plus 5 added during CUT-01 round-2 hardening
 (a Codex adversarial review found a live dispatch the original scanner
-missed -- see "Round-2 hardening" below). Classes: Celery task decorators,
+missed) and 1 added during round-3 hardening (an ordinary two-hop API
+trigger the call-graph fallback missed) -- see "Round-2/3/4 hardening"
+below. Classes: Celery task decorators,
 Beat schedule entries (19 unconditional + 1 conditional), literal dispatch
 calls (`.delay(`, `.apply_async(`, `send_task(`, `.signature(`, a bare
 celery-canvas invocation, or a bound-method/`functools.partial` alias), the
@@ -330,17 +332,68 @@ the final Celery cleanup after CI proves no legacy surface remains"), delete
 this document, the contract file, the CI script, and its test module in the
 same PR that removes the last Celery surface.
 
+### Round-4 hardening (Codex adversarial review, round 3)
+
+A third Codex review returned **BLOCK** with 3 HIGH + 1 MED. Unlike prior
+rounds, these weren't new evasion shapes -- they were **internal
+inconsistencies** between discovery and re-verification, and one genuinely
+*ordinary* (not exotic) pattern this codebase already uses. All fixed:
+
+- **A real, ordinary two-hop API trigger was under-inventoried (HIGH):** the
+  Stripe webhook route (`billing/router.py:319`) reaches its Celery dispatch
+  (`billing/router.py:133`) through two helper calls
+  (`stripe_webhook -> _process_subscription_event -> _enqueue_billing_notification`),
+  and the one-hop call-graph fallback only followed one. Two hops is not an
+  exotic shape here -- it's how this exact webhook handler is written. Fixed
+  by making the same-file call-graph fallback a proper fixed-point BFS
+  (`_transitive_router_anchor`, bounded at 12 hops purely as a runaway
+  backstop) instead of a single lookup, and added the missing
+  `api_trigger_endpoint` row for the Stripe webhook.
+- **The specific-name content-drift check matched anywhere in a 6-line
+  window, including comments (HIGH):** `other_task.apply_async()` followed
+  by a comment or log line mentioning the *old* task name still passed.
+  Fixed by `_statement_window`: the token/path check now only searches the
+  bracket-depth-bounded logical statement starting at the anchor, with each
+  line's trailing `#` comment (and any whole one-line docstring) stripped
+  before matching -- a comment can no longer keep a swapped dispatch alive.
+- **Discovery and content-drift re-verification had literally different
+  pattern tables (HIGH):** a qualified/aliased canvas call or a router-alias
+  decorator that discovery correctly found could still fail its OWN
+  content-drift check, because the re-verifier only knew the base,
+  unaliased regex -- so adding the row the gate demanded produced
+  `STALE ANCHOR` instead of `OK`. Fixed by extracting single shared
+  functions (`_call_site_bare_invocation_patterns`, and re-deriving
+  `_router_aliases`/`_router_decorator_re_for`/`_add_route_re_for` at
+  content-check time exactly as discovery does) used by BOTH passes, so a
+  form discovery accepts can never be rejected by re-verification. Locked in
+  by an end-to-end test per form: synthesize the surface, add the row the
+  gate demands, assert the gate then passes.
+- **Two "documented limitations" were actually routine edits, not exotic
+  (MED):** replacing `from celery import chain, chord` with
+  `from celery import group`, or editing a REST route's path string, both
+  used to pass content-drift. Fixed: `celery_canvas_import` re-verification
+  now compares the actual imported name set to the row's recorded names
+  (`_expected_import_names`); `api_trigger_endpoint` REST rows now compare
+  the decorator/registration's literal path argument to the row's recorded
+  path via a suffix relationship (`_actual_route_path` /
+  `_expected_rest_path`) -- suffix, not exact equality, because an
+  `APIRouter`'s local path argument is frequently only the tail of the row's
+  recorded full effective path (the router's own `prefix=` mount, declared
+  elsewhere, supplies the rest).
+
 ## Known limitations
 
 `ci/check_transitional_inventory.py` is a regex/line-based static scanner, not
-a Python interpreter or a full AST-with-type-inference tool. Two full rounds
-of adversarial review (see "Round-2/Round-3 hardening" above) closed every
-concrete evasion found against *this* codebase's actual patterns. The
-following exotic forms remain theoretically possible and are **deliberately
-not chased further** -- the goal is that an ordinary code change can't slip
-through unnoticed, not that the gate is evasion-complete against a
-hypothetically adversarial contributor. Reviewers: treat any of these shapes
-appearing in a PR as a reason to ask for an explicit inventory row by hand.
+a Python interpreter or a full AST-with-type-inference tool. Three full
+rounds of adversarial review (see "Round-2/3/4 hardening" above) closed
+every concrete evasion found against *this* codebase's actual patterns,
+including same-file multi-hop API registration, which round-4 established
+is an ordinary pattern here and is now fully handled. The following forms
+remain theoretically possible and are **deliberately not chased further** --
+the goal is that an ordinary code change can't slip through unnoticed, not
+that the gate is evasion-complete against a hypothetically adversarial
+contributor. Reviewers: treat any of these shapes appearing in a PR as a
+reason to ask for an explicit inventory row by hand.
 
 - **Non-literal dynamic imports.** `importlib.import_module(some_variable)`
   (the module name comes from a variable, config value, or computed
@@ -353,27 +406,25 @@ appearing in a PR as a reason to ask for an explicit inventory row by hand.
   alias propagation (capped at 4 fixed-point iterations, which comfortably
   covers realistic short alias chains but not an arbitrarily long or
   indirect one).
-- **API registration two or more call-graph hops away.** The shared-helper
-  fan-in fallback in `discover_api_trigger_endpoints` resolves exactly one
-  hop (a dispatch call inside an undecorated helper, called directly by a
-  `@router`-decorated function). A helper called by another helper called by
-  a route is not resolved, nor is any cross-file relationship between a
-  `router.add_api_route(...)` registration and the handler it registers.
+- **API registration across file boundaries.** The call-graph BFS in
+  `discover_api_trigger_endpoints` is transitive but scoped to one file: a
+  `router.add_api_route(...)` registration in one module registering a
+  handler imported from another module, or a call chain that crosses a file
+  boundary, is not resolved. Same-file multi-hop chains of any depth (up to
+  the 12-hop backstop) ARE resolved as of round-4 -- see above.
 - **Dynamically constructed decorators.** `@getattr(router, method_name)(...)`
   or building the HTTP verb from a variable is not recognized -- only a
   literal `.get`/`.post`/`.put`/`.patch`/`.delete` (or `add_api_route`/
   `add_route`) method name is.
-- **REST endpoint path strings and non-primitive content-drift identity.**
-  Content-drift re-verification confirms the decorator/registration *shape*
-  still exists at a `api_trigger_endpoint` row's anchor line, but does not
-  cross-check the specific route path string against the row (a REST
-  endpoint's path is often on a different line than the anchor in a
-  multi-line decorator). Similarly, `celery_canvas_import` content-drift
-  confirms the line is still some celery-canvas import, not that it still
-  imports the *same* names the row recorded.
 - **Bound-alias/partial forms combined with getattr or double indirection**
   (e.g. `partial(getattr(task, "apply_async"), ...)`) are not recognized by
   either the alias or the getattr-indirection pattern individually.
+- **The compressed multi-route REST notation stays shape-only.** A row whose
+  `surface` compresses several sibling routes into one string (e.g.
+  `POST /webhooks/github|gitlab|jira` for three provider routes sharing one
+  dispatch helper) has no single path literal to check, so path-swap
+  content-drift isn't verified for those specific rows (the decorator/
+  registration shape still is).
 
 ## What CUT-01 does **not** cover
 

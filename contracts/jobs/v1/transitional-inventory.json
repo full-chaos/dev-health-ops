@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 152,
+  "row_count": 153,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -3655,6 +3655,30 @@
       "deletion_evidence_requirement": "Deleted once recompute.py no longer imports celery canvas primitives (native external recompute owns the chain natively).",
       "acceptance_test_id": "tests/test_external_ingest_recompute_dispatch.py",
       "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the invocation call site this import backs is already separately inventoried (call_site_literal row at line 368)."
+    },
+    {
+      "id": "api_trigger_endpoint:src/dev_health_ops/api/billing/router.py:319",
+      "surface": "POST /webhooks/stripe",
+      "class": "api_trigger_endpoint",
+      "source": {
+        "file": "src/dev_health_ops/api/billing/router.py",
+        "line": 319
+      },
+      "queue_or_cadence": "n/a",
+      "dispatches": "send_billing_notification (via stripe_webhook -> _process_subscription_event/_handle_subscription_updated/_handle_subscription_deleted/_handle_trial_will_end/_handle_invoice_webhook -> _enqueue_billing_notification, two helper calls deep)",
+      "dispatch_mechanism": "http_api_endpoint",
+      "owner_role": "contributor",
+      "target_owner": {
+        "type": "native_kind",
+        "value": "operational.billing_notification"
+      },
+      "target_kind_id": null,
+      "current_implementation_state": "celery_only",
+      "verification_status": "verified",
+      "compatibility_dependency": "Dispatch/trigger site only; the actual dispatch happens two helper calls below, at billing/router.py:133 (send_billing_notification.delay), already inventoried as a separate call_site_literal row.",
+      "deletion_evidence_requirement": "Deleted or rewritten once Stripe webhook billing-notification dispatch is natively owned in Go (operational.billing_notification).",
+      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_passes_only_durable_billing_reference",
+      "notes": "Added CUT-01 round-3 (Codex HIGH-1): the Stripe webhook endpoint (stripe_webhook) reaches the billing-notification dispatch through two helper calls (e.g. stripe_webhook -> _process_subscription_event -> _enqueue_billing_notification), not one; the original one-hop call-graph fallback missed this ordinary (not exotic) same-file pattern, so no api_trigger_endpoint row existed for this endpoint despite the gate reporting OK. Fixed by making the call-graph fallback transitive (fixed-point BFS over same-file call edges)."
     }
   ]
 }

@@ -56,8 +56,10 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     assert inventory["row_count"] == len(inventory["rows"])
     # 147 Wave-0 audit rows + 5 added in CUT-01 round-2 hardening (Codex
     # HIGH-1): the missed chord(...)() dispatch, plus a fail-closed row for
-    # each celery-canvas (chain/chord/group) import in the tree.
-    assert inventory["row_count"] == 152
+    # each celery-canvas (chain/chord/group) import in the tree, + 1 added
+    # in round-3 hardening (an ordinary two-hop API trigger the call-graph
+    # fallback missed: billing/router.py's Stripe webhook).
+    assert inventory["row_count"] == 153
 
 
 def test_discovered_keys_and_row_keys_are_identical_sets():
@@ -166,6 +168,48 @@ def test_no_two_primary_rows_share_a_target_kind_id():
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+def _make_row(
+    surface: str,
+    cls: str,
+    file: str,
+    line: int,
+    *,
+    owner_role: str = "contributor",
+    target_owner: dict | None = None,
+    target_kind_id: str | None = None,
+    current_implementation_state: str = "celery_only",
+) -> dict:
+    """A minimal-but-complete inventory row for end-to-end fixture tests --
+    every required field filled with an inert placeholder except the ones
+    the caller supplies, so a synthesized surface can be turned into a
+    passing row without repeating the full schema each time."""
+    return {
+        "id": f"{cls}:{file}:{line}",
+        "surface": surface,
+        "class": cls,
+        "source": {"file": file, "line": line},
+        "dispatch_mechanism": "n/a",
+        "owner_role": owner_role,
+        "target_owner": target_owner or {"type": "native_process", "value": "n/a"},
+        "target_kind_id": target_kind_id,
+        "current_implementation_state": current_implementation_state,
+        "verification_status": "verified",
+        "compatibility_dependency": None,
+        "deletion_evidence_requirement": "n/a (fixture)",
+        "acceptance_test_id": "tests/workers/test_transitional_inventory_contract.py",
+        "notes": "",
+    }
+
+
+def _inventory_root_with_rows(base_root: Path, rows: list[dict]) -> Path:
+    inventory = {"schema_version": 1, "row_count": len(rows), "rows": rows}
+    _write(
+        base_root / "contracts/jobs/v1/transitional-inventory.json",
+        json.dumps(inventory, indent=2),
+    )
+    return base_root
 
 
 def _minimal_valid_root(tmp_path: Path) -> Path:
@@ -1017,3 +1061,321 @@ def test_gate_catches_content_drift_when_a_celery_task_name_is_swapped(tmp_path)
     inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
     errors = checker.check(root, inventory_path)
     assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# Round-4 hardening (Codex round-3 review): a real same-file two-hop API
+# trigger, a comment/window content-drift false-pass, discovery/re-
+# verification table drift for canvas/router forms, and REST-path /
+# canvas-import-name content-drift. Per Codex's explicit ask, each
+# discovery fix below has a full end-to-end test: synthesize the surface,
+# add the row the gate demands, and assert the gate then passes -- not just
+# that discovery finds it.
+# ---------------------------------------------------------------------------
+
+
+def test_discovery_finds_a_two_hop_api_trigger(tmp_path):
+    """A dispatch reached through TWO helper calls (not one) from its
+    @router-decorated endpoint -- the real shape of
+    billing/router.py's stripe_webhook -> _process_subscription_event ->
+    _enqueue_billing_notification chain (Codex round-3 HIGH-1: the one-hop
+    fallback missed this ordinary, not exotic, pattern)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "from dev_health_ops.workers.tasks import some_task\n"
+        "\n"
+        "\n"
+        "async def _dispatch():\n"
+        "    some_task.apply_async()\n"
+        "\n"
+        "\n"
+        "async def _process_event():\n"
+        "    await _dispatch()\n"
+        "\n"
+        "\n"
+        '@router.post("/webhooks/example")\n'
+        "async def example_webhook():\n"
+        "    await _process_event()\n",
+    )
+    literal, getattr_indirection = checker.discover_call_sites(root)
+    endpoints = checker.discover_api_trigger_endpoints(
+        root, literal + getattr_indirection
+    )
+    assert [(s.file, s.line) for s in endpoints] == [
+        ("src/dev_health_ops/api/routers/example.py", 12)
+    ]
+
+
+def test_gate_catches_content_drift_with_a_misleading_comment(tmp_path):
+    """The exact Codex round-3 HIGH-2 repro: a genuinely swapped dispatch
+    (`other_task.apply_async()`) must fail content-drift even when a
+    trailing comment happens to still mention the OLD task name -- the
+    unrestricted forward window used to search past the statement into
+    the comment and false-pass."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/billing/router.py",
+        "\n" * 130 + "    other_task.apply_async()  # was send_billing_notification\n",
+    )
+    row = _make_row(
+        "send_billing_notification.delay",
+        "call_site_literal",
+        "src/dev_health_ops/api/billing/router.py",
+        131,
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, [row])
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_end_to_end_two_hop_api_trigger_can_be_inventoried(tmp_path):
+    """Synthesize the two-hop surface, add exactly the row the gate demands
+    for it, and assert the gate then passes end to end (Codex round-3
+    HIGH-3's standard: tests must verify successful inventory acceptance,
+    not only that discovery finds something)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "from dev_health_ops.workers.tasks import some_task\n"
+        "\n"
+        "\n"
+        "async def _dispatch():\n"
+        "    some_task.apply_async()\n"
+        "\n"
+        "\n"
+        "async def _process_event():\n"
+        "    await _dispatch()\n"
+        "\n"
+        "\n"
+        '@router.post("/webhooks/example")\n'
+        "async def example_webhook():\n"
+        "    await _process_event()\n",
+    )
+    literal, getattr_indirection = checker.discover_call_sites(root)
+    rows = [
+        _make_row(
+            "some_task.apply_async",
+            "call_site_literal",
+            "src/dev_health_ops/api/routers/example.py",
+            5,
+        ),
+        *[
+            _make_row(
+                "POST /webhooks/example",
+                "api_trigger_endpoint",
+                s.file,
+                s.line,
+            )
+            for s in checker.discover_api_trigger_endpoints(
+                root, literal + getattr_indirection
+            )
+        ],
+    ]
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, rows)
+
+    errors = checker.check(root, inventory_path)
+    assert errors == [], errors
+
+
+def test_end_to_end_qualified_canvas_invocation_can_be_inventoried(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "import celery.canvas as canvas\n"
+        "\n"
+        "def trigger():\n"
+        "    canvas.chord(\n"
+        "        [x.s() for x in ()],\n"
+        "        y.s(),\n"
+        "    )()\n",
+    )
+    imports = checker.discover_celery_canvas_imports(root)
+    literal, _ = checker.discover_call_sites(root)
+    rows = [
+        _make_row(
+            "import celery.canvas as canvas", "celery_canvas_import", s.file, s.line
+        )
+        for s in imports
+    ] + [
+        _make_row("chord(...)() [qualified]", "call_site_literal", s.file, s.line)
+        for s in literal
+    ]
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, rows)
+
+    errors = checker.check(root, inventory_path)
+    assert errors == [], errors
+
+
+def test_end_to_end_aliased_canvas_invocation_can_be_inventoried(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/somewhere.py",
+        "from celery import chord\n"
+        "\n"
+        "c = chord\n"
+        "\n"
+        "def trigger():\n"
+        "    c(\n"
+        "        [x.s() for x in ()],\n"
+        "        y.s(),\n"
+        "    )()\n",
+    )
+    imports = checker.discover_celery_canvas_imports(root)
+    literal, _ = checker.discover_call_sites(root)
+    rows = [
+        _make_row("from celery import chord", "celery_canvas_import", s.file, s.line)
+        for s in imports
+    ] + [
+        _make_row("chord(...)() [aliased]", "call_site_literal", s.file, s.line)
+        for s in literal
+    ]
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, rows)
+
+    errors = checker.check(root, inventory_path)
+    assert errors == [], errors
+
+
+def test_end_to_end_router_alias_decorator_can_be_inventoried(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "from dev_health_ops.workers.tasks import some_task\n"
+        "\n"
+        "r = router\n"
+        "\n"
+        "\n"
+        '@r.post("/example")\n'
+        "async def trigger_example():\n"
+        "    some_task.apply_async()\n",
+    )
+    literal, getattr_indirection = checker.discover_call_sites(root)
+    endpoints = checker.discover_api_trigger_endpoints(
+        root, literal + getattr_indirection
+    )
+    rows = [
+        _make_row("some_task.apply_async", "call_site_literal", s.file, s.line)
+        for s in literal
+    ] + [
+        _make_row("POST /example", "api_trigger_endpoint", s.file, s.line)
+        for s in endpoints
+    ]
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, rows)
+
+    errors = checker.check(root, inventory_path)
+    assert errors == [], errors
+
+
+def test_end_to_end_add_api_route_can_be_inventoried(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "from dev_health_ops.workers.tasks import some_task\n"
+        "\n"
+        "\n"
+        "async def helper():\n"
+        "    some_task.apply_async()\n"
+        "\n"
+        "\n"
+        'router.add_api_route("/example", helper, methods=["POST"])\n',
+    )
+    literal, getattr_indirection = checker.discover_call_sites(root)
+    endpoints = checker.discover_api_trigger_endpoints(
+        root, literal + getattr_indirection
+    )
+    rows = [
+        _make_row("some_task.apply_async", "call_site_literal", s.file, s.line)
+        for s in literal
+    ] + [
+        _make_row("POST /example", "api_trigger_endpoint", s.file, s.line)
+        for s in endpoints
+    ]
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, rows)
+
+    errors = checker.check(root, inventory_path)
+    assert errors == [], errors
+
+
+def test_gate_catches_a_canvas_import_name_swap(tmp_path):
+    """Replacing `from celery import chain, chord` with
+    `from celery import group` must fail content-drift -- Codex round-3
+    MED: the old check only asked "is this still some canvas import", not
+    "does it still import the SAME names"."""
+    root = tmp_path / "repo"
+    _write(root / "src/dev_health_ops/somewhere.py", "from celery import group\n")
+    row = _make_row(
+        "from celery import chain, chord",
+        "celery_canvas_import",
+        "src/dev_health_ops/somewhere.py",
+        1,
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, [row])
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_gate_catches_a_rest_path_swap(tmp_path):
+    """Editing a REST route's path string must fail content-drift -- Codex
+    round-3 MED: only the decorator/method shape was checked before."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        '@router.post("/completely/different/path")\n'
+        "async def trigger_example():\n"
+        "    pass\n",
+    )
+    row = _make_row(
+        "POST /example",
+        "api_trigger_endpoint",
+        "src/dev_health_ops/api/routers/example.py",
+        1,
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, [row])
+
+    errors = checker.check(root, inventory_path)
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_gate_tolerates_a_router_prefix_composed_path(tmp_path):
+    """A route decorator whose local path argument is only the *suffix* of
+    the row's recorded full effective path (the router's own `prefix=`
+    mount, declared elsewhere, supplies the rest -- exactly the real
+    pagerduty.py shape: `@router.post("/{binding_id}")` under a router
+    mounted at `/webhooks/pagerduty`) must NOT be flagged as content drift."""
+    root = tmp_path / "repo"
+    _write(
+        root / "src/dev_health_ops/api/routers/example.py",
+        "from dev_health_ops.workers.tasks import some_task\n"
+        "\n"
+        "\n"
+        '@router.post("/{binding_id}", status_code=202)\n'
+        "async def trigger_example(binding_id: str):\n"
+        "    some_task.apply_async()\n",
+    )
+    row = _make_row(
+        "some_task.apply_async",
+        "call_site_literal",
+        "src/dev_health_ops/api/routers/example.py",
+        6,
+    )
+    endpoint_row = _make_row(
+        "POST /webhooks/pagerduty/{binding_id}",
+        "api_trigger_endpoint",
+        "src/dev_health_ops/api/routers/example.py",
+        4,
+    )
+    inventory_path = root / "contracts/jobs/v1/transitional-inventory.json"
+    _inventory_root_with_rows(root, [row, endpoint_row])
+
+    errors = checker.check(root, inventory_path)
+    assert errors == [], errors

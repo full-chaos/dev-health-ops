@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -248,6 +249,14 @@ class TestClickHouseStoreSettings:
         assert (
             store._operational_ordering_contract is OperationalOrderingContract.CURRENT
         )
+        assert store._operational_ordering_contract_is_explicit
+
+    def test_rejects_raw_operational_ordering_contract(self):
+        with pytest.raises(TypeError, match="must be an OperationalOrderingContract"):
+            ClickHouseStore(
+                "clickhouse://localhost",
+                operational_ordering_contract=cast(OperationalOrderingContract, 2),
+            )
 
     @pytest.mark.asyncio
     async def test_insert_rows_passes_settings(self):

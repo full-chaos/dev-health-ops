@@ -195,6 +195,73 @@ def test_explicit_current_store_startup_rejects_legacy_schema() -> None:
         asyncio.run(enter_store())
 
 
+def test_constructor_explicit_current_store_startup_runs_guard_without_env() -> None:
+    # Given: a current-contract store override with no environment contract and
+    # migration-066 tables.
+    guard = _guard()
+    client = MagicMock()
+    client.query.return_value.result_rows = [
+        [
+            "CREATE TABLE operational_services "
+            "(org_id String, id String, source_version_at DateTime64(6, 'UTC')) "
+            "ENGINE = ReplacingMergeTree(source_version_at) "
+            "ORDER BY (org_id, id)"
+        ]
+    ]
+
+    async def enter_store() -> None:
+        with (
+            patch("clickhouse_connect.get_client", return_value=client),
+            patch.object(ClickHouseStore, "_ensure_tables", new=AsyncMock()),
+        ):
+            await ClickHouseStore(
+                "clickhouse://unused",
+                operational_ordering_contract=guard.OperationalOrderingContract.CURRENT,
+            ).__aenter__()
+
+    # When: startup uses only the explicit constructor override.
+    # Then: writer admission rejects stale legacy state.
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        pytest.raises(guard.OperationalOrderingStaleStateError),
+    ):
+        os.environ.pop("OPERATIONAL_ORDERING_CONTRACT", None)
+        asyncio.run(enter_store())
+
+
+def test_environment_contract_explicitness_is_snapshotted_before_startup() -> None:
+    # Given: a store created under explicit current mode before its environment
+    # is changed, and migration-066 tables.
+    guard = _guard()
+    client = MagicMock()
+    client.query.return_value.result_rows = [
+        [
+            "CREATE TABLE operational_services "
+            "(org_id String, id String, source_version_at DateTime64(6, 'UTC')) "
+            "ENGINE = ReplacingMergeTree(source_version_at) "
+            "ORDER BY (org_id, id)"
+        ]
+    ]
+    with patch.dict(os.environ, {"OPERATIONAL_ORDERING_CONTRACT": "2"}):
+        store = ClickHouseStore("clickhouse://unused")
+
+    async def enter_store() -> None:
+        with (
+            patch("clickhouse_connect.get_client", return_value=client),
+            patch.object(ClickHouseStore, "_ensure_tables", new=AsyncMock()),
+        ):
+            await store.__aenter__()
+
+    # When: the environment is absent by startup.
+    # Then: snapshotted explicitness still enforces writer admission.
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        pytest.raises(guard.OperationalOrderingStaleStateError),
+    ):
+        os.environ.pop("OPERATIONAL_ORDERING_CONTRACT", None)
+        asyncio.run(enter_store())
+
+
 def test_typed_writer_omits_ordering_fields_only_in_explicit_legacy_mode() -> None:
     # Given: the same derived v2 service written by bridge and current modes.
     class RecordingClient:

@@ -2,9 +2,11 @@ package providersync
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -78,5 +80,55 @@ func TestWorkItemCompatibilityOracleRejectsUnexpectedSource(t *testing.T) {
 	output, err := exec.Command(python, oracleScript, unexpectedSource).CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "unexpected oracle source") {
 		t.Fatalf("unexpected source error=%v output=%s", err, output)
+	}
+}
+
+func TestWorkItemCompatibilityOracleIgnoresSiblingPythonPath(t *testing.T) {
+	python := pythonExecutable(t)
+	_, currentFile, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(currentFile)
+	root := filepath.Join(packageDir, "..", "..")
+	oracleScript := filepath.Join(packageDir, "testdata", "python_work_item_contract_oracle.py")
+	adapterSource := filepath.Join(root, "src", "dev_health_ops", "processors", "dataset_adapters.py")
+
+	siblingSourceRoot := filepath.Join(t.TempDir(), "src")
+	siblingPackage := filepath.Join(siblingSourceRoot, "dev_health_ops")
+	if err := os.MkdirAll(filepath.Join(siblingPackage, "processors"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(t.TempDir(), "sibling-module-executed")
+	malicious := []byte(
+		"from pathlib import Path\nPath(" + strconv.Quote(sentinel) + ").write_text('executed')\n",
+	)
+	for path, content := range map[string][]byte{
+		filepath.Join(siblingPackage, "__init__.py"):                       malicious,
+		filepath.Join(siblingPackage, "processors", "__init__.py"):         {},
+		filepath.Join(siblingPackage, "processors", "dataset_adapters.py"): malicious,
+	} {
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	command := exec.Command(python, oracleScript, adapterSource)
+	command.Env = make([]string, 0, len(os.Environ())+1)
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, "PYTHONPATH=") {
+			command.Env = append(command.Env, value)
+		}
+	}
+	command.Env = append(
+		command.Env,
+		"PYTHONPATH="+strings.Join(
+			[]string{siblingSourceRoot, filepath.Join(root, "src")},
+			string(os.PathListSeparator),
+		),
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute Python work-item oracle: %v: %s", err, output)
+	}
+	if _, err := os.Stat(sentinel); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("sibling module executed: stat error=%v output=%s", err, output)
 	}
 }

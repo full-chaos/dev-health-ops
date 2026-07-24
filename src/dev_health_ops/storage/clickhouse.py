@@ -110,11 +110,21 @@ class ClickHouseStore:
     ) -> None:
         if not conn_string:
             raise ValueError("ClickHouse connection string is required")
+        if operational_ordering_contract is not None and not isinstance(
+            operational_ordering_contract, OperationalOrderingContract
+        ):
+            raise TypeError(
+                "operational_ordering_contract must be an OperationalOrderingContract"
+            )
         self.conn_string = conn_string
         self.client: Any | None = None
         self.org_id: str | None = None
         self._lock = asyncio.Lock()
         self._settings = settings or {}
+        self._operational_ordering_contract_is_explicit = (
+            operational_ordering_contract is not None
+            or operational_ordering_contract_is_explicit()
+        )
         self._operational_ordering_contract = (
             configured_operational_ordering_contract()
             if operational_ordering_contract is None
@@ -129,7 +139,7 @@ class ClickHouseStore:
         )
         self.client = client
         await self._ensure_tables()
-        if operational_ordering_contract_is_explicit():
+        if self._operational_ordering_contract_is_explicit:
             await asyncio.to_thread(
                 guard_operational_writer_tables,
                 client,

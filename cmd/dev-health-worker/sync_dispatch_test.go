@@ -41,7 +41,7 @@ func TestPostSyncWorkGraphScopePreservesLegacyWindowShape(t *testing.T) {
 		t.Fatalf("build=%s err=%v", build, err)
 	}
 	investment, err := postSyncWorkGraphScope(workgraph.KindDispatch, plan)
-	if err != nil || string(investment) != `{"from_date":"2026-01-01","run_membership_backfill_after":true,"to_date":"2026-01-14"}` {
+	if err != nil || string(investment) != `{"build_from_date":"2026-01-01T03:00:00Z","build_to_date":"2026-01-14T23:00:00Z","from_date":"2026-01-01","run_membership_backfill_after":true,"to_date":"2026-01-14"}` {
 		t.Fatalf("investment=%s err=%v", investment, err)
 	}
 }

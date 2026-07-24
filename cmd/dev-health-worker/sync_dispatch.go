@@ -171,13 +171,15 @@ func postSyncWorkGraphScope(
 			scope["to_date"] = plan.To.UTC().Format(time.RFC3339)
 		}
 	case workgraph.KindDispatch:
-		// The materializer accepts date-only bounds. The River compatibility
-		// operation owns the full build -> materialize -> membership sequence,
-		// so it is safe to publish this request without a Celery chord.
+		// The build accepts precise timestamps while the materializer accepts
+		// date-only bounds. Keep both representations so the compatibility
+		// operation can preserve the original build window.
 		if plan.From != nil {
+			scope["build_from_date"] = plan.From.UTC().Format(time.RFC3339)
 			scope["from_date"] = plan.From.UTC().Format("2006-01-02")
 		}
 		if plan.To != nil {
+			scope["build_to_date"] = plan.To.UTC().Format(time.RFC3339)
 			scope["to_date"] = plan.To.UTC().Format("2006-01-02")
 		}
 		scope["run_membership_backfill_after"] = true

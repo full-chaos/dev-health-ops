@@ -9,6 +9,7 @@ model, credential, or database URL.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from typing import Annotated, Any, Literal
@@ -81,6 +82,8 @@ def _scope_arguments(kind: str, scope: object, row: Any) -> dict[str, Any]:
             "llm_batch_timeout_seconds",
         },
         "investment.dispatch": {
+            "build_from_date",
+            "build_to_date",
             "from_date",
             "to_date",
             "window_days",
@@ -133,21 +136,23 @@ def _run_sync(kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
     if kind == "investment.dispatch":
         run_membership = bool(arguments.pop("run_membership_backfill_after", False))
-        build_arguments = {
-            key: arguments[key]
-            for key in ("from_date", "to_date", "org_id")
-            if key in arguments
-        }
-        build = _operation_result(
+        build_from_date = arguments.pop("build_from_date", None)
+        build_to_date = arguments.pop("build_to_date", None)
+        build_arguments = {"org_id": arguments["org_id"]}
+        if build_from_date is not None:
+            build_arguments["from_date"] = build_from_date
+        if build_to_date is not None:
+            build_arguments["to_date"] = build_to_date
+        build = _operation_evidence(
             "workgraph.build",
             work_graph_tasks.run_work_graph_build.run(**build_arguments),
         )
-        materialize = _operation_result(
+        materialize = _operation_evidence(
             "investment.materialize",
             work_graph_tasks.run_investment_materialize.run(**arguments),
         )
         membership = (
-            _operation_result(
+            _operation_evidence(
                 "investment.membership",
                 work_graph_tasks.run_membership_backfill.run(
                     org_id=str(arguments.get("org_id") or "")
@@ -179,10 +184,18 @@ def _run_sync(kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _operation_result(kind: str, result: object) -> dict[str, Any]:
+def _operation_evidence(kind: str, result: object) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise ValueError(f"{kind} compatibility operation returned an invalid result")
-    return result
+    status = result.get("status")
+    if not isinstance(status, str) or not status or len(status) > 64:
+        raise ValueError(f"{kind} compatibility operation returned an invalid status")
+    encoded = _canonical(result).encode()
+    return {
+        "status": status,
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "encoded_bytes": len(encoded),
+    }
 
 
 async def _mark_ambiguous(

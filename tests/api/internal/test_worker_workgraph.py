@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock
@@ -29,6 +30,32 @@ def test_scope_arguments_reloads_only_allowlisted_workgraph_fields() -> None:
         "from_date": "2026-07-01",
         "heuristic_window": 7,
         "org_id": "00000000-0000-4000-8000-000000000009",
+    }
+
+
+def test_scope_arguments_allows_separate_dispatch_build_window() -> None:
+    row = {
+        "org_id": "00000000-0000-4000-8000-000000000009",
+        "model_ref": "gpt-test",
+        "llm_concurrency": 2,
+    }
+    assert _scope_arguments(
+        "investment.dispatch",
+        {
+            "build_from_date": "2026-07-01T03:04:05Z",
+            "build_to_date": "2026-07-14T23:59:58Z",
+            "from_date": "2026-07-01",
+            "to_date": "2026-07-14",
+        },
+        row,
+    ) == {
+        "build_from_date": "2026-07-01T03:04:05Z",
+        "build_to_date": "2026-07-14T23:59:58Z",
+        "from_date": "2026-07-01",
+        "to_date": "2026-07-14",
+        "org_id": "00000000-0000-4000-8000-000000000009",
+        "llm_model": "gpt-test",
+        "llm_concurrency": 2,
     }
 
 
@@ -85,6 +112,8 @@ def test_river_investment_dispatch_runs_sequentially_without_celery(
         "investment.dispatch",
         {
             "org_id": "00000000-0000-4000-8000-000000000009",
+            "build_from_date": "2026-07-01T03:04:05Z",
+            "build_to_date": "2026-07-14T23:59:58Z",
             "from_date": "2026-07-01",
             "to_date": "2026-07-14",
             "llm_model": "gpt-test",
@@ -100,12 +129,74 @@ def test_river_investment_dispatch_runs_sequentially_without_celery(
     ]
     assert calls[0][1] == {
         "org_id": "00000000-0000-4000-8000-000000000009",
-        "from_date": "2026-07-01",
-        "to_date": "2026-07-14",
+        "from_date": "2026-07-01T03:04:05Z",
+        "to_date": "2026-07-14T23:59:58Z",
     }
     assert "llm_model" in calls[1][1]
+    assert calls[1][1]["from_date"] == "2026-07-01"
+    assert calls[1][1]["to_date"] == "2026-07-14"
+    assert "build_from_date" not in calls[1][1]
+    assert "build_to_date" not in calls[1][1]
     assert calls[2][1] == {"org_id": "00000000-0000-4000-8000-000000000009"}
     assert outcome["status"] == "success"
+
+
+def test_large_dispatch_results_produce_bounded_durable_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.workers import work_graph_tasks
+
+    results: dict[str, dict[str, object]] = {}
+
+    def large_result(name: str) -> Callable[..., dict[str, object]]:
+        def run(**_kwargs: object) -> dict[str, object]:
+            result: dict[str, object] = {
+                "status": "success",
+                "operation": name,
+                "payload": "x" * 5000,
+            }
+            results[name] = result
+            return result
+
+        return run
+
+    monkeypatch.setattr(
+        work_graph_tasks.run_work_graph_build, "run", large_result("build")
+    )
+    monkeypatch.setattr(
+        work_graph_tasks.run_investment_materialize,
+        "run",
+        large_result("materialize"),
+    )
+    monkeypatch.setattr(
+        work_graph_tasks.run_membership_backfill,
+        "run",
+        large_result("membership"),
+    )
+
+    outcome = _run_sync(
+        "investment.dispatch",
+        {
+            "org_id": "00000000-0000-4000-8000-000000000009",
+            "run_membership_backfill_after": True,
+        },
+    )
+    evidence = _evidence({"kind": "investment.dispatch", "outcome": outcome})
+
+    for name, key in (
+        ("build", "build"),
+        ("materialize", "materialize"),
+        ("membership", "membership"),
+    ):
+        result = results[name]
+        encoded = worker_workgraph._canonical(result).encode()
+        assert len(encoded) > 4096
+        assert evidence["outcome"][key] == {
+            "status": "success",
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "encoded_bytes": len(encoded),
+        }
+    assert len(worker_workgraph._canonical(evidence).encode()) <= 4096
 
 
 @pytest.mark.asyncio

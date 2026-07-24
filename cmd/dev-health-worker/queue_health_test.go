@@ -197,3 +197,33 @@ func TestQueueHealthMonitorStopsOnShutdown(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 }
+
+// TestQueueHealthShutdownIsSafeWithoutStartAndWhenRepeated keeps a lifecycle
+// violation from turning into a panic or a hang. The runtime only stops
+// components it started, so neither case is reachable through it today, but a
+// component that breaks when that assumption is violated converts an unrelated
+// startup failure into a stuck or crashing shutdown.
+func TestQueueHealthShutdownIsSafeWithoutStartAndWhenRepeated(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	neverStarted := newQueueHealthMonitor(queueHealthSampler{}, slog.Default(), "ops")
+	if err := neverStarted.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown without start = %v, want nil", err)
+	}
+
+	started := newQueueHealthMonitor(queueHealthSampler{}, slog.Default(), "ops")
+	if err := started.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := started.Start(ctx); err != nil {
+		t.Fatalf("repeated start = %v", err)
+	}
+	if err := started.Shutdown(ctx); err != nil {
+		t.Fatalf("first shutdown = %v", err)
+	}
+	if err := started.Shutdown(ctx); err != nil {
+		t.Fatalf("repeated shutdown = %v", err)
+	}
+}

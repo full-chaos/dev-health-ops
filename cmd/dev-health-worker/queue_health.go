@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -34,6 +36,9 @@ type queueHealthMonitor struct {
 	logger   *slog.Logger
 	profile  string
 	interval time.Duration
+	start    sync.Once
+	stop     sync.Once
+	running  atomic.Bool
 	done     chan struct{}
 	stopped  chan struct{}
 }
@@ -62,12 +67,22 @@ func (monitor *queueHealthMonitor) Name() string { return "queue-health-monitor"
 // closes readiness through queued_contract_versions; the monitor must not also
 // prevent the process from serving what it can still serve.
 func (monitor *queueHealthMonitor) Start(context.Context) error {
-	go monitor.loop()
+	monitor.start.Do(func() {
+		monitor.running.Store(true)
+		go monitor.loop()
+	})
 	return nil
 }
 
+// Shutdown is safe to call more than once and safe to call on a monitor that
+// never started. The runtime only stops components it started, but a lifecycle
+// component that can panic or hang when that assumption is violated turns an
+// unrelated startup failure into a stuck or crashing shutdown.
 func (monitor *queueHealthMonitor) Shutdown(ctx context.Context) error {
-	close(monitor.done)
+	if !monitor.running.Load() {
+		return nil
+	}
+	monitor.stop.Do(func() { close(monitor.done) })
 	select {
 	case <-monitor.stopped:
 		return nil

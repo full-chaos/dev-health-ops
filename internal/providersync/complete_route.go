@@ -194,8 +194,13 @@ func (executor CompleteRouteExecutor) Execute(
 			result.ShadowOnly = true
 			return nil
 		}
+		// The same instant that stamped these rows must become the persisted
+		// ledger CreatedAt. Letting the committer read its own clock would
+		// persist a later time than the rows were built with, so the next
+		// attempt would reload that later time, rebuild different rows, and be
+		// rejected on digest — the wedge in a second disguise.
 		result.Effects, err = executor.Committer.Commit(
-			workContext, session.Claim, batch.Effects,
+			workContext, session.Claim, batch.Effects, normalizedAt,
 		)
 		return err
 	})

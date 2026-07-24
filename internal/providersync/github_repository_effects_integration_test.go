@@ -4,10 +4,12 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
@@ -279,17 +281,33 @@ func TestGitHubRepositoryCrashWindowRecoversWithoutDuplicateVersion(t *testing.T
 	defer cancel()
 	harness := startRepositoryReadbackHarness(t, ctx)
 	claim, sink, now := harness.claim, harness.sink, harness.now
-	row := repositoryFixtureRow(claim.OrgID, now)
-	effect := repositoryEffect(t, claim, row)
-
-	state, err := NewEffectLedgerState(
-		claim, []EffectBatch{effect}, now.Add(time.Second),
+	// Attempt one collects through the real route so the rows carry the
+	// route's own timestamps, exactly as production builds them.
+	collectedAt := now
+	firstBatch, err := (GitHubRepositoryRouteHandler{}).Collect(
+		ctx, claim, providerfoundation.Credential{},
+		gitHubRepositoryClient(
+			t, &gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture},
+			"https://api.github.com",
+		),
+		collectedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	effect := firstBatch.Effects[0]
+	var row repositoryRow
+	if err := json.Unmarshal(effect.Rows[0], &row); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := NewEffectLedgerState(claim, []EffectBatch{effect}, collectedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The ledger must persist the collection instant, not a later commit clock.
 	if _, err := harness.repository.PrepareEffects(
-		ctx, claim, state, now.Add(time.Second),
+		ctx, claim, state, collectedAt,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -314,6 +332,37 @@ func TestGitHubRepositoryCrashWindowRecoversWithoutDuplicateVersion(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The recovery attempt must REGENERATE the batch through the route, the
+	// way the executor does, rather than reusing the in-memory batch. Reusing
+	// it would assert nothing about digest stability: it would pass even if
+	// every attempt produced a different manifest.
+	persisted, err := freshRepository.LoadEffects(ctx, recovered, recoveryNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.CreatedAt.UTC().Equal(collectedAt.UTC()) {
+		t.Fatalf(
+			"persisted ledger CreatedAt=%s want=%s",
+			persisted.CreatedAt, collectedAt,
+		)
+	}
+	recoveredBatch, err := (GitHubRepositoryRouteHandler{}).Collect(
+		ctx, recovered, providerfoundation.Credential{},
+		gitHubRepositoryClient(
+			t, &gitHubRepositoryDoer{t: t, body: gitHubRepositoryFixture},
+			"https://api.github.com",
+		),
+		persisted.CreatedAt.UTC(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredBatch.Effects[0].ContentDigest != effect.ContentDigest {
+		t.Fatalf(
+			"regenerated digest=%s want=%s",
+			recoveredBatch.Effects[0].ContentDigest, effect.ContentDigest,
+		)
+	}
 	freshSink := GitHubRepositoryClickHouseEffects{
 		Conn:  harness.conn,
 		Lease: leaseGuardAt(freshRepository, recovered, recoveryNow),
@@ -321,7 +370,9 @@ func TestGitHubRepositoryCrashWindowRecoversWithoutDuplicateVersion(t *testing.T
 	result, err := (EffectCommitter{
 		Ledger: freshRepository, Sink: freshSink, Readback: freshSink,
 		Now: func() time.Time { return recoveryNow },
-	}).Commit(ctx, recovered, []EffectBatch{effect})
+	}).Commit(
+		ctx, recovered, recoveredBatch.Effects, persisted.CreatedAt.UTC(),
+	)
 	if err != nil || result.MarkedCommitted != 1 || result.Written != 0 {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}

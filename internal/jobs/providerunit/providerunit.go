@@ -218,10 +218,16 @@ func (handler *Handler) Work(
 	// remaining attempts would only delay the outcome and then bury the real
 	// cause under the generic provider_unit_exhausted category.
 	if category, deterministic := deterministicTerminalCategory(err); deterministic {
-		_ = handler.Repository.Fail(
+		// Discarding this error would report a permanent, already-recorded
+		// outcome while the category never persisted and run finalization
+		// never armed, leaving the run nonterminal. Stay retryable so a later
+		// attempt can record it, exactly as the route-reconciliation path does.
+		if failErr := handler.Repository.Fail(
 			context.WithoutCancel(ctx), session.Claim, category,
 			startedAt, completedAt,
-		)
+		); failErr != nil {
+			return jobruntime.Retryable(failErr)
+		}
 		return jobruntime.Permanent(err)
 	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {

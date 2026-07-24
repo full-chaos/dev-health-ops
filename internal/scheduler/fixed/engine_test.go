@@ -23,6 +23,12 @@ type memoryLedger struct {
 	byTime   map[string]Anchor
 	statuses map[string]string
 	failNext error
+
+	// anchorRead and beforeClaim let a test pin the interleaving between two
+	// replicas rather than sample it. Both are set before any goroutine starts
+	// and are never mutated afterwards.
+	anchorRead  func()
+	beforeClaim func()
 }
 
 func newMemoryLedger() *memoryLedger {
@@ -34,6 +40,9 @@ func newMemoryLedger() *memoryLedger {
 }
 
 func (ledger *memoryLedger) Claim(_ context.Context, _ pgx.Tx, occurrence Occurrence) (ClaimResult, error) {
+	if ledger.beforeClaim != nil {
+		ledger.beforeClaim()
+	}
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	if ledger.failNext != nil {
@@ -78,8 +87,11 @@ func (ledger *memoryLedger) LastOccurrence(
 	_ context.Context, _ pgx.Tx, scheduleID string,
 ) (Anchor, bool, error) {
 	ledger.mu.Lock()
-	defer ledger.mu.Unlock()
 	value, ok := ledger.byTime[scheduleID]
+	ledger.mu.Unlock()
+	if ledger.anchorRead != nil {
+		ledger.anchorRead()
+	}
 	return value, ok, nil
 }
 
@@ -257,6 +269,20 @@ func newTestEngine(
 	return engine
 }
 
+// Two replicas racing one due time must produce exactly one occurrence and
+// exactly one handoff. That is the whole guarantee, and it holds under either
+// interleaving:
+//
+//   - both read the ledger anchor before either commits, so both derive the
+//     same key, one wins the claim and the other observes the duplicate;
+//   - one commits before the other reads the anchor, so the second sees the due
+//     time already owned and never attempts it.
+//
+// The second outcome is correct, not a missed claim: the work is durably owned
+// either way. Asserting that the loser specifically observed a DUPLICATE
+// demanded the first interleaving and made this test flake at roughly one run
+// in a hundred. The interleaving it was trying to exercise now has its own
+// deterministic test below.
 func TestTwoReplicasProduceExactlyOneOccurrencePerDueTime(t *testing.T) {
 	ctx := context.Background()
 	schedule := heartbeatSchedule(t)
@@ -291,14 +317,84 @@ func TestTwoReplicasProduceExactlyOneOccurrencePerDueTime(t *testing.T) {
 	if ledger.count() != 1 {
 		t.Fatalf("ledger holds %d occurrences, want exactly one per due time", ledger.count())
 	}
-	published := firstPublisher.count() + secondPublisher.count()
-	if published != 1 {
+	if published := firstPublisher.count() + secondPublisher.count(); published != 1 {
 		t.Fatalf("replicas published %d handoffs, want exactly one", published)
+	}
+
+	claimed := results[0].Schedules[0].Claimed + results[1].Schedules[0].Claimed
+	if claimed != 1 {
+		t.Fatalf("claimed=%d across both replicas, want exactly one winner", claimed)
+	}
+	// Whichever replica lost must have done no work, by either route.
+	loser := results[0].Schedules[0]
+	if loser.Claimed == 1 {
+		loser = results[1].Schedules[0]
+	}
+	if loser.Handoffs != 0 {
+		t.Fatalf("the losing replica produced %d handoffs", loser.Handoffs)
+	}
+	if loser.Duplicate != 1 && loser.Due != 0 {
+		t.Fatalf("losing replica neither observed a duplicate nor declined to attempt: %+v", loser)
+	}
+}
+
+// The interleaving the flaky assertion was reaching for, made deterministic:
+// both replicas read the anchor before either is allowed to claim, so both
+// derive the same key and the ledger's uniqueness is what separates them.
+// This is the path that exercises the duplicate-claim guarantee itself, so it
+// must run every time rather than whenever the scheduler happens to cooperate.
+func TestBothReplicasAttemptingTheSameKeyYieldOneClaimAndOneDuplicate(t *testing.T) {
+	ctx := context.Background()
+	schedule := heartbeatSchedule(t)
+	ledger := newMemoryLedger()
+	seedAnchor(ledger, schedule, mustTime(t, "2026-07-23T00:00:00Z"))
+
+	var anchorsRead sync.WaitGroup
+	anchorsRead.Add(2)
+	ledger.anchorRead = anchorsRead.Done
+	ledger.beforeClaim = anchorsRead.Wait
+
+	firstPublisher := &recordingPublisher{}
+	secondPublisher := &recordingPublisher{}
+	engines := []*Engine{
+		newTestEngine(t, schedule, ledger, firstPublisher, &stubTx{}),
+		newTestEngine(t, schedule, ledger, secondPublisher, &stubTx{}),
+	}
+
+	observedAt := mustTime(t, "2026-07-24T00:30:00Z")
+	results := make([]WindowResult, 2)
+	errs := make([]error, 2)
+	var waiter sync.WaitGroup
+	waiter.Add(2)
+	for index, engine := range engines {
+		go func(index int, engine *Engine) {
+			defer waiter.Done()
+			results[index], errs[index] = engine.Step(ctx, observedAt)
+		}(index, engine)
+	}
+	waiter.Wait()
+
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("replica %d Step() = %v", index, err)
+		}
+		if results[index].Failed() {
+			t.Fatalf("replica %d window failed: %v", index, results[index].Err())
+		}
+	}
+	if due := results[0].Schedules[0].Due + results[1].Schedules[0].Due; due != 2 {
+		t.Fatalf("due=%d; the barrier should have made both replicas attempt", due)
 	}
 	claimed := results[0].Schedules[0].Claimed + results[1].Schedules[0].Claimed
 	duplicate := results[0].Schedules[0].Duplicate + results[1].Schedules[0].Duplicate
 	if claimed != 1 || duplicate != 1 {
-		t.Fatalf("claimed=%d duplicate=%d, want one winner and one loser", claimed, duplicate)
+		t.Fatalf("claimed=%d duplicate=%d, want exactly one of each", claimed, duplicate)
+	}
+	if ledger.count() != 1 {
+		t.Fatalf("ledger holds %d occurrences", ledger.count())
+	}
+	if published := firstPublisher.count() + secondPublisher.count(); published != 1 {
+		t.Fatalf("replicas published %d handoffs, want exactly one", published)
 	}
 }
 

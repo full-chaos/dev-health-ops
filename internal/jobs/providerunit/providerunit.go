@@ -22,6 +22,13 @@ var ErrRouteReconciliationRequired = errors.New(
 	"provider unit route is unavailable for this scope; producer gate and Go descriptor disagree",
 )
 
+// RouteReconciliationCategory is the durable, distinguishable failure category
+// recorded when a route fault survives every River attempt. It is deliberately
+// not "route_disabled": that category meant "this scope is unsupported, drop
+// it", while this one means "a producer routed a scope Go does not serve and a
+// human must reconcile the gate".
+const RouteReconciliationCategory = "route_reconciliation_required"
+
 // RouteFault describes a producer/consumer capability disagreement for
 // alerting. It carries no credentials, URLs, or provider payloads.
 type RouteFault struct {
@@ -30,9 +37,15 @@ type RouteFault struct {
 	DescriptorPresent bool
 	RouteReady        bool
 	RouteEnabled      bool
+	Attempt           int
+	MaxAttempts       int
 	// Released reports whether the claim was handed back to dispatching. When
-	// false the unit is still leased and will recover through lease expiry.
+	// false the unit is still leased and will recover through lease expiry, or
+	// has been recorded as reconciliation-required.
 	Released bool
+	// Terminal reports that River has no attempt left, so the unit was moved to
+	// the durable reconciliation-required state instead of being released.
+	Terminal bool
 }
 
 type ExecutorFactory func(
@@ -127,6 +140,26 @@ func (handler *Handler) Work(
 			Provider: claim.Provider, Dataset: claim.Dataset,
 			DescriptorPresent: ok, RouteReady: descriptor.RouteReady,
 			RouteEnabled: descriptor.RouteEnabled,
+			Attempt:      execution.Attempt,
+			MaxAttempts:  execution.Definition.MaxAttempts,
+		}
+		// Releasing on the terminal attempt would strand the unit: River
+		// discards the job after the last attempt, leaving the unit
+		// `dispatching` with no live consumer, and the producer outbox dedupe
+		// row makes a stale redispatch report "queued" without enqueueing
+		// anything. The sync run would then never finalize. Record an explicit
+		// durable reconciliation-required state instead — terminal and
+		// alertable, but never the silent route_disabled drop.
+		if execution.Attempt >= execution.Definition.MaxAttempts {
+			fault.Terminal = true
+			handler.observeRouteFault(fault)
+			if failErr := handler.Repository.Fail(
+				context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
+				startedAt, handler.now(),
+			); failErr != nil {
+				return jobruntime.Retryable(failErr)
+			}
+			return jobruntime.Retryable(ErrRouteReconciliationRequired)
 		}
 		releaseErr := handler.Repository.ReleaseForRetry(
 			context.WithoutCancel(ctx), claim, handler.now(),

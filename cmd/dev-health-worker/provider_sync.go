@@ -139,7 +139,10 @@ func buildProviderSyncWorker(
 				"descriptor_present", fault.DescriptorPresent,
 				"route_ready", fault.RouteReady,
 				"route_enabled", fault.RouteEnabled,
+				"attempt", fault.Attempt,
+				"max_attempts", fault.MaxAttempts,
 				"released_for_retry", fault.Released,
+				"terminal_reconciliation_required", fault.Terminal,
 			)
 		},
 		BuildExecutor: func(

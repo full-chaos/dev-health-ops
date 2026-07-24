@@ -106,10 +106,88 @@ func TestUnroutableScopeNeverTerminalizesAsRouteDisabled(t *testing.T) {
 			fault := faults[0]
 			if fault.Provider != test.provider || fault.Dataset != test.dataset ||
 				fault.DescriptorPresent != test.descriptorPresent ||
-				fault.RouteEnabled || !fault.Released {
+				fault.RouteEnabled || !fault.Released || fault.Terminal {
 				t.Fatalf("fault=%+v", fault)
 			}
 		})
+	}
+}
+
+// TestRouteFaultAcrossEveryAttemptUpToTheCap is the post-cap stranding
+// regression. River discards the job after the final attempt
+// (max_attempts=5 in contracts/jobs/v1/registry.json), so releasing on that
+// attempt would leave the unit `dispatching` with no live consumer. The
+// producer outbox dedupes on `sync.provider_unit:<unit-id>`, so a stale
+// redispatch reports "queued" without enqueueing anything and the sync run
+// never finalizes. The terminal attempt must instead record an explicit
+// durable reconciliation-required state.
+func TestRouteFaultAcrossEveryAttemptUpToTheCap(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	const maxAttempts = 5
+	unit := providerUnit()
+	unit.Provider, unit.Dataset = "pagerduty", "incidents"
+	unit.CostClass = providersync.CostLight
+	unit.DatasetOptions = map[string]any{}
+	repository := newMemoryUnitRepository(unit)
+	var faults []RouteFault
+	handler := &Handler{
+		Repository:    repository,
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(
+			*providersync.LeaseSession,
+		) (providersync.CompleteRouteExecutor, error) {
+			t.Fatal("an unroutable scope must never build an executor")
+			return providersync.CompleteRouteExecutor{}, nil
+		},
+		OnRouteFault: func(fault RouteFault) { faults = append(faults, fault) },
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		execution := providerExecution(unit, now, attempt)
+		execution.Definition.MaxAttempts = maxAttempts
+		err := handler.Work(context.Background(), execution)
+		if !errors.Is(err, ErrRouteReconciliationRequired) ||
+			err.Error() != retryableCategory {
+			t.Fatalf("attempt %d error=%v", attempt, err)
+		}
+		fault := faults[len(faults)-1]
+		if fault.Attempt != attempt || fault.MaxAttempts != maxAttempts {
+			t.Fatalf("attempt %d fault=%+v", attempt, fault)
+		}
+		if attempt < maxAttempts {
+			// Still retriable: hand the claim back so a later attempt (or a
+			// reconciled producer gate) can pick it up.
+			if !fault.Released || fault.Terminal ||
+				repository.status != "dispatching" || repository.failures != 0 {
+				t.Fatalf(
+					"attempt %d fault=%+v status=%q failures=%d",
+					attempt, fault, repository.status, repository.failures,
+				)
+			}
+			continue
+		}
+		// Terminal attempt: durable, distinguishable, alertable — and never
+		// the silent route_disabled drop the TRD forbids.
+		if !fault.Terminal || fault.Released {
+			t.Fatalf("terminal fault=%+v", fault)
+		}
+		if repository.status != "failed" || repository.failures != 1 {
+			t.Fatalf(
+				"terminal status=%q failures=%d", repository.status, repository.failures,
+			)
+		}
+		if repository.lastFailCategory != RouteReconciliationCategory {
+			t.Fatalf("terminal category=%q", repository.lastFailCategory)
+		}
+		if repository.lastFailCategory == "route_disabled" {
+			t.Fatal("unit terminalized as route_disabled")
+		}
+	}
+	if len(faults) != maxAttempts {
+		t.Fatalf("faults=%d want %d", len(faults), maxAttempts)
 	}
 }
 
@@ -148,7 +226,7 @@ func TestUnroutableScopeStaysRetryableWhenReleaseFails(t *testing.T) {
 	if repository.failures != 0 || repository.status == "failed" {
 		t.Fatalf("unit terminalized: status=%q failures=%d", repository.status, repository.failures)
 	}
-	if len(faults) != 1 || faults[0].Released {
+	if len(faults) != 1 || faults[0].Released || faults[0].Terminal {
 		t.Fatalf("faults=%v", faults)
 	}
 }

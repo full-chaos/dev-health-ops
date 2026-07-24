@@ -71,6 +71,41 @@ PROVIDER_MATRIX_UPDATE=1 go test ./internal/providersync \
 - `route_destinations` is empty for pairs with no known sink manifest yet.
   Recording a guessed manifest would be worse than recording none.
 
+## Activation preconditions for `(github, repo-metadata)`
+
+The pair is `native_go` with `route_ready: false`. Before it may be flipped:
+
+1. `TestGitHubRepositoryLiveParityHarness` must be implemented and pass against
+   non-empty real data.
+2. The binary that constructs `GitHubRepositoryRouteHandler` **must** also set
+   `EffectCommitter.Readback` to `GitHubRepositoryClickHouseEffects`. The
+   `repos` effect is `EffectReadbackRequired`, so a committer without a
+   readback fails closed with `ErrEffectRecoveryAmbiguous` rather than
+   reinserting.
+3. Raw `repos` readers must be audited. `repos` is
+   `ReplacingMergeTree(last_synced)` ordered by `(org_id, id)`; readers that
+   join it without `FINAL` or `argMax` can double-count between an insert and
+   the next merge. `src/dev_health_ops/api/queries/heatmap.py` is a known
+   pre-existing example and is not a regression introduced by this contract.
+
+## Known Go/Python divergences (fail-closed by design)
+
+`repositoryIdentity` mirrors Python's `get_repo_uuid_from_repo` for the ASCII
+names GitHub issues, and refuses rather than guesses in two cases:
+
+- Python honours a process-global `REPO_UUID` override
+  (`models/git.py::get_repo_uuid_from_repo`). Go never sources identity from
+  process-global state, so it returns `ErrRepositoryIdentityAmbiguous` when
+  `REPO_UUID` is set.
+- Python's `str.lower()` applies full Unicode case mapping (`U+0130` lowers to
+  `i` plus a combining dot); Go's `strings.ToLower` applies simple per-rune
+  mapping. Non-ASCII repository identifiers are therefore rejected. GitHub
+  restricts owner and repository names to `[A-Za-z0-9._-]`.
+
+`normalizedProviderInstance` likewise rejects Unicode host labels that Python's
+`str.isalnum()` would accept. In every case Go fails the unit instead of
+persisting a value it cannot prove matches Python.
+
 ## Known contract-versus-TRD gaps
 
 TRD §10.1 states the PagerDuty contract preserves a `region` parameter. No

@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -94,7 +96,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	var payload gitHubRepositoryPayload
-	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repository)
+	path := providerRelativePath(client, "repos", owner, repository)
 	if err := fetchObject(ctx, client, path, &payload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -106,12 +108,23 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
+	identity, err := repositoryIdentity(fullName)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	// Python coerces a missing, null, or empty default_branch to "main"
+	// (providers/github/code_client.py::_repo_from_item). Persisting "" would
+	// diverge for a freshly created or unusual repository.
+	defaultBranch := payload.DefaultBranch
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
 	settings, err := json.Marshal(repositorySettings{
 		Source:            "github",
 		GitHubInstanceURL: instance,
 		RepoID:            repoID,
 		URL:               payload.HTMLURL,
-		DefaultBranch:     payload.DefaultBranch,
+		DefaultBranch:     defaultBranch,
 	})
 	if err != nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
@@ -125,7 +138,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	row := repositoryRow{
-		ID:         repositoryIdentity(fullName),
+		ID:         identity,
 		OrgID:      claim.OrgID,
 		Repo:       fullName,
 		CreatedAt:  normalizedAt,
@@ -137,10 +150,14 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 	if err := row.validate(claim); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	// `repos` is ReplacingMergeTree(last_synced) keyed by (org_id, id), so a
-	// replayed identical batch collapses to the same row: replay-safe, no
-	// readback required.
-	effect, err := effectBatchFromValues("repos", EffectReplaySafe, []repositoryRow{row})
+	// `repos` is ReplacingMergeTree(last_synced) keyed by (org_id, id), but
+	// deduplication is asynchronous: between a crash-recovery reinsert and the
+	// next merge, raw readers that join `repos` without FINAL/argMax would see
+	// two physical rows and double their joined metrics. A blind replay is
+	// therefore not safe, so the effect requires readback fencing.
+	effect, err := effectBatchFromValues(
+		"repos", EffectReadbackRequired, []repositoryRow{row},
+	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -150,7 +167,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 			"repos_synced":   1,
 			"repo":           fullName,
 			"repo_id":        repoID,
-			"default_branch": payload.DefaultBranch,
+			"default_branch": defaultBranch,
 			"archived":       payload.Archived,
 		},
 		// repo-metadata is WatermarkNone in both registries: a reference
@@ -172,16 +189,63 @@ func (row repositoryRow) validate(claim Claim) error {
 	return nil
 }
 
-// repositoryIdentity reproduces Python's get_repo_uuid_from_repo: the first
-// sixteen bytes of SHA-256 over the case-folded, trimmed repo identifier,
-// rendered as a UUID without version or variant rewriting. The Go and Python
-// sinks must agree on this value or every downstream repo_id foreign key
-// diverges.
-func repositoryIdentity(repo string) string {
-	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(repo))))
+// providerRelativePath joins path segments underneath the credential's
+// configured base path. A leading-slash absolute path would make url.Parse
+// *replace* the base path, silently dropping a GitHub Enterprise install's
+// required `/api/v3` prefix and issuing the request against a non-API route.
+func providerRelativePath(
+	client *providerfoundation.HTTPClient,
+	segments ...string,
+) string {
+	escaped := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		escaped = append(escaped, url.PathEscape(segment))
+	}
+	joined := strings.Join(escaped, "/")
+	if client == nil || client.BaseURL == nil {
+		return "/" + joined
+	}
+	base := client.BaseURL.EscapedPath()
+	if base == "" || base == "/" {
+		return "/" + joined
+	}
+	return strings.TrimSuffix(base, "/") + "/" + joined
+}
+
+// repositoryIdentity mirrors Python's get_repo_uuid_from_repo for the ASCII
+// repository names GitHub actually issues: the first sixteen bytes of SHA-256
+// over the trimmed, lowercased identifier, rendered as a UUID without version
+// or variant rewriting. Go and Python must agree on this value or every
+// downstream repo_id foreign key forks.
+//
+// Two documented divergences are fail-closed rather than reproduced:
+//
+//   - Python honours a process-global REPO_UUID override. Go never hydrates
+//     identity from process-global state (the same rule Unit.Validate applies
+//     to environment-sourced credentials), so this returns an error rather
+//     than writing an identity Python would not have written.
+//   - Python's str.lower() applies full Unicode case mapping (U+0130 lowers to
+//     "i" plus a combining dot), while Go's strings.ToLower applies simple
+//     per-rune mapping. GitHub owner and repository names are restricted to
+//     [A-Za-z0-9._-], so a non-ASCII identifier means something upstream is
+//     already wrong; refusing it beats writing a forked repo_id.
+func repositoryIdentity(repo string) (string, error) {
+	if _, overridden := os.LookupEnv("REPO_UUID"); overridden {
+		return "", ErrRepositoryIdentityAmbiguous
+	}
+	trimmed := strings.TrimSpace(repo)
+	if trimmed == "" {
+		return "", providerfoundation.ErrNormalizationInvalid
+	}
+	for index := 0; index < len(trimmed); index++ {
+		if trimmed[index] >= utf8.RuneSelf {
+			return "", ErrRepositoryIdentityAmbiguous
+		}
+	}
+	digest := sha256.Sum256([]byte(strings.ToLower(trimmed)))
 	encoded := hex.EncodeToString(digest[:16])
 	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" +
-		encoded[16:20] + "-" + encoded[20:32]
+		encoded[16:20] + "-" + encoded[20:32], nil
 }
 
 // normalizedProviderInstance mirrors
@@ -218,7 +282,10 @@ func normalizedProviderInstance(provider string, base *url.URL) (string, bool) {
 		port = ""
 	}
 	if port != "" {
-		if _, err := strconv.Atoi(port); err != nil {
+		// Python's urlsplit.port raises for a value outside 1-65535, which
+		// normalized_operational_provider_instance turns into a rejection.
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
 			return "", false
 		}
 		return host + ":" + port, true

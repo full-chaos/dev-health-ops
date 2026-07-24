@@ -98,12 +98,15 @@ func TestProviderMatrixMatchesCheckedInContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Regeneration writes and then falls through to the same comparison and
+	// reparse. An accidentally exported PROVIDER_MATRIX_UPDATE must not turn
+	// this test into a rubber stamp for the fields Python cannot independently
+	// derive (route_destinations, native_shadow).
 	if os.Getenv("PROVIDER_MATRIX_UPDATE") == "1" {
 		if err := os.WriteFile(providerMatrixContractPath, encoded, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		t.Log("regenerated " + providerMatrixContractPath)
-		return
 	}
 	stored, err := os.ReadFile(providerMatrixContractPath)
 	if err != nil {

@@ -66,4 +66,109 @@ INSERT INTO repos (
 	return batch.Send()
 }
 
+// InspectEffect fences crash recovery. ReplacingMergeTree deduplicates
+// asynchronously, so a blind reinsert would expose two physical `repos` rows
+// to raw readers that join without FINAL/argMax until the next merge. Reading
+// the row back turns "we may have written this" into an exact answer.
+func (sink GitHubRepositoryClickHouseEffects) InspectEffect(
+	ctx context.Context,
+	claim Claim,
+	effect EffectBatch,
+) (EffectInspection, error) {
+	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
+		claim.Provider != "github" || claim.Dataset != "repo-metadata" ||
+		effect.Destination != "repos" {
+		return EffectConflict, ErrInvalidConfiguration
+	}
+	if err := sink.Lease.Assert(ctx); err != nil {
+		return EffectConflict, err
+	}
+	expected, err := decodeEffectRows[repositoryRow](effect)
+	if err != nil {
+		return EffectConflict, err
+	}
+	for _, row := range expected {
+		if err := row.validate(claim); err != nil {
+			return EffectConflict, err
+		}
+	}
+	if len(expected) == 0 {
+		return EffectAbsent, nil
+	}
+	if sink.Conn == nil {
+		return EffectConflict, ErrInvalidConfiguration
+	}
+	exact, absent := 0, 0
+	for _, row := range expected {
+		inspection, err := sink.inspectRepository(ctx, row)
+		if err != nil {
+			return EffectConflict, err
+		}
+		switch inspection {
+		case EffectExact:
+			exact++
+		case EffectAbsent:
+			absent++
+		default:
+			return EffectConflict, nil
+		}
+	}
+	switch {
+	case exact == len(expected):
+		return EffectExact, nil
+	case absent == len(expected):
+		return EffectAbsent, nil
+	default:
+		return EffectConflict, nil
+	}
+}
+
+func (sink GitHubRepositoryClickHouseEffects) inspectRepository(
+	ctx context.Context,
+	expected repositoryRow,
+) (EffectInspection, error) {
+	rows, err := sink.Conn.Query(ctx, `
+SELECT repo, ref, created_at, settings, tags, provider, last_synced
+FROM repos
+WHERE org_id = ? AND id = ?`,
+		expected.OrgID, expected.ID,
+	)
+	if err != nil {
+		return EffectConflict, err
+	}
+	defer rows.Close()
+	found, matched := 0, 0
+	for rows.Next() {
+		var actual repositoryRow
+		if err := rows.Scan(
+			&actual.Repo, &actual.Ref, &actual.CreatedAt, &actual.Settings,
+			&actual.Tags, &actual.Provider, &actual.LastSynced,
+		); err != nil {
+			return EffectConflict, err
+		}
+		found++
+		if actual.Repo == expected.Repo && actual.Settings == expected.Settings &&
+			actual.Tags == expected.Tags && actual.Provider == expected.Provider &&
+			actual.CreatedAt.UTC().Equal(expected.CreatedAt.UTC()) &&
+			actual.LastSynced.UTC().Equal(expected.LastSynced.UTC()) {
+			matched++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return EffectConflict, err
+	}
+	switch {
+	case found == 0:
+		return EffectAbsent, nil
+	// A duplicate insert of the identical row is still exactly this effect;
+	// ReplacingMergeTree collapses the copies. Any differing row means another
+	// writer owns the key and recovery must stop.
+	case matched == found:
+		return EffectExact, nil
+	default:
+		return EffectConflict, nil
+	}
+}
+
 var _ EffectSink = GitHubRepositoryClickHouseEffects{}
+var _ EffectReadback = GitHubRepositoryClickHouseEffects{}

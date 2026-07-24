@@ -30,15 +30,15 @@ type PostSyncPlan struct {
 }
 
 type DailyPostSyncWriter interface {
-	StartRunTx(context.Context, pgx.Tx, PostSyncPlan) error
+	StartRunTx(context.Context, pgx.Tx, PostSyncPlan, string) (string, error)
 }
 
 type RemainingPostSyncWriter interface {
-	StartRunTx(context.Context, pgx.Tx, string, PostSyncPlan) error
+	StartRunTx(context.Context, pgx.Tx, string, PostSyncPlan, string) (string, error)
 }
 
 type WorkGraphInvestmentPostSyncWriter interface {
-	StartRequestTx(context.Context, pgx.Tx, string, PostSyncPlan) error
+	StartRequestTx(context.Context, pgx.Tx, string, PostSyncPlan, string) (string, error)
 }
 
 type TeamAutoimportPostSyncWriter interface {
@@ -96,31 +96,47 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	if plan == nil {
 		return tx.Commit(ctx)
 	}
+	var orderedCompletion string
 	if plan.Complexity {
-		if err := service.remaining.StartRunTx(ctx, tx, "complexity", *plan); err != nil {
+		orderedCompletion, err = service.remaining.StartRunTx(
+			ctx, tx, "complexity", *plan, orderedCompletion,
+		)
+		if err != nil {
 			return err
 		}
 	}
 	if plan.Daily {
-		if err := service.daily.StartRunTx(ctx, tx, *plan); err != nil {
+		orderedCompletion, err = service.daily.StartRunTx(
+			ctx, tx, *plan, orderedCompletion,
+		)
+		if err != nil {
 			return err
 		}
 	}
-	// Investment dispatch owns the ordered build -> materialize -> membership
-	// sequence. Publishing a separate workgraph request here would let the
-	// investment queue race ahead of the workgraph queue.
-	if plan.WorkGraph && !plan.Investment {
-		if err := service.workGraph.StartRequestTx(ctx, tx, "workgraph.build", *plan); err != nil {
+	if plan.WorkGraph {
+		orderedCompletion, err = service.workGraph.StartRequestTx(
+			ctx, tx, "workgraph.build", *plan, orderedCompletion,
+		)
+		if err != nil {
 			return err
 		}
 	}
 	if plan.Investment {
-		if err := service.workGraph.StartRequestTx(ctx, tx, "investment.dispatch", *plan); err != nil {
+		orderedCompletion, err = service.workGraph.StartRequestTx(
+			ctx, tx, "investment.materialize", *plan, orderedCompletion,
+		)
+		if err != nil {
+			return err
+		}
+		_, err = service.remaining.StartRunTx(
+			ctx, tx, "membership_backfill", *plan, orderedCompletion,
+		)
+		if err != nil {
 			return err
 		}
 	}
 	if plan.DORA {
-		if err := service.remaining.StartRunTx(ctx, tx, "dora", *plan); err != nil {
+		if _, err := service.remaining.StartRunTx(ctx, tx, "dora", *plan, ""); err != nil {
 			return err
 		}
 	}

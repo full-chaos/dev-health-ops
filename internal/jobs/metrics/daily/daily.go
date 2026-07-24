@@ -39,10 +39,11 @@ type Run struct {
 // Repository IDs are server-owned durable references and are partitioned in
 // deterministic order by PostgresStore.
 type StartRunRequest struct {
-	OrganizationID string
-	TargetDay      time.Time
-	Generation     string
-	RepositoryIDs  []string
+	OrganizationID            string
+	TargetDay                 time.Time
+	Generation                string
+	RepositoryIDs             []string
+	PrerequisiteCompletionKey string
 }
 
 type Partition struct {
@@ -88,7 +89,7 @@ type Publisher interface {
 }
 
 type RunPublisher interface {
-	PublishDispatchTx(context.Context, pgx.Tx, Run) error
+	PublishDispatchTx(context.Context, pgx.Tx, Run, string) error
 }
 
 // CompatibilityExecutor is the only temporary Python seam. Both identities

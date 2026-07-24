@@ -29,6 +29,10 @@ func TestPostSyncRemainingScopeMatchesBoundedFamilyContract(t *testing.T) {
 		decoded["sink"] != "auto" || decoded["interval"] != "daily" {
 		t.Fatalf("dora=%s", dora)
 	}
+	membership, err := postSyncRemainingScope("membership_backfill", plan)
+	if err != nil || string(membership) != `{"version":1,"repo_ids":[]}` {
+		t.Fatalf("membership=%s err=%v", membership, err)
+	}
 }
 
 func TestPostSyncWorkGraphScopePreservesLegacyWindowShape(t *testing.T) {
@@ -40,8 +44,8 @@ func TestPostSyncWorkGraphScopePreservesLegacyWindowShape(t *testing.T) {
 	if err != nil || string(build) != `{"from_date":"2026-01-01T03:00:00Z","to_date":"2026-01-14T23:00:00Z"}` {
 		t.Fatalf("build=%s err=%v", build, err)
 	}
-	investment, err := postSyncWorkGraphScope(workgraph.KindDispatch, plan)
-	if err != nil || string(investment) != `{"build_from_date":"2026-01-01T03:00:00Z","build_to_date":"2026-01-14T23:00:00Z","from_date":"2026-01-01","run_membership_backfill_after":true,"to_date":"2026-01-14"}` {
+	investment, err := postSyncWorkGraphScope(workgraph.KindMaterialize, plan)
+	if err != nil || string(investment) != `{"from_date":"2026-01-01","to_date":"2026-01-14"}` {
 		t.Fatalf("investment=%s err=%v", investment, err)
 	}
 }

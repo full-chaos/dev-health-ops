@@ -219,28 +219,42 @@ organization, dispatched transport, dispatched generation, and current
 unpaused route in PostgreSQL. A stale delivery commits no child state. A
 current delivery reconstructs the fanout from successful SyncRun units and
 stages all supported child domain rows plus `worker_job_outbox` handoffs in one
-transaction. Daily and remaining-metric runs, investment dispatch, and team
-autoimport each use deterministic identities. If any child writer or handoff
-fails, the transaction rolls back and the River delivery is retryable; no
-partial generation can escape.
+transaction. Daily, remaining-metric, work-graph, investment-materialize, and
+team-autoimport work use deterministic identities. If any child writer or
+handoff fails, the transaction rolls back and the River delivery is retryable;
+no partial generation can escape.
 
-River investment dispatch is a single fenced compatibility operation. It runs
-work-graph build, synchronous investment materialization, and the org-wide
-membership projection in that order without invoking Celery or a result
-backend. Native post-sync therefore emits only the deterministic investment
-request for a plan that needs investment; it does not also emit a standalone
-work-graph request that could race on a separate queue. The legacy Celery
-post-sync path retains its partitioned chord while its route remains Celery.
-Before starting the long compatibility operation, the API closes its
-PostgreSQL read transaction so Go lease renewal is never blocked by a held row
-lock. The dedicated work-graph HTTP client uses the River execution context as
-its deadline instead of the shared short operational-bridge timeout; the API
-contains the legacy work in a fixed child process and on POSIX terminates its
-process group, kills if needed, and reaps it on context cancellation or client
-disconnect. The canonical `investment.dispatch`
-descriptor therefore has the same 7,200-second execution budget as synchronous
-investment materialization and chunks; its contract version remains `1` and
-its checked-in route remains `celery`.
+The investment path is a durable dependency chain, not one long compatibility
+effect:
+
+`complexity (when selected) -> daily (when selected) -> workgraph.build -> investment.materialize -> membership_backfill`
+
+Every stage keeps its existing run/request ledger. A successor outbox row
+stores the canonical completion key of its predecessor, and the generic relay
+does not claim that row until the predecessor's terminal-success transaction
+also inserts `worker_job_completion_fences`. Waiting therefore consumes no
+River or relay attempt. A crash before the success transaction commits leaves
+both the stage and fence incomplete; normal fenced re-drive resumes that
+stage. A crash after commit exposes the already-persisted successor on the next
+relay poll. Replayed post-sync fanout verifies the deterministic rows and
+restores any pruned fence for an already-succeeded stage.
+
+Completion fences use canonical `<domain>:<uuid>` keys. Terminal-outbox
+retention removes old fences in bounded batches only after no outbox row
+references them. This keeps fence growth bounded without releasing a successor
+early; deterministic fanout replay recreates a fence from authoritative
+terminal domain state when necessary. The legacy Celery post-sync path retains
+its partitioned chord while its route remains Celery.
+
+Before each long compatibility operation, the API closes its PostgreSQL read
+transaction so Go lease renewal is never blocked by a held row lock. The
+dedicated work-graph HTTP client uses the River execution context as its
+deadline instead of the shared short operational-bridge timeout. The API
+contains the legacy work in a fixed child process and, on POSIX, terminates its
+process group, kills it if needed, and reaps it on context cancellation or
+client disconnect. The standalone `investment.dispatch` descriptor retains
+its 7,200-second execution budget, contract version `1`, and checked-in Celery
+route, but native post-sync uses the separately fenced stages above.
 
 Child routes are evaluated independently. While a reviewed child remains
 `go_implemented` and Celery-routed, its generic outbox row is persisted as

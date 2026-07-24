@@ -61,6 +61,7 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 		"CREATE TABLE public.domain_runtime_probe (id bigserial PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 		"CREATE FUNCTION public.domain_runtime_forbidden() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
@@ -347,6 +348,12 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	}
 	if _, err := domainPool.Exec(
 		ctx,
+		"INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ('daily_metrics_run:00000000-0000-4000-8000-000000000001')",
+	); err != nil {
+		t.Fatalf("domain runtime cannot insert completion fence: %v", err)
+	}
+	if _, err := domainPool.Exec(
+		ctx,
 		"UPDATE public.worker_job_outbox SET state='forged' WHERE id='00000000-0000-0000-0000-000000000001'",
 	); err == nil {
 		t.Fatal("domain producer unexpectedly updates relay-owned outbox state")
@@ -406,6 +413,30 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		"DELETE FROM public.worker_job_outbox WHERE id='00000000-0000-0000-0000-000000000001'",
 	); err != nil {
 		t.Fatalf("queue role cannot retire outbox state: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"SELECT completion_key FROM public.worker_job_completion_fences",
+	); err != nil {
+		t.Fatalf("queue role cannot read completion fences: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"UPDATE public.worker_job_completion_fences SET completion_key=completion_key",
+	); err != nil {
+		t.Fatalf("queue role cannot lock completion fences for bounded retention: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"DELETE FROM public.worker_job_completion_fences",
+	); err != nil {
+		t.Fatalf("queue role cannot retire completion fences: %v", err)
+	}
+	if _, err := queuePool.Exec(
+		ctx,
+		"INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ('forbidden')",
+	); err == nil {
+		t.Fatal("queue role unexpectedly inserts completion fences")
 	}
 	if _, err := queuePool.Exec(
 		ctx,

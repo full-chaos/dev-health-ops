@@ -38,16 +38,17 @@ func (kind Kind) Valid() bool {
 // Request is the immutable, authoritative execution intent. Scope is canonical
 // JSON and is never supplied by a River job or compatibility HTTP request.
 type Request struct {
-	ID                   string
-	OrganizationID       string
-	Kind                 Kind
-	Scope                []byte
-	ModelRef             string
-	PromptRef            string
-	LLMConcurrency       int
-	SpendLimitMicrounits int64
-	CorrelationID        string
-	IdempotencyKey       string
+	ID                        string
+	OrganizationID            string
+	Kind                      Kind
+	Scope                     []byte
+	ModelRef                  string
+	PromptRef                 string
+	LLMConcurrency            int
+	SpendLimitMicrounits      int64
+	CorrelationID             string
+	IdempotencyKey            string
+	PrerequisiteCompletionKey string
 }
 
 type Claim struct {

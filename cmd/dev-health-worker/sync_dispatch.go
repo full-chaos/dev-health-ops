@@ -31,14 +31,23 @@ func (writer dailyPostSyncWriter) StartRunTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	plan syncdispatchruntime.PostSyncPlan,
-) error {
-	_, err := writer.store.StartRunTx(ctx, tx, daily.StartRunRequest{
-		OrganizationID: plan.OrganizationID,
-		TargetDay:      plan.TargetDay,
-		Generation:     "post-sync:" + plan.SyncRunID,
-		RepositoryIDs:  plan.RepositoryIDs,
+	prerequisiteCompletionKey string,
+) (string, error) {
+	run, err := writer.store.StartRunTx(ctx, tx, daily.StartRunRequest{
+		OrganizationID:            plan.OrganizationID,
+		TargetDay:                 plan.TargetDay,
+		Generation:                "post-sync:" + plan.SyncRunID,
+		RepositoryIDs:             plan.RepositoryIDs,
+		PrerequisiteCompletionKey: prerequisiteCompletionKey,
 	}, writer.publisher)
-	return err
+	if err != nil {
+		return "", err
+	}
+	completionKey, err := joboutbox.CompletionKey("daily_metrics_run", run.ID)
+	if err != nil {
+		return "", syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	return completionKey, nil
 }
 
 type remainingPostSyncWriter struct {
@@ -51,19 +60,28 @@ func (writer remainingPostSyncWriter) StartRunTx(
 	tx pgx.Tx,
 	family string,
 	plan syncdispatchruntime.PostSyncPlan,
-) error {
+	prerequisiteCompletionKey string,
+) (string, error) {
 	scope, err := postSyncRemainingScope(family, plan)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = writer.store.StartRunTx(ctx, tx, remaining.StartRunRequest{
-		OrganizationID: plan.OrganizationID,
-		Family:         family,
-		Generation:     "post-sync:" + plan.SyncRunID,
-		ScopeKey:       string(scope),
-		Scopes:         []json.RawMessage{scope},
+	run, err := writer.store.StartRunTx(ctx, tx, remaining.StartRunRequest{
+		OrganizationID:            plan.OrganizationID,
+		Family:                    family,
+		Generation:                "post-sync:" + plan.SyncRunID,
+		ScopeKey:                  string(scope),
+		Scopes:                    []json.RawMessage{scope},
+		PrerequisiteCompletionKey: prerequisiteCompletionKey,
 	}, writer.publisher)
-	return err
+	if err != nil {
+		return "", err
+	}
+	completionKey, err := joboutbox.CompletionKey("remaining_metric_run", run.ID)
+	if err != nil {
+		return "", syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	return completionKey, nil
 }
 
 func postSyncRemainingScope(
@@ -89,6 +107,13 @@ func postSyncRemainingScope(
 		}{
 			Version: remaining.ScopeVersion, Day: day, BackfillDays: backfillDays,
 			Sink: "auto", Interval: "daily",
+		})
+	case "membership_backfill":
+		return json.Marshal(struct {
+			Version       int      `json:"version"`
+			RepositoryIDs []string `json:"repo_ids"`
+		}{
+			Version: remaining.ScopeVersion, RepositoryIDs: []string{},
 		})
 	default:
 		return nil, syncdispatchruntime.ErrPostSyncUnavailable
@@ -122,32 +147,43 @@ func (writer workGraphPostSyncWriter) StartRequestTx(
 	tx pgx.Tx,
 	kind string,
 	plan syncdispatchruntime.PostSyncPlan,
-) error {
+	prerequisiteCompletionKey string,
+) (string, error) {
 	var requestKind workgraph.Kind
 	var consumer string
 	switch kind {
 	case jobcontract.KindWorkGraphBuild:
 		requestKind, consumer = workgraph.KindBuild, "workgraph"
-	case jobcontract.KindInvestmentDispatch:
-		requestKind, consumer = workgraph.KindDispatch, "investment"
+	case jobcontract.KindInvestmentMaterialize:
+		requestKind, consumer = workgraph.KindMaterialize, "investment"
 	default:
-		return syncdispatchruntime.ErrPostSyncUnavailable
+		return "", syncdispatchruntime.ErrPostSyncUnavailable
 	}
 	scope, err := postSyncWorkGraphScope(requestKind, plan)
 	if err != nil {
-		return err
+		return "", err
 	}
 	generation := "post-sync:" + plan.SyncRunID
-	return writer.writer.WriteTx(ctx, tx, workgraph.Request{
-		ID:                   postSyncRequestID(plan.SyncRunID, consumer),
-		OrganizationID:       plan.OrganizationID,
-		Kind:                 requestKind,
-		Scope:                scope,
-		LLMConcurrency:       1,
-		SpendLimitMicrounits: 0,
-		CorrelationID:        generation,
-		IdempotencyKey:       generation + ":" + kind,
+	requestID := postSyncRequestID(plan.SyncRunID, consumer)
+	err = writer.writer.WriteTx(ctx, tx, workgraph.Request{
+		ID:                        requestID,
+		OrganizationID:            plan.OrganizationID,
+		Kind:                      requestKind,
+		Scope:                     scope,
+		LLMConcurrency:            1,
+		SpendLimitMicrounits:      0,
+		CorrelationID:             generation,
+		IdempotencyKey:            generation + ":" + kind,
+		PrerequisiteCompletionKey: prerequisiteCompletionKey,
 	})
+	if err != nil {
+		return "", err
+	}
+	completionKey, err := joboutbox.CompletionKey("work_graph_execution_request", requestID)
+	if err != nil {
+		return "", syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	return completionKey, nil
 }
 
 func postSyncRequestID(syncRunID, consumer string) string {
@@ -170,19 +206,13 @@ func postSyncWorkGraphScope(
 		if plan.To != nil {
 			scope["to_date"] = plan.To.UTC().Format(time.RFC3339)
 		}
-	case workgraph.KindDispatch:
-		// The build accepts precise timestamps while the materializer accepts
-		// date-only bounds. Keep both representations so the compatibility
-		// operation can preserve the original build window.
+	case workgraph.KindMaterialize:
 		if plan.From != nil {
-			scope["build_from_date"] = plan.From.UTC().Format(time.RFC3339)
 			scope["from_date"] = plan.From.UTC().Format("2006-01-02")
 		}
 		if plan.To != nil {
-			scope["build_to_date"] = plan.To.UTC().Format(time.RFC3339)
 			scope["to_date"] = plan.To.UTC().Format("2006-01-02")
 		}
-		scope["run_membership_backfill_after"] = true
 	default:
 		return nil, syncdispatchruntime.ErrPostSyncUnavailable
 	}

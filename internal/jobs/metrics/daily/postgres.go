@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,6 +75,20 @@ ON CONFLICT DO NOTHING`,
 		if err := verifyStartedRun(ctx, tx, run, request.TargetDay, partitions); err != nil {
 			return Run{}, err
 		}
+		var status string
+		if err := tx.QueryRow(ctx, `
+SELECT status FROM public.daily_metrics_runs WHERE id = $1::uuid`, run.ID).Scan(&status); err != nil {
+			return Run{}, ErrUnavailable
+		}
+		if status == "succeeded" {
+			completionKey, keyErr := joboutbox.CompletionKey("daily_metrics_run", run.ID)
+			if keyErr != nil {
+				return Run{}, ErrInvalidState
+			}
+			if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+				return Run{}, ErrUnavailable
+			}
+		}
 	} else {
 		for ordinal, repositoryIDs := range partitions {
 			partitionID := dailyPartitionID(run.ID, ordinal)
@@ -90,7 +105,7 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 			}
 		}
 	}
-	if err := publisher.PublishDispatchTx(ctx, tx, run); err != nil {
+	if err := publisher.PublishDispatchTx(ctx, tx, run, request.PrerequisiteCompletionKey); err != nil {
 		return Run{}, err
 	}
 	return run, nil
@@ -98,7 +113,8 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 
 func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, [][]string, error) {
 	if !validUUID(request.OrganizationID) || request.Generation == "" ||
-		len(request.Generation) > 64 || len(request.RepositoryIDs) > 1000 {
+		len(request.Generation) > 64 || len(request.RepositoryIDs) > 1000 ||
+		len(request.PrerequisiteCompletionKey) > 256 {
 		return StartRunRequest{}, nil, ErrInvalidState
 	}
 	request.OrganizationID = uuid.MustParse(request.OrganizationID).String()
@@ -457,7 +473,44 @@ WHERE id = $3::uuid AND finalization_status = 'running'
 }
 
 func (store *PostgresStore) CompleteFinalize(ctx context.Context, claim FinalizeClaim) error {
-	return store.transitionFinalize(ctx, claim, "succeeded")
+	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	completionKey, err := joboutbox.CompletionKey("daily_metrics_run", claim.Run.ID)
+	if err != nil {
+		return ErrInvalidState
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	now := store.now().UTC()
+	command, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET finalization_status = 'succeeded', finalization_claim_token = NULL,
+    finalization_lease_expires_at = NULL, finalized_at = $1,
+    status = 'succeeded', updated_at = $1
+WHERE id = $2::uuid AND finalization_status = 'running'
+  AND finalization_claim_token = $3::uuid AND status = 'running'
+  AND finalization_lease_expires_at > $1`, now, claim.Run.ID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+		return ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (store *PostgresStore) ReleaseFinalize(ctx context.Context, claim FinalizeClaim) error {

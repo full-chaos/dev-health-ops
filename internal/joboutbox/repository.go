@@ -70,13 +70,21 @@ func (repository *Repository) claimDueExcept(
 	rows, err := tx.Query(ctx, `
 		WITH candidates AS (
 			SELECT id
-			FROM public.worker_job_outbox
+			FROM public.worker_job_outbox AS candidate
 			WHERE (
-				(status = 'pending' AND scheduled_at <= $1 AND next_attempt_at <= $1)
-				OR (status = 'claimed' AND claim_expires_at <= $1)
+				(candidate.status = 'pending' AND candidate.scheduled_at <= $1 AND candidate.next_attempt_at <= $1)
+				OR (candidate.status = 'claimed' AND candidate.claim_expires_at <= $1)
 			)
-			AND job_kind <> ALL($4::text[])
-			ORDER BY next_attempt_at, created_at, id
+			AND candidate.job_kind <> ALL($4::text[])
+			AND (
+				candidate.prerequisite_completion_key IS NULL
+				OR EXISTS (
+					SELECT 1
+					FROM public.worker_job_completion_fences AS completion
+					WHERE completion.completion_key = candidate.prerequisite_completion_key
+				)
+			)
+			ORDER BY candidate.next_attempt_at, candidate.created_at, candidate.id
 			FOR UPDATE SKIP LOCKED
 			LIMIT $2
 		)
@@ -255,7 +263,12 @@ func (repository *Repository) DeleteTerminalBefore(
 	if repository == nil || repository.pool == nil || before.IsZero() || limit < 1 || limit > 1000 {
 		return 0, ErrInvalidConfiguration
 	}
-	command, err := repository.pool.Exec(ctx, `
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return 0, ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, `
 		WITH expired AS (
 			SELECT id FROM public.worker_job_outbox
 			WHERE (status = 'delivered' AND delivered_at < $1)
@@ -269,7 +282,30 @@ func (repository *Repository) DeleteTerminalBefore(
 	if err != nil {
 		return 0, ErrUnavailable
 	}
-	return command.RowsAffected(), nil
+	deleted := command.RowsAffected()
+	if _, err := tx.Exec(ctx, `
+		WITH expired AS (
+			SELECT completion.completion_key
+			FROM public.worker_job_completion_fences AS completion
+			WHERE completion.completed_at < $1
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM public.worker_job_outbox AS outbox
+			      WHERE outbox.prerequisite_completion_key = completion.completion_key
+			  )
+			ORDER BY completion.completed_at, completion.completion_key
+			FOR UPDATE SKIP LOCKED
+			LIMIT $2
+		)
+		DELETE FROM public.worker_job_completion_fences AS completion
+		USING expired
+		WHERE completion.completion_key = expired.completion_key`, before.UTC(), limit); err != nil {
+		return 0, ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, ErrUnavailable
+	}
+	return deleted, nil
 }
 
 type scanner interface {

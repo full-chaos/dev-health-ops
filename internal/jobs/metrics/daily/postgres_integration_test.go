@@ -287,6 +287,15 @@ WHERE job_kind=$1 AND dedupe_key=$2`,
 	if err := store.CompleteFinalize(ctx, *reclaimedFinalize); err != nil {
 		t.Fatal(err)
 	}
+	var completionFences int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM worker_job_completion_fences
+WHERE completion_key = $1`, "daily_metrics_run:"+runID).Scan(&completionFences); err != nil {
+		t.Fatal(err)
+	}
+	if completionFences != 1 {
+		t.Fatalf("completion fences=%d want=1", completionFences)
+	}
 	if duplicate, err := store.ClaimFinalize(ctx, runID); err != nil || duplicate != nil {
 		t.Fatalf("completed finalizer was reclaimed = %#v, %v", duplicate, err)
 	}
@@ -313,8 +322,13 @@ CREATE TABLE worker_job_outbox (
  queue varchar(96) NOT NULL, priority smallint NOT NULL,
  max_attempts smallint NOT NULL, scheduled_at timestamptz NOT NULL,
  status varchar(16) NOT NULL, attempt_count integer NOT NULL,
- next_attempt_at timestamptz NOT NULL, created_at timestamptz NOT NULL,
+ next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
+ created_at timestamptz NOT NULL,
  updated_at timestamptz NOT NULL
+) ;
+CREATE TABLE worker_job_completion_fences (
+ completion_key text PRIMARY KEY,
+ completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 )`)
 	if err != nil {
 		t.Fatal(err)
@@ -345,7 +359,7 @@ type failingFinalizePublisher struct {
 
 type failingRunPublisher struct{}
 
-func (failingRunPublisher) PublishDispatchTx(context.Context, pgx.Tx, Run) error {
+func (failingRunPublisher) PublishDispatchTx(context.Context, pgx.Tx, Run, string) error {
 	return ErrUnavailable
 }
 

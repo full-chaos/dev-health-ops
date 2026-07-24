@@ -17,39 +17,42 @@ type markerWriter struct {
 	failKind string
 }
 
-func (writer markerWriter) write(ctx context.Context, tx pgx.Tx, kind string, plan PostSyncPlan) error {
+func (writer markerWriter) write(ctx context.Context, tx pgx.Tx, kind string, plan PostSyncPlan, prerequisite string) error {
 	if kind == writer.failKind {
 		return ErrPostSyncUnavailable
 	}
 	_, err := tx.Exec(ctx, `
-INSERT INTO post_sync_markers (sync_run_id, kind)
-VALUES ($1::uuid, $2)
-ON CONFLICT DO NOTHING`, plan.SyncRunID, kind)
+INSERT INTO post_sync_markers (sync_run_id, kind, prerequisite)
+VALUES ($1::uuid, $2, NULLIF($3, ''))
+ON CONFLICT DO NOTHING`, plan.SyncRunID, kind, prerequisite)
 	return err
 }
 
 type markerDaily struct{ markerWriter }
 
-func (writer markerDaily) StartRunTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan) error {
-	return writer.write(ctx, tx, "daily", plan)
+func (writer markerDaily) StartRunTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan, prerequisite string) (string, error) {
+	err := writer.write(ctx, tx, "daily", plan, prerequisite)
+	return "daily", err
 }
 
 type markerRemaining struct{ markerWriter }
 
-func (writer markerRemaining) StartRunTx(ctx context.Context, tx pgx.Tx, family string, plan PostSyncPlan) error {
-	return writer.write(ctx, tx, family, plan)
+func (writer markerRemaining) StartRunTx(ctx context.Context, tx pgx.Tx, family string, plan PostSyncPlan, prerequisite string) (string, error) {
+	err := writer.write(ctx, tx, family, plan, prerequisite)
+	return family, err
 }
 
 type markerWorkGraph struct{ markerWriter }
 
-func (writer markerWorkGraph) StartRequestTx(ctx context.Context, tx pgx.Tx, kind string, plan PostSyncPlan) error {
-	return writer.write(ctx, tx, kind, plan)
+func (writer markerWorkGraph) StartRequestTx(ctx context.Context, tx pgx.Tx, kind string, plan PostSyncPlan, prerequisite string) (string, error) {
+	err := writer.write(ctx, tx, kind, plan, prerequisite)
+	return kind, err
 }
 
 type markerTeam struct{ markerWriter }
 
 func (writer markerTeam) PublishTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan) error {
-	return writer.write(ctx, tx, "team_autoimport", plan)
+	return writer.write(ctx, tx, "team_autoimport", plan, "")
 }
 
 func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *testing.T) {
@@ -99,8 +102,8 @@ func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *tes
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID).Scan(&markers); err != nil {
 		t.Fatal(err)
 	}
-	if markers != 5 {
-		t.Fatalf("markers=%d want=5", markers)
+	if markers != 7 {
+		t.Fatalf("markers=%d want=7", markers)
 	}
 	var workGraphMarkers int
 	if err := pool.QueryRow(ctx, `
@@ -108,8 +111,38 @@ SELECT count(*) FROM post_sync_markers
 WHERE sync_run_id=$1 AND kind='workgraph.build'`, runID).Scan(&workGraphMarkers); err != nil {
 		t.Fatal(err)
 	}
-	if workGraphMarkers != 0 {
-		t.Fatal("investment post-sync emitted a racing standalone workgraph request")
+	if workGraphMarkers != 1 {
+		t.Fatal("investment post-sync did not stage its durable workgraph checkpoint")
+	}
+	rows, err := pool.Query(ctx, `
+SELECT kind, COALESCE(prerequisite, '')
+FROM post_sync_markers
+WHERE sync_run_id=$1`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	prerequisites := map[string]string{}
+	for rows.Next() {
+		var kind, prerequisite string
+		if err := rows.Scan(&kind, &prerequisite); err != nil {
+			t.Fatal(err)
+		}
+		prerequisites[kind] = prerequisite
+	}
+	wantPrerequisites := map[string]string{
+		"complexity":             "",
+		"daily":                  "complexity",
+		"workgraph.build":        "daily",
+		"investment.materialize": "workgraph.build",
+		"membership_backfill":    "investment.materialize",
+		"dora":                   "",
+		"team_autoimport":        "",
+	}
+	for kind, want := range wantPrerequisites {
+		if got := prerequisites[kind]; got != want {
+			t.Fatalf("%s prerequisite=%q want=%q", kind, got, want)
+		}
 	}
 
 	if _, err := pool.Exec(ctx, `DELETE FROM post_sync_markers WHERE sync_run_id=$1`, runID); err != nil {
@@ -119,7 +152,7 @@ WHERE sync_run_id=$1 AND kind='workgraph.build'`, runID).Scan(&workGraphMarkers)
 		pool,
 		markerDaily{},
 		markerRemaining{},
-		markerWorkGraph{markerWriter{failKind: "investment.dispatch"}},
+		markerWorkGraph{markerWriter{failKind: "investment.materialize"}},
 		markerTeam{},
 	)
 	if err != nil {
@@ -172,7 +205,8 @@ CREATE TABLE sync_configurations (
  parent_id uuid NULL, sync_options jsonb NOT NULL, created_at timestamptz NOT NULL
 );
 CREATE TABLE post_sync_markers (
- sync_run_id uuid NOT NULL, kind text NOT NULL, PRIMARY KEY(sync_run_id, kind)
+ sync_run_id uuid NOT NULL, kind text NOT NULL, prerequisite text NULL,
+ PRIMARY KEY(sync_run_id, kind)
 )`)
 	if err != nil {
 		t.Fatal(err)

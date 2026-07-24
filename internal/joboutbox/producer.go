@@ -48,7 +48,19 @@ func (producer *Producer) Publish(
 	kind string,
 	envelope jobcontract.Envelope,
 ) error {
-	return producer.publish(ctx, tx, kind, envelope, false)
+	return producer.publish(ctx, tx, kind, envelope, false, "")
+}
+
+// PublishAfter persists an executable handoff that becomes relay-eligible only
+// after the named durable completion fence commits.
+func (producer *Producer) PublishAfter(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind string,
+	envelope jobcontract.Envelope,
+	prerequisiteCompletionKey string,
+) error {
+	return producer.publish(ctx, tx, kind, envelope, false, prerequisiteCompletionKey)
 }
 
 // PublishDeferred persists a reviewed Celery-routed handoff without making it
@@ -60,7 +72,20 @@ func (producer *Producer) PublishDeferred(
 	kind string,
 	envelope jobcontract.Envelope,
 ) error {
-	return producer.publish(ctx, tx, kind, envelope, true)
+	return producer.publish(ctx, tx, kind, envelope, true, "")
+}
+
+// PublishDeferredAfter is the checked-in-Celery equivalent of PublishAfter.
+// The row remains ineligible both while its route is deferred and while its
+// durable predecessor is incomplete.
+func (producer *Producer) PublishDeferredAfter(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind string,
+	envelope jobcontract.Envelope,
+	prerequisiteCompletionKey string,
+) error {
+	return producer.publish(ctx, tx, kind, envelope, true, prerequisiteCompletionKey)
 }
 
 func (producer *Producer) publish(
@@ -69,9 +94,13 @@ func (producer *Producer) publish(
 	kind string,
 	envelope jobcontract.Envelope,
 	deferred bool,
+	prerequisiteCompletionKey string,
 ) error {
 	if producer == nil || producer.registry == nil || producer.now == nil || tx == nil {
 		return ErrInvalidConfiguration
+	}
+	if prerequisiteCompletionKey != "" && !validCompletionKey(prerequisiteCompletionKey) {
+		return ErrContractRejected
 	}
 	descriptor, ok := producer.registry.Descriptor(kind)
 	if !ok {
@@ -99,14 +128,15 @@ func (producer *Producer) publish(
 INSERT INTO public.worker_job_outbox (
     id, dedupe_key, job_kind, contract_version, args, payload_hash,
     queue, priority, max_attempts, scheduled_at, status, attempt_count,
-    next_attempt_at, created_at, updated_at
+    next_attempt_at, prerequisite_completion_key, created_at, updated_at
 ) VALUES (
     $1, $2, $3, $4, $5::json, $6, $7, $8, $9, $10,
-    'pending', 0, $10, $10, $10
+    'pending', 0, $10, NULLIF($11, ''), $10, $10
 )
 ON CONFLICT (dedupe_key) DO NOTHING`,
 		id, envelope.IdempotencyKey, kind, envelope.ContractVersion, string(encoded),
 		payloadHash, descriptor.Queue, descriptor.Priority, descriptor.MaxAttempts, now,
+		prerequisiteCompletionKey,
 	)
 	if err != nil {
 		return ErrUnavailable
@@ -114,17 +144,19 @@ ON CONFLICT (dedupe_key) DO NOTHING`,
 	if command.RowsAffected() == 1 {
 		return nil
 	}
-	var existingKind, existingHash string
+	var existingKind, existingHash, existingPrerequisite string
 	var existingVersion int
 	err = tx.QueryRow(ctx, `
-SELECT job_kind, contract_version, payload_hash
+SELECT job_kind, contract_version, payload_hash,
+       COALESCE(prerequisite_completion_key, '')
 FROM public.worker_job_outbox
 WHERE dedupe_key = $1`, envelope.IdempotencyKey).
-		Scan(&existingKind, &existingVersion, &existingHash)
+		Scan(&existingKind, &existingVersion, &existingHash, &existingPrerequisite)
 	if errors.Is(err, pgx.ErrNoRows) || err != nil {
 		return ErrUnavailable
 	}
-	if existingKind != kind || existingVersion != envelope.ContractVersion || existingHash != payloadHash {
+	if existingKind != kind || existingVersion != envelope.ContractVersion ||
+		existingHash != payloadHash || existingPrerequisite != prerequisiteCompletionKey {
 		return ErrContractRejected
 	}
 	return nil

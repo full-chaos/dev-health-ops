@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,12 +35,13 @@ const (
 // generation. Scopes are ordered deliberately: their ordinal is the durable
 // work identity, not an implementation detail of a dispatcher.
 type StartRunRequest struct {
-	OrganizationID string
-	Family         string
-	Generation     string
-	ScopeKey       string
-	GenerationSeed *int64
-	Scopes         []json.RawMessage
+	OrganizationID            string
+	Family                    string
+	Generation                string
+	ScopeKey                  string
+	GenerationSeed            *int64
+	Scopes                    []json.RawMessage
+	PrerequisiteCompletionKey string
 }
 
 type Run struct {
@@ -72,7 +74,7 @@ type PostgresStore struct {
 }
 
 type PartitionPublisher interface {
-	PublishPartitionTx(context.Context, pgx.Tx, Run, Partition) error
+	PublishPartitionTx(context.Context, pgx.Tx, Run, Partition, string) error
 }
 
 func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
@@ -159,10 +161,21 @@ ON CONFLICT DO NOTHING`,
 		if !sameRunSeed(run, request) || !sameRunIdentity(run, request) {
 			return Run{}, ErrInvalidState
 		}
+		if run.Status == "succeeded" {
+			completionKey, keyErr := joboutbox.CompletionKey("remaining_metric_run", run.ID)
+			if keyErr != nil {
+				return Run{}, ErrInvalidState
+			}
+			if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+				return Run{}, ErrUnavailable
+			}
+		}
 		if err := verifyStartedPartitions(ctx, tx, runID, request.Scopes); err != nil {
 			return Run{}, err
 		}
-		if err := publishStartedPartitions(ctx, tx, publisher, run, request.Scopes); err != nil {
+		if err := publishStartedPartitions(
+			ctx, tx, publisher, run, request.Scopes, request.PrerequisiteCompletionKey,
+		); err != nil {
 			return Run{}, err
 		}
 		return run, nil
@@ -192,7 +205,9 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 			return Run{}, ErrUnavailable
 		}
 		if publisher != nil {
-			if err := publisher.PublishPartitionTx(ctx, tx, run, partition); err != nil {
+			if err := publisher.PublishPartitionTx(
+				ctx, tx, run, partition, request.PrerequisiteCompletionKey,
+			); err != nil {
 				return Run{}, err
 			}
 		}
@@ -341,7 +356,7 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running'
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if _, err := tx.Exec(ctx, `
+	runTransition, err := tx.Exec(ctx, `
 UPDATE public.remaining_metric_runs AS run
 SET status = 'succeeded', updated_at = $1
 WHERE run.id = $2::uuid AND run.status = 'running'
@@ -352,8 +367,20 @@ WHERE run.id = $2::uuid AND run.status = 'running'
   AND NOT EXISTS (
       SELECT 1 FROM public.remaining_metric_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
-  )`, now, claim.Partition.RunID); err != nil {
+  )`, now, claim.Partition.RunID)
+	if err != nil {
 		return ErrUnavailable
+	}
+	if runTransition.RowsAffected() == 1 {
+		completionKey, keyErr := joboutbox.CompletionKey(
+			"remaining_metric_run", claim.Partition.RunID,
+		)
+		if keyErr != nil {
+			return ErrInvalidState
+		}
+		if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+			return ErrUnavailable
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrUnavailable
@@ -443,7 +470,8 @@ func validateStartRunRequest(request StartRunRequest) error {
 	if !validUUID(request.OrganizationID) ||
 		utf8.RuneCountInString(request.Generation) < 1 || utf8.RuneCountInString(request.Generation) > maxGenerationLength ||
 		utf8.RuneCountInString(request.ScopeKey) < 1 || utf8.RuneCountInString(request.ScopeKey) > maxScopeKeyLength ||
-		len(request.Scopes) < 1 || len(request.Scopes) > maxScopesPerRun {
+		len(request.Scopes) < 1 || len(request.Scopes) > maxScopesPerRun ||
+		len(request.PrerequisiteCompletionKey) > 256 {
 		return ErrInvalidState
 	}
 	inventory, err := Load()
@@ -576,6 +604,7 @@ func publishStartedPartitions(
 	publisher PartitionPublisher,
 	run Run,
 	scopes []json.RawMessage,
+	prerequisiteCompletionKey string,
 ) error {
 	if publisher == nil {
 		return nil
@@ -587,7 +616,7 @@ func publishStartedPartitions(
 			RunID:   run.ID,
 			Ordinal: ordinal,
 			Scope:   scope,
-		}); err != nil {
+		}, prerequisiteCompletionKey); err != nil {
 			return err
 		}
 	}

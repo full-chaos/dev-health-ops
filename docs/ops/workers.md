@@ -187,6 +187,16 @@ is fail-closed: the loop only opens readiness after one successful step, and
 persistence failures close it instead of being reported as harmless lease
 races.
 
+Ordered post-sync successors remain persisted but unclaimable until their
+predecessor commits a canonical completion fence. The exact native sequence is
+`complexity -> daily -> workgraph.build -> investment.materialize ->
+membership_backfill`, omitting only the first two stages when the sync plan
+does not select them. Each stage has its own durable run/request checkpoint;
+blocked successors consume no retry attempts. Terminal-outbox retention also
+deletes old, unreferenced completion fences in bounded batches, while replay of
+an already-succeeded deterministic stage restores its fence before re-staging
+a successor.
+
 The operational effect bridge is an authenticated internal API. Set
 `WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
 `WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the

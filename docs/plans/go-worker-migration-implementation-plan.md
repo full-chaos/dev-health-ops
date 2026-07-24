@@ -774,19 +774,23 @@ The `post_sync` River consumer now validates the exact dispatched outbox ID,
 tenant, SyncRun, route generation, and live unpaused River route before it
 does any work. It then reloads only successful `sync_run_units` and the
 canonical parent sync configuration. Daily metrics, complexity, DORA,
-work-graph build, and team autoimport use package-owned transaction writers in
-one caller-owned PostgreSQL transaction. A failure in any writer rolls back
+investment dispatch, and team autoimport use package-owned transaction writers
+in one caller-owned PostgreSQL transaction. A failure in any writer rolls back
 every domain request and handoff; River retries the same guarded delivery.
 Replays use deterministic generation/request IDs and outbox dedupe keys, and
 reject a reused identity whose immutable scope changed.
 
-Investment dispatch deliberately remains fail-closed in native post-sync. Its
-temporary compatibility endpoint still invokes the legacy Python dispatcher,
-which creates a Celery chord; binding that endpoint would hide a second
-transport inside River execution. The post-sync transaction therefore returns
-a retryable error and commits none of its earlier children whenever investment
-fanout is required. CHAOS-3050 must supply a direct/native non-Celery dispatch
-writer before this dependency can be bound.
+The River investment dispatch compatibility operation does not call the
+legacy partitioned dispatcher. It executes work-graph build, synchronous
+investment materialization, and org-wide membership projection sequentially,
+then returns bounded evidence to the fenced request ledger. Native post-sync
+emits one deterministic investment request rather than a separate work-graph
+request, preventing the investment queue from racing ahead of graph
+construction. The API releases its read transaction before the long operation
+so the Go worker can renew the execution lease. The dedicated compatibility
+HTTP client takes its deadline from the River execution context rather than
+the shared short operational bridge timeout. The legacy Celery route keeps the
+existing partitioned chord unchanged.
 
 Child contracts remain `go_implemented` with `route=celery` and
 `rollback_route=celery` until their individual parity/canary gates are
@@ -838,11 +842,11 @@ consumer. The legacy Celery chain remains the production path while
 **Blocked by:** CHAOS-2596.
 
 Implementation status: the guarded native consumer and atomic, deterministic
-fanout are implemented for daily, remaining metrics, work-graph build, and
-team autoimport. Investment dispatch remains an explicit fail-closed
-dependency until its direct/native non-Celery fanout lands. Production
-activation remains blocked until that dependency and the downstream child
-contracts complete their independent promotion evidence.
+fanout are implemented for daily, remaining metrics, sequential investment
+dispatch, and team autoimport. The River investment path is free of Celery
+chords; the legacy Celery route remains unchanged. Production activation
+remains blocked until the downstream child contracts complete their
+independent promotion evidence.
 
 #### Work
 

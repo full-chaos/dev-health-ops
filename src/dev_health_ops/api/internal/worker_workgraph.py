@@ -131,10 +131,41 @@ def _scope_arguments(kind: str, scope: object, row: Any) -> dict[str, Any]:
 def _run_sync(kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from dev_health_ops.workers import work_graph_tasks
 
+    if kind == "investment.dispatch":
+        run_membership = bool(arguments.pop("run_membership_backfill_after", False))
+        build_arguments = {
+            key: arguments[key]
+            for key in ("from_date", "to_date", "org_id")
+            if key in arguments
+        }
+        build = _operation_result(
+            "workgraph.build",
+            work_graph_tasks.run_work_graph_build.run(**build_arguments),
+        )
+        materialize = _operation_result(
+            "investment.materialize",
+            work_graph_tasks.run_investment_materialize.run(**arguments),
+        )
+        membership = (
+            _operation_result(
+                "investment.membership",
+                work_graph_tasks.run_membership_backfill.run(
+                    org_id=str(arguments.get("org_id") or "")
+                ),
+            )
+            if run_membership
+            else None
+        )
+        return {
+            "status": "success",
+            "build": build,
+            "materialize": materialize,
+            "membership": membership,
+        }
+
     operations = {
         "workgraph.build": work_graph_tasks.run_work_graph_build.run,
         "investment.materialize": work_graph_tasks.run_investment_materialize.run,
-        "investment.dispatch": work_graph_tasks.dispatch_investment_materialize_partitioned.run,
         "investment.chunk": work_graph_tasks.run_investment_materialize_chunk.run,
         "investment.finalize": work_graph_tasks.finalize_investment_materialize_partitioned.run,
     }
@@ -145,6 +176,12 @@ def _run_sync(kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
     result = operation(**arguments)
     if not isinstance(result, dict):
         raise ValueError("compatibility operation returned an invalid result")
+    return result
+
+
+def _operation_result(kind: str, result: object) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise ValueError(f"{kind} compatibility operation returned an invalid result")
     return result
 
 
@@ -199,24 +236,33 @@ async def execute(
             WHERE id = CAST(:id AS uuid) AND state = 'running'
               AND claim_token = CAST(:token AS uuid)
               AND lease_expires_at > statement_timestamp()
-            FOR UPDATE
             """
         ),
         {"id": str(request.request_id), "token": str(request.claim_token)},
     )
     row = result.mappings().first()
     if row is None:
+        await session.rollback()
         raise HTTPException(status_code=409, detail="Execution lease is unavailable")
+    # End the implicit read transaction before starting long-running Python
+    # work. Holding a row lock here blocks the Go worker's lease renewals and
+    # turns a healthy materialization into an expired execution.
+    execution_row = dict(row)
+    await session.rollback()
     try:
-        arguments = _scope_arguments(str(row["kind"]), row["scope"], row)
-        outcome = await asyncio.to_thread(_run_sync, str(row["kind"]), arguments)
+        arguments = _scope_arguments(
+            str(execution_row["kind"]), execution_row["scope"], execution_row
+        )
+        outcome = await asyncio.to_thread(
+            _run_sync, str(execution_row["kind"]), arguments
+        )
         evidence = _evidence(
             {
-                "kind": row["kind"],
-                "model_ref": row["model_ref"],
-                "prompt_ref": row["prompt_ref"],
-                "llm_concurrency": row["llm_concurrency"],
-                "spend_limit_microunits": row["spend_limit_microunits"],
+                "kind": execution_row["kind"],
+                "model_ref": execution_row["model_ref"],
+                "prompt_ref": execution_row["prompt_ref"],
+                "llm_concurrency": execution_row["llm_concurrency"],
+                "spend_limit_microunits": execution_row["spend_limit_microunits"],
                 "outcome": outcome,
             }
         )

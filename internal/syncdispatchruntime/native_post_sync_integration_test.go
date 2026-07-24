@@ -99,8 +99,17 @@ func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *tes
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID).Scan(&markers); err != nil {
 		t.Fatal(err)
 	}
-	if markers != 6 {
-		t.Fatalf("markers=%d want=6", markers)
+	if markers != 5 {
+		t.Fatalf("markers=%d want=5", markers)
+	}
+	var workGraphMarkers int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM post_sync_markers
+WHERE sync_run_id=$1 AND kind='workgraph.build'`, runID).Scan(&workGraphMarkers); err != nil {
+		t.Fatal(err)
+	}
+	if workGraphMarkers != 0 {
+		t.Fatal("investment post-sync emitted a racing standalone workgraph request")
 	}
 
 	if _, err := pool.Exec(ctx, `DELETE FROM post_sync_markers WHERE sync_run_id=$1`, runID); err != nil {
@@ -110,7 +119,7 @@ func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *tes
 		pool,
 		markerDaily{},
 		markerRemaining{},
-		markerWorkGraph{markerWriter{failKind: "workgraph.build"}},
+		markerWorkGraph{markerWriter{failKind: "investment.dispatch"}},
 		markerTeam{},
 	)
 	if err != nil {

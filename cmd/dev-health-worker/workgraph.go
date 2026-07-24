@@ -55,7 +55,13 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if err != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	compatibility, err := workgraph.NewHTTPCompatibilityExecutor(&http.Client{Timeout: cfg.OperationalBridgeTimeout}, workgraph.HTTPCompatibilityConfig{Endpoint: strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute", BearerToken: cfg.OperationalBridgeToken.Reveal()})
+	compatibility, err := workgraph.NewHTTPCompatibilityExecutor(
+		workgraphCompatibilityHTTPClient(),
+		workgraph.HTTPCompatibilityConfig{
+			Endpoint:    strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute",
+			BearerToken: cfg.OperationalBridgeToken.Reveal(),
+		},
+	)
 	if err != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
@@ -77,6 +83,14 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 	return workgraphWorkerComponent{client: client}, registered, nil
+}
+
+func workgraphCompatibilityHTTPClient() *http.Client {
+	// Work-graph and investment handler contracts have substantially different
+	// execution budgets. The River execution context is the authoritative
+	// deadline; the shared 30-second operational bridge timeout would abort a
+	// healthy synchronous investment materialization.
+	return &http.Client{}
 }
 
 func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies) error {

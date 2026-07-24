@@ -106,7 +106,10 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 			return err
 		}
 	}
-	if plan.WorkGraph {
+	// Investment dispatch owns the ordered build -> materialize -> membership
+	// sequence. Publishing a separate workgraph request here would let the
+	// investment queue race ahead of the workgraph queue.
+	if plan.WorkGraph && !plan.Investment {
 		if err := service.workGraph.StartRequestTx(ctx, tx, "workgraph.build", *plan); err != nil {
 			return err
 		}

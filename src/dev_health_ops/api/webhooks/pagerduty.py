@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, assert_never
@@ -44,6 +45,7 @@ MAX_SIGNATURE_CANDIDATES = 8
 REPLAY_RETENTION_SECONDS = 30 * 24 * 60 * 60
 PENDING_REPLAY_CLAIM_TTL_SECONDS = 5 * 60
 RECEIVER_STREAM_MAXLEN = 10_000
+WEBHOOK_TRANSPORT_ENV = "PAGERDUTY_WEBHOOK_TRANSPORT"
 router = APIRouter(prefix="/pagerduty")
 
 _FEATURE_DISABLED_DETAIL = (
@@ -57,6 +59,29 @@ class ReplayClaimOutcome(StrEnum):
     CLAIMED = "claimed"
     PENDING = "pending"
     REPLAYED = "replayed"
+
+
+class WebhookTransport(StrEnum):
+    CELERY = "celery"
+    RIVER = "river"
+
+
+def _webhook_transport() -> WebhookTransport:
+    """Resolve which runtime owns the PagerDuty stream for this deployment.
+
+    Exactly one consumer may drain a stream entry: the Celery task deletes the
+    entry it processed, which would strip entries the Go River consumer still
+    holds in its pending list. This gate keeps them from racing rather than
+    letting both reconcile. Anything unset, empty, or unrecognised resolves to
+    ``celery`` so a misconfiguration falls back to today's behaviour instead of
+    silently handing the stream to a runtime that may not be deployed.
+    """
+    value = os.getenv(WEBHOOK_TRANSPORT_ENV, "").strip().lower()
+    return (
+        WebhookTransport.RIVER
+        if value == WebhookTransport.RIVER
+        else WebhookTransport.CELERY
+    )
 
 
 async def _canonical_incident_ingestion_allowed(org_id: str) -> bool:
@@ -497,19 +522,37 @@ async def pagerduty_webhook(
             canonical_binding_id, provider_subscription_id, webhook.event.id, body
         )
         raise
-    try:
-        getattr(process_pagerduty_webhook_event, "delay")(
-            binding_id=canonical_binding_id, stream_entry_id=stream_entry_id
-        )
-    except (ValkeyError, KombuError) as exc:
-        _compensate_stream_write(canonical_binding_id, stream_entry_id)
-        _release_replay_claim(
-            canonical_binding_id, provider_subscription_id, webhook.event.id, body
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_QUEUE_UNAVAILABLE_DETAIL,
-        ) from exc
+    # The stream write above is unconditional: it is the durable handoff both
+    # runtimes read. Only the Celery dispatch is gated, so the River consumer
+    # owns the entry outright when it is the configured transport.
+    match _webhook_transport():
+        case WebhookTransport.CELERY:
+            try:
+                getattr(process_pagerduty_webhook_event, "delay")(
+                    binding_id=canonical_binding_id, stream_entry_id=stream_entry_id
+                )
+            except (ValkeyError, KombuError) as exc:
+                _compensate_stream_write(canonical_binding_id, stream_entry_id)
+                _release_replay_claim(
+                    canonical_binding_id,
+                    provider_subscription_id,
+                    webhook.event.id,
+                    body,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=_QUEUE_UNAVAILABLE_DETAIL,
+                ) from exc
+        case WebhookTransport.RIVER:
+            logger.info(
+                "pagerduty_webhook.dispatch_delegated binding_id=%s event_id=%s "
+                "transport=%s",
+                canonical_binding_id,
+                webhook.event.id,
+                WebhookTransport.RIVER.value,
+            )
+        case unreachable_transport:
+            assert_never(unreachable_transport)
     _accept_replay_claim(
         canonical_binding_id, provider_subscription_id, webhook.event.id, body
     )

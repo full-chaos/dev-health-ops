@@ -63,6 +63,9 @@ type operationalBridgeSettings struct {
 	token         secrets.Value
 	timeout       time.Duration
 	allowInsecure bool
+	// transport names the single owner of the PagerDuty webhook stream. The
+	// Go consumer is constructed only when it names River.
+	transport string
 }
 
 func openProductionStreamStorage(ctx context.Context, cfg config.Config) (streamStorage, error) {
@@ -96,6 +99,7 @@ func openProductionStreamStorage(ctx context.Context, cfg config.Config) (stream
 			token:         cfg.OperationalBridgeToken,
 			timeout:       cfg.OperationalBridgeTimeout,
 			allowInsecure: cfg.OperationalBridgeAllowInsecure,
+			transport:     cfg.PagerDutyWebhookTransport,
 		},
 	}, nil
 }
@@ -126,7 +130,21 @@ func (storage *productionStreamStorage) ValkeyReady(ctx context.Context) error {
 }
 
 func (storage *productionStreamStorage) Handler(kind streamHandlerKind) (streamrunner.Handler, error) {
-	if storage == nil || storage.clickHouse == nil {
+	if storage == nil {
+		return nil, errStreamDependencyUnavailable
+	}
+	// Stream ownership is a policy precondition, not a dependency, so it is
+	// decided before any storage check: an operator who starts this profile
+	// before the route flips gets the actionable answer rather than a storage
+	// error. ErrInvalidConfig is deliberate — it stops the process instead of
+	// leaving it live with a closed readiness gate, because a contradiction
+	// between the requested profile and the stream's owner is operator error
+	// and must be impossible to miss.
+	if kind == pagerdutyHandlerKind &&
+		storage.bridge.transport != config.PagerDutyTransportRiver {
+		return nil, streamrunner.ErrInvalidConfig
+	}
+	if storage.clickHouse == nil {
 		return nil, errStreamDependencyUnavailable
 	}
 	switch kind {
@@ -164,6 +182,12 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind) (streamr
 		}
 		return streamhandlers.NewExternalIngestHandler(repository, sink, storage.recompute)
 	case pagerdutyHandlerKind:
+		// Ownership was already proven above: while the transport names Celery
+		// the Python ingress still dispatches its task, reconciles, and XDELs
+		// entries, so a Go consumer here would let both reconcile one event and
+		// let Python delete an entry pending in the Go group. The route flips
+		// at cutover (CUT-14/18).
+		//
 		// Receipts are the crash-safe half of this handler and are native Go.
 		// The reconciliation effect is not: it is forwarded to the Python worker
 		// bridge until the locked-graph port lands (CUT-20).
@@ -436,19 +460,28 @@ func externalIngestRunnerConfig(replicas int) streamrunner.Config {
 // The Celery task uses max_retries=3, i.e. four total attempts before it
 // dead-letters, so MaxDeliveries is 4. Its backoff is 30s/60s/120s; a stream
 // runner redelivers on a fixed reclaim threshold instead of an exponential
-// curve, so ReclaimIdle/ReclaimEvery take the 30s floor of that curve and the
-// budget is bounded by MaxDeliveries rather than by the retry schedule.
+// curve, so the budget is bounded by MaxDeliveries rather than by the schedule.
+//
+// ReclaimIdle must exceed pagerduty.ReceiptLease. A reclaim has to imply the
+// previous holder can no longer own the receipt; if it does not, the reclaimed
+// entry reads as in-flight on every delivery and is dead-lettered without a
+// single reconciliation attempt. pagerdutyReclaimIdleExceedsReceiptLease pins
+// the invariant so tuning either value alone fails the build's tests.
 //
 // Not a singleton: a binding's entries are exclusive to one consumer through
 // the group PEL, and duplicate work across replicas is fenced by the Postgres
 // receipt claim token. Only external-ingest needs a single lane, because its
 // recompute controller carries cross-batch state.
+// pagerdutyReclaimIdle is one minute past the receipt lease so an expired lease
+// is always observable before the entry is redelivered.
+const pagerdutyReclaimIdle = pagerduty.ReceiptLease + time.Minute
+
 func pagerdutyRunnerConfig(replicas int) streamrunner.Config {
 	return streamrunner.Config{
 		Name: "pagerduty_webhooks", Patterns: []string{"pagerduty-webhooks:*"},
 		ConsumerGroup: "pagerduty-webhook-consumers", ConsumerName: "go-pagerduty-webhooks",
 		BatchSize: 25, DiscoveryLimit: 10_000, Block: 5 * time.Second,
-		ReclaimEvery: 30 * time.Second, ReclaimIdle: 30 * time.Second,
+		ReclaimEvery: 30 * time.Second, ReclaimIdle: pagerdutyReclaimIdle,
 		MaxDeliveries: 4, ShutdownDrain: 30 * time.Second,
 		ConfiguredReplicas: replicas,
 	}

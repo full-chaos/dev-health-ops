@@ -122,6 +122,14 @@ services:
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       WORKER_DATABASE_MODE: ${WORKER_DATABASE_MODE:-direct}
+      # The PagerDuty stream runner forwards reconciliation to the Python
+      # worker bridge until the locked-graph port lands (CUT-20), so it
+      # cannot open readiness without both values.
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
+      # Exactly one runtime owns the PagerDuty webhook stream. Celery keeps
+      # it until the route flips at cutover (CUT-14/18).
+      PAGERDUTY_WEBHOOK_TRANSPORT: ${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}
       DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
       AUTO_RUN_MIGRATIONS: "false"
     networks: [dev-health]

@@ -3,6 +3,7 @@ package pagerduty
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -135,7 +136,7 @@ func TestHTTPCompatibilityReconcilerRequiresBoundedTimeoutAndDeployableEndpoint(
 // The handler wraps reconciler failures, so a permanent bridge rejection must
 // still reach the runner as a quarantine decision rather than a retry.
 func TestHandlerPropagatesPermanentBridgeRejection(t *testing.T) {
-	receipts := &receiptStore{proceed: true}
+	receipts := &receiptStore{state: ReceiptClaimed}
 	handler, err := NewHandler(receipts, &reconciler{
 		err: &streamrunner.PermanentError{Reason: "pagerduty_bridge_rejected"},
 	})
@@ -160,4 +161,52 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+// TestBridgeStatusesStayDistinguishable pins TRD 10.5: an operator triaging the
+// dead-letter stream must be able to tell a disabled feature from a revoked
+// binding from a producer bug. A single collapsed reason answers none of those.
+func TestBridgeStatusesStayDistinguishable(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		status     string
+		wantReason string
+		wantOK     bool
+	}{
+		{status: "processed", wantOK: true},
+		{status: "skipped", wantOK: true},
+		{status: "feature_disabled", wantReason: reasonFeatureDisabled},
+		{status: "revoked_binding", wantReason: reasonBindingRevoked},
+		{status: "malformed", wantReason: reasonSchemaInvalid},
+		{status: "rejected", wantReason: reasonBridgeRejected},
+		{status: "something-new", wantReason: reasonBridgeRejected},
+	} {
+		t.Run(test.status, func(t *testing.T) {
+			err := classifyBridgeStatus(test.status)
+			if test.wantOK {
+				if err != nil {
+					t.Fatalf("status %s = %v, want success", test.status, err)
+				}
+				return
+			}
+			var permanent *streamrunner.PermanentError
+			if !errors.As(err, &permanent) {
+				t.Fatalf("status %s = %v, want a permanent outcome", test.status, err)
+			}
+			if permanent.Reason != test.wantReason {
+				t.Fatalf("status %s reason = %s, want %s", test.status, permanent.Reason, test.wantReason)
+			}
+		})
+	}
+
+	// Every terminal reason must be unique, or the DLQ collapses them again.
+	seen := map[string]struct{}{}
+	for _, reason := range []string{
+		reasonBridgeRejected, reasonFeatureDisabled, reasonBindingRevoked, reasonSchemaInvalid,
+	} {
+		if _, duplicate := seen[reason]; duplicate {
+			t.Fatalf("duplicate terminal reason %s", reason)
+		}
+		seen[reason] = struct{}{}
+	}
 }

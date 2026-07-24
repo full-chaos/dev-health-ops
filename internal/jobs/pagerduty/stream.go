@@ -30,19 +30,40 @@ type Event struct {
 }
 
 // ReceiptStore is the durable authority for the reconcile/ACK crash window.
-// Begin returns false for a completed receipt or a live claim; its lease must
-// be recoverable so a process death can be retried from the pending stream.
+// Begin must distinguish a completed receipt from one another process still
+// holds, because only the first may be acknowledged. Release returns a claimed
+// receipt so a transient failure can be retried on the next reclaim instead of
+// waiting out the lease.
 type ReceiptStore interface {
 	Begin(context.Context, string) (ReceiptClaim, error)
 	Complete(context.Context, ReceiptClaim) error
+	Release(context.Context, ReceiptClaim) error
 }
+
+// ReceiptState is why Begin did or did not hand over the receipt.
+type ReceiptState int
+
+const (
+	// ReceiptClaimed means this process owns the receipt and must reconcile.
+	ReceiptClaimed ReceiptState = iota
+	// ReceiptCompleted means the canonical effect already committed. Replay is
+	// a bounded no-op and the entry is safe to acknowledge.
+	ReceiptCompleted
+	// ReceiptInFlight means another process holds a live lease. The entry must
+	// NOT be acknowledged: that process may still fail, and acknowledging here
+	// would drop the event with no canonical effect and no dead-letter record.
+	ReceiptInFlight
+)
 
 // ReceiptClaim fences a stale reconciler from completing a receipt reclaimed
 // after its lease. Token must be matched by the durable receipt store.
 type ReceiptClaim struct {
 	ReceiptID, Token string
-	Proceed          bool
+	State            ReceiptState
 }
+
+// Proceed reports whether this process owns the receipt.
+func (claim ReceiptClaim) Proceed() bool { return claim.State == ReceiptClaimed }
 
 // Reconciler must commit the locked graph mutation before it returns nil. The
 // receipt ID is stable across stream redelivery, allowing that mutation to
@@ -50,6 +71,10 @@ type ReceiptClaim struct {
 type Reconciler interface {
 	Reconcile(context.Context, Event) error
 }
+
+// errReceiptInFlight keeps an entry pending without spending its permanent
+// budget: it is deliberately not a streamrunner.PermanentError.
+var errReceiptInFlight = errors.New("pagerduty receipt is held by another consumer")
 
 type Handler struct {
 	receipts   ReceiptStore
@@ -78,10 +103,26 @@ func (handler *Handler) Handle(ctx context.Context, message streamrunner.Message
 	if err != nil {
 		return fmt.Errorf("claim pagerduty receipt: %w", err)
 	}
-	if !claim.Proceed {
+	switch claim.State {
+	case ReceiptCompleted:
+		// The canonical effect is durable. Replay is a bounded no-op and the
+		// entry may be acknowledged.
 		return nil
+	case ReceiptInFlight:
+		// Another process holds a live lease. Returning nil here would ACK an
+		// event whose reconciliation may still fail, losing it with no
+		// canonical effect and no dead-letter record. Stay unacknowledged and
+		// let a later reclaim past the lease decide.
+		return errReceiptInFlight
 	}
 	if err := handler.reconciler.Reconcile(ctx, event); err != nil {
+		// Release before returning so the retry does not have to wait out the
+		// lease. A permanent bridge verdict still releases: the runner writes
+		// the dead-letter record, and a receipt left running would block the
+		// terminal outcome from ever being re-evaluated.
+		if releaseErr := handler.receipts.Release(ctx, claim); releaseErr != nil {
+			return fmt.Errorf("release pagerduty receipt: %w", releaseErr)
+		}
 		return fmt.Errorf("reconcile pagerduty event: %w", err)
 	}
 	if err := handler.receipts.Complete(ctx, claim); err != nil {

@@ -110,7 +110,7 @@ func (reconciler *HTTPCompatibilityReconciler) Reconcile(ctx context.Context, ev
 		if response.StatusCode >= 400 && response.StatusCode < 500 &&
 			response.StatusCode != http.StatusRequestTimeout &&
 			response.StatusCode != http.StatusTooManyRequests {
-			return &streamrunner.PermanentError{Reason: "pagerduty_bridge_rejected"}
+			return &streamrunner.PermanentError{Reason: reasonBridgeRejected}
 		}
 		return errors.New("pagerduty reconciliation bridge rejected request")
 	}
@@ -120,10 +120,37 @@ func (reconciler *HTTPCompatibilityReconciler) Reconcile(ctx context.Context, ev
 	if json.Unmarshal(data, &result) != nil {
 		return errors.New("pagerduty reconciliation response invalid")
 	}
-	if result.Status == "processed" || result.Status == "skipped" {
+	return classifyBridgeStatus(result.Status)
+}
+
+// Terminal outcomes the dead-letter record must keep distinguishable. TRD
+// section 10.5 requires feature-disabled, malformed, revoked-binding, and
+// retry-exhausted to stay separable: an operator triaging the DLQ needs to know
+// whether to re-enable a feature, fix a binding, or chase a producer bug, and a
+// single collapsed reason answers none of those.
+const (
+	reasonBridgeRejected  = "pagerduty_bridge_rejected"
+	reasonFeatureDisabled = "pagerduty_feature_disabled"
+	reasonBindingRevoked  = "pagerduty_binding_revoked"
+	reasonSchemaInvalid   = "pagerduty_schema_invalid"
+)
+
+// classifyBridgeStatus maps the bridge's bounded status vocabulary onto stream
+// outcomes. An unrecognized status is terminal rather than retryable: the
+// bridge answered successfully, so repeating the call cannot change the verdict.
+func classifyBridgeStatus(status string) error {
+	switch status {
+	case "processed", "skipped":
 		return nil
+	case "feature_disabled":
+		return &streamrunner.PermanentError{Reason: reasonFeatureDisabled}
+	case "revoked_binding":
+		return &streamrunner.PermanentError{Reason: reasonBindingRevoked}
+	case "malformed":
+		return &streamrunner.PermanentError{Reason: reasonSchemaInvalid}
+	default:
+		return &streamrunner.PermanentError{Reason: reasonBridgeRejected}
 	}
-	return &streamrunner.PermanentError{Reason: "pagerduty_bridge_rejected"}
 }
 
 // validBridgeEndpoint mirrors the operational dispatcher's rule: TLS anywhere,

@@ -221,7 +221,7 @@ check_integration() {
 			./internal/testsupport/containers ./internal/storage/postgres ./internal/storage/river \
 			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute \
 			./internal/scheduler/sync ./internal/syncdispatchruntime \
-			./internal/jobs/report ./internal/jobs/system
+			./internal/jobs/report ./internal/jobs/system ./internal/jobs/pagerduty
 	)
 }
 

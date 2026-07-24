@@ -779,3 +779,93 @@ def test_receiver_rejects_a_fully_authenticated_non_ping_receivable_event(
 
     # Then
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "transport", [None, "celery", "CELERY", " celery ", "", "quantum"]
+)
+def test_receiver_dispatches_celery_unless_the_transport_names_river(
+    transport: str | None, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: anything unset, empty, or unrecognised must fail safe to Celery.
+    writes: list[tuple[str, dict[str, str]]] = []
+    dispatches: list[dict[str, str]] = []
+
+    class Redis:
+        def set(self, *_: str, **__: object) -> bool:
+            return True
+
+        def xadd(self, stream: str, fields: dict[str, str], *_: object) -> str:
+            writes.append((stream, fields))
+            return "1-0"
+
+    class Task:
+        @staticmethod
+        def delay(**kwargs: str) -> None:
+            dispatches.append(kwargs)
+
+    if transport is None:
+        monkeypatch.delenv(pagerduty.WEBHOOK_TRANSPORT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(pagerduty.WEBHOOK_TRANSPORT_ENV, transport)
+    monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
+    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
+    body = _body()
+
+    # When
+    response = client.post(
+        f"/api/v1/webhooks/pagerduty/{_BINDING_ID}",
+        content=body,
+        headers=_headers(body),
+    )
+
+    # Then
+    assert response.status_code == 202
+    assert writes[0][0] == f"pagerduty-webhooks:{_BINDING_ID}"
+    assert dispatches == [{"binding_id": _BINDING_ID, "stream_entry_id": "1-0"}]
+
+
+@pytest.mark.parametrize("transport", ["river", "RIVER", " river "])
+def test_receiver_leaves_the_stream_entry_to_river_without_dispatching_celery(
+    transport: str, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: exactly one consumer may drain the stream entry.
+    writes: list[tuple[str, dict[str, str]]] = []
+    dispatched = False
+    deleted: list[tuple[str, str]] = []
+
+    class Redis:
+        def set(self, *_: str, **__: object) -> bool:
+            return True
+
+        def xadd(self, stream: str, fields: dict[str, str], *_: object) -> str:
+            writes.append((stream, fields))
+            return "1-0"
+
+        def xdel(self, stream: str, entry_id: str) -> None:
+            deleted.append((stream, entry_id))
+
+    class Task:
+        @staticmethod
+        def delay(**_: str) -> None:
+            nonlocal dispatched
+            dispatched = True
+
+    monkeypatch.setenv(pagerduty.WEBHOOK_TRANSPORT_ENV, transport)
+    monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
+    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
+    body = _body()
+
+    # When
+    response = client.post(
+        f"/api/v1/webhooks/pagerduty/{_BINDING_ID}",
+        content=body,
+        headers=_headers(body),
+    )
+
+    # Then: the durable handoff is still written, and left intact, for Go.
+    assert response.status_code == 202
+    assert writes[0][0] == f"pagerduty-webhooks:{_BINDING_ID}"
+    assert writes[0][1]["binding_id"] == _BINDING_ID
+    assert dispatched is False
+    assert deleted == []

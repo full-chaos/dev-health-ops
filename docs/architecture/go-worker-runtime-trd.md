@@ -532,12 +532,13 @@ Logical queues preserve latency and cost isolation but are generated from the re
 
 | Profile | Queues |
 |---|---|
-| `latency` | `default`, `webhooks`, `reports`, `sync.coordinator` |
-| `sync` | `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.linear.medium`, `sync.jira.medium`, `sync.launchdarkly.light` |
-| `heavy` | `metrics`, `backfill`, `workgraph`, `investment`, `complexity` |
-| `ops` | `retention`, `heartbeat`, `notifications` |
+| `sync` | `sync`, `sync_provider` |
+| `heavy` | `metrics`, `reports`, `workgraph`, `investment` |
+| `ops` | `retention`, `heartbeat`, `webhooks` |
 
-A coordinator queue is always consumed by a low-latency profile so provider saturation cannot block dispatch or finalization.
+The `latency` profile was removed in CUT-02: it registered no kinds, so it could never satisfy exact startup validation. Its intended work is owned elsewhere — `webhooks` and `heartbeat` by `ops`, `reports` by `heavy`, and the sync coordinator by the `sync` queue.
+
+The sync coordinator queue is consumed by the same profile as provider units. Provider saturation cannot block dispatch or finalization because per-queue `MaxWorkers` is budgeted separately for `sync` and `sync_provider`, so a saturated provider queue cannot consume the coordinator's slots.
 
 Per-queue `MaxWorkers` is local to a process. Fleet-wide limits are enforced by the existing database/Valkey budget layer keyed by provider, organization, host, and cost class.
 

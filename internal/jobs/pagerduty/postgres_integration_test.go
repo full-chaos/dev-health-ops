@@ -42,11 +42,14 @@ func TestPostgresReceiptStoreFencesDuplicateAndCrashedDeliveries(t *testing.T) {
 	const receiptID = "pagerduty:binding-1:evt-1"
 
 	first, err := store.Begin(ctx, receiptID)
-	if err != nil || !first.Proceed || first.Token == "" {
+	if err != nil || !first.Proceed() || first.Token == "" {
 		t.Fatalf("first claim = %#v, %v", first, err)
 	}
+	// A live lease is IN-FLIGHT, not completed. Collapsing the two lets a
+	// reclaim mistake a peer's unfinished work for durable success and ACK the
+	// entry away with no canonical effect (codex HIGH-2).
 	duplicate, err := store.Begin(ctx, receiptID)
-	if err != nil || duplicate.Proceed {
+	if err != nil || duplicate.State != ReceiptInFlight {
 		t.Fatalf("live-lease duplicate = %#v, %v", duplicate, err)
 	}
 
@@ -55,7 +58,7 @@ func TestPostgresReceiptStoreFencesDuplicateAndCrashedDeliveries(t *testing.T) {
 	// crashed claimant must no longer be able to complete it.
 	now = now.Add(store.lease + time.Second)
 	reclaimed, err := store.Begin(ctx, receiptID)
-	if err != nil || !reclaimed.Proceed || reclaimed.Token == first.Token {
+	if err != nil || !reclaimed.Proceed() || reclaimed.Token == first.Token {
 		t.Fatalf("reclaimed = %#v, %v", reclaimed, err)
 	}
 	if err := store.Complete(ctx, first); err != errUnavailable {
@@ -65,7 +68,7 @@ func TestPostgresReceiptStoreFencesDuplicateAndCrashedDeliveries(t *testing.T) {
 		t.Fatalf("current completion = %v", err)
 	}
 	completed, err := store.Begin(ctx, receiptID)
-	if err != nil || completed.Proceed {
+	if err != nil || completed.State != ReceiptCompleted {
 		t.Fatalf("completed receipt = %#v, %v", completed, err)
 	}
 
@@ -105,5 +108,66 @@ func createReceiptTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		)`)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPostgresReceiptStoreReleasesForImmediateRetry covers the other half of
+// codex HIGH-2: a failed reconciliation must hand the receipt back so the next
+// delivery can retry, rather than leaving an abandoned lease that reads as
+// another consumer's in-flight work until it expires.
+func TestPostgresReceiptStoreReleasesForImmediateRetry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := instance.Close(context.Background()); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReceiptTable(t, ctx, pool)
+
+	store, err := NewPostgresReceiptStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 23, 18, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	const receiptID = "pagerduty:binding-2:evt-2"
+
+	claim, err := store.Begin(ctx, receiptID)
+	if err != nil || !claim.Proceed() {
+		t.Fatalf("claim = %#v, %v", claim, err)
+	}
+	if err := store.Release(ctx, claim); err != nil {
+		t.Fatalf("release = %v", err)
+	}
+	// No clock movement: the retry must be available immediately, not after
+	// the lease expires.
+	retry, err := store.Begin(ctx, receiptID)
+	if err != nil || !retry.Proceed() || retry.Token == claim.Token {
+		t.Fatalf("retry after release = %#v, %v", retry, err)
+	}
+	// A released claim is spent. The previous holder must not be able to
+	// complete or release the receipt the new holder now owns.
+	if err := store.Complete(ctx, claim); err == nil {
+		t.Fatal("released claim completed the new holder's receipt")
+	}
+	if err := store.Release(ctx, claim); err != nil {
+		t.Fatalf("releasing an already-released claim must be benign: %v", err)
+	}
+	stillHeld, err := store.Begin(ctx, receiptID)
+	if err != nil || stillHeld.State != ReceiptInFlight {
+		t.Fatalf("stale release stole the live claim: %#v, %v", stillHeld, err)
+	}
+	if err := store.Complete(ctx, retry); err != nil {
+		t.Fatalf("current holder completion = %v", err)
 	}
 }

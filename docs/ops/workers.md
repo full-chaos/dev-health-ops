@@ -195,7 +195,12 @@ defaults to 10s for the bounded operational-effect, coordinator, and metric
 compatibility calls. Long-running work-graph and investment compatibility
 calls are the exception: their dedicated client has no independent wall-clock
 timeout and is canceled by the River handler execution context, whose
-contract-specific deadline remains authoritative. Plain HTTP defaults to
+contract-specific deadline remains authoritative. The API runs those legacy
+Python calls in a fixed, killable child process with bounded JSON input/output
+(stdout is the protocol; diagnostics retain inherited stderr). On POSIX the
+child has its own process group, which River cancellation or client disconnect
+terminates, kills if needed, and reaps before the fenced execution becomes
+ambiguous. Plain HTTP defaults to
 loopback-only. Local container stacks may explicitly set
 `WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
 permits only private IPs and single-label/`.internal`/`.local` service-discovery

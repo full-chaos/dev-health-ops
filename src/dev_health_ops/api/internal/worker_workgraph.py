@@ -9,12 +9,16 @@ model, credential, or database URL.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import os
+import signal
+import sys
 import uuid
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +31,14 @@ from dev_health_ops.api.internal.worker_auth import (
 
 router = APIRouter(prefix="/internal/worker/workgraph/v1", include_in_schema=False)
 _MAX_EVIDENCE_BYTES = 4096
+_MAX_COMPATIBILITY_PROCESS_BYTES = 1024 * 1024
+_PROCESS_TERMINATION_TIMEOUT_SECONDS = 1.0
+_DISCONNECT_POLL_SECONDS = 0.1
+_COMPATIBILITY_RUNNER_COMMAND = (
+    sys.executable,
+    "-m",
+    "dev_health_ops.api.internal.worker_workgraph_runner",
+)
 
 
 class _Strict(BaseModel):
@@ -198,6 +210,115 @@ def _operation_evidence(kind: str, result: object) -> dict[str, Any]:
     }
 
 
+async def _read_bounded_stream(
+    stream: asyncio.StreamReader, maximum_bytes: int
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await stream.read(64 * 1024):
+        total += len(chunk)
+        if total > maximum_bytes:
+            raise ValueError("compatibility process output exceeds the durable bound")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+    else:
+        process.terminate()
+    try:
+        await asyncio.wait_for(
+            process.wait(), timeout=_PROCESS_TERMINATION_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        if os.name == "posix":
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+        await process.wait()
+
+
+async def _run_compatibility_process(
+    kind: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    payload = _canonical({"kind": kind, "arguments": arguments}).encode()
+    if len(payload) > _MAX_COMPATIBILITY_PROCESS_BYTES:
+        raise ValueError("compatibility process input exceeds the durable bound")
+    process = await asyncio.create_subprocess_exec(
+        *_COMPATIBILITY_RUNNER_COMMAND,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        # The child reserves stdout for the bounded JSON protocol and inherits
+        # stderr so compatibility-task diagnostics remain visible to operators.
+        stderr=None,
+        start_new_session=os.name == "posix",
+    )
+    if process.stdin is None or process.stdout is None:
+        await _terminate_process(process)
+        raise RuntimeError("compatibility process pipes are unavailable")
+    stdout_task = asyncio.create_task(
+        _read_bounded_stream(process.stdout, _MAX_COMPATIBILITY_PROCESS_BYTES)
+    )
+    try:
+        process.stdin.write(payload)
+        await process.stdin.drain()
+        process.stdin.close()
+        stdout, return_code = await asyncio.gather(stdout_task, process.wait())
+    except BaseException:
+        await _terminate_process(process)
+        raise
+    finally:
+        if not stdout_task.done():
+            stdout_task.cancel()
+        await asyncio.gather(stdout_task, return_exceptions=True)
+    if return_code != 0:
+        raise RuntimeError("compatibility process failed")
+    try:
+        decoded = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("compatibility process returned invalid JSON") from exc
+    if (
+        not isinstance(decoded, dict)
+        or set(decoded) != {"outcome"}
+        or not isinstance(decoded["outcome"], dict)
+    ):
+        raise ValueError("compatibility process returned an invalid response")
+    return decoded["outcome"]
+
+
+async def _wait_for_client_disconnect(connection: Request) -> None:
+    while not await connection.is_disconnected():
+        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+
+
+async def _run_until_client_disconnect(
+    connection: Request, kind: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    execution = asyncio.create_task(_run_compatibility_process(kind, arguments))
+    disconnect = asyncio.create_task(_wait_for_client_disconnect(connection))
+    try:
+        done, _pending = await asyncio.wait(
+            {execution, disconnect}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if execution in done:
+            return execution.result()
+        execution.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await execution
+        raise ConnectionError("compatibility request client disconnected")
+    finally:
+        for task in (execution, disconnect):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(execution, disconnect, return_exceptions=True)
+
+
 async def _mark_ambiguous(
     session: AsyncSession, request: ExecuteRequest, detail: str
 ) -> None:
@@ -237,6 +358,7 @@ async def _mark_ambiguous(
 async def execute(
     request: ExecuteRequest,
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    connection: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
     authorize_worker_bridge(authorization)
@@ -266,8 +388,8 @@ async def execute(
         arguments = _scope_arguments(
             str(execution_row["kind"]), execution_row["scope"], execution_row
         )
-        outcome = await asyncio.to_thread(
-            _run_sync, str(execution_row["kind"]), arguments
+        outcome = await _run_until_client_disconnect(
+            connection, str(execution_row["kind"]), arguments
         )
         evidence = _evidence(
             {
@@ -279,7 +401,7 @@ async def execute(
                 "outcome": outcome,
             }
         )
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         await _mark_ambiguous(
             session, request, f"compatibility executor raised {type(exc).__name__}"
         )

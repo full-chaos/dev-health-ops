@@ -789,7 +789,9 @@ request, preventing the investment queue from racing ahead of graph
 construction. The API releases its read transaction before the long operation
 so the Go worker can renew the execution lease. The dedicated compatibility
 HTTP client takes its deadline from the River execution context rather than
-the shared short operational bridge timeout. The runtime registry assigns the
+the shared short operational bridge timeout, while the API runs legacy work in
+a fixed child process and on POSIX terminates its process group, kills if
+needed, and reaps on cancellation or disconnect. The runtime registry assigns the
 combined dispatch the same 7,200-second execution budget as materialization
 and chunks; contract version `1` and the checked-in Celery route remain
 unchanged. The legacy Celery route keeps the existing partitioned chord

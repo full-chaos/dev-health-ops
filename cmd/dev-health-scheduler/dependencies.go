@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -98,6 +100,10 @@ type schedulerRuntimeSources struct {
 		schedulersync.Coordinator,
 		schedulersync.LoopConfig,
 	) (*schedulersync.Loop, error)
+	// newFixedLoop builds the fixed maintenance schedule runtime that replaces
+	// Celery Beat's non-product entries. It shares this process because two
+	// processes must never both believe they own periodic work.
+	newFixedLoop func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error)
 }
 
 var productionSchedulerRuntimeSources = schedulerRuntimeSources{
@@ -107,6 +113,7 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 	},
 	newCoordinator: schedulersync.NewOccurrenceCoordinator,
 	newLoop:        schedulersync.NewLoop,
+	newFixedLoop:   buildFixedScheduleLoop,
 }
 
 func buildProductionSchedulerLoop(
@@ -130,7 +137,7 @@ func buildSchedulerLoopWithSources(
 ) (lifecycle.Component, error) {
 	if ctx == nil || registry == nil || sources.openDatabase == nil ||
 		sources.newRepository == nil || sources.newCoordinator == nil ||
-		sources.newLoop == nil {
+		sources.newLoop == nil || sources.newFixedLoop == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
 	database, err := sources.openDatabase(ctx, cfg)
@@ -173,30 +180,51 @@ func buildSchedulerLoopWithSources(
 	if err != nil || loop == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
+	fixedLoop, err := sources.newFixedLoop(database.DomainPool(), registry)
+	if err != nil || fixedLoop == nil {
+		return nil, errSchedulerActivationUnavailable
+	}
 	closeOnError = false
-	return schedulerRuntime{database: database, loop: loop}, nil
+	return schedulerRuntime{database: database, loop: loop, fixedLoop: fixedLoop}, nil
 }
 
 type schedulerRuntime struct {
-	database schedulerDatabase
-	loop     *schedulersync.Loop
+	database  schedulerDatabase
+	loop      *schedulersync.Loop
+	fixedLoop lifecycle.Component
 }
 
 func (schedulerRuntime) Name() string { return "sync-scheduler-runtime" }
 
+// Start brings up the product schedule loop first. If it cannot start, the
+// fixed maintenance loop is never started either: a process that owns half the
+// periodic surface is harder to reason about than one that stays closed.
 func (component schedulerRuntime) Start(ctx context.Context) error {
-	if component.database == nil || component.loop == nil {
+	if component.database == nil || component.loop == nil || component.fixedLoop == nil {
 		return errSchedulerActivationUnavailable
 	}
-	return component.loop.Start(ctx)
+	if err := component.loop.Start(ctx); err != nil {
+		return err
+	}
+	if err := component.fixedLoop.Start(ctx); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_ = component.loop.Shutdown(shutdownCtx)
+		return err
+	}
+	return nil
 }
 
+// Shutdown stops both loops and always closes the database, even when one loop
+// fails to stop cleanly.
 func (component schedulerRuntime) Shutdown(ctx context.Context) error {
 	if component.database != nil {
 		defer component.database.Close()
 	}
-	if component.loop == nil {
+	if component.loop == nil || component.fixedLoop == nil {
 		return errSchedulerActivationUnavailable
 	}
-	return component.loop.Shutdown(ctx)
+	fixedErr := component.fixedLoop.Shutdown(ctx)
+	syncErr := component.loop.Shutdown(ctx)
+	return errors.Join(fixedErr, syncErr)
 }

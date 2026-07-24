@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -55,8 +56,29 @@ func (database *fakeSchedulerDatabase) RiverSchemaReady(context.Context, string)
 func (database *fakeSchedulerDatabase) DomainPool() *pgxpool.Pool { return database.pool }
 func (database *fakeSchedulerDatabase) Close()                    { database.closed.Store(true) }
 
+// fakeFixedLoop records the fixed maintenance schedule lifecycle so the
+// composition test can prove the scheduler process owns both schedulers.
+type fakeFixedLoop struct {
+	started  atomic.Int64
+	stopped  atomic.Int64
+	startErr error
+}
+
+func (*fakeFixedLoop) Name() string { return "fixed-schedule-loop" }
+
+func (loop *fakeFixedLoop) Start(context.Context) error {
+	loop.started.Add(1)
+	return loop.startErr
+}
+
+func (loop *fakeFixedLoop) Shutdown(context.Context) error {
+	loop.stopped.Add(1)
+	return nil
+}
+
 func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	fixedLoop := &fakeFixedLoop{}
 	steps := atomic.Int64{}
 	sources := schedulerRuntimeSources{
 		openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) {
@@ -86,6 +108,12 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			})
 		},
 		newLoop: schedulersync.NewLoop,
+		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry) (lifecycle.Component, error) {
+			if pool != database.pool {
+				t.Fatal("fixed schedule loop received the wrong domain pool")
+			}
+			return fixedLoop, nil
+		},
 	}
 	registry := health.NewRegistry(100 * time.Millisecond)
 	component, err := buildSchedulerLoopWithSources(
@@ -125,6 +153,47 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 	if !database.closed.Load() {
 		t.Fatal("scheduler runtime did not close database pools")
 	}
+	if fixedLoop.started.Load() != 1 || fixedLoop.stopped.Load() != 1 {
+		t.Fatalf(
+			"fixed schedule loop started=%d stopped=%d; the scheduler process owns both schedulers",
+			fixedLoop.started.Load(), fixedLoop.stopped.Load(),
+		)
+	}
+}
+
+// A scheduler process that cannot construct the fixed maintenance loop must
+// not start with only half the periodic surface: the legacy Beat entries would
+// silently stop firing while the process reported itself healthy.
+func TestSchedulerRuntimeRefusesToStartWithoutTheFixedScheduleLoop(t *testing.T) {
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	_, err := buildSchedulerLoopWithSources(
+		context.Background(),
+		config.Config{RiverDatabaseSchema: "river"},
+		health.NewRegistry(time.Second),
+		schedulerRuntimeSources{
+			openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) {
+				return database, nil
+			},
+			newRepository: func(*pgxpool.Pool) (schedulersync.HandoffStepper, error) {
+				return schedulerHandoffStepperFunc(func(
+					context.Context, time.Time, int, schedulersync.Coordinator,
+				) (schedulersync.HandoffResult, error) {
+					return schedulersync.HandoffResult{}, nil
+				}), nil
+			},
+			newCoordinator: schedulersync.NewOccurrenceCoordinator,
+			newLoop:        schedulersync.NewLoop,
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error) {
+				return nil, errors.New("producers unavailable")
+			},
+		},
+	)
+	if !errors.Is(err, errSchedulerActivationUnavailable) {
+		t.Fatalf("err = %v, want errSchedulerActivationUnavailable", err)
+	}
+	if !database.closed.Load() {
+		t.Fatal("failed fixed-loop composition leaked the database pools")
+	}
 }
 
 func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing.T) {
@@ -142,6 +211,9 @@ func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing
 			},
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry) (lifecycle.Component, error) {
+				return nil, errors.New("fixed schedule loop unavailable")
+			},
 		},
 	)
 	if !errors.Is(err, errSchedulerActivationUnavailable) || !database.closed.Load() {

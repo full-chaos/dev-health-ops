@@ -40,7 +40,36 @@ const (
 	KindInvestmentFinalize       = "investment.finalize"
 	KindSyncProviderUnit         = "sync.provider_unit"
 	RetentionWorkerTerminal      = "worker_job_terminal"
+	// RetentionRateLimitObservation bounds the durable provider rate-limit
+	// observation store (CHAOS-2758). It replaces the Celery
+	// prune-rate-limit-observations entry.
+	RetentionRateLimitObservation = "rate_limit_observation"
+	// RetentionExternalIngestBatch bounds the external-ingest status store
+	// (CHAOS-2694). It replaces the Celery prune-external-ingest-batches
+	// entry and deletes terminal-status rows only.
+	RetentionExternalIngestBatch = "external_ingest_batch"
 )
+
+// RetentionPolicies is the closed set of bounded retention operations. Each
+// value is a distinct deletion scope with its own retention horizon; they are
+// deliberately not collapsed into one parameterized policy so a route or
+// rollback can be applied to one store without touching the others.
+func RetentionPolicies() []string {
+	return []string{
+		RetentionWorkerTerminal,
+		RetentionRateLimitObservation,
+		RetentionExternalIngestBatch,
+	}
+}
+
+func supportedRetentionPolicy(policy string) bool {
+	for _, supported := range RetentionPolicies() {
+		if policy == supported {
+			return true
+		}
+	}
+	return false
+}
 
 var (
 	kindPattern       = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
@@ -598,7 +627,7 @@ func (payload RetentionCleanupPayload) validate() error {
 	if err := validateUTCTimestamp("delete_before", payload.DeleteBefore); err != nil {
 		return err
 	}
-	if payload.RetentionPolicy != RetentionWorkerTerminal {
+	if !supportedRetentionPolicy(payload.RetentionPolicy) {
 		return errors.New("unsupported retention_policy")
 	}
 	return nil

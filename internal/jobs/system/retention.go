@@ -42,8 +42,16 @@ func (adapter terminalOutboxRetention) DeleteBefore(
 // requested policy. There is no default store and no fallback: an unknown or
 // unregistered policy is a permanent failure, so a policy whose table nobody
 // constructed cannot silently delete from a neighbouring one.
+// retentionClockSkew is how far a cutoff may sit in the future before the
+// handler refuses it. A producer derives the cutoff from an occurrence's due
+// time minus a retention horizon, so a correct cutoff is always in the past by
+// the time the job runs; only clock skew between the scheduler host and this
+// one can push it marginally forward.
+const retentionClockSkew = time.Minute
+
 type RetentionHandler struct {
 	stores map[string]RetentionStore
+	now    func() time.Time
 }
 
 // NewRetentionHandler binds each supported policy to its owning store. Every
@@ -65,7 +73,7 @@ func NewRetentionHandler(stores map[string]RetentionStore) (*RetentionHandler, e
 			return nil, errors.New("retention policy has no store")
 		}
 	}
-	return &RetentionHandler{stores: bound}, nil
+	return &RetentionHandler{stores: bound, now: time.Now}, nil
 }
 
 // NewTerminalOutboxRetentionStore adapts the worker-outbox repository to the
@@ -93,6 +101,18 @@ func (handler *RetentionHandler) Work(ctx context.Context, execution *jobruntime
 	deleteBefore, err := time.Parse(time.RFC3339, payload.DeleteBefore)
 	if err != nil || deleteBefore.Location() != time.UTC {
 		return jobruntime.Permanent(errors.New("retention cutoff is invalid"))
+	}
+	// A cutoff in the future would delete rows newer than now, which no
+	// retention schedule can intend: it is what a sign error in the producer's
+	// "due time minus horizon" arithmetic looks like. Retrying cannot repair a
+	// bad cutoff, so this is terminal rather than retryable. The cutoff is
+	// otherwise authoritative -- the handler never reads a retention horizon of
+	// its own, so the producer stays the single owner of the window.
+	if handler.now == nil {
+		return jobruntime.Permanent(errors.New("retention handler is not configured"))
+	}
+	if deleteBefore.After(handler.now().UTC().Add(retentionClockSkew)) {
+		return jobruntime.Permanent(errors.New("retention cutoff is in the future"))
 	}
 	if _, err := store.DeleteBefore(ctx, deleteBefore, payload.BatchSize); err != nil {
 		return jobruntime.Retryable(err)

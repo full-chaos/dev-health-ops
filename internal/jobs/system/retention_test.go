@@ -137,3 +137,54 @@ func TestRetentionHandlerRefusesPartialPolicyCoverage(t *testing.T) {
 		t.Fatal("unknown retention policy unexpectedly accepted")
 	}
 }
+
+// TestRetentionHandlerRefusesAFutureCutoff guards the direction of the
+// producer's arithmetic. A cutoff newer than now deletes rows newer than now,
+// which no retention schedule can intend; it is what "due + horizon" instead of
+// "due - horizon" looks like, and its blast radius is every terminal row.
+func TestRetentionHandlerRefusesAFutureCutoff(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 24, 5, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name    string
+		cutoff  time.Time
+		wantErr bool
+	}{
+		{name: "well inside the retention window", cutoff: now.Add(-14 * 24 * time.Hour)},
+		{name: "cutoff at the occurrence due time", cutoff: now},
+		{name: "within tolerated scheduler clock skew", cutoff: now.Add(30 * time.Second)},
+		{name: "beyond tolerated skew", cutoff: now.Add(2 * time.Minute), wantErr: true},
+		{name: "sign error on a 90 day horizon", cutoff: now.Add(90 * 24 * time.Hour), wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &retentionStore{}
+			handler, err := NewRetentionHandler(allRetentionStores(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler.now = func() time.Time { return now }
+			err = handler.Work(context.Background(), retentionExecution(
+				jobcontract.RetentionCleanupPayload{
+					BatchSize:       500,
+					DeleteBefore:    test.cutoff.Format(time.RFC3339),
+					RetentionPolicy: jobcontract.RetentionExternalIngestBatches,
+				},
+			))
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("future cutoff was accepted")
+				}
+				if store.called {
+					t.Fatal("future cutoff reached storage")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("valid cutoff rejected: %v", err)
+			}
+			if !store.called {
+				t.Fatal("valid cutoff never reached storage")
+			}
+		})
+	}
+}

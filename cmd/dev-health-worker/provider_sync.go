@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	providerUnitQueue         = "sync.provider"
+	providerUnitQueue         = "sync_provider"
 	providerUnitLeaseDuration = 2 * time.Minute
 	providerUnitHeartbeat     = 30 * time.Second
 	providerUnitBudgetTTL     = 15 * time.Minute

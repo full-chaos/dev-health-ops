@@ -260,7 +260,7 @@
       "max_replicas": 2,
       "queues": [
         "sync",
-        "sync.provider"
+        "sync_provider"
       ],
       "queue_workers": [
         {
@@ -268,7 +268,7 @@
           "max_workers": 4
         },
         {
-          "queue": "sync.provider",
+          "queue": "sync_provider",
           "max_workers": 2
         }
       ],

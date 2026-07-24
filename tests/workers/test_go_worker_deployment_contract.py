@@ -140,7 +140,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     }
 
     compose = _load_yaml(_GO_COMPOSE)["services"]
-    assert set(compose) == {
+    runtime_services = {
         "go-worker-heavy",
         "go-worker-latency",
         "go-worker-ops",
@@ -150,7 +150,13 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         "go-stream-external",
         "go-stream-ingest",
     }
-    for service in compose.values():
+    assert set(compose) == runtime_services | {
+        "go-river-provision",
+        "go-river-migrate",
+        "go-contractcheck",
+    }
+    for name in runtime_services:
+        service = compose[name]
         assert service["profiles"] == ["go-workers"]
         assert service["read_only"] is True
         assert service["user"] == "65532:65532"
@@ -162,7 +168,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     )
 
     swarm = _load_yaml(_GO_SWARM)["services"]
-    assert set(swarm) == set(compose)
+    assert set(swarm) == runtime_services
     for service in swarm.values():
         assert service["read_only"] is True
         assert service["user"] == "65532:65532"
@@ -188,7 +194,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         "labels"
     ]
     assert sync_labels["dev-health.io/profile"] == "sync"
-    assert sync_labels["dev-health.io/queue"] == "sync.provider"
+    assert sync_labels["dev-health.io/queue"] == "sync_provider"
 
     values = _load_yaml(_HELM_CHART / "values.yaml")
     assert values["goWorkers"]["enabled"] is False
@@ -201,7 +207,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
         if profile["name"] == "sync"
     )
     assert sync_profile["runtimeProfile"] == "sync"
-    assert sync_profile["queue"] == "sync.provider"
+    assert sync_profile["queue"] == "sync_provider"
     assert "worker_jobs_available" in (
         _HELM_CHART / "templates" / "go-workers.yaml"
     ).read_text(encoding="utf-8")
@@ -211,6 +217,64 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     assert "worker_execution_saturation_ratio" in (
         _HELM_CHART / "templates" / "go-workers.yaml"
     ).read_text(encoding="utf-8")
+
+
+def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> None:
+    services = _load_yaml(_GO_COMPOSE)["services"]
+
+    provision = services["go-river-provision"]
+    assert provision["profiles"] == ["go-workers"]
+    assert provision["restart"] == "no"
+    assert (
+        provision["depends_on"]["migrate"]["condition"]
+        == "service_completed_successfully"
+    )
+    provision_command = _command_string(provision)
+    assert "psql" in provision_command
+    assert "provision_river_roles.sql" in provision_command
+    assert any(
+        str(volume).endswith(
+            "scripts/worker/provision_river_roles.sql:"
+            "/opt/dev-health/provision_river_roles.sql:ro"
+        )
+        for volume in provision["volumes"]
+    )
+
+    river_migrate = services["go-river-migrate"]
+    assert river_migrate["profiles"] == ["go-workers"]
+    assert river_migrate["restart"] == "no"
+    assert (
+        river_migrate["depends_on"]["go-river-provision"]["condition"]
+        == "service_completed_successfully"
+    )
+    migration_command = _command_string(river_migrate)
+    assert migration_command.count("dev-health-worker-migrate") == 2
+    assert "dev-health-worker-migrate --check" in migration_command
+    assert "MIGRATION_DATABASE_URI" in river_migrate["environment"]
+
+    contractcheck = services["go-contractcheck"]
+    assert contractcheck["profiles"] == ["go-workers"]
+    assert contractcheck["restart"] == "no"
+    assert contractcheck["network_mode"] == "none"
+    assert contractcheck["build"]["target"] == "contractcheck"
+    assert (
+        contractcheck["depends_on"]["go-river-migrate"]["condition"]
+        == "service_completed_successfully"
+    )
+    assert "validate" in _command_string(contractcheck)
+
+    for name, service in services.items():
+        if name in {"go-river-provision", "go-river-migrate", "go-contractcheck"}:
+            continue
+        assert (
+            service["depends_on"]["go-contractcheck"]["condition"]
+            == "service_completed_successfully"
+        ), f"{name} must wait for the complete local Go bootstrap chain"
+        assert "MIGRATION_DATABASE_URI" not in service["environment"]
+
+    rendered = _GO_COMPOSE.read_text(encoding="utf-8")
+    assert "workerctl route" not in rendered
+    assert _load_json(_PROFILES)["deployment_state"] == "coexistence_disabled"
 
 
 @pytest.mark.parametrize(
@@ -255,6 +319,23 @@ def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
         + "/runtime/reconciler/app/contracts/sync-dispatch/v1;"
         in dockerfile
     )
+
+
+def test_scheduler_image_packages_runtime_policy_inputs() -> None:
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/scheduler/app/contracts/jobs/v1;"
+        in dockerfile
+    )
+    assert (
+        "cp /src/deploy/go-workers/profiles.json "
+        + "/runtime/scheduler/app/deploy/go-workers/profiles.json;"
+        in dockerfile
+    )
+    scheduler_target = dockerfile.split("FROM runtime AS scheduler", maxsplit=1)[1]
+    scheduler_target = scheduler_target.split("FROM runtime AS", maxsplit=1)[0]
+    assert "WORKDIR /app" in scheduler_target
 
 
 def test_sync_parity_image_packages_fixed_runtime_paths() -> None:

@@ -8,6 +8,101 @@
 # The checked-in routing contract remains Celery-owned. Starting these
 # containers alone does not transfer a queue or scheduler ownership.
 services:
+  # The canonical Python migrate service owns Alembic and ClickHouse. Re-run
+  # role provisioning only after it completes so guarded grants see every
+  # current semantic table, including an already-initialized local volume.
+  go-river-provision:
+    image: postgres:18-alpine
+    profiles: [go-workers]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        exec psql \
+          --host="${POSTGRES_HOST:-postgres}" \
+          --username="${POSTGRES_USER:-devhealth}" \
+          --dbname="${POSTGRES_DB:-devhealth}" \
+          --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
+          --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
+          --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
+          --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
+          --file=/opt/dev-health/provision_river_roles.sql
+    volumes:
+      - ../../scripts/worker/provision_river_roles.sql:/opt/dev-health/provision_river_roles.sql:ro
+    networks: [dev-health]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Apply the pinned River bundle with the elevated local/admin DSN, then
+  # independently check that the resulting schema is current. Neither DSN nor
+  # this binary is exposed to a long-running Go service.
+  go-river-migrate:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    profiles: [go-workers]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >-
+        if [ -z "$$MIGRATION_DATABASE_URI" ];
+        then export MIGRATION_DATABASE_URI="postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:5432/$$POSTGRES_DB";
+        fi;
+        dev-health-worker-migrate
+        && dev-health-worker-migrate --check
+    environment:
+      MIGRATION_DATABASE_URI: ${GO_WORKER_MIGRATION_DATABASE_URI:-}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-devhealth}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      POSTGRES_DB: ${POSTGRES_DB:-devhealth}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+    networks: [dev-health]
+    depends_on:
+      go-river-provision:
+        condition: service_completed_successfully
+
+  # Validate the exact checked-in job registry and deployment profile before
+  # Compose is allowed to start any long-running Go process.
+  go-contractcheck:
+    build:
+      context: ../..
+      dockerfile: docker/go-worker.Dockerfile
+      target: contractcheck
+    profiles: [go-workers]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    command: [validate]
+    depends_on:
+      go-river-migrate:
+        condition: service_completed_successfully
+
   go-worker-heavy: &go-worker
     image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
     profiles: [go-workers]
@@ -31,7 +126,7 @@ services:
       AUTO_RUN_MIGRATIONS: "false"
     networks: [dev-health]
     depends_on:
-      migrate:
+      go-contractcheck:
         condition: service_completed_successfully
     deploy: &go-worker-resources
       resources:
@@ -55,7 +150,7 @@ services:
       DEV_HEALTH_PROFILE: ops
 
   # Runtime profile remains `sync`; its provider-unit handler consumes the
-  # separately-owned River queue `sync.provider` once the provider contract
+  # separately-owned River queue `sync_provider` once the provider contract
   # release is present.
   go-worker-sync-provider:
     <<: *go-worker

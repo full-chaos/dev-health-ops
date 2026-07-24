@@ -110,6 +110,21 @@ type analyzer struct {
 	// handoff README's known-limitations list.
 	implementers map[*types.Named][]*types.Named
 	devirt       []DevirtualizedCallSite
+
+	// sqlParamConstants[fn][paramIndex] holds every distinct constant string
+	// value that string parameter is EVER passed at any in-module call site
+	// -- but ONLY when every observed call site passed a compile-time
+	// constant for that position (one non-constant call site excludes the
+	// whole (fn, paramIndex) pair, fail-safe). This is interprocedural
+	// constant propagation for SQL text passed through a helper function
+	// parameter (e.g. `deleteInChunks(ctx, pool, sqlLiteral, ...)` where the
+	// SQL is a parameter, not inlined at the .Exec call) -- a real gap found
+	// by re-running against feat/go-default-cutover's
+	// internal/jobs/system/retention_postgres.go, which forwards its DELETE
+	// statement through two such parameter hops before reaching pool.Exec.
+	// Built once, independent of taint state (a pure syntactic property of
+	// call sites), before the taint fixed-point loop.
+	sqlParamConstants map[*types.Func]map[int][]string
 }
 
 // DevirtualizedCallSite records every place the analyzer resolved an
@@ -217,6 +232,7 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 			"go/packages load likely failed silently", moduleDir)
 	}
 	a.buildImplementers(pkgs)
+	a.buildSQLParamConstants()
 
 	const maxIterations = 40
 	for iter := 0; iter < maxIterations; iter++ {
@@ -353,6 +369,195 @@ func (a *analyzer) resolveDevirtualized(recvExpr ast.Expr, recvType types.Type, 
 		Interface: iface.Obj().Name(), Concrete: impls[0].Obj().Name(), Method: methodName,
 	})
 	return concrete
+}
+
+// simpleCalleeFunc resolves a call expression's callee to a *types.Func
+// without devirtualization -- used by buildSQLParamConstants, which only
+// needs to handle plain function/method calls (deleteInChunks/deleteOneChunk
+// are not interface-dispatched); handleCall has its own, richer resolution
+// (including devirtualization) kept separate to avoid entangling the two
+// passes.
+func simpleCalleeFunc(call *ast.CallExpr, info *types.Info) *types.Func {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		if obj, ok := info.Uses[fn].(*types.Func); ok {
+			return obj
+		}
+	case *ast.SelectorExpr:
+		if sel, ok := info.Selections[fn]; ok {
+			if f, ok := sel.Obj().(*types.Func); ok {
+				return f
+			}
+		} else if obj, ok := info.Uses[fn.Sel].(*types.Func); ok {
+			return obj
+		}
+	}
+	return nil
+}
+
+func isStringType(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Kind() == types.String
+}
+
+// buildSQLParamConstants finds every in-module function with a `string`
+// parameter that EVERY call site (found anywhere in the module) passes
+// either a compile-time constant, or the CALLING function's own
+// already-resolved string parameter, for -- and records the set of values it
+// can take. This is a small fixed-point loop (bounded, monotonic, same shape
+// as the taint propagation loop but independent of it) because the
+// motivating case is TWO hops deep:
+// `DeleteBefore` passes a literal to `deleteInChunks(ctx, pool, statement
+// string, ...)`, which forwards its OWN `statement` parameter (not a
+// literal, from deleteInChunks's local perspective) to `deleteOneChunk`,
+// which finally calls `tx.Exec(ctx, statement, ...)`. A single pass would
+// resolve deleteInChunks's parameter but then see deleteOneChunk's call site
+// (`statement`, a bare identifier, not a literal) and give up. See the
+// analyzer struct field's doc comment for the concrete case that motivated
+// this.
+func (a *analyzer) buildSQLParamConstants() {
+	a.sqlParamConstants = map[*types.Func]map[int][]string{}
+	const maxIterations = 12
+	for iter := 0; iter < maxIterations; iter++ {
+		seen := map[*types.Func]map[int]map[string]bool{}
+		failed := map[*types.Func]map[int]bool{}
+
+		for _, ctx := range a.funcDecls {
+			var currentFn *types.Func
+			if obj, ok := ctx.info.Defs[ctx.decl.Name]; ok {
+				currentFn, _ = obj.(*types.Func)
+			}
+			ast.Inspect(ctx.decl.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee := simpleCalleeFunc(call, ctx.info)
+				if callee == nil {
+					return true
+				}
+				if _, ok := a.funcDecls[callee]; !ok {
+					return true // need the callee's own param list; skip stdlib/third-party
+				}
+				sig, ok := callee.Type().(*types.Signature)
+				if !ok {
+					return true
+				}
+				for i, arg := range call.Args {
+					if i >= sig.Params().Len() {
+						break
+					}
+					if !isStringType(sig.Params().At(i).Type()) {
+						continue
+					}
+					var values []string
+					if tv := ctx.info.Types[arg]; tv.Value != nil && tv.Value.Kind() == constant.String {
+						values = []string{constant.StringVal(tv.Value)}
+					} else if id, ok := arg.(*ast.Ident); ok && currentFn != nil {
+						if pIdx := paramIndex(ctx.decl, id.Name); pIdx >= 0 {
+							values = a.sqlParamConstants[currentFn][pIdx] // nil if not yet resolved
+						}
+					}
+					if values == nil {
+						if failed[callee] == nil {
+							failed[callee] = map[int]bool{}
+						}
+						failed[callee][i] = true
+						continue
+					}
+					if seen[callee] == nil {
+						seen[callee] = map[int]map[string]bool{}
+					}
+					if seen[callee][i] == nil {
+						seen[callee][i] = map[string]bool{}
+					}
+					for _, v := range values {
+						seen[callee][i][v] = true
+					}
+				}
+				return true
+			})
+		}
+
+		next := map[*types.Func]map[int][]string{}
+		total := 0
+		for fn, byIdx := range seen {
+			for idx, values := range byIdx {
+				if failed[fn][idx] {
+					continue
+				}
+				list := make([]string, 0, len(values))
+				for v := range values {
+					list = append(list, v)
+				}
+				if next[fn] == nil {
+					next[fn] = map[int][]string{}
+				}
+				next[fn][idx] = list
+				total += len(list)
+			}
+		}
+		prevTotal := 0
+		for _, byIdx := range a.sqlParamConstants {
+			for _, values := range byIdx {
+				prevTotal += len(values)
+			}
+		}
+		a.sqlParamConstants = next
+		if total == prevTotal {
+			break // fixed point: monotonic, so equal totals means no new facts
+		}
+	}
+}
+
+// paramIndex returns the positional index of a parameter named name in
+// decl's parameter list, or -1 if not found. Accounts for grouped names
+// (`a, b string`).
+func paramIndex(decl *ast.FuncDecl, name string) int {
+	if decl.Type.Params == nil {
+		return -1
+	}
+	idx := 0
+	for _, field := range decl.Type.Params.List {
+		if len(field.Names) == 0 {
+			idx++
+			continue
+		}
+		for _, n := range field.Names {
+			if n.Name == name {
+				return idx
+			}
+			idx++
+		}
+	}
+	return -1
+}
+
+// resolveParamConstantSQL handles a SQL argument that is a bare identifier
+// referring to the CURRENT function's own string parameter -- e.g. inside
+// `func deleteOneChunk(ctx, pool, statement string, ...) { ... pool.Exec(ctx,
+// statement, ...) }`, `statement` isn't a compile-time constant from this
+// function's own perspective, but buildSQLParamConstants already proved
+// every call site passes one.
+func (a *analyzer) resolveParamConstantSQL(sqlArg ast.Expr, ctx funcCtx) ([]string, bool) {
+	ident, ok := sqlArg.(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	fnObj, ok := ctx.info.Defs[ctx.decl.Name]
+	if !ok {
+		return nil, false
+	}
+	fn, ok := fnObj.(*types.Func)
+	if !ok {
+		return nil, false
+	}
+	idx := paramIndex(ctx.decl, ident.Name)
+	if idx < 0 {
+		return nil, false
+	}
+	values, ok := a.sqlParamConstants[fn][idx]
+	return values, ok
 }
 
 func firstN(s []string, n int) []string {
@@ -763,6 +968,20 @@ func (a *analyzer) recordSQLSite(call *ast.CallExpr, ctx funcCtx) {
 	// see resolveLoopTableSQL's doc comment for exactly what it does and
 	// does not handle.
 	if values, ok := a.resolveLoopTableSQL(sqlArg, ctx); ok {
+		for _, sqlText := range values {
+			a.recordSQLText(sqlText, pos, txGroup)
+		}
+		return
+	}
+
+	// Fallback for SQL text forwarded through a helper function's own
+	// string parameter (e.g. `deleteInChunks(ctx, pool, sqlLiteral, ...)`,
+	// where the literal is constant at THIS call site but `deleteInChunks`
+	// itself receives it as a plain `statement string` parameter and passes
+	// THAT to .Exec two hops later) -- see buildSQLParamConstants's doc
+	// comment; this is what recovers internal/jobs/system/retention_postgres.go's
+	// provider_rate_limit_observations DELETE.
+	if values, ok := a.resolveParamConstantSQL(sqlArg, ctx); ok {
 		for _, sqlText := range values {
 			a.recordSQLText(sqlText, pos, txGroup)
 		}

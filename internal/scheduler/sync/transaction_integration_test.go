@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -280,6 +281,219 @@ func TestHandoffDuePostgresUnsupportedCronFallsBackWithoutMarkerWrite(t *testing
 	}
 	if occurrences != 0 || nextRunAt != nil {
 		t.Fatalf("unsupported fallback mutated occurrences=%d nextRunAt=%v", occurrences, nextRunAt)
+	}
+}
+
+// TestHandoffDuePostgresRespectsExternalRowLock is the CHAOS-3128 two-owners-
+// impossible proof. The "other owner" here is a raw PostgreSQL connection,
+// not another Go repository: it takes exactly the lock clause and lock order
+// (sync_configurations, then scheduled_jobs, both `FOR UPDATE`) that
+// sync_scheduler.py's `_maybe_dispatch_config` takes via SQLAlchemy's
+// `.with_for_update(skip_locked=True)`, so it stands in for a live Celery
+// Beat transaction without any Go-side cooperation. The property under test
+// is enforced by PostgreSQL's row-lock protocol, not by application code on
+// either side agreeing to be polite — see TransferScheduleMarkerOwnershipToGo
+// and HandoffDueResult's doc comments for the argument this proves.
+func TestHandoffDuePostgresRespectsExternalRowLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second, independent connection plays Celery Beat: same lock order,
+	// same clause shape, held open across the window Go tries to handoff in.
+	beatConn, err := pgx.Connect(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = beatConn.Close(context.Background()) }()
+	beatTx, err := beatConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = beatTx.Rollback(context.Background()) }()
+	if _, err := beatTx.Exec(ctx,
+		"SELECT 1 FROM public.sync_configurations WHERE id = $1 FOR UPDATE",
+		"00000000-0000-4000-8000-000000003038",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := beatTx.Exec(ctx,
+		"SELECT 1 FROM public.scheduled_jobs WHERE id = $1 FOR UPDATE",
+		"00000000-0000-4000-8000-000000003039",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := at("2026-01-01T12:00:00Z")
+	occurrences, err := repository.HandoffDue(ctx, observedAt, 1, NewOccurrenceCoordinator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occurrences) != 0 {
+		t.Fatalf(
+			"Go handed off %d occurrences while an external transaction held the row lock",
+			len(occurrences),
+		)
+	}
+
+	// The simulated Beat transaction now "wins": it advances the marker and
+	// commits, exactly as the real Python scheduler would inside the same
+	// locked transaction.
+	if _, err := beatTx.Exec(ctx,
+		"UPDATE public.scheduled_jobs SET next_run_at = $1, updated_at = $2 WHERE id = $3",
+		at("2026-01-01T13:00:00Z"), observedAt, "00000000-0000-4000-8000-000000003039",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := beatTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Go's next poll must observe the committed marker and correctly treat
+	// the schedule as not due, rather than acting on a stale read.
+	second, err := repository.HandoffDue(ctx, observedAt, 1, NewOccurrenceCoordinator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("Go re-handled a schedule Beat had already advanced: %d occurrences", len(second))
+	}
+	var occurrenceRows int
+	if err := pool.QueryRow(
+		ctx, "SELECT count(*) FROM public.scheduled_sync_occurrences",
+	).Scan(&occurrenceRows); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceRows != 0 {
+		t.Fatalf(
+			"occurrence rows = %d, want 0: Beat's dispatch owns this occurrence, not Go's ledger",
+			occurrenceRows,
+		)
+	}
+}
+
+// TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite is the
+// transaction-crash gate. It severs the underlying connection mid-handoff —
+// after the coordinator has durably written the occurrence but before the
+// marker advance or commit — without ever calling Commit or Rollback, so the
+// property under test is PostgreSQL's own transaction-abort-on-disconnect
+// behavior, not this package's deferred Rollback call.
+func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := at("2026-01-01T12:00:00Z")
+
+	crashed := errors.New("simulated process crash")
+	_, err = repository.HandoffDue(ctx, observedAt, 1, CoordinatorFunc(func(
+		handoffCtx context.Context,
+		transaction HandoffTransaction,
+		occurrence Occurrence,
+	) error {
+		if _, execErr := transaction.Exec(
+			handoffCtx,
+			"INSERT INTO public.scheduler_handoffs (id) VALUES ($1)",
+			occurrence.ID,
+		); execErr != nil {
+			return execErr
+		}
+		postgresTransaction, ok := transaction.(postgresSchedulerTransaction)
+		if !ok {
+			t.Fatal("unexpected transaction type")
+		}
+		// Kill the connection outright, as a crashed process would, instead
+		// of calling Rollback. The repository's deferred Rollback still runs
+		// on the caller side and will fail or no-op against a dead
+		// connection either way -- that is not what leaves no partial write
+		// behind. PostgreSQL aborting the transaction server-side on
+		// disconnect is.
+		if closeErr := postgresTransaction.Tx.Conn().Close(context.Background()); closeErr != nil {
+			t.Logf("closing simulated-crash connection: %v", closeErr)
+		}
+		return crashed
+	}))
+	if err == nil {
+		t.Fatal("HandoffDue() succeeded despite a crashed connection")
+	}
+
+	var handoffs int
+	var nextRunAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM public.scheduler_handoffs),
+			next_run_at
+		FROM public.scheduled_jobs
+		WHERE id = '00000000-0000-4000-8000-000000003039'
+	`).Scan(&handoffs, &nextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if handoffs != 0 || nextRunAt != nil {
+		t.Fatalf("crash left a partial write: handoffs=%d nextRunAt=%v", handoffs, nextRunAt)
+	}
+	var occurrenceRows int
+	if err := pool.QueryRow(
+		ctx, "SELECT count(*) FROM public.scheduled_sync_occurrences",
+	).Scan(&occurrenceRows); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceRows != 0 {
+		t.Fatalf("crash left %d occurrence rows behind", occurrenceRows)
+	}
+
+	// The pool must not be poisoned by one crashed connection: a fresh
+	// transaction has to succeed normally afterward.
+	occurrences, err := repository.HandoffDue(ctx, observedAt, 1, NewOccurrenceCoordinator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occurrences) != 1 {
+		t.Fatalf("post-crash HandoffDue() occurrences = %d, want 1", len(occurrences))
 	}
 }
 

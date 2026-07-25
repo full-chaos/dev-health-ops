@@ -136,6 +136,20 @@ func (repository *Repository) HandoffDue(
 // HandoffDueResult locks and re-evaluates one bounded candidate window. It is
 // the lifecycle-facing form of HandoffDue and exposes only aggregate fallback
 // counts, never organization or configuration identifiers.
+//
+// Two-owner safety (CHAOS-3128): schedulerHandoffCandidatesSQL's
+// `FOR UPDATE OF config, job SKIP LOCKED` clause and lock order
+// (sync_configurations, then scheduled_jobs) are byte-for-byte the same shape
+// SQLAlchemy's `.with_for_update(skip_locked=True)` produces in the Python
+// scheduler's `_maybe_dispatch_config`, against the same rows. PostgreSQL
+// grants that lock to at most one transaction at a time regardless of which
+// process holds it, and the marker advance below runs inside the same
+// transaction as the lock, so a concurrently running Celery Beat and this
+// method can never both mutate the same schedule's marker — one of them gets
+// SKIP LOCKED and moves on rather than reading a value the other is mid-write
+// on. This is what makes TransferScheduleMarkerOwnershipToGo's policy switch
+// safe to flip while Beat is still deployed, not merely convenient; see that
+// function's doc comment and TestHandoffDuePostgresRespectsExternalRowLock.
 func (repository *Repository) HandoffDueResult(
 	ctx context.Context,
 	observedAt time.Time,

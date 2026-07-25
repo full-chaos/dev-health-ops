@@ -36,6 +36,22 @@ func TestMutationRepositoryRequiresExplicitReviewedConstructor(t *testing.T) {
 	}
 }
 
+func TestTransferScheduleMarkerOwnershipToGoMatchesTheReviewedPolicy(t *testing.T) {
+	transferred := TransferScheduleMarkerOwnershipToGo()
+	if transferred != reviewedGoMutationOwnershipPolicy() {
+		t.Fatalf("TransferScheduleMarkerOwnershipToGo() = %#v, want the reviewed policy", transferred)
+	}
+	if err := transferred.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	if !transferred.allowsMutation() {
+		t.Fatal("the exported ownership transfer does not allow mutation")
+	}
+	if transferred == DefaultOwnershipPolicy() {
+		t.Fatal("the transferred policy must differ from the checked-in default")
+	}
+}
+
 func TestOwnershipPolicyOnlyPermitsExplicitOwnerModePairs(t *testing.T) {
 	for _, test := range []struct {
 		name   string

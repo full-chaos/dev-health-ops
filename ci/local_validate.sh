@@ -10,6 +10,11 @@
 #   This gate closes BOTH gaps.
 #
 # WHAT IT DOES (mirrors the PR-time CI gates of PR #1018, in order):
+#   0. preflight also installs requirements-docs.txt into .venv (mirrors the
+#      `pip install -r requirements-docs.txt` step in test.yml's test-matrix
+#      and coverage jobs) so tests/docs/*.py's `mkdocs build --strict` shells
+#      don't false-fail with "No module named mkdocs" in a freshly `uv sync`'d
+#      worktree venv, which never pulls that requirements file in on its own.
 #   1. ruff format --check .         (== lint.yml)
 #   2. ruff check .                  (== lint.yml)
 #   3. mypy --install-types ... .    (== typecheck.yml)
@@ -110,6 +115,37 @@ run_stage() {
 }
 
 # --- Preflight: must run from the worktree with its .venv. --------------------------
+# CI-parity for pip installs: .github/workflows/test.yml (test-matrix AND
+# coverage jobs) runs `pip install -r requirements.txt` then
+# `pip install -r requirements-docs.txt` before invoking ci/run_tests.sh.
+# gate_unit_suite() below runs that SAME `pytest tests -m "not benchmark and
+# not clickhouse"` invocation, which collects tests/docs/*.py — and those
+# tests shell out to `python -m mkdocs build --strict`. `uv sync --all-extras
+# --dev` (requirements.txt / -e .[dev]) does NOT pull in requirements-docs.txt
+# (mkdocs-material lives outside pyproject.toml on purpose, per docs-guards.yml
+# installing it separately), so a venv built the documented way is missing it.
+# Without this step the gate reports "No module named mkdocs" — a red CI would
+# never produce, since CI always provisions it. Install it here too, exactly
+# like CI, rather than letting the docs tests fail or silently skip.
+ensure_docs_deps() {
+  local reqs="${ROOT}/requirements-docs.txt"
+  [ -f "${reqs}" ] || die "requirements-docs.txt not found at ${reqs} (repo layout changed?)."
+  local pip_log
+  pip_log="$(mktemp)"
+  printf '   installing %s (mirrors CI test.yml pip install step)...\n' "$(basename "${reqs}")"
+  if "${PYBIN}" -m pip install -q -r "${reqs}" >"${pip_log}" 2>&1; then
+    rm -f "${pip_log}"
+  else
+    cat "${pip_log}" >&2
+    rm -f "${pip_log}"
+    die "could not install requirements-docs.txt into ${PYBIN} (pip output above). Run manually:
+      ${PYBIN} -m pip install -r requirements-docs.txt
+   tests/docs/*.py shell out to 'python -m mkdocs build --strict' and WILL
+   false-fail with 'No module named mkdocs' until this succeeds — do not
+   reinterpret that failure as a real docs regression without this installed."
+  fi
+}
+
 preflight() {
   banner "preflight"
   [ -f "${ROOT}/ci/run_tests.sh" ] || die "not a worktree root (no ci/run_tests.sh at ${ROOT})."
@@ -118,6 +154,7 @@ preflight() {
    (requirements.txt is '-e .[dev]'; pytest-asyncio tests mislead-fail without a fresh sync)."
   [ -x "${RUFF}" ] || die "missing ${RUFF}; install the [dev] extra into .venv."
   [ -x "${MYPY}" ] || die "missing ${MYPY}; install the [dev] extra into .venv."
+  ensure_docs_deps
   printf '   worktree root : %s\n' "${ROOT}"
   printf '   interpreter   : %s\n' "${PYBIN}"
   printf '   %s\n' "$(c_green 'preflight OK')"

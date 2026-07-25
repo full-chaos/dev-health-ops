@@ -238,17 +238,36 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	// The relations that were already granted with no interesting exercise
 	// shape of their own, so the assertion's required set is complete and
 	// this suite tests the delta rather than re-testing the baseline.
-	// worker_job_routes is deliberately absent: it moved to
-	// coordinatorPosture entirely under the Option B split
-	// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91)
-	// and the domain role no longer has any grant on it.
+	//
+	// The coordinator-exclusive relations are created here too, BEFORE
+	// ApplyPinnedMigrations runs. That ordering is load-bearing in two
+	// directions. Every domain GRANT in runtimeGrantStatements is wrapped in
+	// a to_regclass guard, so a coordinator table created AFTER the migration
+	// would be silently skipped and any test asserting "the domain role holds
+	// nothing here" would pass vacuously — it would pass even if migrate.go
+	// did grant it. Creating them first also means
+	// TestGrantsAndAssertionCoverTheSameRelations now actively polices the
+	// other direction: if a future edit hands the domain role a privilege on
+	// a coordinator table, that table shows up in its `granted` set, is
+	// absent from domainPosture's required set, and the test fails.
 	for _, ddl := range []string{
 		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY)",
+		// Carries the columns syncroute's real route-mutation statements name,
+		// so a privilege denial cannot be mistaken for an undefined column
+		// (42703 is raised during parse analysis, before the ACL check).
+		`CREATE TABLE public.sync_dispatch_transport_routes (
+			kind text PRIMARY KEY,
+			transport text NOT NULL DEFAULT 'celery',
+			rollback_transport text NOT NULL DEFAULT 'celery',
+			paused boolean NOT NULL DEFAULT FALSE,
+			paused_at timestamptz,
+			generation bigint NOT NULL DEFAULT 1,
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
@@ -269,6 +288,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	} {
 		setup = append(setup, ddl)
 	}
+	setup = append(setup, coordinatorExclusiveDDL()...)
 	for _, statement := range setup {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)

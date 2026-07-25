@@ -8,11 +8,74 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
+
+// TestBuildProviderSyncHandlerSharesOneMetricsInstance is CHAOS-3118
+// mutation-tested evidence for dev_health_provider_*, not a behavioral
+// assertion: it pins the identity between the providerfoundation.Metrics
+// instance BuildExecutor hands each claim's executor and the instance the
+// caller (buildProviderSyncWorker) registers as workerFamily.metricsSource.
+//
+// The original defect on origin/main was exactly this: providerfoundation.NewMetrics()
+// was called inside the BuildExecutor closure itself, so every unit dispatch
+// got a fresh, immediately-discarded instance while a *different* instance —
+// or none at all — was what got registered and scraped. Every counter reset
+// to zero on the next dispatch and the family was permanently invisible.
+//
+// A behavioral test (record something, read it back) cannot catch that
+// defect: reverting just "Metrics: providerMetrics" to
+// "Metrics: providerfoundation.NewMetrics()" inside BuildExecutor, while
+// leaving workerFamily.metricsSource registration untouched, still compiles,
+// still passes every other test in this package and in
+// internal/providerfoundation, and still publishes HELP/TYPE — it looks
+// exactly as wired as the real fix. Only a same-instance check distinguishes
+// them, which is why this test compares pointers rather than values.
+func TestBuildProviderSyncHandlerSharesOneMetricsInstance(t *testing.T) {
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
+		Profiles: []string{"sync"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every dependency below is only ever stored as a closure capture inside
+	// buildProviderSyncHandler — never dialed, dereferenced, or called during
+	// construction — so nil stand-ins are sufficient to reach the real,
+	// unmodified BuildExecutor closure without a live ClickHouse, Valkey, or
+	// Postgres connection.
+	handler, providerMetrics := buildProviderSyncHandler(
+		nil, nil, nil, nil, nil, collector, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("buildProviderSyncHandler returned an incomplete handler")
+	}
+	if providerMetrics == nil {
+		t.Fatal("buildProviderSyncHandler returned a nil Metrics instance")
+	}
+
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{})
+	if err != nil {
+		t.Fatalf("BuildExecutor: %v", err)
+	}
+
+	// The property under test is identity, not behavior: this is the same
+	// check buildProviderSyncWorker's real wiring must satisfy between
+	// executor.Metrics (what every claim actually writes to) and
+	// workerFamily.metricsSource (what the health.Registry actually scrapes).
+	if executor.Metrics != providerMetrics {
+		t.Fatalf(
+			"executor.Metrics = %p, want the same instance buildProviderSyncHandler "+
+				"returned (%p): a distinct instance here writes real counters nobody "+
+				"scrapes, while the registered instance stays permanently zero — the "+
+				"exact CHAOS-3118 defect",
+			executor.Metrics, providerMetrics,
+		)
+	}
+}
 
 type independentRiverClient struct {
 	name     string

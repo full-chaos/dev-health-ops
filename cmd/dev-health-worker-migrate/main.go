@@ -19,7 +19,13 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 )
 
-const serviceName = "dev-health-worker-migrate"
+const (
+	serviceName = "dev-health-worker-migrate"
+	// Kept in step with internal/platform/config's
+	// defaultCoordinatorDatabaseRole so the migration grants the same role the
+	// runtime binaries connect as when neither side overrides the env var.
+	defaultCoordinatorRole = "devhealth_coordinator"
+)
 
 func main() {
 	os.Exit(execute(context.Background(), os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr))
@@ -76,13 +82,29 @@ func execute(
 	if value, present := lookup("RIVER_DATABASE_SCHEMA"); present && strings.TrimSpace(value) != "" {
 		schema = value
 	}
-	migrationOptions := riverstore.MigrationOptions{
-		Schema:     schema,
-		DomainRole: domainRole,
-		QueueRole:  queueRole,
+	// Defaulted rather than required, matching RIVER_DATABASE_SCHEMA above and
+	// internal/platform/config's own default: making it required would break
+	// every existing environment's migration the moment this ships, for no
+	// safety gain. Safety comes from the preflight instead — the coordinator
+	// role must already exist as an eligible least-privilege login, so a
+	// migration run before the role is provisioned fails loudly rather than
+	// granting nothing and reporting success. See
+	// .github/docs-legacy/architecture/chaos-3033-coordinator-pool-activation.md for the
+	// required order of operations.
+	coordinatorRole := defaultCoordinatorRole
+	if value, present := lookup("RIVER_COORDINATOR_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {
+		coordinatorRole = value
 	}
-	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil || migrationRole == domainRole || migrationRole == queueRole {
-		fmt.Fprintln(stderr, "configuration error: migration, domain, and queue-control PostgreSQL roles must be distinct")
+	migrationOptions := riverstore.MigrationOptions{
+		Schema:            schema,
+		DomainRole:        domainRole,
+		QueueRole:         queueRole,
+		CoordinatorRole:   coordinatorRole,
+		CoordinatorGrants: coordinatorGrants(),
+	}
+	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
+		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {
+		fmt.Fprintln(stderr, "configuration error: migration, domain, queue-control, and coordinator PostgreSQL roles must be distinct")
 		return 1
 	}
 
@@ -151,4 +173,34 @@ func requiredSecret(
 		return platformsecrets.Value{}, false
 	}
 	return value, true
+}
+
+// coordinatorGrants derives the coordinator role's GRANT set from
+// postgresstore.CoordinatorPosture() — the same declaration
+// postgresstore.CheckCoordinatorAuthorization asserts against at readiness — so
+// the migration cannot grant a privilege set the readiness check would then
+// reject, and cannot omit one it requires. Nothing about the coordinator's
+// table list is written here; this only translates between the two packages'
+// types, because internal/storage/river cannot import internal/storage/postgres
+// (that direction is an import cycle).
+//
+// Column-scoped privileges are intentionally not translated: coordinatorPosture
+// declares none, and silently dropping any that appeared later would be exactly
+// the grants/assertion drift this indirection exists to prevent — so a future
+// coordinator ColumnScoped entry must fail loudly here instead.
+func coordinatorGrants() []riverstore.TableGrant {
+	posture := postgresstore.CoordinatorPosture()
+	if len(posture.ColumnScoped) != 0 {
+		return nil
+	}
+	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
+	for _, table := range posture.RequiredTables {
+		grants = append(grants, riverstore.TableGrant{
+			TableName:   table.TableName,
+			AllowInsert: table.AllowInsert,
+			AllowUpdate: table.AllowUpdate,
+			AllowDelete: table.AllowDelete,
+		})
+	}
+	return grants
 }

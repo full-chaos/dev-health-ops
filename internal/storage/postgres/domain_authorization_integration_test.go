@@ -46,22 +46,55 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.integration_datasets (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
+		// worker_job_routes is coordinator-exclusive under the Option B split
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @
+		// eda2d6b91) — created here only so the "column-level operator route
+		// mutation" case below has a real relation to test against; it is
+		// deliberately never granted to the domain role.
 		"CREATE TABLE public.worker_job_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_dispatch_outbox (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id bigint PRIMARY KEY, state text)",
+		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY, completed_at timestamptz NOT NULL DEFAULT now())",
+		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_batch_payloads (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.unrelated_semantic_table (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SEQUENCE public.unrelated_sequence",
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_runs, public.worker_job_routes, public.sync_dispatch_transport_routes TO " + authorizedDomainRole,
-		"GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + authorizedDomainRole,
-		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox TO " + authorizedDomainRole,
-		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.sync_runs, public.sync_run_units, public.report_runs, public.saved_reports TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + authorizedDomainRole,
+		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + authorizedDomainRole,
+		"GRANT SELECT, UPDATE, DELETE ON TABLE public.external_ingest_batches, public.provider_rate_limit_observations TO " + authorizedDomainRole,
+		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -148,6 +181,14 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 			name:   "destructive DELETE",
 			grant:  "GRANT DELETE ON TABLE public.sync_dispatch_outbox TO " + authorizedDomainRole,
 			revoke: "REVOKE DELETE ON TABLE public.sync_dispatch_outbox FROM " + authorizedDomainRole,
+		},
+		{
+			// The mirror case: external_ingest_batches is one of the three
+			// AllowDelete tables, so losing the required DELETE must fail
+			// closed just as gaining an undeclared one does above.
+			name:   "missing required DELETE",
+			grant:  "REVOKE DELETE ON TABLE public.external_ingest_batches FROM " + authorizedDomainRole,
+			revoke: "GRANT DELETE ON TABLE public.external_ingest_batches TO " + authorizedDomainRole,
 		},
 		{
 			name:   "unrelated semantic access",

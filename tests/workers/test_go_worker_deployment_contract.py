@@ -236,6 +236,7 @@ def test_go_profiles_are_disabled_future_topology() -> None:
 
     assert manifest["deployment_state"] == "coexistence_disabled"
     assert manifest["runtime_role_env"] == [
+        "RIVER_COORDINATOR_DATABASE_ROLE",
         "RIVER_DOMAIN_DATABASE_ROLE",
         "RIVER_QUEUE_DATABASE_ROLE",
     ]
@@ -258,14 +259,21 @@ def test_go_profiles_are_disabled_future_topology() -> None:
         "max_concurrent_invocations": 1,
         "queue_control_max_connections": 2,
         "domain_max_connections": 2,
+        # CHAOS-3033: workerctl is a coordinator binary -- it authenticates the
+        # operator token against coordinator-exclusive
+        # internal_service_credentials before any command dispatches -- so it
+        # carries a coordinator budget and requires the coordinator DSN.
+        "coordinator_max_connections": 2,
         "config_env": [
             "PGBOUNCER_TRANSACTION_MODE",
+            "RIVER_COORDINATOR_DATABASE_ROLE",
             "RIVER_DATABASE_SCHEMA",
             "RIVER_DOMAIN_DATABASE_ROLE",
             "RIVER_QUEUE_DATABASE_ROLE",
             "WORKER_DATABASE_MODE",
         ],
         "secret_env": [
+            "COORDINATOR_DATABASE_URI",
             "POSTGRES_URI",
             "WORKER_DATABASE_URI",
             "WORKER_OPERATOR_TOKEN",

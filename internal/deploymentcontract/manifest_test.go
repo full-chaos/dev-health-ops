@@ -33,11 +33,18 @@ func TestCheckedInManifestIsValidAndBounded(t *testing.T) {
 	if summary.DirectQueueControlConnections != 18 {
 		t.Fatalf("direct queue-control connections = %d", summary.DirectQueueControlConnections)
 	}
+	// The three coordinator profiles under the Option B split — reconciler
+	// and scheduler at two replicas each (2×2 + 2×2 = 8), plus workerctl's
+	// single invocation (1×2) — contribute 10 direct, server-counted
+	// connections alongside (not instead of) their existing domain pools.
+	if summary.DirectCoordinatorConnections != 10 {
+		t.Fatalf("direct coordinator connections = %d", summary.DirectCoordinatorConnections)
+	}
 	// stream-pagerduty adds two replicas of a four-connection domain pool.
 	if summary.DomainClientConnections != 50 {
 		t.Fatalf("domain client connections = %d", summary.DomainClientConnections)
 	}
-	if summary.ServerConnectionFootprint != 83 {
+	if summary.ServerConnectionFootprint != 93 {
 		t.Fatalf("server connection footprint = %d", summary.ServerConnectionFootprint)
 	}
 }
@@ -71,7 +78,7 @@ func TestManifestRejectsQueueWorkerCoverageDrift(t *testing.T) {
 func TestManifestRejectsConnectionBudgetOverflow(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)
-	manifest.PostgresBudget.ServerMaxConnections = 82
+	manifest.PostgresBudget.ServerMaxConnections = 92
 	if _, err := manifest.Validate(registry); err == nil {
 		t.Fatal("expected server connection budget overflow")
 	}
@@ -122,4 +129,58 @@ func TestManifestRejectsDuplicateExternalStreamReplicaConfiguration(t *testing.T
 	if _, err := manifest.Validate(registry); err == nil {
 		t.Fatal("expected duplicate external stream replica configuration to fail")
 	}
+}
+
+// CoordinatorMaxConnections is a direct, server-counted connection budget —
+// the same shape QueueControlMaxConnections already models — reserved for
+// the three coordinator profiles (reconciler, scheduler, workerctl) under
+// the Option B two-role split. Both directions of the new constraint must
+// fail closed: a coordinator ("control" runtime) profile silently missing
+// its coordinator pool, and a non-coordinator profile wrongly granted one.
+func TestManifestRejectsCoordinatorConnectionMisconfiguration(t *testing.T) {
+	t.Parallel()
+
+	t.Run("control runtime missing its coordinator pool", func(t *testing.T) {
+		manifest, registry := loadFixture(t)
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "reconciler" {
+				manifest.Processes[index].CoordinatorMaxConnections = 0
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected a control-runtime profile with no coordinator connections to fail validation")
+		}
+	})
+
+	t.Run("river runtime wrongly granted a coordinator pool", func(t *testing.T) {
+		manifest, registry := loadFixture(t)
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync" {
+				manifest.Processes[index].CoordinatorMaxConnections = 2
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected a River-runtime profile granted coordinator connections to fail validation")
+		}
+	})
+
+	t.Run("stream runtime wrongly granted a coordinator pool", func(t *testing.T) {
+		manifest, registry := loadFixture(t)
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "stream-external" {
+				manifest.Processes[index].CoordinatorMaxConnections = 2
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected a stream-runtime profile granted coordinator connections to fail validation")
+		}
+	})
+
+	t.Run("workerctl missing its coordinator pool", func(t *testing.T) {
+		manifest, registry := loadFixture(t)
+		manifest.OperatorCLI.CoordinatorMaxConnections = 0
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected workerctl with no coordinator connections to fail validation")
+		}
+	})
 }

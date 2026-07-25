@@ -33,32 +33,42 @@ const (
 
 var errReconcilerDependencyUnavailable = errors.New("reconciler readiness dependency is unavailable")
 
-// reconcilerDatabase keeps the command's domain and queue-control trust
-// boundaries testable without weakening the production RuntimePools contract.
+// reconcilerDatabase keeps the command's domain, queue-control, and
+// coordinator trust boundaries testable without weakening the production
+// RuntimePools contract.
 type reconcilerDatabase interface {
 	DomainReady(context.Context) error
 	QueueReady(context.Context) error
+	CoordinatorReady(context.Context) error
 	RiverSchemaReady(context.Context, string) error
 	DomainPool() *pgxpool.Pool
 	QueuePool() *pgxpool.Pool
+	CoordinatorPool() *pgxpool.Pool
 	Close()
 }
 
 type postgresReconcilerDatabase struct {
-	pools       *postgres.RuntimePools
-	domainRole  string
-	queueRole   string
-	riverSchema string
+	pools           *postgres.RuntimePools
+	domainRole      string
+	queueRole       string
+	coordinatorRole string
+	riverSchema     string
 }
 
 func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerDatabase, error) {
-	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg)
+	// The reconciler is a coordinator binary: deploy/go-workers/profiles.json
+	// gives its "control" runtime coordinator_max_connections >= 1, and its
+	// always-constructed outbox relay reads worker_job_routes, which is
+	// coordinator-exclusive. WithCoordinator makes the coordinator DSN a
+	// startup requirement rather than an optional extra.
+	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg).WithCoordinator()
 	pools, err := postgres.NewRuntimePools(ctx, runtimeConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &postgresReconcilerDatabase{
-		pools: pools, domainRole: runtimeConfig.DomainRole, queueRole: runtimeConfig.QueueRole, riverSchema: runtimeConfig.RiverSchema,
+		pools: pools, domainRole: runtimeConfig.DomainRole, queueRole: runtimeConfig.QueueRole,
+		coordinatorRole: runtimeConfig.CoordinatorRole, riverSchema: runtimeConfig.RiverSchema,
 	}, nil
 }
 
@@ -74,6 +84,19 @@ func (database *postgresReconcilerDatabase) QueueReady(ctx context.Context) erro
 		return errReconcilerDependencyUnavailable
 	}
 	return postgres.CheckQueueAuthorization(ctx, database.pools.QueueControl, database.queueRole, database.riverSchema)
+}
+
+// CoordinatorReady proves the coordinator login holds exactly
+// coordinatorPosture. It is a separate readiness gate from DomainReady on
+// purpose: cross-role attribution is distributed, so only the coordinator's own
+// check can catch a privilege wrongly granted to the coordinator role.
+func (database *postgresReconcilerDatabase) CoordinatorReady(ctx context.Context) error {
+	if database == nil || database.pools == nil || database.pools.Coordinator == nil {
+		return errReconcilerDependencyUnavailable
+	}
+	return postgres.CheckCoordinatorAuthorization(
+		ctx, database.pools.Coordinator, database.coordinatorRole, database.riverSchema,
+	)
 }
 
 func (database *postgresReconcilerDatabase) RiverSchemaReady(ctx context.Context, schema string) error {
@@ -98,6 +121,16 @@ func (database *postgresReconcilerDatabase) DomainPool() *pgxpool.Pool {
 	return database.pools.Domain
 }
 
+// CoordinatorPool never falls back to the domain pool. A nil return propagates
+// as a dependency failure, which is the intended behaviour: silently handing a
+// coordinator call site the domain pool is the defect this split removes.
+func (database *postgresReconcilerDatabase) CoordinatorPool() *pgxpool.Pool {
+	if database == nil || database.pools == nil {
+		return nil
+	}
+	return database.pools.Coordinator
+}
+
 func (database *postgresReconcilerDatabase) Close() {
 	if database != nil && database.pools != nil {
 		database.pools.Close()
@@ -107,14 +140,14 @@ func (database *postgresReconcilerDatabase) Close() {
 type reconcilerDependencySources struct {
 	openDatabase        func(context.Context, config.Config) (reconcilerDatabase, error)
 	loadRuntimeRegistry func(string) (*jobruntime.Registry, error)
-	buildRelay          func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error)
+	buildRelay          func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error)
 	newLoop             func(joboutbox.RelayStepper, joboutbox.ReconcilerLoopConfig) (*joboutbox.ReconcilerLoop, error)
 	contractRoot        string
 
 	loadSyncDispatchRegistry func(string) (*syncdispatchcontract.Registry, error)
 	buildSyncRouteFence      func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncroute.Checker, error)
 	buildSyncShadow          func(*pgxpool.Pool, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
-	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
+	buildSyncMutation        func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *syncdispatchcontract.Registry) (syncreconciler.Stepper, error)
 	newSyncRecorder          func(*slog.Logger) (reconcilerObservationRecorder, error)
 	newSyncLoop              func(syncreconciler.Stepper, syncreconciler.LoopConfig) (*syncreconciler.Loop, error)
 	syncDispatchContractRoot string
@@ -155,7 +188,14 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	syncDispatchContractRoot: defaultSyncDispatchContractRoot,
 }
 
+// Dormant today (checkedInReconcilerActivation.syncMutation is false), but
+// wired correctly so flipping that flag does not ship a 42501: the Materializer
+// reads sync_run_reference_discoveries and sync_run_post_dispatches, both
+// coordinator-exclusive, so it takes the coordinator pool. LeaseRepair, the
+// Kernel's observe side, and the Observer stay on the domain pool -- every
+// table they touch is domain-granted, and widening them would defeat the split.
 func buildSyncMutationPipeline(
+	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,
 	queuePool *pgxpool.Pool,
 	riverSchema string,
@@ -165,7 +205,7 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
-	materializer, err := syncreconciler.NewMaterializer(domainPool)
+	materializer, err := syncreconciler.NewMaterializer(coordinatorPool)
 	if err != nil {
 		return nil, err
 	}
@@ -252,12 +292,21 @@ type reconcilerObservationRecorder interface {
 	Shutdown(context.Context) error
 }
 
+// The relay's route resolver runs on the COORDINATOR pool. Every relay step
+// calls DeferredKinds -> Resolve -> Inspect, which SELECTs
+// public.worker_job_routes; that table is coordinator-exclusive under the
+// Option B split, so on the domain pool this is an unconditional 42501 on the
+// reconciler's hot path, not a rare operator error. The repository, River
+// inserter, and River quiescer stay on the queue pool, which owns the outbox
+// drain and the River schema.
 func buildReconcilerRelay(
+	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,
 	queuePool *pgxpool.Pool,
 	riverSchema string,
 	registry *jobruntime.Registry,
 ) (joboutbox.RelayStepper, error) {
+	_ = domainPool // the relay has no domain-role component today
 	repository, err := joboutbox.NewRepository(queuePool)
 	if err != nil {
 		return nil, err
@@ -270,7 +319,7 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
-	routes, err := jobroute.NewController(domainPool, registry, quiescer)
+	routes, err := jobroute.NewController(coordinatorPool, registry, quiescer)
 	if err != nil {
 		return nil, err
 	}
@@ -335,6 +384,10 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		{name: "domain_postgres", check: dependencies.domainReady},
 		{name: "job_registry", check: dependencies.registryReady},
 		{name: "queue_postgres", check: dependencies.queueReady},
+		// Named separately from domain_postgres so a coordinator-role privilege
+		// problem is attributable in readiness output rather than surfacing as a
+		// generic domain failure.
+		{name: "coordinator_postgres", check: dependencies.coordinatorReady},
 		{name: "river_schema", check: dependencies.riverSchemaReady(cfg.RiverDatabaseSchema)},
 		{name: "sync_dispatch_registry", check: dependencies.syncRegistryReady},
 	}
@@ -420,6 +473,7 @@ func buildReconcilerDependencies(
 	}
 
 	relay, err := sources.buildRelay(
+		dependencies.database.CoordinatorPool(),
 		dependencies.database.DomainPool(),
 		dependencies.database.QueuePool(),
 		cfg.RiverDatabaseSchema,
@@ -447,6 +501,7 @@ func buildReconcilerDependencies(
 	var syncStepper syncreconciler.Stepper
 	if activation.syncMutation {
 		syncStepper, err = sources.buildSyncMutation(
+			dependencies.database.CoordinatorPool(),
 			dependencies.database.DomainPool(),
 			dependencies.database.QueuePool(),
 			cfg.RiverDatabaseSchema,
@@ -502,6 +557,16 @@ func (dependencies *reconcilerDependencies) queueReady(ctx context.Context) erro
 		return errReconcilerDependencyUnavailable
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
+		return errReconcilerDependencyUnavailable
+	}
+	return nil
+}
+
+func (dependencies *reconcilerDependencies) coordinatorReady(ctx context.Context) error {
+	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil {
+		return errReconcilerDependencyUnavailable
+	}
+	if err := dependencies.database.CoordinatorReady(ctx); err != nil {
 		return errReconcilerDependencyUnavailable
 	}
 	return nil

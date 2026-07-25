@@ -670,11 +670,38 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		// worker_job_routes is coordinator-exclusive under the Option B split
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @
+		// eda2d6b91) — created but never granted to the domain role here.
 		"CREATE TABLE public.worker_job_routes (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
+		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
+		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_batch_payloads (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		`CREATE TABLE public.sync_dispatch_transport_routes (
 			kind text PRIMARY KEY,
 			transport text NOT NULL,

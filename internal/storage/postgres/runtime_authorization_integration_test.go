@@ -40,13 +40,40 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.integration_datasets (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
+		// worker_job_routes is coordinator-exclusive under the Option B split
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @
+		// eda2d6b91) — created but never granted to the domain role here.
 		"CREATE TABLE public.worker_job_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
+		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
+		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
+		// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_batch_payloads (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SCHEMA river",
 		"CREATE TABLE river.river_job (id bigserial PRIMARY KEY, state text NOT NULL)",
@@ -58,10 +85,13 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE ROLE " + runtimeAuthorizationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationQueuePass + "'",
 		"GRANT CONNECT ON DATABASE worker_test TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_runs, public.worker_job_routes, public.sync_dispatch_transport_routes TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, UPDATE ON TABLE public.sync_run_units TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_sources, public.integration_datasets, public.integration_credentials, public.sync_dispatch_transport_routes, public.sync_configurations, public.organizations, public.billing_notifications, public.external_ingest_sources, public.feature_flags, public.org_feature_overrides, public.org_licenses, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE ON TABLE public.sync_runs, public.sync_run_units, public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE, DELETE ON TABLE public.external_ingest_batches, public.provider_rate_limit_observations TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
@@ -173,6 +203,31 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	if _, err := admin.Exec(ctx, "REVOKE UPDATE ON TABLE public.worker_job_outbox FROM "+runtimeAuthorizationDomainRole); err != nil {
 		t.Fatal(err)
+	}
+	// The completion-fence grant is column-scoped (SELECT/INSERT on
+	// completion_key only, never completed_at). has_table_privilege cannot
+	// see a column-level grant, so a naive reuse of the has_table_privilege
+	// pattern here would silently accept a table-wide grant it never checked
+	// for. Confirm the dedicated column-scoped check actually catches it.
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public.worker_job_completion_fences TO "+runtimeAuthorizationDomainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("domain completion-fence table-wide-leakage authorization error = %v, want ErrUnavailable", err)
+	}
+	// REVOKE SELECT ON TABLE (whole-table form) revokes SELECT for this
+	// grantee on this relation entirely — confirmed empirically — including
+	// the pre-existing column-level SELECT (completion_key) grant, not just
+	// the table-wide ACL entry just added. Restore the column-scoped grant
+	// before asserting recovery, or this legitimately fails closed.
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public.worker_job_completion_fences FROM "+runtimeAuthorizationDomainRole); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT SELECT (completion_key) ON TABLE public.worker_job_completion_fences TO "+runtimeAuthorizationDomainRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); err != nil {
+		t.Fatalf("domain authorization did not recover after revoking completion-fence table-wide leakage: %v", err)
 	}
 	if _, err := admin.Exec(ctx, "GRANT TRUNCATE ON TABLE public.runtime_semantic_probe TO "+runtimeAuthorizationDomainRole); err != nil {
 		t.Fatal(err)

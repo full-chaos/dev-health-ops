@@ -598,8 +598,9 @@ func domainPosture() RolePosture {
 //
 //   - worker_job_outbox (coordinator: SELECT, UPDATE): internal/jobroute/
 //     control.go:197 runs `LOCK TABLE public.worker_job_outbox IN SHARE ROW
-//     EXCLUSIVE MODE` (needs UPDATE, confirmed empirically) inside
-//     ApplyCheckedIn/Rollback, reached by dev-health-workerctl (a coordinator
+//     EXCLUSIVE MODE` (needs UPDATE, confirmed empirically) inside Rollback
+//     only — ApplyCheckedIn touches worker_job_routes and nothing else —
+//     reached by dev-health-workerctl (a coordinator
 //     binary once its jobroute pool repoints from domainPool to the
 //     coordinator pool — a deploy prerequisite). The table is a THREE-role
 //     table: domain SELECT+INSERT (outbox producer), queue SELECT+UPDATE+DELETE
@@ -610,7 +611,7 @@ func domainPosture() RolePosture {
 //     will check once that provisioning lands. See the LOCK-aware coordinator
 //     sweep in .remember/chaos-3033-option-b-role-split.md; the pre-existing
 //     latent 42501 (domain-pool workerctl cannot hold this lock today) is
-//     tracked separately.
+//     tracked as CHAOS-3113.
 func coordinatorPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{

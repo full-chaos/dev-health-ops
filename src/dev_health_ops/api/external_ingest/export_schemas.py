@@ -6,8 +6,9 @@ Usage:
 Mirrors ``api/graphql/export_schema.py``'s pattern (argparse, ``--out``,
 stdout fallback): lets customers/CI vendor a schema file for offline
 ``ajv``/``jsonschema`` validation, gives docs a stable linkable artifact,
-and is compared byte-for-byte against the committed
-``docs/api/external-ingest/v1/schema.json`` by
+and is a stable machine contract co-located with its generator. It is compared
+byte-for-byte against the committed source-owned
+``src/dev_health_ops/api/external_ingest/schema.json`` by
 ``tests/api/external_ingest/test_schema_export_no_drift.py`` at PR time
 (brief D7) — deliberately a pytest, not a new CI workflow.
 

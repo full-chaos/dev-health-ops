@@ -50,7 +50,7 @@ Notes:
   migration. Existing Alembic-only stacks may keep a direct `POSTGRES_URI`;
   without the dedicated DSN the additive River step is skipped. Never send
   migration DDL through transaction-mode PgBouncer. See
-  `docs/ops/database-connection-pooling.md`.
+  `docs/operate/configure/databases-and-storage.md`.
 
 ## Scaling Services
 

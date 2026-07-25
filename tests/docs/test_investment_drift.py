@@ -1,9 +1,15 @@
 """Investment-docs drift guard.
 
-Extends docs test coverage for CHAOS-2316 (investment-taxonomy.md as shared
-semantic source) and CHAOS-2326 (ADR-002 investment-period-components alignment).
-Both issues have 'Reconcile and close' disposition in the coverage matrix;
-these tests are the automated proof required before reconciliation.
+Extends docs test coverage for CHAOS-2316 (investment taxonomy as shared semantic
+source) and CHAOS-2326 (ADR-002 investment-period-components alignment). Both issues
+have 'Reconcile and close' disposition in the coverage matrix; these tests are the
+automated proof required before reconciliation.
+
+Canonical/legacy split: the generated taxonomy source of truth (BEGIN/END markers,
+shared-semantic-source declaration) and the ADR history are preserved under
+``.github/docs-legacy/``; the generation and drift tooling operate on that archived
+source. The public reference page under ``docs/reference/taxonomies/`` is validated
+separately for the current canonical vocabulary.
 """
 
 from __future__ import annotations
@@ -16,11 +22,17 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+LEGACY_DOCS = ROOT / ".github" / "docs-legacy"
 DRIFT_SCRIPT = ROOT / "scripts" / "check_investment_docs_drift.py"
 GEN_SCRIPT = ROOT / "scripts" / "gen_taxonomy_docs.py"
-TAXONOMY_DOC = ROOT / "docs" / "product" / "investment-taxonomy.md"
+# Archived generated source of truth: the shared-semantic-source taxonomy document
+# that the drift and generation tooling read and write.
+ARCHIVED_TAXONOMY_DOC = LEGACY_DOCS / "product" / "investment-taxonomy.md"
+# Canonical public taxonomy reference page.
+CANONICAL_TAXONOMY_DOC = ROOT / "docs" / "reference" / "taxonomies" / "investment.md"
 TAXONOMY_SRC = ROOT / "src" / "dev_health_ops" / "investment_taxonomy.py"
-ADR_002 = ROOT / "docs" / "architecture" / "adr" / "002-investment-period-components.md"
+# Preserved ADR source history.
+ADR_002 = LEGACY_DOCS / "architecture" / "adr" / "002-investment-period-components.md"
 MATERIALIZE_MODULE = (
     ROOT / "src" / "dev_health_ops" / "work_graph" / "investment" / "materialize.py"
 )
@@ -63,62 +75,95 @@ def test_investment_taxonomy_drift_check_exits_clean() -> None:
     )
 
 
-def test_investment_taxonomy_generated_block_matches_registry() -> None:
-    """The generated block in investment-taxonomy.md must match investment_taxonomy.py.
+def test_archived_taxonomy_generated_block_matches_registry() -> None:
+    """The generated block in the archived taxonomy source must match the registry.
 
-    Proves that the doc is in sync with the canonical Python registry without
-    writing to disk (read-only verification).
+    Proves that the archived shared-semantic-source document is in sync with the
+    canonical Python registry without writing to disk (read-only verification).
     """
     assert GEN_SCRIPT.is_file(), f"missing gen script: {GEN_SCRIPT}"
-    assert TAXONOMY_DOC.is_file(), f"missing taxonomy doc: {TAXONOMY_DOC}"
+    assert ARCHIVED_TAXONOMY_DOC.is_file(), (
+        f"missing archived taxonomy source: {ARCHIVED_TAXONOMY_DOC}"
+    )
 
     gen = _load_gen_module()
     themes, subcategories, mapping = gen.load_taxonomy()
     expected_block = gen.render_block(themes, subcategories, mapping)
 
-    doc = TAXONOMY_DOC.read_text(encoding="utf-8")
+    doc = ARCHIVED_TAXONOMY_DOC.read_text(encoding="utf-8")
     start = doc.find(BEGIN)
     stop = doc.find(END)
     assert start != -1 and stop > start, (
-        f"generated taxonomy markers missing in {TAXONOMY_DOC}"
+        f"generated taxonomy markers missing in {ARCHIVED_TAXONOMY_DOC}"
     )
     actual_block = doc[start : stop + len(END)]
 
     assert actual_block == expected_block, (
-        "Generated block in investment-taxonomy.md is stale. "
+        "Generated block in the archived investment-taxonomy.md is stale. "
         "Run 'python scripts/gen_taxonomy_docs.py' and commit the result."
     )
 
 
-def test_investment_taxonomy_doc_is_shared_semantic_source() -> None:
-    """investment-taxonomy.md must be the single shared semantic source for the taxonomy."""
-    assert TAXONOMY_DOC.is_file(), f"missing taxonomy doc: {TAXONOMY_DOC}"
-    content = TAXONOMY_DOC.read_text(encoding="utf-8")
+def test_archived_taxonomy_doc_is_shared_semantic_source() -> None:
+    """The archived taxonomy source must remain the single shared semantic source."""
+    assert ARCHIVED_TAXONOMY_DOC.is_file(), (
+        f"missing archived taxonomy source: {ARCHIVED_TAXONOMY_DOC}"
+    )
+    content = ARCHIVED_TAXONOMY_DOC.read_text(encoding="utf-8")
 
     # Declares itself the shared semantic source
     assert "shared" in content and "semantic source" in content, (
-        "investment-taxonomy.md must declare itself the shared semantic source"
+        "archived investment-taxonomy.md must declare itself the shared semantic source"
     )
     # References the canonical Python module
     assert "investment_taxonomy.py" in content, (
-        "investment-taxonomy.md must reference the canonical Python source"
+        "archived investment-taxonomy.md must reference the canonical Python source"
     )
     # Taxonomy is fixed — no synonyms, no overrides, no per-team config
-    assert "fixed" in content, "investment-taxonomy.md must state the taxonomy is fixed"
+    assert "fixed" in content, (
+        "archived investment-taxonomy.md must state the taxonomy is fixed"
+    )
     # Categorization never returns unknown
     assert "never" in content, (
-        "investment-taxonomy.md must state categorization never returns unknown"
+        "archived investment-taxonomy.md must state categorization never returns unknown"
     )
     # Generated block present
     assert BEGIN in content and END in content, (
-        "investment-taxonomy.md is missing generated taxonomy markers"
+        "archived investment-taxonomy.md is missing generated taxonomy markers"
     )
     # All 5 canonical theme keys must appear in the doc
     gen = _load_gen_module()
     themes, _, _ = gen.load_taxonomy()
     for theme in themes:
         assert f"`{theme}`" in content, (
-            f"theme key '{theme}' is not documented in investment-taxonomy.md"
+            f"theme key '{theme}' is not documented in the archived investment-taxonomy.md"
+        )
+
+
+def test_canonical_public_taxonomy_documents_current_vocabulary() -> None:
+    """The public taxonomy reference must document the canonical, fixed vocabulary."""
+    assert CANONICAL_TAXONOMY_DOC.is_file(), (
+        f"missing canonical taxonomy page: {CANONICAL_TAXONOMY_DOC}"
+    )
+    content = CANONICAL_TAXONOMY_DOC.read_text(encoding="utf-8")
+
+    # Declares the vocabulary canonical and not workspace-configurable.
+    assert "canonical" in content.casefold(), (
+        "canonical taxonomy page must declare the vocabulary canonical"
+    )
+    assert "not workspace-configurable" in content.casefold(), (
+        "canonical taxonomy page must state the labels are not workspace-configurable"
+    )
+    # No competing vocabulary may be defined elsewhere.
+    assert "must not define a competing vocabulary" in content.casefold(), (
+        "canonical taxonomy page must forbid a competing vocabulary"
+    )
+    # All 5 canonical theme keys must appear on the public page.
+    gen = _load_gen_module()
+    themes, _, _ = gen.load_taxonomy()
+    for theme in themes:
+        assert f"`{theme}`" in content, (
+            f"theme key '{theme}' is not documented in the canonical taxonomy page"
         )
 
 
@@ -150,19 +195,23 @@ def test_adr_002_is_accepted_option_a_with_no_code_changes() -> None:
     )
 
 
-def test_investment_taxonomy_all_linked_docs_exist() -> None:
-    """All relative links in investment-taxonomy.md must resolve to existing files."""
-    assert TAXONOMY_DOC.is_file(), f"missing taxonomy doc: {TAXONOMY_DOC}"
-    taxonomy_dir = TAXONOMY_DOC.parent
+def test_archived_taxonomy_all_linked_docs_exist() -> None:
+    """All relative links in the archived taxonomy source must resolve to files."""
+    assert ARCHIVED_TAXONOMY_DOC.is_file(), (
+        f"missing archived taxonomy source: {ARCHIVED_TAXONOMY_DOC}"
+    )
+    taxonomy_dir = ARCHIVED_TAXONOMY_DOC.parent
 
     link_re = re.compile(r"\[.*?\]\((\.\./[^\)]+\.md)\)")
-    content = TAXONOMY_DOC.read_text(encoding="utf-8")
+    content = ARCHIVED_TAXONOMY_DOC.read_text(encoding="utf-8")
     links = link_re.findall(content)
 
-    assert links, "no relative links found in investment-taxonomy.md"
+    assert links, "no relative links found in the archived investment-taxonomy.md"
     for rel_link in links:
         target = (taxonomy_dir / rel_link).resolve()
-        assert target.is_file(), f"investment-taxonomy.md has a broken link: {rel_link}"
+        assert target.is_file(), (
+            f"archived investment-taxonomy.md has a broken link: {rel_link}"
+        )
 
 
 def test_investment_taxonomy_fixture_reports_operational_external() -> None:

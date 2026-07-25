@@ -27,7 +27,7 @@
 # MIGRATION_DATABASE_URI (preferred) or compatibility POSTGRES_URI must point
 # DIRECTLY at Postgres (port 5432), never at a transaction-mode pooler
 # (PgBouncer/RDS Proxy): migrations run raw DDL.
-# See docs/ops/database-connection-pooling.md.
+# See docs/operate/configure/databases-and-storage.md.
 apiVersion: batch/v1
 kind: Job
 metadata:

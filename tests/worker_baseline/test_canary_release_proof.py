@@ -218,7 +218,7 @@ def test_emitted_v2_artifact_conforms_to_the_checked_in_schema() -> None:
     schema = json.loads(
         (
             ROOT
-            / "docs/architecture/evidence/go-worker-migration/v3-canary-release-proof/artifact.schema.json"
+            / ".github/docs-legacy/architecture/evidence/go-worker-migration/v3-canary-release-proof/artifact.schema.json"
         ).read_text()
     )
     assert_schema_valid(

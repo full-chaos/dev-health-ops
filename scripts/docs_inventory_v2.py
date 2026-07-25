@@ -32,9 +32,6 @@ OVERRIDE_SUFFIXES = {".html", ".css", ".js", ".svg"}
 CONFIG_PATHS = {
     "mkdocs.yml",
     "requirements-docs.txt",
-    "docs/publication.yml",
-    "docs/freshness-inventory.yml",
-    "docs/search-acceptance.json",
     "Makefile",
 }
 
@@ -78,6 +75,10 @@ def _normalise_doc_path(path: str) -> str:
 
 def _flatten_nav(node: object, trail: tuple[str, ...] = ()) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
+    if isinstance(node, str):
+        label = trail[-1] if trail else Path(node).stem.replace("-", " ").title()
+        result[_normalise_doc_path(node)] = list(trail) or [label]
+        return result
     if isinstance(node, list):
         for child in node:
             result.update(_flatten_nav(child, trail))
@@ -285,6 +286,9 @@ def _docs_artifacts(repo_root: Path) -> list[Path]:
 def build_inventory(repo_root: Path, repository_name: str) -> dict[str, object]:
     repo_root = repo_root.resolve()
     mkdocs = _load_yaml(repo_root / "mkdocs.yml")
+    # The canonical repository no longer has docs/publication.yml, so mkdocs
+    # navigation is its publication truth. Loading the file when present keeps
+    # the standalone scanner useful for older repositories and test fixtures.
     manifest = _load_yaml(repo_root / "docs" / "publication.yml")
     nav = _flatten_nav(mkdocs.get("nav", []))
     site_url_value = str(mkdocs.get("site_url") or "").strip()

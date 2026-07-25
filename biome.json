@@ -1,0 +1,18 @@
+{
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "main"
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!dist",
+      "!**/dist",
+      "!**/.build",
+      "!**/.github",
+      "!**/.gitlab"
+    ]
+  }
+}

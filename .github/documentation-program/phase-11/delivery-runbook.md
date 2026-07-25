@@ -7,6 +7,116 @@
 
 Repository code configures and validates the delivery mechanism. Account-level Cloudflare Access, DNS, API-token scope, and GitHub environment approvals must be reviewed in their respective control planes before production is enabled.
 
+## Local development and deployment
+
+Install the documentation dependencies once:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements-docs.txt
+```
+
+The documentation lifecycle has five explicit operations. They are intentionally separate so a local preview, a remote preview version, and a production deployment cannot be confused.
+
+```bash
+# 1. Fast writing and styling with MkDocs live reload
+make docs:serve
+
+# 2. Build preview-mode assets and run them in the local Workers runtime
+make docs:preview
+
+# 3. Upload an immutable remote Worker version with a stable preview alias
+make docs:version PREVIEW_ALIAS=pr-1256
+
+# 4. Run the full production gate and deploy a new production version
+make docs:deploy
+
+# 5. Roll production back to an explicit known-good version
+make docs:rollback VERSION_ID=<known-good-version-id>
+```
+
+### Authoring preview
+
+`make docs:serve` opens `http://127.0.0.1:8000`. It is the fastest content and theme loop, but it does not emulate Cloudflare response headers, redirects, or the Workers runtime.
+
+### Local Workers preview
+
+`make docs:preview` builds `.build/docs-cloudflare` in **preview mode**, including redirects, security headers, `X-Robots-Tag: noindex, nofollow`, a disallowing `robots.txt`, and source metadata. It then runs `wrangler dev` at `http://localhost:8787`.
+
+This operation is entirely local. It does not create a Worker version and does not contact the production deployment.
+
+### Remote preview version
+
+`make docs:version PREVIEW_ALIAS=<alias>` runs the complete reader-critical gate, builds the same preview-mode asset tree, and invokes:
+
+```bash
+npx --yes wrangler@4.112.0 versions upload \
+  --config wrangler.jsonc \
+  --preview-alias <alias>
+```
+
+The command creates an immutable Worker version and returns both a version-specific preview URL and a stable aliased preview URL. It does **not** change the active production deployment.
+
+Aliases must begin with a lowercase letter and contain only lowercase letters, numbers, and dashes. For pull requests, use `pr-<number>`, for example `pr-1256`.
+
+Preview versions contain `noindex` headers and a disallowing `robots.txt`. Do not promote a preview-mode version to production.
+
+### Production deployment
+
+`make docs:deploy` runs the complete reader-critical gate again, rebuilds the asset tree in **production mode** without preview indexing restrictions, and invokes `wrangler deploy`.
+
+`wrangler deploy` creates a new Worker version and immediately makes that version the active deployment at 100% traffic. The first successful deployment recreates the `dev-health-docs` Worker when it does not already exist and applies the `docs.fullchaos.dev` custom domain declared in `wrangler.jsonc`.
+
+### Versions, deployments, and rollback
+
+Inspect Cloudflare state with:
+
+```bash
+make docs:versions
+make docs:deployments
+```
+
+Rollback requires an explicit version ID:
+
+```bash
+make docs:rollback VERSION_ID=<known-good-version-id>
+```
+
+The older local-development names remain aliases:
+
+```bash
+make docs:v2-serve
+make docs:cloudflare-dev
+make docs:cloudflare-version PREVIEW_ALIAS=pr-1256
+make docs:cloudflare-deploy
+```
+
+### Raw commands
+
+The raw remote preview flow is:
+
+```bash
+python scripts/build_docs_cloudflare.py --mode preview --full-check
+npx --yes wrangler@4.112.0 versions upload \
+  --config wrangler.jsonc \
+  --preview-alias pr-1256
+```
+
+The raw production flow is:
+
+```bash
+python scripts/build_docs_cloudflare.py --mode production --full-check
+npx --yes wrangler@4.112.0 deploy \
+  --config wrangler.jsonc \
+  --strict
+```
+
+The explicit build step is intentional. Wrangler uploads the directory named by `assets.directory`; a clean checkout does not contain generated HTML, so `.build/docs-cloudflare` must be prepared before `wrangler dev`, `wrangler versions upload`, or `wrangler deploy` runs.
+
+Local development does not require the remote Worker to exist. If MkDocs is unavailable, activate the documentation virtual environment and reinstall `requirements-docs.txt`.
+
 ## One-time account setup
 
 ### 1. Protect Worker preview URLs
@@ -58,9 +168,9 @@ For a same-repository pull request that changes documentation delivery inputs, t
 
 Fork pull requests never receive Cloudflare credentials or create Worker versions.
 
-## Production deploy
+## Production deploy through GitHub
 
-Production is manual. Use **Documentation Cloudflare delivery** → **Run workflow** with:
+Production can also be deployed through **Documentation Cloudflare delivery** → **Run workflow** with:
 
 - action: `deploy`
 - confirmation: `docs.fullchaos.dev`
@@ -79,7 +189,7 @@ Record the source commit, new version ID, prior production version ID, workflow 
 
 Before the first canonical cutover, rehearse rollback with a non-production version and record the evidence.
 
-For an actual rollback, run the same workflow with:
+For an actual rollback, run the workflow with:
 
 - action: `rollback`
 - version ID: the explicit known-good Worker version
@@ -118,6 +228,7 @@ A Content Security Policy is intentionally deferred until it is tested against M
 | Failure | Response |
 | --- | --- |
 | Quality check fails | Do not upload or deploy. Fix the source or gate. |
+| Generated asset directory is missing | Run the corresponding Make target; do not invoke Wrangler against a clean checkout. |
 | Cloudflare credential missing | Preview stays as a GitHub artifact; production fails closed. |
 | Preview inaccessible to approved reviewer | Review Access policy, not documentation code. |
 | Preview accessible anonymously | Disable preview uploads and fix Access immediately. |

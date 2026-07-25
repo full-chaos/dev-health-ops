@@ -187,12 +187,22 @@ DML-verb sweep, or this class of gap recurs. A full sweep of `internal/` and
 the only table missing its lock-implied privilege from the manifest; every
 other hit already matched an existing row.
 
-## Schema-level blocker (unchanged)
+## Schema-level blocker — RESOLVED by Phase 2
 
 `external_ingest_batch_payloads`, `external_ingest_batches`,
 `provider_rate_limit_observations` all need DELETE, all domain-role
-retention/cleanup, and `required_table_privileges` has no `allow_delete`
-column — needs a schema decision before implementation regardless of role.
+retention/cleanup, and the posture was a `(table, allow_insert, allow_update)`
+triple with no way to express `allow_delete` — so a required DELETE was
+*unrepresentable*, not merely unlisted. That unrepresentability is what tipped
+the Option A/B decision toward the role split.
+
+Phase 2 added `AllowDelete` to `TablePrivilege` and the matching DELETE grants
+to `runtimeGrantStatements`, so DELETE is now an ordinary privilege on both
+sides. `internal/domaingrants` kept a hardcoded "DELETE can never be
+expressed" special case after that landed, which reported three permanent
+false Criticals and would have hidden a real DELETE gap behind them; it was
+removed when this manifest merged into the integration branch, and
+`groundtruth_test.go` now pins DELETE's presence on both lists instead.
 
 ## Unresolved cross-function transactions (hedge, not a clean-list claim)
 

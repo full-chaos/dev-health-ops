@@ -353,7 +353,7 @@ func grantStatementsForPosture(role string, posture RolePosture) []string {
 // TestCheckRolePostureAllowsATableRequiredByBothRoles already established for
 // arbitrary and synthetic postures holds for the ACTUAL production partition:
 // domainPosture() and coordinatorPosture(), per
-// docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91. Every
+// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91. Every
 // one of the manifest's six dual-grant ("both") tables — sync_dispatch_outbox,
 // sync_run_units, sync_runs, worker_job_runs, sync_dispatch_transport_routes,
 // organizations — is exercised here with each role's real flags side by

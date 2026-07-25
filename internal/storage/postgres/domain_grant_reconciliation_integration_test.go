@@ -52,7 +52,7 @@ func reconciliationTables() []domainTable {
 	return []domainTable{
 		{
 			// Tightened under the Option B two-role split
-			// (docs/architecture/chaos-3033-role-partition-manifest.md @
+			// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @
 			// eda2d6b91): the domain-side call
 			// (internal/syncdispatchruntime/native_post_sync.go:263) is a
 			// plain SELECT with no lock clause. The FOR UPDATE row-locking

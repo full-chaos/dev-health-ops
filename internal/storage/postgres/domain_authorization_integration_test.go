@@ -47,7 +47,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
-		// (docs/architecture/chaos-3033-role-partition-manifest.md @
+		// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @
 		// eda2d6b91) — created here only so the "column-level operator route
 		// mutation" case below has a real relation to test against; it is
 		// deliberately never granted to the domain role.
@@ -65,7 +65,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY, completed_at timestamptz NOT NULL DEFAULT now())",
 		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
-		// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",

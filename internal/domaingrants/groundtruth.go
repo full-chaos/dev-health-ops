@@ -16,11 +16,14 @@ type GroundTruth struct {
 	// in-process via the grantcheck_export.go shim -- i.e. this is the exact
 	// SQL migrate.go would execute, not a restatement of it.
 	Grants map[string]PrivilegeSet
-	// RequiredTablePrivileges is parsed from the required_table_privileges
-	// VALUES rows embedded in domainAuthorizationQuery
-	// (domain_authorization.go), obtained the same way.
+	// RequiredTablePrivileges is the domain role's declared posture, read as
+	// data from postgresstore.DomainPosture(). It used to be regexed out of
+	// the readiness query's required_table_privileges VALUES rows; Phase 2 of
+	// the Option B role split parameterized that query over posture data bound
+	// through unnest, so the rows are no longer in the SQL text and the
+	// declaration itself is what gets read.
 	RequiredTablePrivileges map[string]PrivilegeSet
-	// ColumnScopedTables lists tables domain_authorization.go grants only
+	// ColumnScopedTables lists tables the domain posture declares only
 	// column-scoped privileges on (e.g. worker_job_completion_fences).
 	// These are deliberately excluded from RequiredTablePrivileges/table-wide
 	// comparison: the checker cannot yet reason about column-level privilege
@@ -34,21 +37,14 @@ var grantStatementTableRE = regexp.MustCompile(
 	`(?is)GRANT\s+([A-Z, ]+?)\s+ON\s+TABLE\s+public\.([a-zA-Z_][a-zA-Z0-9_]*)\s+TO\s+"?` + regexp.QuoteMeta(riverstore.GrantCheckDomainRole) + `"?\b`,
 )
 
-var requiredRowRE = regexp.MustCompile(
-	`(?is)\(\s*'([a-zA-Z_][a-zA-Z0-9_]*)'\s*,\s*(true|false)\s*,\s*(true|false)\s*\)`,
-)
-
-var columnScopedRowRE = regexp.MustCompile(
-	`(?is)\(\s*'([a-zA-Z_][a-zA-Z0-9_]*)'\s*,\s*'[a-zA-Z_][a-zA-Z0-9_]*'\s*,\s*'(SELECT|INSERT|UPDATE|DELETE|REFERENCES)'\s*\)`,
-)
-
-// LoadGroundTruth calls into internal/storage/river and
-// internal/storage/postgres (via their grantcheck_export.go shims) to obtain
-// the real, currently-shipping text of both hand-maintained artefacts, then
-// parses each into a table->privilege map. No file on disk is read or
-// restated: this is the same code path production uses to build the GRANT
-// statements and the same constant string production uses for the
-// readiness query.
+// LoadGroundTruth reads both hand-maintained artefacts through the same code
+// paths production uses, and restates neither. The GRANT side still comes as
+// SQL text, from riverstore.DerivedRuntimeGrantStatements() (grantcheck_export.go),
+// because migrate.go genuinely builds statements. The posture side is read as
+// data from postgresstore.DomainPosture(), because since Phase 2 of the Option
+// B role split it genuinely IS data — the readiness query binds it through
+// unnest rather than embedding VALUES rows, so there is no SQL text left to
+// parse there.
 func LoadGroundTruth() (*GroundTruth, error) {
 	gt := &GroundTruth{
 		Grants:                  map[string]PrivilegeSet{},
@@ -80,47 +76,29 @@ func LoadGroundTruth() (*GroundTruth, error) {
 			"the extraction regex has drifted from migrate.go's actual statement shape", riverstore.GrantCheckDomainRole)
 	}
 
-	query := postgresstore.DomainAuthorizationQueryForCheck()
-	reqSection, columnSection := splitRequiredPrivilegesSections(query)
-
-	for _, m := range requiredRowRE.FindAllStringSubmatch(reqSection, -1) {
-		table := strings.ToLower(m[1])
+	posture := postgresstore.DomainPosture()
+	for _, table := range posture.RequiredTables {
 		var set PrivilegeSet
-		set.add(PrivSelect) // every required_table_privileges row is baseline-SELECT
-		if strings.EqualFold(m[2], "true") {
+		set.add(PrivSelect) // SELECT is implied by every posture row
+		if table.AllowInsert {
 			set.add(PrivInsert)
 		}
-		if strings.EqualFold(m[3], "true") {
+		if table.AllowUpdate {
 			set.add(PrivUpdate)
 		}
-		gt.RequiredTablePrivileges[table] = set
+		if table.AllowDelete {
+			set.add(PrivDelete)
+		}
+		gt.RequiredTablePrivileges[strings.ToLower(table.TableName)] = set
 	}
 	if len(gt.RequiredTablePrivileges) == 0 {
-		return nil, fmt.Errorf("domaingrants: parsed zero required_table_privileges rows from domainAuthorizationQuery; " +
-			"the extraction regex has drifted from domain_authorization.go's actual VALUES shape")
+		return nil, fmt.Errorf("domaingrants: DomainPosture() declared zero required tables, " +
+			"which cannot be right for a role the runtime asserts a posture for")
 	}
 
-	for _, m := range columnScopedRowRE.FindAllStringSubmatch(columnSection, -1) {
-		gt.ColumnScopedTables[strings.ToLower(m[1])] = true
+	for _, column := range posture.ColumnScoped {
+		gt.ColumnScopedTables[strings.ToLower(column.TableName)] = true
 	}
 
 	return gt, nil
-}
-
-// splitRequiredPrivilegesSections separates the required_table_privileges
-// VALUES block from any column_scoped_privileges VALUES block that follows
-// it in the same query, so a column-scoped row's privilege literal
-// ('SELECT') is never mistaken for a required_table_privileges row's
-// allow_insert/allow_update booleans (which happen to share the token
-// shape only coincidentally -- true/false vs quoted privilege names, so in
-// practice they cannot cross-match, but the split keeps the two regexes
-// scoped to their own CTE and makes that guarantee explicit rather than
-// incidental).
-func splitRequiredPrivilegesSections(query string) (required, columnScoped string) {
-	const columnMarker = "column_scoped_privileges"
-	idx := strings.Index(query, columnMarker)
-	if idx < 0 {
-		return query, ""
-	}
-	return query[:idx], query[idx:]
 }

@@ -460,7 +460,7 @@ type RolePosture struct {
 
 // domainPosture is the domain runtime role's declared manifest under the
 // Option B two-role split. Table set and flags come from
-// docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91
+// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91
 // (grant-deriver tool derivation + hand-verified Go source), the sole
 // authority for role/privilege attribution — not this comment, and not any
 // earlier revision of it.
@@ -561,7 +561,7 @@ func domainPosture() RolePosture {
 
 // coordinatorPosture is the coordinator runtime role's declared manifest
 // under the Option B two-role split, per
-// docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91 — the
+// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91 — the
 // same sole authority domainPosture defers to.
 //
 //   - internal_service_credentials, worker_operator_audits,
@@ -648,6 +648,21 @@ func coordinatorPosture() RolePosture {
 // by both sides.
 func CoordinatorPosture() RolePosture {
 	return coordinatorPosture()
+}
+
+// DomainPosture is the domain-role counterpart of CoordinatorPosture, for the
+// same reason: out-of-package readers need the declared manifest itself, not a
+// restatement of it.
+//
+// It replaces an earlier shim that handed out the verbatim SQL text of the
+// readiness query so internal/domaingrants could regex the
+// required_table_privileges VALUES rows back out of it. Phase 2 parameterized
+// that query over posture data bound through unnest, so the table list is no
+// longer in the SQL at all and there is nothing left to parse — the data is
+// the artefact now, and reading it directly removes a whole class of
+// extraction drift.
+func DomainPosture() RolePosture {
+	return domainPosture()
 }
 
 // CheckRolePosture is a read-only readiness check proving the active login

@@ -2,13 +2,19 @@ package domaingrants
 
 import "testing"
 
-// TestLoadGroundTruth_MatchesKnownShapeOnMain pins the ground-truth parser
-// against the current, hand-maintained state of migrate.go and
-// domain_authorization.go on this branch (origin/main plus the
-// grantcheck_export.go shims). If either hand-maintained file changes
-// shape, this test should be the first thing that tells you the parser
-// needs updating -- NOT a silent mis-parse inside the CI gate test.
-func TestLoadGroundTruth_MatchesKnownShapeOnMain(t *testing.T) {
+// TestLoadGroundTruth_MatchesKnownShape pins the ground-truth reader against
+// the current, hand-maintained state of migrate.go's runtimeGrantStatements
+// and the domain posture. If either changes shape, this test should be the
+// first thing that tells you the reader needs updating -- NOT a silent
+// mis-read inside the CI gate test.
+//
+// Updated for the Option B two-role split. Three things moved:
+// worker_job_routes left the domain role entirely (it is coordinator-exclusive
+// now, so it must be absent from BOTH lists); sync_runs became one of the
+// dual-grant tables and carries UPDATE on the domain side; and DELETE became
+// expressible, so the DELETE tables are asserted here rather than being
+// permanently unrepresentable.
+func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 	gt, err := LoadGroundTruth()
 	if err != nil {
 		t.Fatalf("LoadGroundTruth: %v", err)
@@ -16,8 +22,8 @@ func TestLoadGroundTruth_MatchesKnownShapeOnMain(t *testing.T) {
 
 	wantSelectOnly := []string{
 		"integrations", "integration_sources", "integration_datasets",
-		"integration_credentials", "sync_runs", "worker_job_routes",
-		"sync_dispatch_transport_routes",
+		"integration_credentials", "sync_dispatch_transport_routes",
+		"sync_configurations", "organizations",
 	}
 	for _, table := range wantSelectOnly {
 		for _, src := range []struct {
@@ -35,7 +41,18 @@ func TestLoadGroundTruth_MatchesKnownShapeOnMain(t *testing.T) {
 		}
 	}
 
-	wantSelectUpdate := []string{"sync_run_units"}
+	// worker_job_routes is coordinator-exclusive under the split: a domain
+	// grant or posture row for it would be a regression, not an omission.
+	for _, src := range []struct {
+		name string
+		m    map[string]PrivilegeSet
+	}{{"grants", gt.Grants}, {"required", gt.RequiredTablePrivileges}} {
+		if _, ok := src.m["worker_job_routes"]; ok {
+			t.Errorf("%s: worker_job_routes is coordinator-exclusive and must not appear on the domain side", src.name)
+		}
+	}
+
+	wantSelectUpdate := []string{"sync_run_units", "sync_runs"}
 	for _, table := range wantSelectUpdate {
 		set := gt.RequiredTablePrivileges[table]
 		if !set.Has(PrivSelect) || !set.Has(PrivUpdate) || set.Has(PrivInsert) {
@@ -56,11 +73,30 @@ func TestLoadGroundTruth_MatchesKnownShapeOnMain(t *testing.T) {
 		t.Errorf("required: worker_job_outbox = %+v, want SELECT+INSERT only", set)
 	}
 
-	if len(gt.RequiredTablePrivileges) != 11 {
-		t.Errorf("required_table_privileges: got %d rows, want 11 (pre lane/domain-grant-reconciliation merge) -- "+
-			"if this changed intentionally, the ground-truth parser is fine, just update this pin", len(gt.RequiredTablePrivileges))
+	// DELETE is an ordinary privilege since Phase 2 added AllowDelete to the
+	// posture; these three used to be reported as permanently unrepresentable.
+	for _, table := range []string{"external_ingest_batch_payloads", "provider_rate_limit_observations"} {
+		for _, src := range []struct {
+			name string
+			m    map[string]PrivilegeSet
+		}{{"grants", gt.Grants}, {"required", gt.RequiredTablePrivileges}} {
+			if set := src.m[table]; !set.Has(PrivDelete) {
+				t.Errorf("%s: table %q = %+v, want DELETE present", src.name, table, set)
+			}
+		}
 	}
-	if len(gt.Grants) != 11 {
-		t.Errorf("runtimeGrantStatements: got %d granted tables, want 11 -- see note above", len(gt.Grants))
+
+	if len(gt.RequiredTablePrivileges) != 32 {
+		t.Errorf("domain posture: got %d tables, want 32 (Option B two-role split) -- "+
+			"if this changed intentionally, the ground-truth reader is fine, just update this pin", len(gt.RequiredTablePrivileges))
+	}
+	if len(gt.Grants) != 32 {
+		t.Errorf("runtimeGrantStatements: got %d granted tables, want 32 -- see note above", len(gt.Grants))
+	}
+	// The two lists agreeing on their size is the property that matters most
+	// here: this checker exists because they disagreed once.
+	if len(gt.Grants) != len(gt.RequiredTablePrivileges) {
+		t.Errorf("grants cover %d tables but the posture declares %d -- the two hand-maintained lists have drifted apart",
+			len(gt.Grants), len(gt.RequiredTablePrivileges))
 	}
 }

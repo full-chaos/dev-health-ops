@@ -41,7 +41,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
-		// (docs/architecture/chaos-3033-role-partition-manifest.md @
+		// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @
 		// eda2d6b91) — created but never granted to the domain role here.
 		"CREATE TABLE public.worker_job_routes (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_units (id bigint PRIMARY KEY, state text)",
@@ -57,7 +57,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
 		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
-		// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",

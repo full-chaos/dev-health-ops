@@ -358,7 +358,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
 		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
-		// (docs/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",

@@ -122,20 +122,16 @@ func Compare(derived *DerivedSurface, gt *GroundTruth) *Report {
 				continue
 			}
 			evidence := evidenceFor(surface, p)
-			if p == PrivDelete {
-				// required_table_privileges structurally cannot express
-				// allow_delete -- any derived DELETE is unrepresentable by
-				// the current schema, not just unlisted.
-				report.Findings = append(report.Findings, Finding{
-					Severity: Critical, Table: table, Privilege: p,
-					Summary: fmt.Sprintf(
-						"table %q: derived surface requires DELETE, but required_table_privileges has no allow_delete column -- the schema cannot express this even if a row existed",
-						table,
-					),
-					Evidence: evidence,
-				})
-				continue
-			}
+			// DELETE used to be special-cased Critical here: the posture was
+			// a (table, allow_insert, allow_update) triple with no way to
+			// express allow_delete, so a derived DELETE was unrepresentable
+			// rather than merely unlisted. Phase 2 of the Option B role split
+			// added AllowDelete to TablePrivilege and the matching DELETE
+			// grants to runtimeGrantStatements, so DELETE is now an ordinary
+			// privilege and comparing it like the others is what keeps this
+			// checker honest — leaving the special case in place would report
+			// three permanent false Criticals and hide any real DELETE gap
+			// behind them.
 			if columnScoped {
 				// Column-scoped tables are handled by a different mechanism
 				// this tool does not model (see GroundTruth.ColumnScopedTables
@@ -338,9 +334,9 @@ func isFullyCovered(surface *TableSurface, gt *GroundTruth) bool {
 		if !surface.Privileges.Has(p) {
 			continue
 		}
-		if p == PrivDelete {
-			return false // required_table_privileges can never express this
-		}
+		// No DELETE special case: the posture expresses AllowDelete since
+		// Phase 2 of the Option B role split, so DELETE is covered when both
+		// lists carry it, exactly like the other privileges.
 		if !granted.Has(p) || !required.Has(p) {
 			return false
 		}

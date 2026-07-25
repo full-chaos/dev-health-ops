@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,6 +25,10 @@ type Config struct {
 	MaxConnLifetime   time.Duration
 	MaxConnIdleTime   time.Duration
 	HealthCheckPeriod time.Duration
+	// Tracer is optional and unused by most callers (the zero value is nil,
+	// preserving today's behavior). NewRuntimePools sets it to instrument
+	// Acquire for the domain and queue-control pools.
+	Tracer pgx.QueryTracer
 }
 
 func DefaultConfig(uri string) Config {
@@ -81,6 +86,9 @@ func New(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
 	poolConfig.HealthCheckPeriod = config.HealthCheckPeriod
 	poolConfig.ConnConfig.ConnectTimeout = config.ConnectTimeout
+	if config.Tracer != nil {
+		poolConfig.ConnConfig.Tracer = config.Tracer
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

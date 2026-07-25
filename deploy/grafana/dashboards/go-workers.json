@@ -118,13 +118,13 @@
       "id": 7,
       "targets": [
         {
-          "expr": "max by (stream, consumer_group) (worker_stream_lag)",
-          "legendFormat": "lag {{stream}} / {{consumer_group}}",
+          "expr": "max by (job, instance) (worker_stream_lag)",
+          "legendFormat": "lag {{job}} ({{instance}})",
           "refId": "A"
         },
         {
-          "expr": "max by (stream, consumer_group) (worker_stream_pending)",
-          "legendFormat": "pending {{stream}} / {{consumer_group}}",
+          "expr": "max by (job, instance) (worker_stream_pending)",
+          "legendFormat": "pending {{job}} ({{instance}})",
           "refId": "B"
         }
       ],

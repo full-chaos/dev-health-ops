@@ -195,9 +195,23 @@ groups:
             A job was rejected because its {{ $labels.domain_type }} domain state
             did not permit execution. Inspect the sanitized operator audit trail.
 
+      # worker_stream_lag/worker_stream_pending/worker_stream_oldest_pending_seconds
+      # are deliberately emitted with NO stream label (see
+      # internal/streamrunner/runner.go WritePrometheus): every configured
+      # runner discovers its streams by wildcard pattern
+      # ("pagerduty-webhooks:*", "ingest:*:commits", ...), and the wildcard
+      # segment is a per-org or per-integration identifier. Labeling by the
+      # literal stream key would put an org/integration identity on a metric
+      # label, which the PRD forbids outright. Each runner kind (pagerduty,
+      # internal_ingest, product_telemetry, external_ingest) instead runs as
+      # its own scrape target, so grouping by Prometheus's own job/instance
+      # labels — already relied on by GoWorkerTelemetryTargetDown below —
+      # is the bounded, policy-safe way to say *which deployment* is behind.
+      # It cannot say which org's stream within that deployment is behind;
+      # that would require a durable, non-metric signal instead.
       - alert: GoWorkerStreamLagHigh
         expr: |
-          max by (stream, consumer_group) (worker_stream_lag) > 1000
+          max by (job, instance) (worker_stream_lag) > 1000
         for: 10m
         labels:
           severity: warning
@@ -205,12 +219,12 @@ groups:
         annotations:
           summary: "Worker stream consumer lag is high"
           description: |
-            Stream {{ $labels.stream }} consumer group {{ $labels.consumer_group }}
-            is {{ $value }} messages behind.
+            Stream runner {{ $labels.job }} ({{ $labels.instance }}) is
+            {{ $value }} messages behind across its monitored streams.
 
       - alert: GoWorkerStreamPendingTooOld
         expr: |
-          max by (stream, consumer_group) (worker_stream_oldest_pending_seconds) > 300
+          max by (job, instance) (worker_stream_oldest_pending_seconds) > 300
         for: 10m
         labels:
           severity: warning
@@ -218,8 +232,8 @@ groups:
         annotations:
           summary: "Worker stream pending entry is stale"
           description: |
-            The oldest pending entry for {{ $labels.stream }} / 
-            {{ $labels.consumer_group }} is {{ $value | humanizeDuration }} old.
+            The oldest pending entry seen by stream runner {{ $labels.job }}
+            ({{ $labels.instance }}) is {{ $value | humanizeDuration }} old.
 
       - alert: GoWorkerQueueControlPoolPressure
         expr: |

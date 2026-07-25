@@ -247,6 +247,28 @@ type RuntimePools struct {
 	Domain       *pgxpool.Pool
 	QueueControl *pgxpool.Pool
 	Coordinator  *pgxpool.Pool
+
+	// domainAcquire/queueAcquire back worker_database_pool_acquire_seconds.
+	// Coordinator is intentionally not instrumented: the metric's pool
+	// dimension is bounded to domain|queue_control (see
+	// jobruntime.Observer's doc comment), and only those two are River's own
+	// runtime pools.
+	domainAcquire *poolAcquireTracer
+	queueAcquire  *poolAcquireTracer
+}
+
+// AttachPoolAcquireObserver wires a real observer into the domain and
+// queue-control pools' Acquire tracers after construction. It is safe to call
+// with a nil observer (detaches) or on a nil *RuntimePools (no-op) — the
+// latter matters because a process without a domain/queue-control database
+// configured never gets past NewRuntimePools in the first place, but callers
+// building pools conditionally should not need to guard twice.
+func (p *RuntimePools) AttachPoolAcquireObserver(observer PoolAcquireObserver) {
+	if p == nil {
+		return
+	}
+	p.domainAcquire.attach(observer)
+	p.queueAcquire.attach(observer)
 }
 
 // CoordinatorPool returns the coordinator pool or ErrUnavailable. It exists so
@@ -278,22 +300,33 @@ func NewRuntimePools(ctx context.Context, runtimeConfig RuntimeConfig) (*Runtime
 		return nil, err
 	}
 
+	// worker_database_pool_acquire_seconds{pool="domain"|"queue_control"} is
+	// the exact bounded pair Observer's pool dimension permits (see
+	// jobruntime.Observer's doc comment); the label string is fixed here so
+	// it can never drift into a per-tenant or per-endpoint value.
+	domainTracer := newPoolAcquireTracer("domain")
 	domainConfig := DefaultConfig(runtimeConfig.DomainURI)
 	domainConfig.MaxConns = runtimeConfig.DomainMaxConns
+	domainConfig.Tracer = domainTracer
 	domainPool, err := New(ctx, domainConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open domain pool: %w", err)
 	}
 
+	queueTracer := newPoolAcquireTracer("queue_control")
 	queueConfig := DefaultConfig(runtimeConfig.QueueControlURI)
 	queueConfig.MaxConns = runtimeConfig.QueueMaxConns
+	queueConfig.Tracer = queueTracer
 	queuePool, err := New(ctx, queueConfig)
 	if err != nil {
 		domainPool.Close()
 		return nil, fmt.Errorf("open queue-control pool: %w", err)
 	}
 
-	pools := &RuntimePools{Domain: domainPool, QueueControl: queuePool}
+	pools := &RuntimePools{
+		Domain: domainPool, QueueControl: queuePool,
+		domainAcquire: domainTracer, queueAcquire: queueTracer,
+	}
 	if runtimeConfig.RequireCoordinator {
 		coordinatorConfig := DefaultConfig(runtimeConfig.CoordinatorURI)
 		coordinatorConfig.MaxConns = runtimeConfig.CoordinatorMaxConns

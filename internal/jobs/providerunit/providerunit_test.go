@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 )
+
+// leaseSyncDimensions is the bounded SyncLeaseLabels pair providerUnit()
+// exercises (Provider: "launchdarkly", Dataset: "feature-flags").
+func leaseSyncDimensions() jobruntime.MetricDimensions {
+	return jobruntime.MetricDimensions{
+		Profiles: []string{"sync"},
+		SyncLeases: []jobruntime.SyncLeaseLabels{
+			{Provider: "launchdarkly", DatasetFamily: "feature-flags"},
+		},
+	}
+}
 
 func TestEnabledProviderUnitExecutesCompleteRouteAndTerminalizes(t *testing.T) {
 	t.Parallel()
@@ -59,6 +71,14 @@ func TestFreshHandlerRecoversExpiredProcessClaimAndReleasesForRiverRetry(
 		t.Fatalf("first claim=%+v error=%v", first, err)
 	}
 	recoveryNow := now.Add(time.Minute + time.Second)
+	// CHAOS-3118 evidence for worker_sync_lease_expired_total: a real
+	// *jobruntime.MetricsCollector observes the durable resolution of this
+	// recovered claim through the actual Handler.Work() path below, not a
+	// direct setter call.
+	collector, err := jobruntime.NewMetricsCollector(leaseSyncDimensions())
+	if err != nil {
+		t.Fatalf("NewMetricsCollector: %v", err)
+	}
 	fresh := &Handler{
 		Repository: repository,
 		Switches: providersync.CompleteRouteSwitches{
@@ -67,6 +87,7 @@ func TestFreshHandlerRecoversExpiredProcessClaimAndReleasesForRiverRetry(
 		LeaseDuration: time.Minute,
 		Heartbeat:     10 * time.Second,
 		Now:           func() time.Time { return recoveryNow },
+		LeaseMetrics:  collector,
 		BuildExecutor: func(
 			*providersync.LeaseSession,
 		) (providersync.CompleteRouteExecutor, error) {
@@ -83,6 +104,71 @@ func TestFreshHandlerRecoversExpiredProcessClaimAndReleasesForRiverRetry(
 			"error=%v attempt=%d recovered=%v status=%s",
 			err, repository.attempt, repository.lastClaim.Recovered, repository.status,
 		)
+	}
+	text := collector.PrometheusText()
+	if !strings.Contains(text, `worker_sync_lease_expired_total{provider="launchdarkly",dataset_family="feature-flags",result="retrying"} 1`) {
+		t.Fatalf("expected a non-zero retrying series, got:\n%s", text)
+	}
+	if !strings.Contains(text, `worker_sync_lease_expired_total{provider="launchdarkly",dataset_family="feature-flags",result="failed"} 0`) {
+		t.Fatalf("expected the failed series to stay at zero, got:\n%s", text)
+	}
+}
+
+// TestRecoveredExpiredLeaseAttemptExhaustionRecordsFailedResolution is
+// CHAOS-3118 evidence for the "failed" branch of worker_sync_lease_expired_total:
+// a claim that itself recovered an expired lease, then exhausts its last
+// River attempt, must durably resolve to "failed" and the collector's own
+// ObserveSyncLeaseExpired contract (never record a failed CAS) must still
+// hold — Repository.Fail here genuinely succeeds, so the series is observed.
+func TestRecoveredExpiredLeaseAttemptExhaustionRecordsFailedResolution(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	repository := newMemoryUnitRepository(providerUnit())
+	if _, err := repository.Claim(context.Background(), providersync.ClaimRequest{
+		UnitID: repository.unit.ID, OrgID: repository.unit.OrgID,
+		Owner: uuid.NewString(), Now: now, LeaseDuration: time.Minute,
+		AllowExpiredRecovery: true,
+	}); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	recoveryNow := now.Add(time.Minute + time.Second)
+	collector, err := jobruntime.NewMetricsCollector(leaseSyncDimensions())
+	if err != nil {
+		t.Fatalf("NewMetricsCollector: %v", err)
+	}
+	const maxAttempts = 2
+	fresh := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return recoveryNow },
+		LeaseMetrics:  collector,
+		BuildExecutor: func(
+			*providersync.LeaseSession,
+		) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, errors.New("transient")
+		},
+	}
+	execution := providerExecution(repository.unit, recoveryNow, maxAttempts)
+	execution.Definition.MaxAttempts = maxAttempts
+	err = fresh.Work(context.Background(), execution)
+	if err == nil || repository.attempt != 2 || !repository.lastClaim.Recovered ||
+		repository.status != "failed" || repository.lastFailCategory != "provider_unit_exhausted" {
+		t.Fatalf(
+			"error=%v attempt=%d recovered=%v status=%s category=%s",
+			err, repository.attempt, repository.lastClaim.Recovered,
+			repository.status, repository.lastFailCategory,
+		)
+	}
+	text := collector.PrometheusText()
+	if !strings.Contains(text, `worker_sync_lease_expired_total{provider="launchdarkly",dataset_family="feature-flags",result="failed"} 1`) {
+		t.Fatalf("expected a non-zero failed series, got:\n%s", text)
+	}
+	if !strings.Contains(text, `worker_sync_lease_expired_total{provider="launchdarkly",dataset_family="feature-flags",result="retrying"} 0`) {
+		t.Fatalf("expected the retrying series to stay at zero, got:\n%s", text)
 	}
 }
 

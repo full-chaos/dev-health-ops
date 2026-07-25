@@ -33,6 +33,11 @@ type workerDatabase interface {
 	RiverSchemaReady(context.Context, string) error
 	PoolSaturation() (domain float64, queueControl float64)
 	NewQueueTelemetrySampler(riverstore.QueueTelemetryConfig) (queueTelemetrySampler, error)
+	// AttachPoolAcquireObserver wires worker_database_pool_acquire_seconds
+	// into the domain/queue-control pools' Acquire path. It is called once
+	// dependencies.metrics exists, which is after the database itself opens
+	// (see NewRuntimePools's tracer freeze-at-construction constraint).
+	AttachPoolAcquireObserver(postgres.PoolAcquireObserver)
 	Close()
 }
 
@@ -108,6 +113,13 @@ func poolSaturation(pool *pgxpool.Pool) float64 {
 	return float64(statistics.AcquiredConns()) / float64(statistics.MaxConns())
 }
 
+func (database *postgresWorkerDatabase) AttachPoolAcquireObserver(observer postgres.PoolAcquireObserver) {
+	if database == nil || database.pools == nil {
+		return
+	}
+	database.pools.AttachPoolAcquireObserver(observer)
+}
+
 func (database *postgresWorkerDatabase) Close() {
 	if database != nil && database.pools != nil {
 		database.pools.Close()
@@ -122,6 +134,11 @@ type workerFamily struct {
 	component lifecycle.Component
 	handlers  []jobruntime.HandlerSpec
 	queues    []jobruntime.QueueBudget
+	// metricsSource is an additional Prometheus fragment this family owns
+	// (e.g. providerfoundation's dev_health_provider_* family), registered
+	// with the health.Registry alongside "worker_runtime" once construction
+	// finishes. Most families leave this nil.
+	metricsSource health.MetricsSource
 }
 
 type workerFamilyBuilder func(
@@ -235,6 +252,12 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, err
 	}
+	// worker_database_pool_acquire_seconds needs the collector, which is why
+	// this happens here rather than at pool construction: NewRuntimePools
+	// freezes its pgxpool tracer before dependencies.metrics exists.
+	if dependencies.database != nil {
+		dependencies.database.AttachPoolAcquireObserver(dependencies.metrics)
+	}
 	providerRuntimeConstructed := false
 	checks := []struct {
 		name  string
@@ -319,6 +342,12 @@ func configureWorkerDependenciesWithSources(
 			return nil, errWorkerDependencyUnavailable
 		}
 	}
+	if active.metricsSource != nil {
+		if err := registry.RegisterMetrics("provider_foundation", active.metricsSource); err != nil {
+			dependencies.close()
+			return nil, err
+		}
+	}
 	for _, handler := range active.handlers {
 		if handler.Kind == jobcontract.KindSyncProviderUnit {
 			providerRuntimeConstructed = true
@@ -340,8 +369,17 @@ func configureWorkerDependenciesWithSources(
 
 func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error) {
 	result := workerFamily{
-		handlers: append([]jobruntime.HandlerSpec(nil), existing.handlers...),
-		queues:   append([]jobruntime.QueueBudget(nil), existing.queues...),
+		handlers:      append([]jobruntime.HandlerSpec(nil), existing.handlers...),
+		queues:        append([]jobruntime.QueueBudget(nil), existing.queues...),
+		metricsSource: existing.metricsSource,
+	}
+	if additional.metricsSource != nil {
+		if result.metricsSource != nil {
+			// Two families both claiming an additional metrics fragment would
+			// silently drop one of them at registration; fail closed instead.
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
+		result.metricsSource = additional.metricsSource
 	}
 	seen := make(map[string]struct{}, len(result.handlers)+len(additional.handlers))
 	for _, handler := range result.handlers {
@@ -582,7 +620,10 @@ func buildWorkerMetrics(
 ) (*jobruntime.MetricsCollector, error) {
 	dimensions := jobruntime.MetricDimensions{Profiles: []string{cfg.Profile}}
 	if runtimeRegistry != nil && runtimeRegistry.HasProfile(cfg.Profile) {
-		derived, err := jobruntime.DimensionsForProfile(runtimeRegistry, cfg.Profile, nil, nil)
+		derived, err := jobruntime.DimensionsForProfile(
+			runtimeRegistry, cfg.Profile, nil,
+			budgetDimensionsForProfile(cfg.Profile), syncLeaseDimensionsForProfile(cfg.Profile),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -601,6 +642,51 @@ func buildWorkerMetrics(
 		return nil, err
 	}
 	return collector, nil
+}
+
+// syncLeaseDimensionsForProfile registers the frozen provider/dataset matrix
+// (providersync.MatrixProviders + Capabilities, TRD §10.1) as the bounded
+// worker_sync_lease_expired_total dimension set. Only the "sync" profile
+// constructs the provider-unit handler that can ever observe a recovered
+// claim, so other profiles keep an empty, harmless set. The matrix is static
+// deployment configuration, not runtime or tenant data, so this stays well
+// under maxMetricSyncLeases regardless of which providers are feature-flag
+// enabled today.
+func syncLeaseDimensionsForProfile(profile string) []jobruntime.SyncLeaseLabels {
+	if profile != "sync" {
+		return nil
+	}
+	var labels []jobruntime.SyncLeaseLabels
+	for _, provider := range providersync.MatrixProviders() {
+		for _, capability := range providersync.Capabilities(provider) {
+			labels = append(labels, jobruntime.SyncLeaseLabels{
+				Provider: capability.Provider, DatasetFamily: capability.Dataset,
+			})
+		}
+	}
+	return labels
+}
+
+// budgetDimensionsForProfile registers the same frozen provider matrix, paired
+// with providersync's three static cost classes, as the bounded
+// worker_budget_wait_seconds dimension set. Only "sync" builds a provider-unit
+// executor that ever acquires a provider cost budget.
+func budgetDimensionsForProfile(profile string) []jobruntime.BudgetLabels {
+	if profile != "sync" {
+		return nil
+	}
+	costClasses := []providersync.CostClass{
+		providersync.CostLight, providersync.CostMedium, providersync.CostHeavy,
+	}
+	var labels []jobruntime.BudgetLabels
+	for _, provider := range providersync.MatrixProviders() {
+		for _, costClass := range costClasses {
+			labels = append(labels, jobruntime.BudgetLabels{
+				Provider: provider, CostClass: string(costClass),
+			})
+		}
+	}
+	return labels
 }
 
 func riverProcessForProfile(manifest deploymentcontract.Manifest, profile string) (deploymentcontract.Process, bool) {

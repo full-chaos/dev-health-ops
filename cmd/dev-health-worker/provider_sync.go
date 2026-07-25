@@ -67,6 +67,40 @@ func (component *providerSyncWorkerComponent) Shutdown(ctx context.Context) erro
 	return result
 }
 
+// budgetWaitObserver bridges providerfoundation's credential-free
+// BudgetWaitObserver to the process's shared MetricsCollector. It is a value
+// type specifically so a nil collector never becomes a non-nil, panicking
+// interface value: ObserveProviderBudgetWait is a no-op until a real
+// collector is attached.
+type budgetWaitObserver struct {
+	collector *jobruntime.MetricsCollector
+}
+
+func (o budgetWaitObserver) ObserveProviderBudgetWait(provider, costClass string, wait time.Duration) error {
+	if o.collector == nil {
+		return nil
+	}
+	return o.collector.ObserveProviderBudgetWait(jobruntime.BudgetLabels{Provider: provider, CostClass: costClass}, wait)
+}
+
+var _ providerfoundation.BudgetWaitObserver = budgetWaitObserver{}
+
+// leaseRecoveryObserver bridges providerunit's expired-lease recovery
+// signal to the shared MetricsCollector, for the same nil-safety reason as
+// budgetWaitObserver above.
+type leaseRecoveryObserver struct {
+	collector *jobruntime.MetricsCollector
+}
+
+func (o leaseRecoveryObserver) ObserveSyncLeaseExpired(labels jobruntime.SyncLeaseLabels, result jobruntime.SyncLeaseResult) error {
+	if o.collector == nil {
+		return nil
+	}
+	return o.collector.ObserveSyncLeaseExpired(labels, result)
+}
+
+var _ jobruntime.SyncLeaseObserver = leaseRecoveryObserver{}
+
 func buildProviderSyncWorker(
 	ctx context.Context,
 	cfg config.Config,
@@ -123,11 +157,28 @@ func buildProviderSyncWorker(
 	switches := providersync.CompleteRouteSwitches{
 		LaunchDarklyFeatureFlags: true,
 	}
+	// The observer passed in is always the process's one *jobruntime.MetricsCollector
+	// in production; the assertion fails closed to a nil collector (both bridge
+	// types below are then safe no-ops) for any other Observer implementation,
+	// such as a test double.
+	collector, _ := observer.(*jobruntime.MetricsCollector)
+	// providerMetrics is constructed exactly once per worker process and
+	// referenced by every claim's executor, so dev_health_provider_* actually
+	// accumulates across dispatches instead of being built and discarded per
+	// unit. It is registered with the health.Registry via workerFamily.metricsSource
+	// below, which is what makes it a live, scraped series rather than a
+	// constructed-but-never-registered family.
+	providerMetrics := providerfoundation.NewMetrics()
 	handler := &providerunit.Handler{
 		Repository:    repository,
 		Switches:      switches,
 		LeaseDuration: providerUnitLeaseDuration,
 		Heartbeat:     providerUnitHeartbeat,
+		// LeaseMetrics observes worker_sync_lease_expired_total. Only claims
+		// this handler itself resolved after Repository.Claim reported
+		// claim.Recovered (an expired lease was recovered into this attempt)
+		// are ever observed; see observeLeaseRecovery below.
+		LeaseMetrics: leaseRecoveryObserver{collector: collector},
 		// A route fault means the Python producer gate routed a scope the Go
 		// capability system does not serve. The unit is never terminalized
 		// (TRD non-negotiable #3), so this log is the operator's only signal
@@ -167,7 +218,8 @@ func buildProviderSyncWorker(
 				Doer:  &http.Client{Timeout: 45 * time.Second},
 				Retry: providerfoundation.DefaultRetryPolicy(),
 				Budget: providerfoundation.ValkeyBudgetStore{
-					Client: valkeyClient,
+					Client:   valkeyClient,
+					Observer: budgetWaitObserver{collector: collector},
 				},
 				BudgetLimits: map[providersync.CostClass]int{
 					providersync.CostLight:  4,
@@ -186,9 +238,11 @@ func buildProviderSyncWorker(
 						Client: valkeyClient, Provider: claim.Provider,
 						OrgID: claim.OrgID, Host: client.BaseURL.Hostname(),
 						MaxBackoff: 5 * time.Minute,
+						CostClass:  string(claim.CostClass),
+						Observer:   budgetWaitObserver{collector: collector},
 					}
 				},
-				Metrics: providerfoundation.NewMetrics(),
+				Metrics: providerMetrics,
 				Handler: providersync.LaunchDarklyRouteHandler{
 					CodeReferences: providersync.LaunchDarklyClickHouseReferences{
 						Conn: clickhouseConnection, Lease: session,
@@ -237,6 +291,7 @@ func buildProviderSyncWorker(
 		queues: []jobruntime.QueueBudget{
 			{Queue: providerUnitQueue, MaxWorkers: providerUnitQueueWorkers},
 		},
+		metricsSource: providerMetrics,
 	}, nil
 }
 

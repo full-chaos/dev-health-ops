@@ -226,6 +226,15 @@ func (adapter *Adapter[T]) Work(parent context.Context, job *river.Job[T]) error
 		Queue:   adapter.descriptor.Queue,
 		Kind:    adapter.descriptor.Kind,
 	}
+	// ScheduledAt is River's own "available to be worked" timestamp, so the gap
+	// to this Work() entry is exactly the availability-to-execution-start wait
+	// the TRD requires. A missing or clock-skewed ScheduledAt yields a negative
+	// gap, which is dropped rather than observed.
+	if job != nil && job.JobRow != nil && !job.JobRow.ScheduledAt.IsZero() {
+		if wait := started.Sub(job.JobRow.ScheduledAt); wait >= 0 {
+			observe(func() { adapter.observer.JobWait(parent, labels, wait) })
+		}
+	}
 	observe(func() { adapter.observer.JobStarted(parent, labels) })
 	choice := decision{result: ResultCancel, category: CategoryValidation, cancel: true}
 	var envelope jobcontract.Envelope

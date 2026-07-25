@@ -16,6 +16,7 @@ import (
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -65,6 +66,173 @@ func (component *providerSyncWorkerComponent) Shutdown(ctx context.Context) erro
 		}
 	}
 	return result
+}
+
+// budgetWaitObserver bridges providerfoundation's credential-free
+// BudgetWaitObserver to the process's shared MetricsCollector. It is a value
+// type specifically so a nil collector never becomes a non-nil, panicking
+// interface value: ObserveProviderBudgetWait is a no-op until a real
+// collector is attached.
+type budgetWaitObserver struct {
+	collector *jobruntime.MetricsCollector
+}
+
+func (o budgetWaitObserver) ObserveProviderBudgetWait(provider, costClass string, wait time.Duration) error {
+	if o.collector == nil {
+		return nil
+	}
+	return o.collector.ObserveProviderBudgetWait(jobruntime.BudgetLabels{Provider: provider, CostClass: costClass}, wait)
+}
+
+var _ providerfoundation.BudgetWaitObserver = budgetWaitObserver{}
+
+// leaseRecoveryObserver bridges providerunit's expired-lease recovery
+// signal to the shared MetricsCollector, for the same nil-safety reason as
+// budgetWaitObserver above.
+type leaseRecoveryObserver struct {
+	collector *jobruntime.MetricsCollector
+}
+
+func (o leaseRecoveryObserver) ObserveSyncLeaseExpired(labels jobruntime.SyncLeaseLabels, result jobruntime.SyncLeaseResult) error {
+	if o.collector == nil {
+		return nil
+	}
+	return o.collector.ObserveSyncLeaseExpired(labels, result)
+}
+
+var _ jobruntime.SyncLeaseObserver = leaseRecoveryObserver{}
+
+// providerSyncRepository is the exact capability buildProviderSyncHandler
+// needs from its repository: everything providerunit.Handler requires (the
+// lease/claim lifecycle) plus the effect ledger EffectCommitter requires.
+// *providersync.PostgresRepository implements both in production.
+type providerSyncRepository interface {
+	providerunit.UnitRepository
+	providersync.EffectLedger
+}
+
+// buildProviderSyncHandler constructs the provider-unit handler and the one
+// providerfoundation.Metrics instance its executor is wired to reference.
+//
+// It performs no I/O of its own — every connection/client/pool parameter is
+// only stored as a closure capture here, never dialed or dereferenced — and
+// is extracted from buildProviderSyncWorker specifically so a test can pin
+// the identity between the Metrics instance BuildExecutor hands each claim's
+// executor and the instance the caller registers as workerFamily.metricsSource,
+// without needing a live ClickHouse/Valkey/Postgres connection. See
+// provider_sync_test.go's TestBuildProviderSyncHandlerSharesOneMetricsInstance:
+// this is a mutation-tested seam (CHAOS-3118) — reintroducing a second
+// providerfoundation.NewMetrics() call inside BuildExecutor, the exact defect
+// this ticket exists to eliminate, must fail that test.
+func buildProviderSyncHandler(
+	repository providerSyncRepository,
+	decryptor providerfoundation.CredentialDecryptor,
+	clickhouseConnection driver.Conn,
+	valkeyClient valkeygo.Client,
+	domainPool *pgxpool.Pool,
+	collector *jobruntime.MetricsCollector,
+	logger *slog.Logger,
+) (*providerunit.Handler, *providerfoundation.Metrics) {
+	// providerMetrics is constructed exactly once per worker process and
+	// referenced by every claim's executor, so dev_health_provider_* actually
+	// accumulates across dispatches instead of being built and discarded per
+	// unit. The caller registers this same pointer with the health.Registry
+	// via workerFamily.metricsSource, which is what makes it a live, scraped
+	// series rather than a constructed-but-never-registered family.
+	providerMetrics := providerfoundation.NewMetrics()
+	handler := &providerunit.Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: providerUnitLeaseDuration,
+		Heartbeat:     providerUnitHeartbeat,
+		// LeaseMetrics observes worker_sync_lease_expired_total. Only claims
+		// this handler itself resolved after Repository.Claim reported
+		// claim.Recovered (an expired lease was recovered into this attempt)
+		// are ever observed; see providerunit.Handler.observeLeaseRecovery.
+		LeaseMetrics: leaseRecoveryObserver{collector: collector},
+		// A route fault means the Python producer gate routed a scope the Go
+		// capability system does not serve. The unit is never terminalized
+		// (TRD non-negotiable #3), so this log is the operator's only signal
+		// that a producer gate needs reconciliation. Fields are bounded: no
+		// credentials, URLs, or provider payloads.
+		OnRouteFault: func(fault providerunit.RouteFault) {
+			logger.Error(
+				"provider unit route reconciliation required",
+				"provider", fault.Provider,
+				"dataset", fault.Dataset,
+				"descriptor_present", fault.DescriptorPresent,
+				"route_ready", fault.RouteReady,
+				"route_enabled", fault.RouteEnabled,
+				"attempt", fault.Attempt,
+				"max_attempts", fault.MaxAttempts,
+				"released_for_retry", fault.Released,
+				"terminal_reconciliation_required", fault.Terminal,
+			)
+		},
+		BuildExecutor: func(
+			session *providersync.LeaseSession,
+		) (providersync.CompleteRouteExecutor, error) {
+			if session == nil {
+				return providersync.CompleteRouteExecutor{},
+					errWorkerDependencyUnavailable
+			}
+			sink := providersync.LaunchDarklyClickHouseEffects{
+				Conn: clickhouseConnection, Lease: session,
+			}
+			return providersync.CompleteRouteExecutor{
+				Credentials: providerfoundation.CredentialResolver{
+					Repository: providerfoundation.PostgresCredentialRepository{
+						Pool: domainPool,
+					},
+					Decryptor: decryptor,
+				},
+				Doer:  &http.Client{Timeout: 45 * time.Second},
+				Retry: providerfoundation.DefaultRetryPolicy(),
+				Budget: providerfoundation.ValkeyBudgetStore{
+					Client:   valkeyClient,
+					Observer: budgetWaitObserver{collector: collector},
+				},
+				BudgetLimits: map[providersync.CostClass]int{
+					providersync.CostLight:  4,
+					providersync.CostMedium: 2,
+					providersync.CostHeavy:  1,
+				},
+				BudgetTTL: providerUnitBudgetTTL,
+				Gate: func(
+					claim providersync.Claim,
+					client *providerfoundation.HTTPClient,
+				) providerfoundation.BackoffGate {
+					if client == nil || client.BaseURL == nil {
+						return nil
+					}
+					return providerfoundation.ValkeyBackoffGate{
+						Client: valkeyClient, Provider: claim.Provider,
+						OrgID: claim.OrgID, Host: client.BaseURL.Hostname(),
+						MaxBackoff: 5 * time.Minute,
+						CostClass:  string(claim.CostClass),
+						Observer:   budgetWaitObserver{collector: collector},
+					}
+				},
+				// This is the exact seam the mutation test targets: Metrics
+				// must stay the shared providerMetrics closed over above, not
+				// a fresh providerfoundation.NewMetrics() built per call.
+				Metrics: providerMetrics,
+				Handler: providersync.LaunchDarklyRouteHandler{
+					CodeReferences: providersync.LaunchDarklyClickHouseReferences{
+						Conn: clickhouseConnection, Lease: session,
+					},
+				},
+				Comparator: providersync.ProductionContractComparator{},
+				Committer: providersync.EffectCommitter{
+					Ledger: repository, Sink: sink, Readback: sink,
+				},
+				HeartbeatInterval: providerUnitHeartbeat,
+			}, nil
+		},
+	}
+	return handler, providerMetrics
 }
 
 func buildProviderSyncWorker(
@@ -123,88 +291,15 @@ func buildProviderSyncWorker(
 		valkeyClient.Close()
 		_ = clickhouseConnection.Close()
 	}
-	switches := providersync.CompleteRouteSwitches{
-		LaunchDarklyFeatureFlags: true,
-	}
-	handler := &providerunit.Handler{
-		Repository:    repository,
-		Switches:      switches,
-		LeaseDuration: providerUnitLeaseDuration,
-		Heartbeat:     providerUnitHeartbeat,
-		// A route fault means the Python producer gate routed a scope the Go
-		// capability system does not serve. The unit is never terminalized
-		// (TRD non-negotiable #3), so this log is the operator's only signal
-		// that a producer gate needs reconciliation. Fields are bounded: no
-		// credentials, URLs, or provider payloads.
-		OnRouteFault: func(fault providerunit.RouteFault) {
-			logger.Error(
-				"provider unit route reconciliation required",
-				"provider", fault.Provider,
-				"dataset", fault.Dataset,
-				"descriptor_present", fault.DescriptorPresent,
-				"route_ready", fault.RouteReady,
-				"route_enabled", fault.RouteEnabled,
-				"attempt", fault.Attempt,
-				"max_attempts", fault.MaxAttempts,
-				"released_for_retry", fault.Released,
-				"terminal_reconciliation_required", fault.Terminal,
-			)
-		},
-		BuildExecutor: func(
-			session *providersync.LeaseSession,
-		) (providersync.CompleteRouteExecutor, error) {
-			if session == nil {
-				return providersync.CompleteRouteExecutor{},
-					errWorkerDependencyUnavailable
-			}
-			sink := providersync.LaunchDarklyClickHouseEffects{
-				Conn: clickhouseConnection, Lease: session,
-			}
-			return providersync.CompleteRouteExecutor{
-				Credentials: providerfoundation.CredentialResolver{
-					Repository: providerfoundation.PostgresCredentialRepository{
-						Pool: postgresDatabase.pools.Domain,
-					},
-					Decryptor: decryptor,
-				},
-				Doer:  &http.Client{Timeout: 45 * time.Second},
-				Retry: providerfoundation.DefaultRetryPolicy(),
-				Budget: providerfoundation.ValkeyBudgetStore{
-					Client: valkeyClient,
-				},
-				BudgetLimits: map[providersync.CostClass]int{
-					providersync.CostLight:  4,
-					providersync.CostMedium: 2,
-					providersync.CostHeavy:  1,
-				},
-				BudgetTTL: providerUnitBudgetTTL,
-				Gate: func(
-					claim providersync.Claim,
-					client *providerfoundation.HTTPClient,
-				) providerfoundation.BackoffGate {
-					if client == nil || client.BaseURL == nil {
-						return nil
-					}
-					return providerfoundation.ValkeyBackoffGate{
-						Client: valkeyClient, Provider: claim.Provider,
-						OrgID: claim.OrgID, Host: client.BaseURL.Hostname(),
-						MaxBackoff: 5 * time.Minute,
-					}
-				},
-				Metrics: providerfoundation.NewMetrics(),
-				Handler: providersync.LaunchDarklyRouteHandler{
-					CodeReferences: providersync.LaunchDarklyClickHouseReferences{
-						Conn: clickhouseConnection, Lease: session,
-					},
-				},
-				Comparator: providersync.ProductionContractComparator{},
-				Committer: providersync.EffectCommitter{
-					Ledger: repository, Sink: sink, Readback: sink,
-				},
-				HeartbeatInterval: providerUnitHeartbeat,
-			}, nil
-		},
-	}
+	// The observer passed in is always the process's one *jobruntime.MetricsCollector
+	// in production; the assertion fails closed to a nil collector (both bridge
+	// types below are then safe no-ops) for any other Observer implementation,
+	// such as a test double.
+	collector, _ := observer.(*jobruntime.MetricsCollector)
+	handler, providerMetrics := buildProviderSyncHandler(
+		repository, decryptor, clickhouseConnection, valkeyClient,
+		postgresDatabase.pools.Domain, collector, logger,
+	)
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](
 		registry, spec, handler, jobruntime.Dependencies{
 			Logger: logger, Observer: observer,
@@ -240,6 +335,7 @@ func buildProviderSyncWorker(
 		queues: []jobruntime.QueueBudget{
 			{Queue: providerUnitQueue, MaxWorkers: providerUnitQueueWorkers},
 		},
+		metricsSource: providerMetrics,
 	}, nil
 }
 

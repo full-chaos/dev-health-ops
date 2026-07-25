@@ -99,6 +99,13 @@ type Handler struct {
 	// binary can alert on them. A nil hook keeps the fail-safe behavior; it
 	// never converts the fault into success.
 	OnRouteFault func(RouteFault)
+	// LeaseMetrics observes worker_sync_lease_expired_total. It is called only
+	// for a claim whose Repository.Claim reported Recovered — i.e. this
+	// attempt itself is River's recovery of a unit whose previous owner's
+	// lease had expired — at the point this handler durably resolves that
+	// attempt to retrying (ReleaseForRetry) or failed (Fail). A nil value
+	// keeps behavior unchanged.
+	LeaseMetrics jobruntime.SyncLeaseObserver
 }
 
 func (handler *Handler) observeRouteFault(fault RouteFault) {
@@ -106,6 +113,20 @@ func (handler *Handler) observeRouteFault(fault RouteFault) {
 		return
 	}
 	handler.OnRouteFault(fault)
+}
+
+// observeLeaseRecovery records the durable resolution of a claim that itself
+// recovered an expired lease. It is a no-op for an ordinary (non-recovered)
+// claim, since ObserveSyncLeaseExpired's contract is specifically about
+// expired-lease recovery, not every retry or failure.
+func (handler *Handler) observeLeaseRecovery(claim providersync.Claim, result jobruntime.SyncLeaseResult) {
+	if handler == nil || handler.LeaseMetrics == nil || !claim.Recovered {
+		return
+	}
+	_ = handler.LeaseMetrics.ObserveSyncLeaseExpired(
+		jobruntime.SyncLeaseLabels{Provider: claim.Provider, DatasetFamily: claim.Dataset},
+		result,
+	)
 }
 
 func (handler *Handler) now() time.Time {
@@ -175,6 +196,7 @@ func (handler *Handler) Work(
 			); failErr != nil {
 				return jobruntime.Retryable(failErr)
 			}
+			handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
 			return jobruntime.Retryable(ErrRouteReconciliationRequired)
 		}
 		releaseErr := handler.Repository.ReleaseForRetry(
@@ -185,6 +207,7 @@ func (handler *Handler) Work(
 		if releaseErr != nil {
 			return jobruntime.Retryable(releaseErr)
 		}
+		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
 		return jobruntime.Retryable(ErrRouteReconciliationRequired)
 	}
 	session := &providersync.LeaseSession{
@@ -228,13 +251,21 @@ func (handler *Handler) Work(
 		); failErr != nil {
 			return jobruntime.Retryable(failErr)
 		}
+		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		return jobruntime.Permanent(err)
 	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
-		_ = handler.Repository.Fail(
+		// The collector's contract forbids recording a failed CAS attempt, so
+		// this capture (where the prior code discarded the error entirely)
+		// only adds the ability to gate the metric on true success; it does
+		// not change the existing best-effort, always-retryable behavior.
+		failErr := handler.Repository.Fail(
 			context.WithoutCancel(ctx), session.Claim, "provider_unit_exhausted",
 			startedAt, completedAt,
 		)
+		if failErr == nil {
+			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
+		}
 		return jobruntime.Retryable(err)
 	}
 	if releaseErr := handler.Repository.ReleaseForRetry(
@@ -242,6 +273,7 @@ func (handler *Handler) Work(
 	); releaseErr != nil {
 		return jobruntime.Retryable(releaseErr)
 	}
+	handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 	return jobruntime.Retryable(err)
 }
 

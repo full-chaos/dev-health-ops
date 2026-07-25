@@ -82,10 +82,29 @@ type BudgetStore interface {
 	Acquire(context.Context, BudgetKey) (Reservation, error)
 }
 
+// BudgetWaitObserver records real-execution latency on the provider
+// cost-budget acquire and backoff-gate wait paths as worker_budget_wait_seconds.
+// provider and costClass are exactly the bounded, credential-free pair
+// BudgetKey.Validate already enforces (never an org, host, or credential). A
+// nil Observer on ValkeyBudgetStore/ValkeyBackoffGate keeps both types working
+// with no metrics, matching every other optional dependency in this package.
+type BudgetWaitObserver interface {
+	ObserveProviderBudgetWait(provider, costClass string, wait time.Duration) error
+}
+
 // ValkeyBudgetStore uses a single Lua admission/release protocol, so Go
 // workers share a provider/org/host/cost limit across processes. The key
 // vocabulary is deliberately stable and has no credentials or request data.
-type ValkeyBudgetStore struct{ Client valkeygo.Client }
+type ValkeyBudgetStore struct {
+	Client valkeygo.Client
+	// Observer records how long Acquire spent asking the shared Valkey store
+	// for a reservation — round-trip and lock-contention latency, not a
+	// client-side backoff sleep (this store never sleeps; a denial is
+	// returned immediately as ErrBudgetUnavailable). It is observed on both
+	// the granted and the denied path, since both represent real time this
+	// call spent waiting on the budget subsystem.
+	Observer BudgetWaitObserver
+}
 
 const budgetAcquireLua = `local current=redis.call('GET',KEYS[1]); if not current then current=0 else current=tonumber(current) end; if current>=tonumber(ARGV[1]) then return 0 end; redis.call('INCR',KEYS[1]); redis.call('PEXPIRE',KEYS[1],ARGV[2]); return 1`
 const budgetReleaseLua = `local current=redis.call('GET',KEYS[1]); if not current then return 0 end; current=tonumber(current); if current<=1 then redis.call('DEL',KEYS[1]); return 0 end; redis.call('DECR',KEYS[1]); return current-1`
@@ -94,8 +113,10 @@ func (s ValkeyBudgetStore) Acquire(ctx context.Context, key BudgetKey) (Reservat
 	if s.Client == nil || key.Validate() != nil {
 		return nil, ErrBudgetUnavailable
 	}
+	started := time.Now()
 	response := valkeygo.NewLuaScriptNoSha(budgetAcquireLua).Exec(ctx, s.Client, []string{key.String()}, []string{strconv.Itoa(key.Limit), strconv.FormatInt(key.TTL.Milliseconds(), 10)})
 	allowed, err := response.AsInt64()
+	s.observeWait(key, started)
 	if err != nil {
 		return nil, ErrBudgetUnavailable
 	}
@@ -103,6 +124,13 @@ func (s ValkeyBudgetStore) Acquire(ctx context.Context, key BudgetKey) (Reservat
 		return nil, ErrBudgetUnavailable
 	}
 	return &valkeyReservation{client: s.Client, key: key.String()}, nil
+}
+
+func (s ValkeyBudgetStore) observeWait(key BudgetKey, started time.Time) {
+	if s.Observer == nil {
+		return
+	}
+	_ = s.Observer.ObserveProviderBudgetWait(key.Provider, key.CostClass, time.Since(started))
 }
 
 type valkeyReservation struct {
@@ -133,6 +161,16 @@ type ValkeyBackoffGate struct {
 	Provider, OrgID, Host string
 	MaxBackoff            time.Duration
 	Now                   func() time.Time
+	// CostClass is the same bounded class this gate's calling client is
+	// budgeted under. It exists solely to label worker_budget_wait_seconds:
+	// the gate's own Valkey key never includes it (see key(), which is
+	// intentionally identical to the Python rate_limit:<provider>:<org or
+	// _>:<host or _> contract).
+	CostClass string
+	// Observer records the real backoff duration this Wait call computed and
+	// returned to its caller — the actual time the caller now knows it must
+	// not send another request, not a call-latency measurement.
+	Observer BudgetWaitObserver
 }
 
 const backoffPenalizeLua = `local old=tonumber(redis.call('GET',KEYS[1]) or '0'); local proposed=tonumber(ARGV[1]); local applied=math.max(old,proposed); redis.call('SET',KEYS[1],applied,'EX',ARGV[2]); return applied`
@@ -152,6 +190,7 @@ func (g ValkeyBackoffGate) Wait(ctx context.Context) (time.Duration, error) {
 	}
 	raw, err := g.Client.Do(ctx, g.Client.B().Get().Key(g.key()).Build()).AsFloat64()
 	if valkeygo.IsValkeyNil(err) {
+		g.observeWait(0)
 		return 0, nil
 	}
 	if err != nil {
@@ -159,9 +198,17 @@ func (g ValkeyBackoffGate) Wait(ctx context.Context) (time.Duration, error) {
 	}
 	wait := time.Duration((raw - float64(g.now().UnixMilli())/1000) * float64(time.Second))
 	if wait < 0 {
-		return 0, nil
+		wait = 0
 	}
+	g.observeWait(wait)
 	return wait, nil
+}
+
+func (g ValkeyBackoffGate) observeWait(wait time.Duration) {
+	if g.Observer == nil {
+		return
+	}
+	_ = g.Observer.ObserveProviderBudgetWait(g.Provider, g.CostClass, wait)
 }
 func (g ValkeyBackoffGate) Penalize(ctx context.Context, delay time.Duration) error {
 	if g.Client == nil {
@@ -236,6 +283,11 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_provider_requests_total Provider HTTP requests by bounded provider and error class.\n"+
+			"# TYPE dev_health_provider_requests_total counter\n"); err != nil {
+		return err
+	}
 	requestKeys := make([]string, 0, len(m.requests))
 	for key := range m.requests {
 		requestKeys = append(requestKeys, key)
@@ -248,6 +300,11 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 			return err
 		}
 	}
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_provider_budget_denied_total Provider cost-budget denials by bounded provider.\n"+
+			"# TYPE dev_health_provider_budget_denied_total counter\n"); err != nil {
+		return err
+	}
 	providers := make([]string, 0, len(m.budgetDenied))
 	for provider := range m.budgetDenied {
 		providers = append(providers, provider)
@@ -258,6 +315,11 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		if _, err := fmt.Fprintf(writer, "dev_health_provider_budget_denied_total{provider=%q} %d\n", provider, value); err != nil {
 			return err
 		}
+	}
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_provider_budget_release_errors_total Provider cost-budget reservation release failures by bounded provider.\n"+
+			"# TYPE dev_health_provider_budget_release_errors_total counter\n"); err != nil {
+		return err
 	}
 	providers = providers[:0]
 	for provider := range m.budgetReleaseErrors {

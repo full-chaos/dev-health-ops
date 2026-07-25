@@ -167,6 +167,7 @@ type MetricsCollector struct {
 }
 
 var _ Observer = (*MetricsCollector)(nil)
+var _ SyncLeaseObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -298,9 +299,10 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 }
 
 // DimensionsForProfile derives job and domain dimensions from the validated
-// runtime registry. Sync-lease pairs are appended from static deployment
-// configuration; stream and budget pairs remain explicit inputs here.
-func DimensionsForProfile(registry *Registry, profile string, streams []StreamLabels, budgets []BudgetLabels) (MetricDimensions, error) {
+// runtime registry. Sync-lease, stream, and budget pairs remain explicit
+// inputs here since they come from static deployment configuration rather
+// than the job registry.
+func DimensionsForProfile(registry *Registry, profile string, streams []StreamLabels, budgets []BudgetLabels, syncLeases []SyncLeaseLabels) (MetricDimensions, error) {
 	if registry == nil {
 		return MetricDimensions{}, errors.New("runtime registry is required")
 	}
@@ -308,7 +310,12 @@ func DimensionsForProfile(registry *Registry, profile string, streams []StreamLa
 	if len(descriptors) == 0 {
 		return MetricDimensions{}, errors.New("runtime profile has no registered jobs")
 	}
-	dimensions := MetricDimensions{Profiles: []string{profile}, Streams: append([]StreamLabels(nil), streams...), Budgets: append([]BudgetLabels(nil), budgets...)}
+	dimensions := MetricDimensions{
+		Profiles:   []string{profile},
+		Streams:    append([]StreamLabels(nil), streams...),
+		Budgets:    append([]BudgetLabels(nil), budgets...),
+		SyncLeases: append([]SyncLeaseLabels(nil), syncLeases...),
+	}
 	domains := make(map[string]struct{})
 	for _, descriptor := range descriptors {
 		dimensions.Jobs = append(dimensions.Jobs, JobLabels{
@@ -440,6 +447,13 @@ func (collector *MetricsCollector) ObserveJobWait(labels JobLabels, wait time.Du
 	}
 	metric.observe(wait.Seconds())
 	return nil
+}
+
+// JobWait satisfies Observer. It is the generic middleware entry point the
+// adapter calls on every execution; negative or unregistered observations are
+// dropped rather than surfaced, exactly like the other Observer methods.
+func (collector *MetricsCollector) JobWait(_ context.Context, labels JobLabels, wait time.Duration) {
+	_ = collector.ObserveJobWait(labels, wait)
 }
 
 // ObserveSyncLeaseExpired records an expired-lease recovery that successfully

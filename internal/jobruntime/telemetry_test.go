@@ -362,7 +362,7 @@ func TestDimensionsForProfileUsesRegistryPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dimensions, err := DimensionsForProfile(registry, "ops", nil, nil)
+	dimensions, err := DimensionsForProfile(registry, "ops", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

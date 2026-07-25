@@ -172,6 +172,59 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 	}
 }
 
+// TestAdapterObservesJobWaitFromRiverScheduledAt is CHAOS-3118 evidence for
+// worker_job_wait_seconds: it drives the real Adapter.Work() path (not a
+// setter call) with a real *MetricsCollector as the Observer, then reads the
+// collector's own Prometheus exposition to prove a non-zero series exists at
+// the exact bucket a ~750ms wait belongs in.
+func TestAdapterObservesJobWaitFromRiverScheduledAt(t *testing.T) {
+	t.Parallel()
+	registry, err := newRegistry(testContractRegistry(), testMigrationState())
+	if err != nil {
+		t.Fatalf("newRegistry: %v", err)
+	}
+	spec, ok := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	if !ok {
+		t.Fatal("missing retention descriptor")
+	}
+	collector, err := NewMetricsCollector(MetricDimensions{
+		Profiles: []string{spec.Profile},
+		Jobs:     []JobLabels{{Profile: spec.Profile, Queue: spec.Queue, Kind: spec.Kind}},
+	})
+	if err != nil {
+		t.Fatalf("NewMetricsCollector: %v", err)
+	}
+
+	var logs bytes.Buffer
+	claim := &recordingClaim{state: ClaimProceed}
+	lease := &recordingLease{}
+	handler := HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		return nil
+	})
+	adapter := newRetentionAdapter(t, handler, collector, claim, lease, &logs)
+
+	job := retentionJob(t, 1)
+	job.JobRow.ScheduledAt = time.Now().Add(-750 * time.Millisecond)
+
+	if err := adapter.Work(context.Background(), job); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	text := collector.PrometheusText()
+	labels := `profile="` + spec.Profile + `",queue="` + spec.Queue + `",kind="` + spec.Kind + `"`
+	if !strings.Contains(text, "worker_job_wait_seconds_count{"+labels+"} 1") {
+		t.Fatalf("expected a non-zero worker_job_wait_seconds series, got:\n%s", text)
+	}
+	// A near-zero rounding artifact would land under le="0.5"; the real
+	// ~750ms wait must not.
+	if strings.Contains(text, `worker_job_wait_seconds_bucket{`+labels+`,le="0.5"} 1`) {
+		t.Fatalf("wait was bucketed under 0.5s, want at least 0.5s:\n%s", text)
+	}
+	if !strings.Contains(text, `worker_job_wait_seconds_bucket{`+labels+`,le="1"} 1`) {
+		t.Fatalf("wait was not bucketed at 1s as expected:\n%s", text)
+	}
+}
+
 func TestAdapterRejectsRawContractAndExecutionPolicyDrift(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -358,6 +411,7 @@ type recordingObserver struct {
 	panicked       bool
 	domainMismatch bool
 	cancelled      bool
+	jobWaits       []time.Duration
 }
 
 func (*recordingObserver) RuntimeRegistered(context.Context, RuntimeInfo) {}
@@ -373,3 +427,6 @@ func (observer *recordingObserver) DomainMismatch(context.Context, string) {
 	observer.domainMismatch = true
 }
 func (*recordingObserver) BudgetWait(context.Context, JobLabels, time.Duration, string) {}
+func (observer *recordingObserver) JobWait(_ context.Context, _ JobLabels, wait time.Duration) {
+	observer.jobWaits = append(observer.jobWaits, wait)
+}

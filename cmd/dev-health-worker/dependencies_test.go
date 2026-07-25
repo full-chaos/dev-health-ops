@@ -749,6 +749,7 @@ type fakeWorkerDatabase struct {
 	telemetryErr     error
 	telemetryConfig  riverstore.QueueTelemetryConfig
 	closed           atomic.Bool
+	acquireObserver  postgres.PoolAcquireObserver
 }
 
 type namedComponent string
@@ -904,6 +905,10 @@ func (database *fakeWorkerDatabase) NewQueueTelemetrySampler(
 		snapshot.Queues = append(snapshot.Queues, riverstore.QueueAgeTelemetry{Queue: queue.Name})
 	}
 	return &fakeQueueTelemetry{snapshot: snapshot}, nil
+}
+
+func (database *fakeWorkerDatabase) AttachPoolAcquireObserver(observer postgres.PoolAcquireObserver) {
+	database.acquireObserver = observer
 }
 
 func (database *fakeWorkerDatabase) Close() {

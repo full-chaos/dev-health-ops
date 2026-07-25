@@ -3,10 +3,16 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
 
@@ -66,4 +72,101 @@ func TestPostSyncRemainingScopeRejectsUnownedFamily(t *testing.T) {
 	if _, err := postSyncRemainingScope("recommendations", syncdispatchruntime.PostSyncPlan{}); !errors.Is(err, syncdispatchruntime.ErrPostSyncUnavailable) {
 		t.Fatalf("err=%v", err)
 	}
+}
+
+// TestSyncCoordinatorReportsItsRegisteredKind closes the second registration
+// blind spot: sync.team_autoimport is a bounded registry kind whose worker
+// lives in the coordinator's own private River client. Before CUT-02 that
+// builder returned only a lifecycle component, so the kind was constructed but
+// unobservable to startup validation.
+func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	for _, test := range []struct {
+		name      string
+		promote   []string
+		wantKinds []string
+		wantQueue bool
+	}{
+		{
+			name:      "celery routed kind is not consumed at all",
+			wantKinds: nil,
+		},
+		{
+			name:      "promoted kind is registered and reported",
+			promote:   []string{jobcontract.KindTeamAutoimport},
+			wantKinds: []string{jobcontract.KindTeamAutoimport},
+			wantQueue: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry, _ := promotedContractRoot(t, test.promote...)
+			family, err := buildSyncCoordinatorWorker(
+				config.Config{
+					Profile:                        "sync",
+					RiverDatabaseSchema:            "river",
+					OperationalBridgeURL:           "http://localhost",
+					OperationalBridgeToken:         secrets.NewValue("test-bridge-token"),
+					OperationalBridgeTimeout:       time.Second,
+					OperationalBridgeAllowInsecure: true,
+				},
+				reportBuilderDatabase(t),
+				registry,
+				reportTestObserver(t),
+				slog.Default(),
+			)
+			if err != nil {
+				t.Fatalf("buildSyncCoordinatorWorker: %v", err)
+			}
+			if family.component == nil {
+				t.Fatal("coordinator did not construct its River client")
+			}
+			if len(family.handlers) != len(test.wantKinds) {
+				t.Fatalf("reported handlers = %#v, want %v", family.handlers, test.wantKinds)
+			}
+			for index, kind := range test.wantKinds {
+				if family.handlers[index].Kind != kind {
+					t.Fatalf("reported handler %d = %s, want %s", index, family.handlers[index].Kind, kind)
+				}
+			}
+			// The sync queue enters registry queue coverage exactly when a
+			// registry kind depends on it, never merely because the
+			// coordinator's unregistered kinds also use it.
+			if test.wantQueue {
+				if len(family.queues) != 1 || family.queues[0].Queue != syncCoordinatorQueue ||
+					family.queues[0].MaxWorkers != syncCoordinatorQueueWorkers {
+					t.Fatalf("reported queues = %#v", family.queues)
+				}
+			} else if len(family.queues) != 0 {
+				t.Fatalf("celery-routed kind claimed queue coverage: %#v", family.queues)
+			}
+		})
+	}
+}
+
+// TestSyncCoordinatorQueueBudgetMatchesDeploymentManifest keeps the
+// coordinator's constructed capacity pinned to the reviewed capacity plan.
+func TestSyncCoordinatorQueueBudgetMatchesDeploymentManifest(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	contracts, err := jobcontract.LoadRegistry(defaultContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := deploymentcontract.Load(defaultDeploymentProfile, contracts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, ok := riverProcessForProfile(manifest, "sync")
+	if !ok {
+		t.Fatal("sync process is missing from the deployment manifest")
+	}
+	for _, queue := range process.QueueWorkers {
+		if queue.Queue != syncCoordinatorQueue {
+			continue
+		}
+		if queue.MaxWorkers != syncCoordinatorQueueWorkers {
+			t.Fatalf("sync queue budget = %d, constructed %d", queue.MaxWorkers, syncCoordinatorQueueWorkers)
+		}
+		return
+	}
+	t.Fatal("deployment manifest does not budget the sync queue")
 }

@@ -52,7 +52,7 @@ func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *t
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	want := []string{"domain_postgres", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	status := registry.Readiness(context.Background())
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
@@ -69,7 +69,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	syncCalls := 0
 	shadowBuilds := 0
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			calls++
 			return joboutbox.StepResult{}, nil
@@ -140,7 +140,7 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 	relayCalls := 0
 	mutationBuilds := 0
 	mutationCalls := 0
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			relayCalls++
 			return joboutbox.StepResult{}, nil
@@ -151,6 +151,7 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 		return nil, nil
 	}
 	sources.buildSyncMutation = func(
+		*pgxpool.Pool,
 		*pgxpool.Pool,
 		*pgxpool.Pool,
 		string,
@@ -197,7 +198,7 @@ func TestReconcilerNilLoggerFailsClosedBeforeRecorderConstruction(t *testing.T) 
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeReconcilerDatabase{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			return joboutbox.StepResult{}, nil
 		}), nil
@@ -231,7 +232,7 @@ func TestReconcilerSyncLoopConstructionFailureClosesRecorderBeforeDatabase(t *te
 	database := &fakeReconcilerDatabase{}
 	recorder := &fakeReconcilerRecorder{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			return joboutbox.StepResult{}, nil
 		}), nil
@@ -266,7 +267,7 @@ func TestReconcilerRecorderConstructionFailureClosesReturnedRecorderAndDatabase(
 	database := &fakeReconcilerDatabase{}
 	recorder := &fakeReconcilerRecorder{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			return joboutbox.StepResult{}, nil
 		}), nil
@@ -297,7 +298,7 @@ func TestReconcilerConstructionFailureClosesDatabaseAndFailsReadiness(t *testing
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeReconcilerDatabase{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return nil, errors.New("dial postgresql://queue:do-not-print@database.internal/app")
 	}
 
@@ -321,7 +322,7 @@ func TestReconcilerConstructionFailureClosesDatabaseAndFailsReadiness(t *testing
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
-	want := []string{"domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -352,7 +353,7 @@ func TestReconcilerSyncRegistryLoadFailureClosesDatabaseAndFailsReadiness(t *tes
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -383,7 +384,7 @@ func TestReconcilerSyncShadowBuildFailureClosesDatabaseAndFailsReadiness(t *test
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -394,7 +395,7 @@ func TestReconcilerReadinessRegistrationFailureClosesConstructedDatabase(t *test
 	database := &fakeReconcilerDatabase{}
 	recorder := &fakeReconcilerRecorder{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			return joboutbox.StepResult{}, nil
 		}), nil
@@ -446,7 +447,7 @@ func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeReconcilerDatabase{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			return joboutbox.StepResult{}, nil
 		}), nil
@@ -496,7 +497,7 @@ func TestReconcilerRouteFenceConstructionFailureFailsClosed(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeReconcilerDatabase{}
 	sources := reconcilerSourcesForTest(t, database)
-	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
 			return joboutbox.StepResult{}, nil
 		}), nil
@@ -522,7 +523,7 @@ func TestReconcilerRouteFenceConstructionFailureFailsClosed(t *testing.T) {
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
+	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -602,12 +603,14 @@ func (recorder *fakeReconcilerRecorder) Shutdown(context.Context) error {
 }
 
 type fakeReconcilerDatabase struct {
-	domainErr  error
-	queueErr   error
-	schemaErr  error
-	domainPool *pgxpool.Pool
-	queuePool  *pgxpool.Pool
-	closed     atomic.Bool
+	domainErr       error
+	queueErr        error
+	coordinatorErr  error
+	schemaErr       error
+	domainPool      *pgxpool.Pool
+	queuePool       *pgxpool.Pool
+	coordinatorPool *pgxpool.Pool
+	closed          atomic.Bool
 }
 
 func (database *fakeReconcilerDatabase) DomainPool() *pgxpool.Pool {
@@ -628,6 +631,14 @@ func (database *fakeReconcilerDatabase) RiverSchemaReady(context.Context, string
 
 func (database *fakeReconcilerDatabase) QueuePool() *pgxpool.Pool {
 	return database.queuePool
+}
+
+func (database *fakeReconcilerDatabase) CoordinatorReady(context.Context) error {
+	return database.coordinatorErr
+}
+
+func (database *fakeReconcilerDatabase) CoordinatorPool() *pgxpool.Pool {
+	return database.coordinatorPool
 }
 
 func (database *fakeReconcilerDatabase) Close() {

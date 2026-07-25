@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dev-health.full-chaos.dev/contracts/provider-matrix/v1/matrix.schema.json",
+  "title": "Provider/dataset capability matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "providers", "pairs"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "providers": {
+      "type": "array",
+      "minItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "github",
+          "gitlab",
+          "jira",
+          "launchdarkly",
+          "linear",
+          "pagerduty"
+        ]
+      }
+    },
+    "pairs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/pair"}
+    }
+  },
+  "$defs": {
+    "pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "dataset",
+        "python_source",
+        "cost_class",
+        "watermark",
+        "legacy_targets",
+        "processor_flags",
+        "go_executor",
+        "native_shadow",
+        "route_dataset",
+        "route_destinations",
+        "route_ready",
+        "credential_modes"
+      ],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "dataset": {"type": "string", "minLength": 1},
+        "python_source": {
+          "type": "string",
+          "description": "Anchor into the authoritative Python registry.",
+          "pattern": "^src/dev_health_ops/sync/datasets\\.py::"
+        },
+        "cost_class": {"type": "string", "enum": ["light", "medium", "heavy"]},
+        "watermark": {"type": "string", "enum": ["incremental", "none"]},
+        "legacy_targets": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "processor_flags": {
+          "type": "object",
+          "additionalProperties": {"type": "boolean"}
+        },
+        "go_executor": {
+          "type": "string",
+          "description": "Which code would execute the pair. Never a routing statement.",
+          "enum": ["native_go", "python_compatibility", "none"]
+        },
+        "native_shadow": {
+          "type": "boolean",
+          "description": "Eligible for the fixture/parity shadow harness only."
+        },
+        "route_dataset": {"type": "string", "minLength": 1},
+        "route_destinations": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "route_ready": {
+          "type": "boolean",
+          "description": "Whether the complete native route may execute. Environment switches can only narrow this, never widen it."
+        },
+        "credential_modes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

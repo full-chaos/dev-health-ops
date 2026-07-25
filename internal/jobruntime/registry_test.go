@@ -8,22 +8,59 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 )
 
-func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
-	t.Parallel()
-	registry, err := Load("../../contracts/jobs/v1")
+// riverRoutedRegistry promotes every checked-in kind to a River route so
+// startup validation can be exercised against the real contract. Production
+// routes stay Celery until an operator promotes them; without this fixture the
+// executable set would be empty and every case would pass vacuously.
+func riverRoutedRegistry(t *testing.T) *Registry {
+	t.Helper()
+	contracts, err := jobcontract.LoadRegistry("../../contracts/jobs/v1")
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadRegistry: %v", err)
 	}
+	migration, err := jobcontract.LoadMigrationState("../../contracts/jobs/v1", contracts)
+	if err != nil {
+		t.Fatalf("LoadMigrationState: %v", err)
+	}
+	for index := range migration.Jobs {
+		migration.Jobs[index].State = "go_default"
+		migration.Jobs[index].Route = "river"
+		migration.Jobs[index].RollbackRoute = "celery"
+	}
+	registry, err := newRegistry(contracts, migration)
+	if err != nil {
+		t.Fatalf("newRegistry: %v", err)
+	}
+	return registry
+}
+
+func opsStartup(registry *Registry) StartupSpec {
 	heartbeat, _ := registry.Descriptor(jobcontract.KindHeartbeat)
 	retention, _ := registry.Descriptor(jobcontract.KindRetentionCleanup)
 	billing, _ := registry.Descriptor(jobcontract.KindBillingNotification)
 	webhook, _ := registry.Descriptor(jobcontract.KindWebhookDelivery)
-	startup := StartupSpec{
-		Profile:  "ops",
-		Queues:   []string{"heartbeat", "retention", "webhooks"},
-		Handlers: []HandlerSpec{billing, webhook, heartbeat, retention},
+	queues := func() []QueueBudget {
+		return []QueueBudget{
+			{Queue: "heartbeat", MaxWorkers: 1},
+			{Queue: "retention", MaxWorkers: 1},
+			{Queue: "webhooks", MaxWorkers: 4},
+		}
 	}
-	if err := registry.ValidateStartup(startup); err != nil {
+	return StartupSpec{
+		Profile:             "ops",
+		Queues:              queues(),
+		ManifestQueues:      queues(),
+		Handlers:            []HandlerSpec{billing, webhook, heartbeat, retention},
+		Connections:         ConnectionBudget{QueueControl: 2, Domain: 4},
+		ManifestConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
+	}
+}
+
+func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
+	t.Parallel()
+	registry := riverRoutedRegistry(t)
+	retention, _ := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	if err := registry.ValidateStartup(opsStartup(registry)); err != nil {
 		t.Fatalf("ValidateStartup: %v", err)
 	}
 
@@ -32,7 +69,12 @@ func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
 		mutate func(*HandlerSpec)
 	}{
 		{"current_version", func(spec *HandlerSpec) { spec.CurrentVersion++ }},
-		{"supported_versions", func(spec *HandlerSpec) { spec.SupportedVersions = []int{1, 2} }},
+		// Derived from the descriptor rather than a literal: pinning {1, 2} here
+		// silently stopped drifting once retention_cleanup really did support
+		// both versions, which turned this case into a no-op assertion.
+		{"supported_versions", func(spec *HandlerSpec) {
+			spec.SupportedVersions = append(append([]int(nil), spec.SupportedVersions...), 99)
+		}},
 		{"profile", func(spec *HandlerSpec) { spec.Profile = "heavy" }},
 		{"queue", func(spec *HandlerSpec) { spec.Queue = "other" }},
 		{"execution_mode", func(spec *HandlerSpec) { spec.ExecutionMode = "coordinator" }},
@@ -72,25 +114,31 @@ func TestRegistryInvestmentDispatchStartupBudgetMatchesMaterialization(t *testin
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	handlers := registry.Profile("heavy")
+	promoted := riverRoutedRegistry(t)
+	handlers := promoted.Profile("heavy")
 	queueSet := make(map[string]struct{})
-	var dispatch Descriptor
 	for _, handler := range handlers {
 		queueSet[handler.Queue] = struct{}{}
+	}
+	queues := make([]QueueBudget, 0, len(queueSet))
+	for queue := range queueSet {
+		queues = append(queues, QueueBudget{Queue: queue, MaxWorkers: 2})
+	}
+	if err := promoted.ValidateStartup(StartupSpec{
+		Profile:             "heavy",
+		Queues:              queues,
+		ManifestQueues:      queues,
+		Handlers:            handlers,
+		Connections:         ConnectionBudget{QueueControl: 2, Domain: 4},
+		ManifestConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
+	}); err != nil {
+		t.Fatalf("ValidateStartup: %v", err)
+	}
+	var dispatch Descriptor
+	for _, handler := range registry.Profile("heavy") {
 		if handler.Kind == jobcontract.KindInvestmentDispatch {
 			dispatch = handler
 		}
-	}
-	queues := make([]string, 0, len(queueSet))
-	for queue := range queueSet {
-		queues = append(queues, queue)
-	}
-	if err := registry.ValidateStartup(StartupSpec{
-		Profile:  "heavy",
-		Queues:   queues,
-		Handlers: handlers,
-	}); err != nil {
-		t.Fatalf("ValidateStartup: %v", err)
 	}
 	if dispatch.Kind == "" {
 		t.Fatal("heavy startup is missing investment.dispatch")
@@ -109,23 +157,56 @@ func TestRegistryInvestmentDispatchStartupBudgetMatchesMaterialization(t *testin
 
 func TestRegistryValidateStartupRejectsCoverageDrift(t *testing.T) {
 	t.Parallel()
+	registry := riverRoutedRegistry(t)
+	heartbeat, _ := registry.Descriptor(jobcontract.KindHeartbeat)
+
+	tests := []struct {
+		name   string
+		mutate func(*StartupSpec)
+	}{
+		{"missing queue", func(spec *StartupSpec) { spec.Queues = spec.Queues[:2] }},
+		{"extra queue", func(spec *StartupSpec) {
+			spec.Queues = append(spec.Queues, QueueBudget{Queue: "reports", MaxWorkers: 1})
+		}},
+		{"missing handler", func(spec *StartupSpec) { spec.Handlers = spec.Handlers[:3] }},
+		{"duplicate handler", func(spec *StartupSpec) {
+			spec.Handlers = []HandlerSpec{heartbeat, heartbeat, heartbeat, heartbeat}
+		}},
+		{"unknown profile", func(spec *StartupSpec) { spec.Profile = "unknown" }},
+		{"zero queue budget", func(spec *StartupSpec) { spec.Queues[0].MaxWorkers = 0 }},
+		{"queue budget drift", func(spec *StartupSpec) { spec.Queues[0].MaxWorkers = 3 }},
+		{"unbudgeted queue", func(spec *StartupSpec) { spec.ManifestQueues = spec.ManifestQueues[1:] }},
+		{"missing connection budget", func(spec *StartupSpec) { spec.Connections = ConnectionBudget{} }},
+		{"connection budget drift", func(spec *StartupSpec) { spec.Connections.Domain = 8 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			startup := opsStartup(registry)
+			test.mutate(&startup)
+			if err := registry.ValidateStartup(startup); err == nil {
+				t.Fatal("startup drift unexpectedly passed")
+			}
+		})
+	}
+}
+
+// TestRegistryValidateStartupRejectsUnexecutableProfile pins the CUT-02 rule
+// that a profile with nothing routed to River cannot start. It is the check
+// that made the empty latency profile unrepresentable.
+func TestRegistryValidateStartupRejectsUnexecutableProfile(t *testing.T) {
+	t.Parallel()
 	registry, err := Load("../../contracts/jobs/v1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	heartbeat, _ := registry.Descriptor(jobcontract.KindHeartbeat)
-	retention, _ := registry.Descriptor(jobcontract.KindRetentionCleanup)
-
-	tests := []StartupSpec{
-		{Profile: "ops", Queues: []string{"heartbeat"}, Handlers: []HandlerSpec{heartbeat, retention}},
-		{Profile: "ops", Queues: []string{"heartbeat", "retention"}, Handlers: []HandlerSpec{heartbeat}},
-		{Profile: "ops", Queues: []string{"heartbeat", "retention"}, Handlers: []HandlerSpec{heartbeat, heartbeat}},
-		{Profile: "unknown", Queues: []string{"heartbeat"}, Handlers: []HandlerSpec{heartbeat}},
+	if len(registry.ExecutableProfile("ops")) != 0 {
+		t.Skip("ops profile has been promoted; rule is covered elsewhere")
 	}
-	for index, startup := range tests {
-		if err := registry.ValidateStartup(startup); err == nil {
-			t.Fatalf("case %d unexpectedly passed", index)
-		}
+	if err := registry.ValidateStartup(opsStartup(registry)); err == nil {
+		t.Fatal("celery-routed profile unexpectedly passed startup validation")
+	}
+	if err := registry.ValidateStartup(StartupSpec{Profile: "latency"}); err == nil {
+		t.Fatal("empty profile unexpectedly passed startup validation")
 	}
 }
 

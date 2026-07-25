@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 import yaml
@@ -37,6 +38,36 @@ _FORBIDDEN_SHARED_MIGRATION_SECRETS = {
     "MIGRATION_DATABASE_URI",
     "MIGRATION_DATABASE_URI_FILE",
 }
+
+_KUBERNETES_CONFIGMAP = _KUBERNETES / "configmap.yaml"
+_KUBERNETES_SECRETS = _KUBERNETES / "secrets.yaml"
+_KUBERNETES_API = _KUBERNETES / "api.yaml"
+
+# CHAOS-3076: the PagerDuty stream runner forwards reconciliation to the Python
+# worker bridge, so a renderer that declares the process without this wiring
+# produces a service that can never construct its handler (missing endpoint or
+# insecure opt-in) or is rejected with 401 (missing token).
+_PAGERDUTY_PROCESS = "stream-pagerduty"
+_PAGERDUTY_RUNTIME_PROFILE = "pagerduty"
+# Non-secret half of the contract. It cannot be driven from profiles.json:
+# `processes[]` entries carry only `secret_env`, and internal/deploymentcontract
+# decodes the manifest with DisallowUnknownFields, so a `config_env` key there
+# would fail the Go contract check until the Go schema grows the field.
+_PAGERDUTY_CONFIG_ENV = {
+    "PAGERDUTY_WEBHOOK_TRANSPORT",
+    "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
+    "WORKER_OPERATIONAL_BRIDGE_URL",
+}
+# The API serves the bridge endpoint and owns the Celery dispatch decision, so
+# it needs the caller's token and the same transport selector.
+_API_BRIDGE_ENV = {
+    "PAGERDUTY_WEBHOOK_TRANSPORT",
+    "WORKER_OPERATIONAL_BRIDGE_TOKEN",
+}
+_DEFAULT_WEBHOOK_TRANSPORT = "celery"
+# strconv.ParseBool's truthy spellings, lowercased.
+_TRUTHY = {"1", "t", "true"}
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 def _load_json(path: Path) -> dict:
@@ -78,11 +109,134 @@ def _assert_migration_command(command: str) -> None:
     assert "POSTGRES_URI" in command
 
 
+def _bridge_secret_env() -> set[str]:
+    """Bridge secrets the checked-in manifest declares for the process."""
+    process = next(
+        item
+        for item in _load_json(_PROFILES)["processes"]
+        if item["name"] == _PAGERDUTY_PROCESS
+    )
+    declared = {
+        name
+        for name in process["secret_env"]
+        if name.startswith("WORKER_OPERATIONAL_BRIDGE")
+    }
+    assert declared, (
+        f"{_PAGERDUTY_PROCESS} must declare its bridge credential in "
+        "deploy/go-workers/profiles.json"
+    )
+    return declared
+
+
+def _pagerduty_required_env() -> set[str]:
+    return _bridge_secret_env() | _PAGERDUTY_CONFIG_ENV
+
+
+def _compose_variable_default(value: object, variable: str) -> str:
+    match = re.fullmatch(rf"\$\{{{re.escape(variable)}:-(.*)\}}", str(value), re.DOTALL)
+    assert match is not None, f"{variable} must stay overridable with a default"
+    return match.group(1)
+
+
+def _compose_pagerduty_services(path: Path) -> dict[str, dict]:
+    return {
+        name: service
+        for name, service in (_load_yaml(path).get("services") or {}).items()
+        if (service.get("environment") or {}).get("DEV_HEALTH_PROFILE")
+        == _PAGERDUTY_RUNTIME_PROFILE
+    }
+
+
+def _kubernetes_env_sources() -> dict[tuple[str, str], set[str]]:
+    sources: dict[tuple[str, str], set[str]] = {}
+    for path in (_KUBERNETES_CONFIGMAP, _KUBERNETES_SECRETS):
+        for document in _load_yaml_documents(path):
+            if document["kind"] == "ConfigMap":
+                sources[("configMapRef", document["metadata"]["name"])] = set(
+                    document.get("data") or {}
+                )
+            elif document["kind"] == "Secret":
+                sources[("secretRef", document["metadata"]["name"])] = set(
+                    document.get("stringData") or {}
+                )
+    return sources
+
+
+def _kubernetes_container_env(container: dict) -> set[str]:
+    """Every env name the container resolves, inline plus envFrom references."""
+    sources = _kubernetes_env_sources()
+    names = {item["name"] for item in container.get("env") or []}
+    for source in container.get("envFrom") or []:
+        for kind in ("configMapRef", "secretRef"):
+            reference = source.get(kind)
+            if reference is None:
+                continue
+            assert (kind, reference["name"]) in sources, (
+                f"unknown {kind} {reference['name']}"
+            )
+            names |= sources[(kind, reference["name"])]
+    return names
+
+
+def _kubernetes_container_profile(container: dict) -> str | None:
+    """The DEV_HEALTH_PROFILE this container actually runs with.
+
+    Inline env wins; otherwise the value is inherited from a referenced
+    ConfigMap. A label is metadata and does not reach the process, so it can
+    never stand in for this.
+    """
+    for item in container.get("env") or []:
+        if item["name"] == "DEV_HEALTH_PROFILE":
+            return item.get("value")
+    config = _load_yaml(_KUBERNETES_CONFIGMAP).get("data") or {}
+    for source in container.get("envFrom") or []:
+        reference = source.get("configMapRef")
+        if reference and "DEV_HEALTH_PROFILE" in config:
+            return config["DEV_HEALTH_PROFILE"]
+    return None
+
+
+def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
+    """Deployments that run the PagerDuty profile, by effective env not label.
+
+    Discovering by `dev-health.io/profile` alone proved nothing: the label is
+    metadata, so a Deployment labelled pagerduty whose container ran a different
+    DEV_HEALTH_PROFILE passed every assertion here while, at cutover, running
+    the wrong profile and leaving PagerDuty entries unconsumed after Celery
+    stood down. Discovery follows the env; label agreement is asserted
+    separately so a mismatch in either direction fails.
+    """
+    containers = {}
+    for document in _load_yaml_documents(path):
+        if document.get("kind") != "Deployment":
+            continue
+        pod = ((document.get("spec") or {}).get("template") or {}).get("spec") or {}
+        pod_containers = pod.get("containers") or []
+        if not pod_containers:
+            continue
+        container = pod_containers[0]
+        labelled = (document["metadata"].get("labels") or {}).get(
+            "dev-health.io/profile"
+        ) == _PAGERDUTY_PROCESS
+        runs_profile = (
+            _kubernetes_container_profile(container) == _PAGERDUTY_RUNTIME_PROFILE
+        )
+        name = document["metadata"]["name"]
+        assert labelled == runs_profile, (
+            f"{name}: label says pagerduty={labelled} but the container runs "
+            f"DEV_HEALTH_PROFILE={_kubernetes_container_profile(container)!r}"
+        )
+        if runs_profile:
+            containers[name] = container
+    return containers
+
+
 def test_go_profiles_are_disabled_future_topology() -> None:
     manifest = _load_json(_PROFILES)
 
     assert manifest["deployment_state"] == "coexistence_disabled"
     assert manifest["runtime_role_env"] == [
+        "RIVER_COORDINATOR_DATABASE_ROLE",
         "RIVER_DOMAIN_DATABASE_ROLE",
         "RIVER_QUEUE_DATABASE_ROLE",
     ]
@@ -105,14 +259,21 @@ def test_go_profiles_are_disabled_future_topology() -> None:
         "max_concurrent_invocations": 1,
         "queue_control_max_connections": 2,
         "domain_max_connections": 2,
+        # CHAOS-3033: workerctl is a coordinator binary -- it authenticates the
+        # operator token against coordinator-exclusive
+        # internal_service_credentials before any command dispatches -- so it
+        # carries a coordinator budget and requires the coordinator DSN.
+        "coordinator_max_connections": 2,
         "config_env": [
             "PGBOUNCER_TRANSACTION_MODE",
+            "RIVER_COORDINATOR_DATABASE_ROLE",
             "RIVER_DATABASE_SCHEMA",
             "RIVER_DOMAIN_DATABASE_ROLE",
             "RIVER_QUEUE_DATABASE_ROLE",
             "WORKER_DATABASE_MODE",
         ],
         "secret_env": [
+            "COORDINATOR_DATABASE_URI",
             "POSTGRES_URI",
             "WORKER_DATABASE_URI",
             "WORKER_OPERATOR_TOKEN",
@@ -130,25 +291,25 @@ def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() 
     }
     assert expected_profiles == {
         "heavy",
-        "latency",
         "ops",
         "reconciler",
         "scheduler",
         "stream-external",
         "stream-ingest",
+        "stream-pagerduty",
         "sync",
     }
 
     compose = _load_yaml(_GO_COMPOSE)["services"]
     runtime_services = {
         "go-worker-heavy",
-        "go-worker-latency",
         "go-worker-ops",
         "go-worker-sync-provider",
         "go-reconciler",
         "go-scheduler",
         "go-stream-external",
         "go-stream-ingest",
+        "go-stream-pagerduty",
     }
     assert set(compose) == runtime_services | {
         "go-river-provision",
@@ -571,3 +732,203 @@ def test_helm_migration_job_uses_its_dedicated_external_secret() -> None:
         if "secretRef" in source
     }
     assert secret_refs == {"elevated-migration-secrets"}
+
+
+def _assert_insecure_optin_covers_endpoint(
+    url: str, allow_insecure: str, source: str
+) -> None:
+    """Mirror internal/jobs/pagerduty `validBridgeEndpoint`: a plaintext bridge
+    endpoint is only usable for loopback unless the insecure opt-in is set, so a
+    renderer that defaults to a plaintext service name and leaves the opt-in
+    unset produces a runner that can never build its handler.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme == "https" or parsed.hostname in _LOOPBACK_HOSTS:
+        return
+    assert allow_insecure.strip().lower() in _TRUTHY, (
+        f"{source} defaults the bridge endpoint to plaintext {url!r}; the Go "
+        "runtime rejects it unless WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE "
+        "opts in"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "required_declaration"),
+    [
+        (_GO_COMPOSE, True),
+        (_GO_COMPOSE_ONLY, False),
+        (_GO_SWARM, True),
+        (_GO_SWARM_ONLY, False),
+    ],
+)
+def test_compose_surfaces_render_complete_pagerduty_bridge_env(
+    path: Path, required_declaration: bool
+) -> None:
+    """CHAOS-3076: wherever a Compose/Swarm surface declares the PagerDuty
+    stream runner, it must render every key the process needs to reach the
+    Python worker bridge — including an insecure opt-in that matches the
+    checked-in default endpoint.
+    """
+    services = _compose_pagerduty_services(path)
+    assert bool(services) == required_declaration
+
+    required = _pagerduty_required_env()
+    for name, service in services.items():
+        environment = service["environment"]
+        missing = required - set(environment)
+        assert not missing, f"{path.name}:{name} drops {sorted(missing)}"
+        _assert_insecure_optin_covers_endpoint(
+            _compose_variable_default(
+                environment["WORKER_OPERATIONAL_BRIDGE_URL"],
+                "WORKER_OPERATIONAL_BRIDGE_URL",
+            ),
+            _compose_variable_default(
+                environment["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
+                "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
+            ),
+            f"{path.name}:{name}",
+        )
+        assert (
+            _compose_variable_default(
+                environment["PAGERDUTY_WEBHOOK_TRANSPORT"],
+                "PAGERDUTY_WEBHOOK_TRANSPORT",
+            )
+            == _DEFAULT_WEBHOOK_TRANSPORT
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "required_declaration"),
+    [(_GO_KUBERNETES, True), (_GO_KUBERNETES_ONLY, False)],
+)
+def test_kubernetes_pagerduty_deployment_resolves_complete_bridge_env(
+    path: Path, required_declaration: bool
+) -> None:
+    containers = _kubernetes_pagerduty_containers(path)
+    assert bool(containers) == required_declaration
+
+    required = _pagerduty_required_env()
+    for name, container in containers.items():
+        missing = required - _kubernetes_container_env(container)
+        assert not missing, f"{path.name}:{name} drops {sorted(missing)}"
+
+    if not containers:
+        return
+    config = _load_yaml(_KUBERNETES_CONFIGMAP)["data"]
+    assert config["PAGERDUTY_WEBHOOK_TRANSPORT"] == _DEFAULT_WEBHOOK_TRANSPORT
+    _assert_insecure_optin_covers_endpoint(
+        config["WORKER_OPERATIONAL_BRIDGE_URL"],
+        config["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
+        _KUBERNETES_CONFIGMAP.name,
+    )
+    # The bearer token stays a Secret key with an empty placeholder; a rendered
+    # literal would commit the credential.
+    secret = next(
+        document
+        for document in _load_yaml_documents(_KUBERNETES_SECRETS)
+        if document["metadata"]["name"] == "dev-health-secrets"
+    )
+    assert secret["stringData"]["WORKER_OPERATIONAL_BRIDGE_TOKEN"] == ""
+
+
+def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
+    values = _load_yaml(_HELM_CHART / "values.yaml")
+    profiles = [
+        profile
+        for profile in values["goWorkers"]["profiles"]
+        if profile.get("runtimeProfile") == _PAGERDUTY_RUNTIME_PROFILE
+    ]
+    assert len(profiles) == 1
+
+    # values.runtimeProfile only controls the rendered process if the template
+    # actually binds DEV_HEALTH_PROFILE to it. Asserting the values alone let a
+    # template edit change the profile every pod runs while this test stayed
+    # green, so the binding is pinned too.
+    workers_template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "{name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}"
+        in workers_template
+    ), "the chart must render DEV_HEALTH_PROFILE from $profile.runtimeProfile"
+
+    # Every Go profile inherits the shared ConfigMap and Secret, so the chart's
+    # value surface is what decides whether the runner is wired.
+    template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        'configMapRef: {name: {{ include "dev-health.configMapName" $ }}}' in template
+    )
+    assert 'secretRef: {name: {{ include "dev-health.secretName" $ }}}' in template
+
+    resolved = set(values["config"]) | set(values["secrets"]["data"])
+    missing = _pagerduty_required_env() - resolved
+    assert not missing, f"helm values drop {sorted(missing)}"
+    assert values["config"]["PAGERDUTY_WEBHOOK_TRANSPORT"] == (
+        _DEFAULT_WEBHOOK_TRANSPORT
+    )
+    # An empty URL is auto-computed into the plaintext in-cluster API Service,
+    # so the opt-in must hold for the derived endpoint as well.
+    _assert_insecure_optin_covers_endpoint(
+        values["config"]["WORKER_OPERATIONAL_BRIDGE_URL"],
+        values["config"]["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
+        "helm values.yaml",
+    )
+    assert 'define "dev-health.operationalBridgeURL"' in (
+        _HELM_CHART / "templates" / "_helpers.tpl"
+    ).read_text(encoding="utf-8")
+    assert values["secrets"]["data"]["WORKER_OPERATIONAL_BRIDGE_TOKEN"] == ""
+
+
+@pytest.mark.parametrize("path", [_PRODUCTION_COMPOSE, _SWARM_STACK])
+def test_api_service_carries_bridge_token_and_webhook_transport(path: Path) -> None:
+    """CHAOS-3076: the API authenticates bridge callers against the shared token
+    and decides the PagerDuty dispatch from the transport selector. Omitting
+    either leaves the bridge answering 401 or two runtimes consuming the same
+    webhook stream.
+    """
+    environment = _load_yaml(path)["services"]["api"]["environment"]
+
+    missing = _API_BRIDGE_ENV - set(environment)
+    assert not missing, f"{path.name}:api drops {sorted(missing)}"
+    assert (
+        _compose_variable_default(
+            environment["PAGERDUTY_WEBHOOK_TRANSPORT"], "PAGERDUTY_WEBHOOK_TRANSPORT"
+        )
+        == _DEFAULT_WEBHOOK_TRANSPORT
+    )
+    # The token must arrive from the environment, never as a committed literal.
+    assert (
+        _compose_variable_default(
+            environment["WORKER_OPERATIONAL_BRIDGE_TOKEN"],
+            "WORKER_OPERATIONAL_BRIDGE_TOKEN",
+        )
+        == ""
+    )
+
+
+def test_kubernetes_and_helm_api_carry_bridge_token_and_webhook_transport() -> None:
+    api = next(
+        document
+        for document in _load_yaml_documents(_KUBERNETES_API)
+        if document["kind"] == "Deployment"
+    )
+    container = api["spec"]["template"]["spec"]["containers"][0]
+    missing = _API_BRIDGE_ENV - _kubernetes_container_env(container)
+    assert not missing, f"api.yaml drops {sorted(missing)}"
+
+    template = (_HELM_CHART / "templates" / "api-deployment.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        'configMapRef:\n                name: {{ include "dev-health.configMapName" .'
+        in template
+    )
+    assert (
+        'secretRef:\n                name: {{ include "dev-health.secretName" .'
+        in template
+    )
+    values = _load_yaml(_HELM_CHART / "values.yaml")
+    resolved = set(values["config"]) | set(values["secrets"]["data"])
+    assert not _API_BRIDGE_ENV - resolved

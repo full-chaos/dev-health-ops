@@ -34,10 +34,11 @@ import (
 )
 
 const (
-	serviceName         = "dev-health-workerctl"
-	operatorAdvisoryKey = int64(30330001)
-	defaultDomainRole   = "devhealth_domain"
-	defaultQueueRole    = "devhealth_queue"
+	serviceName            = "dev-health-workerctl"
+	operatorAdvisoryKey    = int64(30330001)
+	defaultDomainRole      = "devhealth_domain"
+	defaultQueueRole       = "devhealth_queue"
+	defaultCoordinatorRole = "devhealth_coordinator"
 )
 
 func main() {
@@ -111,6 +112,16 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if !ok {
 		return nil, writeError(stderr, "configuration_error")
 	}
+	// Required, not optional: workerctl is a coordinator binary. Its very first
+	// database action (authenticating the operator token against
+	// internal_service_credentials) is a coordinator-exclusive read, so without
+	// this DSN the whole CLI is non-functional. Failing here with
+	// configuration_error is the honest outcome; falling back to the domain pool
+	// would reproduce the 42501 this change exists to remove.
+	coordinatorURI, ok := resolveRequired("COORDINATOR_DATABASE_URI", lookup)
+	if !ok {
+		return nil, writeError(stderr, "configuration_error")
+	}
 	token, ok := resolveRequired("WORKER_OPERATOR_TOKEN", lookup)
 	if !ok {
 		return nil, writeError(stderr, "authentication_failed")
@@ -124,6 +135,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	}
 	domainRole := resolveName("RIVER_DOMAIN_DATABASE_ROLE", defaultDomainRole, lookup)
 	queueRole := resolveName("RIVER_QUEUE_DATABASE_ROLE", defaultQueueRole, lookup)
+	coordinatorRole := resolveName("RIVER_COORDINATOR_DATABASE_ROLE", defaultCoordinatorRole, lookup)
 	schema := resolveName("RIVER_DATABASE_SCHEMA", "river", lookup)
 	domainTransactionPooler := false
 	if raw, configured := lookup("PGBOUNCER_TRANSACTION_MODE"); configured && raw != "" {
@@ -136,12 +148,18 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 
 	runtimeConfig := postgresstore.DefaultRuntimeConfig(
 		domainURI.Reveal(), queueURI.Reveal(), domainRole, queueRole,
-	)
+	).WithCoordinator()
 	runtimeConfig.QueueControlMode = mode
 	runtimeConfig.RiverSchema = schema
 	runtimeConfig.DomainTransactionPooler = domainTransactionPooler
 	runtimeConfig.DomainMaxConns = 2
 	runtimeConfig.QueueMaxConns = 2
+	runtimeConfig.CoordinatorURI = coordinatorURI.Reveal()
+	runtimeConfig.CoordinatorRole = coordinatorRole
+	// 2 matches operator_cli.coordinator_max_connections in
+	// deploy/go-workers/profiles.json, the same way DomainMaxConns and
+	// QueueMaxConns above match their fields there.
+	runtimeConfig.CoordinatorMaxConns = 2
 	pools, err := postgresstore.OpenRuntimePools(ctx, runtimeConfig)
 	if err != nil {
 		return nil, writeError(stderr, "database_unavailable")
@@ -152,12 +170,24 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 			pools.Close()
 		}
 	}()
+	// All three postures are checked. Cross-role attribution is a distributed
+	// property: each CheckRolePosture call only ever proves its OWN role holds
+	// nothing beyond its manifest, so the coordinator check is what would catch
+	// a coordinator-exclusive privilege wrongly granted to the coordinator's
+	// login, and the domain check is what catches the mirror image.
+	coordinatorPool, err := pools.CoordinatorPool()
+	if err != nil {
+		return nil, writeError(stderr, "database_unavailable")
+	}
 	if postgresstore.CheckDomainAuthorization(ctx, pools.Domain, domainRole, schema) != nil ||
-		postgresstore.CheckQueueAuthorization(ctx, pools.QueueControl, queueRole, schema) != nil {
+		postgresstore.CheckQueueAuthorization(ctx, pools.QueueControl, queueRole, schema) != nil ||
+		postgresstore.CheckCoordinatorAuthorization(ctx, coordinatorPool, coordinatorRole, schema) != nil {
 		return nil, writeError(stderr, "runtime_role_unauthorized")
 	}
 
-	authenticator, err := joboperator.NewAuthenticator(pools.Domain)
+	// Coordinator pool: reads and updates internal_service_credentials, which
+	// is coordinator-exclusive and has no domain grant at all.
+	authenticator, err := joboperator.NewAuthenticator(coordinatorPool)
 	if err != nil {
 		return nil, writeError(stderr, "authentication_failed")
 	}
@@ -203,11 +233,21 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "contract_registry_invalid")
 	}
-	routeController, err := syncroute.NewController(pools.Domain, routeRegistry, routeCapabilities)
+	// Coordinator pool: syncroute.Controller UPDATEs
+	// sync_dispatch_transport_routes (control.go:163,249) and takes FOR UPDATE
+	// on it (control.go:338-343). That table is dual-granted, but UPDATE exists
+	// only on the coordinator side of the split -- domainPosture declares it
+	// SELECT-only -- so `workerctl routes pause|drain|resume` is a coordinator
+	// path even though `routes status` would work on either. Its LOCK TABLE on
+	// sync_dispatch_outbox (control.go:15) needs UPDATE too, which the
+	// coordinator posture also carries.
+	routeController, err := syncroute.NewController(coordinatorPool, routeRegistry, routeCapabilities)
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
-	jobRouteController, err := newJobRouteController(pools.Domain, pools.QueueControl, schema, registry)
+	jobRouteController, err := newJobRouteController(
+		coordinatorPool, pools.Domain, pools.QueueControl, schema, registry,
+	)
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
@@ -228,10 +268,14 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "operator_backend_unavailable")
 	}
-	auditor, err := joboperator.NewPostgresAuditor(pools.Domain)
+	// Coordinator pool: INSERTs and UPDATEs worker_operator_audits, which is
+	// coordinator-exclusive with no domain grant.
+	auditor, err := joboperator.NewPostgresAuditor(coordinatorPool)
 	if err != nil {
 		return nil, writeError(stderr, "audit_unavailable")
 	}
+	// Stays on the domain pool: PostgresDomainGuard runs `SELECT true` and
+	// touches no relation at all, so it needs nothing the domain role lacks.
 	guard, err := joboperator.NewPostgresDomainGuard(pools.Domain)
 	if err != nil {
 		return nil, writeError(stderr, "domain_precondition_unavailable")
@@ -257,8 +301,23 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 // sync.provider_unit from its legacy Celery owner to the checked-in River
 // canary. The controller remains fail-closed for every other kind because the
 // Celery quiescer accepts that exact durable unit ledger only.
+// The three pools are not interchangeable here, and the split is per-component
+// rather than per-controller:
+//
+//   - coordinatorPool drives the Controller itself. It SELECTs and UPDATEs
+//     worker_job_routes (control.go:159,229,257,270), which is
+//     coordinator-exclusive — so even the read path 42501s on the domain role —
+//     and Rollback runs LOCK TABLE public.worker_job_outbox IN SHARE ROW
+//     EXCLUSIVE MODE (control.go:197), which PostgreSQL treats as requiring
+//     UPDATE. The domain role holds only SELECT+INSERT there. That pair is
+//     CHAOS-3113.
+//   - domainPool stays on the Celery quiescer: it reads sync_run_units
+//     (quiescer.go:88), a dual-granted table whose read is genuinely domain
+//     work, so there is no reason to widen it to the coordinator.
+//   - queuePool stays on the River quiescer, which only touches the River
+//     schema.
 func newJobRouteController(
-	domainPool, queuePool *pgxpool.Pool,
+	coordinatorPool, domainPool, queuePool *pgxpool.Pool,
 	schema string,
 	registry *jobruntime.Registry,
 ) (*jobroute.Controller, error) {
@@ -271,7 +330,7 @@ func newJobRouteController(
 		return nil, err
 	}
 	return jobroute.NewControllerWithCeleryQuiescer(
-		domainPool, registry, riverQuiescer, celeryQuiescer,
+		coordinatorPool, registry, riverQuiescer, celeryQuiescer,
 	)
 }
 

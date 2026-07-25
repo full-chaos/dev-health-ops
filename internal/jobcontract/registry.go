@@ -431,7 +431,11 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if !ok {
 		return errors.New("payload schema has no properties object")
 	}
-	if version != ContractVersionV1 {
+	// Only versions with a compiled validator below may be declared. Adding a
+	// contract version therefore requires teaching this function what that
+	// version's payload must look like; it can never be validated by default.
+	if version != ContractVersionV1 &&
+		!(kind == KindRetentionCleanup && version == ContractVersionV2) {
 		return fmt.Errorf("no compiled schema validator for version %d", version)
 	}
 	expectedFields := map[string][]string{
@@ -507,9 +511,25 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if !ok || policy["type"] != "string" {
 		return errors.New("retention_policy schema drifts from compiled type")
 	}
+	// The schema enum and the compiled policy list for this version must stay
+	// identical and ordered: a policy that exists in only one of them is
+	// either an unrunnable contract or an undeclared table-deletion
+	// capability. The expected list is per-version because a published
+	// version's value domain is frozen — v1 declares only the policy it
+	// shipped with, while the current version must match the compiled list
+	// exactly so no runnable policy goes undeclared.
+	expectedPolicies := RetentionPolicies()
+	if version == ContractVersionV1 {
+		expectedPolicies = FrozenRetentionPoliciesV1()
+	}
 	enum, ok := policy["enum"].([]any)
-	if !ok || len(enum) != 1 || enum[0] != RetentionWorkerTerminal {
+	if !ok || len(enum) != len(expectedPolicies) {
 		return errors.New("retention_policy schema drifts from compiled values")
+	}
+	for index, supported := range expectedPolicies {
+		if enum[index] != supported {
+			return errors.New("retention_policy schema drifts from compiled values")
+		}
 	}
 	return nil
 }

@@ -129,6 +129,16 @@ PostgreSQL URI — auto-computed when postgresql.enabled
 {{- end }}
 
 {{/*
+Worker operational bridge URL — the in-cluster API Service that serves the
+bridge the Go PagerDuty stream runner forwards reconciliation to. Auto-computed
+so the chart renders a reachable endpoint; override config.WORKER_OPERATIONAL_-
+BRIDGE_URL to point at an internal HTTPS origin instead.
+*/}}
+{{- define "dev-health.operationalBridgeURL" -}}
+{{- printf "http://%s-api.%s.svc.cluster.local:%v" (include "dev-health.fullname" .) (include "dev-health.namespace" .) .Values.api.port }}
+{{- end }}
+
+{{/*
 Image pull secrets
 */}}
 {{- define "dev-health.imagePullSecrets" -}}
@@ -146,8 +156,13 @@ chart's regular resources are created).
 {{- define "dev-health.configData" -}}
 {{- $redisAuto := and .Values.valkey.enabled (not .Values.config.CELERY_BROKER_URL) }}
 {{- $redisKeys := list "CELERY_BROKER_URL" "CELERY_RESULT_BACKEND" "REDIS_URL" }}
+{{- /* Keys whose empty placeholder is replaced by a computed value below. */}}
+{{- $derivedKeys := list "WORKER_OPERATIONAL_BRIDGE_URL" }}
+{{- if $redisAuto }}
+{{- $derivedKeys = concat $derivedKeys $redisKeys }}
+{{- end }}
 {{- range $key, $value := .Values.config }}
-{{- if or $value (not (and $redisAuto (has $key $redisKeys))) }}
+{{- if or $value (not (has $key $derivedKeys)) }}
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}
@@ -155,6 +170,9 @@ chart's regular resources are created).
 CELERY_BROKER_URL: {{ include "dev-health.redisURL" . | quote }}
 CELERY_RESULT_BACKEND: {{ include "dev-health.redisURL" . | quote }}
 REDIS_URL: {{ include "dev-health.redisURL" . | quote }}
+{{- end }}
+{{- if not (index .Values.config "WORKER_OPERATIONAL_BRIDGE_URL") }}
+WORKER_OPERATIONAL_BRIDGE_URL: {{ include "dev-health.operationalBridgeURL" . | quote }}
 {{- end }}
 {{- if not (hasKey .Values.config "AUTO_RUN_MIGRATIONS") }}
 {{- /* CHAOS-2304: when the migration hook owns schema changes, app pods must

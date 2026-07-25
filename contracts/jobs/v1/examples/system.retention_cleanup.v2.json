@@ -1,0 +1,14 @@
+{
+  "contract_version": 2,
+  "correlation_id": "job-retention-0002",
+  "idempotency_key": "retention:rate_limit_observations:2026-07-14",
+  "domain": {
+    "type": "maintenance_run",
+    "id": "00000000-0000-4000-8000-000000000002"
+  },
+  "payload": {
+    "batch_size": 500,
+    "delete_before": "2026-07-14T12:00:00Z",
+    "retention_policy": "rate_limit_observations"
+  }
+}

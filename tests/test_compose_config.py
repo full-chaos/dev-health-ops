@@ -299,9 +299,28 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
     assert ':"app_database"' in init_script
     assert "GRANT CONNECT ON DATABASE" in init_script
     assert (
-        'REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role", :"queue_role";'
-        in init_script
+        'REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role",'
+        ' :"queue_role", :"coordinator_role";' in init_script
     )
+    # CHAOS-3033: the coordinator role of the Option B split is provisioned
+    # here alongside the other two so local dev and CI are self-provisioning.
+    # It deliberately receives no per-table grants -- those are owned by the
+    # pinned River migration, derived from postgres.CoordinatorPosture() -- so
+    # this only asserts the login and its ability to connect.
+    for coordinator_fragment in (
+        "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}",
+        '-v coordinator_role="$river_coordinator_role"',
+        ":'coordinator_role', :'coordinator_password'",
+        'GRANT CONNECT ON DATABASE :"app_database" TO :"coordinator_role";',
+        'GRANT USAGE ON SCHEMA public TO :"coordinator_role";',
+        'REVOKE CREATE ON SCHEMA public FROM :"coordinator_role";',
+    ):
+        assert coordinator_fragment in init_script
+    # worker_job_routes is coordinator-exclusive under the split, so the domain
+    # role must no longer be granted it here -- that grant contradicted
+    # domainPosture() and would fail domain readiness if provisioning ran
+    # after a migration.
+    assert "worker_job_routes" not in init_script
     for grant in (
         "GRANT USAGE ON SCHEMA public",
         "REVOKE CREATE ON SCHEMA public FROM",
@@ -331,11 +350,26 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
     ).read_text(encoding="utf-8")
     assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION" in upgrade_script
     assert "WHERE NOT EXISTS" in upgrade_script
-    assert "domain_role and queue_role must be distinct" in upgrade_script
+    # All three Option B runtime roles must be pairwise distinct, so the guard
+    # now covers the coordinator role too.
     assert (
-        'REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role", :"queue_role";'
+        "domain_role, queue_role, and coordinator_role must be distinct"
         in upgrade_script
     )
+    assert (
+        'REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"domain_role",'
+        ' :"queue_role", :"coordinator_role";' in upgrade_script
+    )
+    # The coordinator login is provisioned here for deployed environments the
+    # same way init-extra-dbs.sh does it for local dev, and likewise receives no
+    # per-table grants -- the pinned River migration owns those.
+    for coordinator_fragment in (
+        ":'coordinator_role',",
+        'GRANT CONNECT ON DATABASE :"app_database" TO :"coordinator_role";',
+        'GRANT USAGE ON SCHEMA public TO :"coordinator_role";',
+        'REVOKE CREATE ON SCHEMA public FROM :"coordinator_role";',
+    ):
+        assert coordinator_fragment in upgrade_script
     for grant in (
         "GRANT USAGE ON SCHEMA public",
         "REVOKE CREATE ON SCHEMA public FROM",
@@ -361,13 +395,16 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
 
 
 def _assert_least_privilege_domain_grants(domain_script: str) -> None:
+    # worker_job_routes is absent by design: CHAOS-3033 attributes it
+    # exclusively to the coordinator role, and domainPosture() declares no
+    # privilege on it at all. Re-adding it here would put the provisioning
+    # scripts back in contradiction with domain readiness.
     expected_read_only_tables = {
         "integrations",
         "integration_sources",
         "integration_datasets",
         "integration_credentials",
         "sync_runs",
-        "worker_job_routes",
         "sync_dispatch_transport_routes",
     }
     configured_read_only_tables = {

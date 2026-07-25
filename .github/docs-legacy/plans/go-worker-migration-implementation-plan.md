@@ -6,6 +6,7 @@
 **Last updated:** 2026-07-20  
 **PRD:** [Go Worker Migration PRD](../product/go-worker-migration-prd.md)  
 **TRD:** [Go Worker Runtime TRD](../architecture/go-worker-runtime-trd.md)
+**Completion plan:** [Go Worker Cutover Completion Plan](go-worker-cutover-implementation-plan.md)
 
 ## 1. Delivery strategy
 

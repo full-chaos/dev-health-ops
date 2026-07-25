@@ -2,47 +2,33 @@ package providersync
 
 import "testing"
 
-func TestExecutionRegistryMachineCoversEveryProviderCapability(t *testing.T) {
+// TestCanonicalDescriptorRecognisesEveryCapability proves the unification: the
+// production route descriptor and the dataset capability registry recognise
+// exactly the same provider/dataset set, so no slice can be wired to a
+// descriptor path the router does not consult.
+func TestCanonicalDescriptorRecognisesEveryCapability(t *testing.T) {
 	t.Parallel()
-	for _, provider := range []string{"github", "gitlab", "jira", "linear", "launchdarkly"} {
+	switches := CompleteRouteSwitches{}
+	for _, provider := range MatrixProviders() {
 		capabilities := Capabilities(provider)
-		descriptors := ExecutionDescriptors(provider)
-		if len(descriptors) != len(capabilities) {
-			t.Fatalf("%s descriptors=%d capabilities=%d", provider, len(descriptors), len(capabilities))
+		if len(capabilities) == 0 {
+			t.Fatalf("%s has no capabilities", provider)
 		}
-		for index, capability := range capabilities {
-			descriptor := descriptors[index]
-			if descriptor.Provider != provider || descriptor.Dataset != capability.Dataset ||
-				descriptor.Mode != ExecutionPythonCompatibility ||
-				descriptor.CompatibilityAdapter != "dev_health_ops.processors.dataset_adapters.run_dataset_unit" ||
-				descriptor.RouteEnabled {
-				t.Fatalf("%s/%s descriptor=%+v", provider, capability.Dataset, descriptor)
-			}
-			if descriptor.NativeShadow != nativeShadowReady(provider, capability.Dataset) {
-				t.Fatalf("%s/%s native shadow=%v", provider, capability.Dataset, descriptor.NativeShadow)
+		for _, capability := range capabilities {
+			descriptor, ok := switches.Descriptor(provider, capability.Dataset)
+			if !ok || descriptor.Provider != provider ||
+				descriptor.RequestedDataset != capability.Dataset ||
+				descriptor.Executor != ProviderExecutor(provider, capability.Dataset) ||
+				descriptor.NativeShadow != nativeShadowReady(provider, capability.Dataset) {
+				t.Fatalf("%s/%s descriptor=%+v ok=%v", provider, capability.Dataset, descriptor, ok)
 			}
 		}
 	}
-}
-
-func TestNewProviderRouteSwitchesAreIndependentAndFailClosedUntilComplete(t *testing.T) {
-	t.Parallel()
-	switches := RouteSwitches{Linear: true, Jira: true, LaunchDarkly: true}
-	for _, test := range []struct {
-		provider string
-		dataset  string
-	}{
-		{provider: "linear", dataset: "work-items"},
-		{provider: "jira", dataset: "incidents"},
-		{provider: "launchdarkly", dataset: "feature-flags"},
-	} {
-		descriptor, ok := switches.Descriptor(test.provider, test.dataset)
-		if !ok || descriptor.NativeShadow || descriptor.RouteEnabled {
-			t.Fatalf("%s/%s descriptor=%+v ok=%v", test.provider, test.dataset, descriptor, ok)
-		}
+	if _, ok := switches.Descriptor("github", "feature-flags"); ok {
+		t.Fatal("unconfigured pair resolved a descriptor")
 	}
-	if github, ok := switches.Descriptor("github", "repo-metadata"); !ok || github.RouteEnabled {
-		t.Fatalf("unrelated GitHub route=%+v ok=%v", github, ok)
+	if _, ok := switches.Descriptor("bitbucket", "commits"); ok {
+		t.Fatal("unknown provider resolved a descriptor")
 	}
 }
 
@@ -79,25 +65,47 @@ func TestCompleteRouteSwitchesCollapseWorkItemAliasesAndRemainIndependent(t *tes
 	}
 }
 
-func TestProviderRouteSwitchesAreIndependentAndOnlyEnableAuditableNativeShadows(t *testing.T) {
+// TestShadowProjectionIsDerivedAndNarrow keeps the parity harness from
+// becoming a second capability registry.
+func TestShadowProjectionIsDerivedAndNarrow(t *testing.T) {
 	t.Parallel()
-	switches := RouteSwitches{GitHub: true}
-	github, ok := switches.Descriptor("github", "repo-metadata")
-	if !ok || !github.RouteEnabled {
-		t.Fatalf("GitHub descriptor=%+v ok=%v", github, ok)
+	switches := CompleteRouteSwitches{}
+	for _, provider := range []string{"github", "gitlab"} {
+		descriptor, _ := switches.Descriptor(provider, "repo-metadata")
+		shadow, ok := descriptor.Shadow(true)
+		if !ok || shadow.Provider != provider || shadow.Dataset != "repo-metadata" ||
+			!shadow.Write {
+			t.Fatalf("%s shadow=%+v ok=%v", provider, shadow, ok)
+		}
 	}
-	gitlab, ok := switches.Descriptor("gitlab", "repo-metadata")
-	if !ok || gitlab.RouteEnabled {
-		t.Fatalf("GitLab descriptor=%+v ok=%v", gitlab, ok)
-	}
-	code, ok := switches.Descriptor("github", "commits")
-	if !ok || code.RouteEnabled || code.NativeShadow {
-		t.Fatalf("code descriptor=%+v ok=%v", code, ok)
+	for _, test := range []struct{ provider, dataset string }{
+		{"github", "commits"},
+		{"github", "work-items"},
+		{"gitlab", "work-item-labels"},
+		{"linear", "work-items"},
+		{"jira", "incidents"},
+		{"launchdarkly", "feature-flags"},
+		{"pagerduty", "incidents"},
+	} {
+		descriptor, ok := switches.Descriptor(test.provider, test.dataset)
+		if !ok {
+			t.Fatalf("%s/%s has no descriptor", test.provider, test.dataset)
+		}
+		if shadow, ok := descriptor.Shadow(true); ok {
+			t.Fatalf("%s/%s shadow-eligible: %+v", test.provider, test.dataset, shadow)
+		}
 	}
 }
 
+// TestPartialWorkItemCollectorsCannotBeEnabledAsNativeRoutes preserves the
+// pre-CUT-08 guarantee: the GitHub/GitLab work-item fixture collectors are not
+// independent sink semantics and may never route or shadow.
 func TestPartialWorkItemCollectorsCannotBeEnabledAsNativeRoutes(t *testing.T) {
 	t.Parallel()
+	switches := CompleteRouteSwitches{
+		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
+		LaunchDarklyFeatureFlags: true,
+	}
 	for _, provider := range []string{"github", "gitlab"} {
 		for _, dataset := range []string{
 			"work-items",
@@ -106,10 +114,43 @@ func TestPartialWorkItemCollectorsCannotBeEnabledAsNativeRoutes(t *testing.T) {
 			"work-item-history",
 			"work-item-comments",
 		} {
-			descriptor, ok := (RouteSwitches{GitHub: true, GitLab: true}).Descriptor(provider, dataset)
-			if !ok || descriptor.NativeShadow || descriptor.RouteEnabled {
+			descriptor, ok := switches.Descriptor(provider, dataset)
+			if !ok || descriptor.NativeShadow || descriptor.RouteReady ||
+				descriptor.RouteEnabled ||
+				descriptor.Executor != ExecutorNone {
 				t.Fatalf("%s/%s descriptor=%+v ok=%v", provider, dataset, descriptor, ok)
 			}
 		}
+	}
+}
+
+// TestPagerDutyIsCoveredByTheSameContract closes the largest CUT-08 gap: every
+// PagerDuty dataset now resolves the same descriptor type as every other
+// provider, with honest false readiness.
+func TestPagerDutyIsCoveredByTheSameContract(t *testing.T) {
+	t.Parallel()
+	datasets := []string{
+		"services", "business-services", "escalation-policies", "schedules",
+		"on-calls", "users", "teams", "incidents", "incident-alerts",
+		"incident-log-entries", "incident-notes",
+	}
+	switches := CompleteRouteSwitches{
+		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
+		LaunchDarklyFeatureFlags: true,
+	}
+	for _, dataset := range datasets {
+		descriptor, ok := switches.Descriptor("pagerduty", dataset)
+		if !ok || descriptor.RouteReady || descriptor.RouteEnabled ||
+			descriptor.Executor != ExecutorNone {
+			t.Fatalf("pagerduty/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
+		}
+		capability, ok := Capability("pagerduty", dataset)
+		if !ok || len(capability.LegacyTargets) != 1 ||
+			capability.LegacyTargets[0] != "operational" {
+			t.Fatalf("pagerduty/%s capability=%+v ok=%v", dataset, capability, ok)
+		}
+	}
+	if len(Capabilities("pagerduty")) != len(datasets) {
+		t.Fatalf("pagerduty capabilities=%d", len(Capabilities("pagerduty")))
 	}
 }

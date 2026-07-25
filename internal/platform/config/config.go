@@ -16,11 +16,15 @@ import (
 )
 
 const (
-	defaultHTTPAddress         = ":8080"
-	defaultShutdownTimeout     = 30 * time.Second
-	defaultHealthCheckTimout   = 2 * time.Second
-	defaultDomainMaxConns      = 4
-	defaultQueueMaxConns       = 2
+	defaultHTTPAddress       = ":8080"
+	defaultShutdownTimeout   = 30 * time.Second
+	defaultHealthCheckTimout = 2 * time.Second
+	defaultDomainMaxConns    = 4
+	defaultQueueMaxConns     = 2
+	// 2 matches the checked-in per-process coordinator_max_connections in
+	// deploy/go-workers/profiles.json for every coordinator process today
+	// (reconciler, scheduler, worker-operator).
+	defaultCoordinatorMaxConns = 2
 	defaultCompletedRetention  = 7 * 24 * time.Hour
 	defaultCancelledRetention  = 30 * 24 * time.Hour
 	defaultDiscardedRetention  = 30 * 24 * time.Hour
@@ -28,7 +32,11 @@ const (
 	defaultRiverDatabaseSchema = "river"
 	defaultDomainDatabaseRole  = "devhealth_domain"
 	defaultQueueDatabaseRole   = "devhealth_queue"
-	defaultStreamReplicas      = 1
+	// The coordinator role of the CHAOS-3033 Option B split. Provisioned
+	// alongside the other two by docker/init-extra-dbs.sh (local dev) and
+	// scripts/worker/provision_river_roles.sql (deployed environments).
+	defaultCoordinatorDatabaseRole = "devhealth_coordinator"
+	defaultStreamReplicas          = 1
 )
 
 // QueueControlMode describes the endpoint semantics promised by the operator.
@@ -62,19 +70,22 @@ type Config struct {
 	HealthCheckTimeout time.Duration
 	LogLevel           slog.Level
 
-	DomainDatabaseURI     secrets.Value
-	QueueDatabaseURI      secrets.Value
-	ClickHouseURI         secrets.Value
-	ValkeyURI             secrets.Value
-	SettingsEncryptionKey secrets.Value
+	DomainDatabaseURI      secrets.Value
+	QueueDatabaseURI       secrets.Value
+	CoordinatorDatabaseURI secrets.Value
+	ClickHouseURI          secrets.Value
+	ValkeyURI              secrets.Value
+	SettingsEncryptionKey  secrets.Value
 
 	QueueDatabaseMode              QueueControlMode
 	RiverDatabaseSchema            string
 	DomainDatabaseRole             string
 	QueueDatabaseRole              string
+	CoordinatorDatabaseRole        string
 	DomainTransactionPooler        bool
 	DomainDatabaseMaxConns         int32
 	QueueDatabaseMaxConns          int32
+	CoordinatorDatabaseMaxConns    int32
 	CompletedJobRetention          time.Duration
 	CancelledJobRetention          time.Duration
 	DiscardedJobRetention          time.Duration
@@ -89,7 +100,22 @@ type Config struct {
 	WorkerJiraWorkItemsEnabled            bool
 	WorkerJiraIncidentsEnabled            bool
 	WorkerLaunchDarklyFeatureFlagsEnabled bool
+
+	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
+	// stream. The Python ingress dispatches its Celery task only while this is
+	// "celery"; the Go stream runner constructs its consumer only when it is
+	// "river". One switch, read by both runtimes, so the stream can never have
+	// two owners reconciling and deleting the same entries.
+	PagerDutyWebhookTransport string
 }
+
+// PagerDuty webhook transports. Celery is the default because it is what
+// production runs today: an unset or unrecognized value must never silently
+// hand ownership to the runtime that is not yet cut over.
+const (
+	PagerDutyTransportCelery = "celery"
+	PagerDutyTransportRiver  = "river"
+)
 
 // Load reads and validates the process environment. CLI profile selection, if
 // supplied by Spec.Profile, takes precedence over DEV_HEALTH_PROFILE.
@@ -178,6 +204,11 @@ func Load(spec Spec) (Config, error) {
 	}{
 		{name: "POSTGRES_URI", target: &cfg.DomainDatabaseURI},
 		{name: "WORKER_DATABASE_URI", target: &cfg.QueueDatabaseURI},
+		// Optional here on purpose: only coordinator binaries require it, and
+		// they enforce that themselves through
+		// postgres.RuntimeConfig.RequireCoordinator. A domain-only worker must
+		// not fail to start merely because this is unset.
+		{name: "COORDINATOR_DATABASE_URI", target: &cfg.CoordinatorDatabaseURI},
 		{name: "CLICKHOUSE_URI", target: &cfg.ClickHouseURI},
 		{name: "VALKEY_URI", target: &cfg.ValkeyURI},
 		{name: "SETTINGS_ENCRYPTION_KEY", target: &cfg.SettingsEncryptionKey},
@@ -218,6 +249,9 @@ func Load(spec Spec) (Config, error) {
 	if err := validateURI("WORKER_DATABASE_URI", cfg.QueueDatabaseURI, postgresSchemes...); err != nil {
 		return Config{}, err
 	}
+	if err := validateURI("COORDINATOR_DATABASE_URI", cfg.CoordinatorDatabaseURI, postgresSchemes...); err != nil {
+		return Config{}, err
+	}
 	if err := validateURI("CLICKHOUSE_URI", cfg.ClickHouseURI, "clickhouse", "http", "https"); err != nil {
 		return Config{}, err
 	}
@@ -228,6 +262,16 @@ func Load(spec Spec) (Config, error) {
 	cfg.QueueDatabaseMode, err = queueControlModeEnv(lookup)
 	if err != nil {
 		return Config{}, err
+	}
+	cfg.PagerDutyWebhookTransport = strings.ToLower(strings.TrimSpace(envOrDefault(
+		lookup, "PAGERDUTY_WEBHOOK_TRANSPORT", PagerDutyTransportCelery,
+	)))
+	if cfg.PagerDutyWebhookTransport != PagerDutyTransportCelery &&
+		cfg.PagerDutyWebhookTransport != PagerDutyTransportRiver {
+		return Config{}, fmt.Errorf(
+			"PAGERDUTY_WEBHOOK_TRANSPORT must be %s or %s",
+			PagerDutyTransportCelery, PagerDutyTransportRiver,
+		)
 	}
 	cfg.RiverDatabaseSchema = envOrDefault(lookup, "RIVER_DATABASE_SCHEMA", defaultRiverDatabaseSchema)
 	if err := validateIdentifier("RIVER_DATABASE_SCHEMA", cfg.RiverDatabaseSchema); err != nil {
@@ -243,6 +287,23 @@ func Load(spec Spec) (Config, error) {
 	}
 	if cfg.DomainDatabaseRole == cfg.QueueDatabaseRole {
 		return Config{}, fmt.Errorf("RIVER_DOMAIN_DATABASE_ROLE and RIVER_QUEUE_DATABASE_ROLE must be distinct")
+	}
+	cfg.CoordinatorDatabaseRole = envOrDefault(
+		lookup, "RIVER_COORDINATOR_DATABASE_ROLE", defaultCoordinatorDatabaseRole,
+	)
+	if err := validateIdentifier("RIVER_COORDINATOR_DATABASE_ROLE", cfg.CoordinatorDatabaseRole); err != nil {
+		return Config{}, err
+	}
+	// Checked unconditionally, even for domain-only processes: the three role
+	// names are a deployment-wide invariant, and a collision configured on a
+	// worker that never opens a coordinator pool is still a misconfiguration
+	// that would be silently inherited by the next process to opt in.
+	if cfg.CoordinatorDatabaseRole == cfg.DomainDatabaseRole ||
+		cfg.CoordinatorDatabaseRole == cfg.QueueDatabaseRole {
+		return Config{}, fmt.Errorf(
+			"RIVER_COORDINATOR_DATABASE_ROLE must be distinct from " +
+				"RIVER_DOMAIN_DATABASE_ROLE and RIVER_QUEUE_DATABASE_ROLE",
+		)
 	}
 	cfg.DomainTransactionPooler, err = boolEnv(lookup, "PGBOUNCER_TRANSACTION_MODE", false)
 	if err != nil {
@@ -268,8 +329,22 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// 1..4 mirrors deploymentcontract's CoordinatorMaxConnections bound: the
+	// coordinator connection is direct and server-counted, so it shares the
+	// queue-control ceiling rather than the PgBouncer-pooled domain ceiling.
+	coordinatorMaxConns, err := boundedIntEnv(
+		lookup,
+		"WORKER_COORDINATOR_DATABASE_MAX_CONNS",
+		defaultCoordinatorMaxConns,
+		1,
+		4,
+	)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg.DomainDatabaseMaxConns = int32(domainMaxConns)
 	cfg.QueueDatabaseMaxConns = int32(queueMaxConns)
+	cfg.CoordinatorDatabaseMaxConns = int32(coordinatorMaxConns)
 
 	cfg.CompletedJobRetention, err = durationEnv(
 		lookup,
@@ -335,14 +410,17 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("health_check_timeout", c.HealthCheckTimeout),
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
+		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
 		slog.String("queue_database_mode", string(c.QueueDatabaseMode)),
 		slog.String("river_database_schema", c.RiverDatabaseSchema),
 		slog.String("river_domain_database_role", c.DomainDatabaseRole),
 		slog.String("river_queue_database_role", c.QueueDatabaseRole),
+		slog.String("river_coordinator_database_role", c.CoordinatorDatabaseRole),
 		slog.Bool("domain_transaction_pooler", c.DomainTransactionPooler),
 		slog.Int("domain_database_max_connections", int(c.DomainDatabaseMaxConns)),
 		slog.Int("queue_database_max_connections", int(c.QueueDatabaseMaxConns)),
+		slog.Int("coordinator_database_max_connections", int(c.CoordinatorDatabaseMaxConns)),
 		slog.Duration("river_completed_job_retention", c.CompletedJobRetention),
 		slog.Duration("river_cancelled_job_retention", c.CancelledJobRetention),
 		slog.Duration("river_discarded_job_retention", c.DiscardedJobRetention),

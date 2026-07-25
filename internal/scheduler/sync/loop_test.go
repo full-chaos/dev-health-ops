@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,6 +68,7 @@ func newTestLoop(t *testing.T, stepper HandoffStepper, clock *testLoopClock) (*L
 		MaxBackoff:   80 * time.Millisecond,
 		Limit:        3,
 		Registry:     registry,
+		Occurrences:  &stubOccurrences{},
 	}, clock)
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +81,22 @@ func openLoopReadiness(t *testing.T, registry *health.Registry) {
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// stubOccurrences is a no-work occurrence consumer. The loop requires one, so
+// every loop test supplies it; the reconciler's own behavior is covered by its
+// integration tests.
+type stubOccurrences struct {
+	calls  atomic.Int64
+	result OccurrenceReconcileResult
+	err    error
+}
+
+func (stepper *stubOccurrences) Reconcile(
+	context.Context, time.Time, int,
+) (OccurrenceReconcileResult, error) {
+	stepper.calls.Add(1)
+	return stepper.result, stepper.err
 }
 
 func TestLoopImmediateWindowOpensReadinessAndExportsMetrics(t *testing.T) {
@@ -268,4 +286,115 @@ func TestLoopRejectsDoubleStartAndStopsTicker(t *testing.T) {
 	default:
 		t.Fatal("shutdown did not stop ticker")
 	}
+}
+
+// CUT-06's consumer is only useful if something drives it. The marker advances
+// the moment an occurrence is handed off, so a loop that produces occurrences
+// without consuming them strands work permanently once the optional Python
+// consumer is off.
+func TestLoopDrivesTheOccurrenceConsumerEveryWindow(t *testing.T) {
+	clock := &testLoopClock{now: at("2026-07-23T12:00:00Z")}
+	occurrences := &stubOccurrences{
+		result: OccurrenceReconcileResult{Scanned: 2, Completed: 1, Retried: 1},
+	}
+	registry := health.NewRegistry(time.Second)
+	loop, err := newLoop(
+		schedulerHandoffStepper(func() (HandoffResult, error) {
+			return HandoffResult{}, nil
+		}),
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+		LoopConfig{
+			PollInterval: minLoopPollInterval,
+			StepTimeout:  time.Second,
+			MaxBackoff:   80 * time.Millisecond,
+			Limit:        3,
+			Registry:     registry,
+			Occurrences:  occurrences,
+		},
+		clock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loop.Shutdown(context.Background()) }()
+	if occurrences.calls.Load() != 1 {
+		t.Fatalf("the initial window drove the consumer %d times", occurrences.calls.Load())
+	}
+	var metrics strings.Builder
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sync_scheduler_occurrences_completed_total 1",
+		"sync_scheduler_occurrences_retried_total 1",
+		"sync_scheduler_occurrences_quarantined_total 0",
+	} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Errorf("metrics omit %q", want)
+		}
+	}
+}
+
+// A consumer failure has to fail the window. Reporting a healthy scheduler
+// while pending occurrences pile up is precisely the silent-stranding failure
+// this wiring exists to prevent.
+func TestLoopFailsTheWindowWhenOccurrencesCannotBeConsumed(t *testing.T) {
+	clock := &testLoopClock{now: at("2026-07-23T12:00:00Z")}
+	occurrences := &stubOccurrences{err: ErrMaterializerUnavailable}
+	registry := health.NewRegistry(time.Second)
+	loop, err := newLoop(
+		schedulerHandoffStepper(func() (HandoffResult, error) {
+			return HandoffResult{}, nil
+		}),
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+		LoopConfig{
+			PollInterval: minLoopPollInterval,
+			StepTimeout:  time.Second,
+			MaxBackoff:   80 * time.Millisecond,
+			Limit:        3,
+			Registry:     registry,
+			Occurrences:  occurrences,
+		},
+		clock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Start(context.Background()); err == nil {
+		t.Fatal("a scheduler that cannot consume its own occurrences started successfully")
+	}
+	if err := loop.readiness(context.Background()); err == nil {
+		t.Fatal("readiness stayed open with an unconsumable occurrence backlog")
+	}
+}
+
+// A loop cannot be constructed without a consumer at all.
+func TestLoopRequiresAnOccurrenceConsumer(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	_, err := newLoop(
+		schedulerHandoffStepper(func() (HandoffResult, error) { return HandoffResult{}, nil }),
+		CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) error { return nil }),
+		LoopConfig{
+			PollInterval: minLoopPollInterval,
+			StepTimeout:  time.Second,
+			MaxBackoff:   80 * time.Millisecond,
+			Limit:        3,
+			Registry:     registry,
+		},
+		&testLoopClock{now: at("2026-07-23T12:00:00Z")},
+	)
+	if err == nil {
+		t.Fatal("newLoop() accepted a config with no occurrence consumer")
+	}
+}
+
+type schedulerHandoffStepper func() (HandoffResult, error)
+
+func (stepper schedulerHandoffStepper) HandoffDueResult(
+	context.Context, time.Time, int, Coordinator,
+) (HandoffResult, error) {
+	return stepper()
 }

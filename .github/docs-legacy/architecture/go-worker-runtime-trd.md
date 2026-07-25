@@ -6,6 +6,8 @@
 **Last updated:** 2026-07-20  
 **Product requirements:** [Go Worker Migration PRD](../product/go-worker-migration-prd.md)  
 **Delivery plan:** Repository-only [Go Worker Migration Implementation Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-migration-implementation-plan.md)  
+**Cutover completion design:** [Go Worker Cutover Completion TRD](go-worker-cutover-trd.md)  
+**Cutover completion plan:** Repository-only [Go Worker Cutover Completion Plan](https://github.com/full-chaos/dev-health-ops/blob/main/docs/plans/go-worker-cutover-implementation-plan.md)  
 **Phase 0 decision:** [CHAOS-3034 River compatibility ADR](../decisions/chaos-3034-river-compatibility.md)
 
 ## 1. Decision summary
@@ -152,7 +154,6 @@ flowchart TB
     end
 
     subgraph GoRuntime["Go worker runtime"]
-        Latency[profile: latency]
         Sync[profile: sync]
         Heavy[profile: heavy]
         Ops[profile: ops]
@@ -203,10 +204,13 @@ flowchart TB
 ### 4.1 Process topology
 
 One binary may implement multiple profiles, but profiles remain separate deployments.
+The worker has no default profile: an operator must name one, and every named
+profile owns registered job kinds. The `latency` profile was removed in CUT-02
+because it registered nothing and could therefore never satisfy exact startup
+validation; webhook, report, and billing kinds are owned by `ops` and `heavy`.
 
 | Process/profile | Execution mode | Default work | Scaling model |
 |---|---|---|---|
-| `dev-health-worker --profile latency` | River client | webhooks, reports, billing, lightweight coordinators | HPA on oldest available age and saturation |
 | `dev-health-worker --profile sync` | River client | sync coordinators and provider units | HPA by provider/cost queue age with DB/provider budget caps |
 | `dev-health-worker --profile heavy` | River client | metrics, complexity, work graph, investment, backfills | HPA on backlog age plus CPU/memory; conservative DB/CH caps |
 | `dev-health-worker --profile ops` | River client | retention, heartbeat, low-volume operational commands | fixed small replica count |
@@ -528,12 +532,13 @@ Logical queues preserve latency and cost isolation but are generated from the re
 
 | Profile | Queues |
 |---|---|
-| `latency` | `default`, `webhooks`, `reports`, `sync.coordinator` |
-| `sync` | `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.linear.medium`, `sync.jira.medium`, `sync.launchdarkly.light` |
-| `heavy` | `metrics`, `backfill`, `workgraph`, `investment`, `complexity` |
-| `ops` | `retention`, `heartbeat`, `notifications` |
+| `sync` | `sync`, `sync_provider` |
+| `heavy` | `metrics`, `reports`, `workgraph`, `investment` |
+| `ops` | `retention`, `heartbeat`, `webhooks` |
 
-A coordinator queue is always consumed by a low-latency profile so provider saturation cannot block dispatch or finalization.
+The `latency` profile was removed in CUT-02: it registered no kinds, so it could never satisfy exact startup validation. Its intended work is owned elsewhere — `webhooks` and `heartbeat` by `ops`, `reports` by `heavy`, and the sync coordinator by the `sync` queue.
+
+The sync coordinator queue is consumed by the same profile as provider units. Provider saturation cannot block dispatch or finalization because per-queue `MaxWorkers` is budgeted separately for `sync` and `sync_provider`, so a saturated provider queue cannot consume the coordinator's slots.
 
 Per-queue `MaxWorkers` is local to a process. Fleet-wide limits are enforced by the existing database/Valkey budget layer keyed by provider, organization, host, and cost class.
 

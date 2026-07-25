@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/pagerduty"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -75,7 +76,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 	if streamRunnerSpec.Service != "dev-health-stream-runner" || streamRunnerSpec.DefaultProfile != "ingest" {
 		t.Fatalf("unexpected stream-runner spec: %#v", streamRunnerSpec)
 	}
-	if !slices.Equal(streamRunnerSpec.Profiles, []string{"ingest", "external"}) {
+	if !slices.Equal(streamRunnerSpec.Profiles, []string{"ingest", "external", "pagerduty"}) {
 		t.Fatalf("unexpected stream profiles: %v", streamRunnerSpec.Profiles)
 	}
 	if streamRunnerSpec.ConfigureDependencies == nil {
@@ -188,6 +189,68 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []string{"stream_consumer", "valkey"}
+		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
+			t.Fatalf("readiness = %#v, want failed %v", status, want)
+		}
+	})
+
+	t.Run("pagerduty owns one webhook loop over process storage", func(t *testing.T) {
+		storage := &streamCommandStorage{}
+		registry := health.NewRegistry(100 * time.Millisecond)
+		components, err := configureStreamRunnerDependenciesWithSources(
+			context.Background(),
+			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 2},
+			registry,
+			streamDependencySources{
+				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+					return storage, nil
+				},
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(components) != 2 {
+			t.Fatalf("components = %d, want storage plus one webhook loop", len(components))
+		}
+		if !slices.Equal(storage.handlers, []streamHandlerKind{pagerdutyHandlerKind}) {
+			t.Fatalf("handlers = %v", storage.handlers)
+		}
+		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		status := registry.Readiness(context.Background())
+		want := []string{"pagerduty_webhooks_loop"}
+		if status.Ready || !slices.Equal(status.Failed, want) {
+			t.Fatalf("readiness = %#v, want failed %v", status, want)
+		}
+	})
+
+	t.Run("unavailable pagerduty bridge stays live and fails readiness", func(t *testing.T) {
+		// The compatibility reconciler is unconfigured until the worker bridge
+		// URL and token are deployed; that must never kill the process.
+		storage := &streamCommandStorage{handlerErr: errors.New("bridge unavailable")}
+		registry := health.NewRegistry(100 * time.Millisecond)
+		components, err := configureStreamRunnerDependenciesWithSources(
+			context.Background(),
+			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 1},
+			registry,
+			streamDependencySources{
+				openStorage: func(context.Context, config.Config) (streamStorage, error) {
+					return storage, nil
+				},
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(components) != 0 || !storage.closed {
+			t.Fatalf("components=%d storage_closed=%v, want no components and closed storage", len(components), storage.closed)
+		}
+		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"stream_consumer"}
 		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 			t.Fatalf("readiness = %#v, want failed %v", status, want)
 		}
@@ -319,5 +382,99 @@ func TestProductionRunnerConfigsPreservePythonStreamContracts(t *testing.T) {
 		external.ReclaimIdle != 15*time.Minute || external.MaxDeliveries != 5 ||
 		!external.Singleton || external.ConfiguredReplicas != 1 {
 		t.Fatalf("external config = %#v", external)
+	}
+	// Python: max_retries=3 (four attempts) with a 30s first backoff, one
+	// stream per binding, and horizontally scalable webhook processing.
+	pagerdutyRunner := pagerdutyRunnerConfig(2)
+	if pagerdutyRunner.ConsumerGroup != "pagerduty-webhook-consumers" ||
+		!slices.Equal(pagerdutyRunner.Patterns, []string{"pagerduty-webhooks:*"}) ||
+		pagerdutyRunner.MaxDeliveries != 4 ||
+		pagerdutyRunner.ReclaimIdle != pagerduty.ReceiptLease+time.Minute ||
+		pagerdutyRunner.ReclaimEvery != 30*time.Second ||
+		pagerdutyRunner.Singleton || pagerdutyRunner.ConfiguredReplicas != 2 {
+		t.Fatalf("pagerduty config = %#v", pagerdutyRunner)
+	}
+	// A reclaim must imply the previous holder can no longer own the receipt.
+	// If the idle threshold ever drops below the lease, a reclaimed entry reads
+	// as in-flight on every delivery and is dead-lettered without a single
+	// reconciliation attempt.
+	if pagerdutyRunner.ReclaimIdle <= pagerduty.ReceiptLease {
+		t.Fatalf("reclaim idle %s does not exceed receipt lease %s",
+			pagerdutyRunner.ReclaimIdle, pagerduty.ReceiptLease)
+	}
+}
+
+// TestPagerDutyConsumerRefusesToRaceCelery is the CUT-04 codex HIGH-3
+// regression. The Python ingress still writes the stream entry AND dispatches
+// its Celery task, which reconciles and XDELs the same entry. Constructing a Go
+// consumer alongside it lets both reconcile one event and lets Python delete an
+// entry pending in the Go group; the two receipts are not shared (Valkey vs
+// PostgreSQL). Exactly one runtime may own the stream, chosen by one switch.
+func TestPagerDutyConsumerRefusesToRaceCelery(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name      string
+		transport string
+		wantErr   bool
+	}{
+		{name: "celery owns the stream", transport: config.PagerDutyTransportCelery, wantErr: true},
+		{name: "unset defaults to celery", transport: "", wantErr: true},
+		{name: "river owns the stream", transport: config.PagerDutyTransportRiver},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			storage := &productionStreamStorage{
+				bridge: operationalBridgeSettings{
+					baseURL:   "https://api.internal",
+					token:     secrets.NewValue("test-bridge-token"),
+					timeout:   time.Second,
+					transport: test.transport,
+				},
+			}
+			_, err := storage.Handler(pagerdutyHandlerKind)
+			if test.wantErr {
+				// ErrInvalidConfig stops the process rather than leaving it
+				// live: a profile/owner contradiction is operator error.
+				if !errors.Is(err, streamrunner.ErrInvalidConfig) {
+					t.Fatalf("handler error = %v, want the ownership refusal", err)
+				}
+				return
+			}
+			// With River owning the stream the gate is open; construction still
+			// fails here only because this fake storage has no domain pool.
+			if errors.Is(err, streamrunner.ErrInvalidConfig) {
+				t.Fatal("river transport was refused by the ownership gate")
+			}
+		})
+	}
+}
+
+// TestPagerDutyTransportDefaultsToCelery pins the fail-safe direction: an unset
+// or unrecognized value must never hand ownership to the runtime that is not
+// yet cut over.
+func TestPagerDutyTransportDefaultsToCelery(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.Load(config.Spec{
+		Service: "dev-health-stream-runner", Profiles: []string{"ingest"},
+		DefaultProfile: "ingest",
+		LookupEnv:      func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PagerDutyWebhookTransport != config.PagerDutyTransportCelery {
+		t.Fatalf("default transport = %q, want celery", cfg.PagerDutyWebhookTransport)
+	}
+	if _, err := config.Load(config.Spec{
+		Service: "dev-health-stream-runner", Profiles: []string{"ingest"},
+		DefaultProfile: "ingest",
+		LookupEnv: func(key string) (string, bool) {
+			if key == "PAGERDUTY_WEBHOOK_TRANSPORT" {
+				return "kafka", true
+			}
+			return "", false
+		},
+	}); err == nil {
+		t.Fatal("unrecognized transport was accepted")
 	}
 }

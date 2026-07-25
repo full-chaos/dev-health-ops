@@ -23,7 +23,7 @@ func TestEffectCommitterRecoversCrashWindowsByDestinationPolicy(t *testing.T) {
 	firstSink := &memoryEffectSink{failAfterWrite: "feature_flag_event", failure: crash}
 	_, err := (EffectCommitter{
 		Ledger: ledger, Sink: firstSink, Now: func() time.Time { return now },
-	}).Commit(context.Background(), claim, batches)
+	}).Commit(context.Background(), claim, batches, now)
 	if !errors.Is(err, crash) {
 		t.Fatalf("first commit error=%v", err)
 	}
@@ -41,7 +41,7 @@ func TestEffectCommitterRecoversCrashWindowsByDestinationPolicy(t *testing.T) {
 			inspections: map[string]EffectInspection{"feature_flag_event": EffectExact},
 		},
 		Now: func() time.Time { return now.Add(time.Minute) },
-	}).Commit(context.Background(), claim, batches)
+	}).Commit(context.Background(), claim, batches, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestEffectCommitterResetsAbsentAndReplaysProvenSafeEffects(t *testing.T) {
 			result, err := (EffectCommitter{
 				Ledger: ledger, Sink: sink, Readback: test.readback,
 				Now: func() time.Time { return now.Add(time.Minute) },
-			}).Commit(context.Background(), claim, []EffectBatch{batch})
+			}).Commit(context.Background(), claim, []EffectBatch{batch}, now)
 			if err != nil || result != test.wantResult ||
 				len(sink.destinations) != 1 ||
 				ledger.state.Effects[0].Status != GenerationBlockCommitted {
@@ -161,7 +161,7 @@ func TestEffectCommitterFailsClosedForAmbiguousOrDriftedRecovery(t *testing.T) {
 			_, err = (EffectCommitter{
 				Ledger: ledger, Sink: sink, Readback: test.readback,
 				Now: func() time.Time { return now.Add(time.Minute) },
-			}).Commit(context.Background(), claim, []EffectBatch{batch})
+			}).Commit(context.Background(), claim, []EffectBatch{batch}, now)
 			if !errors.Is(err, test.want) || len(sink.destinations) != 0 ||
 				ledger.state.Effects[0].Status != GenerationBlockWriting {
 				t.Fatalf("error=%v writes=%v state=%+v", err, sink.destinations, ledger.state)
@@ -183,7 +183,7 @@ func TestEffectCommitterFailsClosedForAmbiguousOrDriftedRecovery(t *testing.T) {
 	_, err = (EffectCommitter{
 		Ledger: ledger, Sink: &memoryEffectSink{},
 		Now: func() time.Time { return now.Add(time.Minute) },
-	}).Commit(context.Background(), claim, []EffectBatch{newBatch})
+	}).Commit(context.Background(), claim, []EffectBatch{newBatch}, now)
 	if !errors.Is(err, ErrEffectLedgerConflict) {
 		t.Fatalf("drifted manifest error=%v", err)
 	}
@@ -253,7 +253,10 @@ func (ledger *memoryEffectLedger) LoadEffects(
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	if ledger.state.SchemaVersion == "" {
-		return EffectLedgerState{}, ErrEffectLedgerConflict
+		// Match PostgresRepository.LoadEffects: an absent ledger is "not
+		// found", not a conflict. Returning a conflict here hid the fact that
+		// the executor now stabilizes timestamps on every attempt.
+		return EffectLedgerState{}, ErrEffectLedgerNotFound
 	}
 	return ledger.state, nil
 }

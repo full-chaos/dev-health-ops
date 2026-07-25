@@ -26,6 +26,20 @@ data:
   RIVER_DATABASE_SCHEMA: "river"
   RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
   RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
+
+  # Worker operational bridge (CUT-04). The Go PagerDuty stream runner forwards
+  # reconciliation to the Python API bridge until the locked-graph port lands,
+  # so it cannot open readiness without a reachable endpoint. The matching
+  # bearer token is a Secret key (dev-health-secrets), never a ConfigMap value.
+  WORKER_OPERATIONAL_BRIDGE_URL: "http://dev-health-api.dev-health.svc.cluster.local:8000"
+  # The in-cluster endpoint above is plaintext, which the Go runtime rejects
+  # unless this opt-in is set. Set it to "false" and repoint the URL at an
+  # internal HTTPS origin (mesh/ingress) to drop the exemption.
+  WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: "true"
+  # Exactly one runtime owns the PagerDuty webhook stream. The API and the Go
+  # stream runner share this ConfigMap so they can never disagree: `celery`
+  # keeps the Celery dispatch, `river` hands the stream to Go (CUT-14/18).
+  PAGERDUTY_WEBHOOK_TRANSPORT: "celery"
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
   OTEL_SERVICE_NAME: "dev-health-ops"

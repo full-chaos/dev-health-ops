@@ -47,6 +47,7 @@ type OperatorCLI struct {
 	MaxConcurrentInvocations   int      `json:"max_concurrent_invocations"`
 	QueueControlMaxConnections int      `json:"queue_control_max_connections"`
 	DomainMaxConnections       int      `json:"domain_max_connections"`
+	CoordinatorMaxConnections  int      `json:"coordinator_max_connections"`
 	ConfigEnv                  []string `json:"config_env"`
 	SecretEnv                  []string `json:"secret_env"`
 }
@@ -69,6 +70,7 @@ type Process struct {
 	JobKinds                   []string      `json:"job_kinds"`
 	QueueControlMaxConnections int           `json:"queue_control_max_connections"`
 	DomainMaxConnections       int           `json:"domain_max_connections"`
+	CoordinatorMaxConnections  int           `json:"coordinator_max_connections"`
 	RequiresClickHouse         bool          `json:"requires_clickhouse"`
 	RequiresValkey             bool          `json:"requires_valkey"`
 	SecretEnv                  []string      `json:"secret_env"`
@@ -87,6 +89,7 @@ type Manifest struct {
 
 type BudgetSummary struct {
 	DirectQueueControlConnections int
+	DirectCoordinatorConnections  int
 	DomainClientConnections       int
 	ServerConnectionFootprint     int
 }
@@ -123,7 +126,13 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	if manifest.Registry != "contracts/jobs/v1/registry.json" {
 		return BudgetSummary{}, errors.New("deployment profile registry path is not canonical")
 	}
+	// All three runtime role identities of the Option B split. The coordinator
+	// role belongs here even though only the control-runtime processes and
+	// workerctl open a coordinator pool: the three names must be pairwise
+	// distinct deployment-wide, and platform/config enforces that on every
+	// process, including domain-only ones.
 	if !equalStrings(manifest.RuntimeRoleEnv, []string{
+		"RIVER_COORDINATOR_DATABASE_ROLE",
 		"RIVER_DOMAIN_DATABASE_ROLE",
 		"RIVER_QUEUE_DATABASE_ROLE",
 	}) {
@@ -150,6 +159,8 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	summary := BudgetSummary{
 		DirectQueueControlConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
 			manifest.OperatorCLI.QueueControlMaxConnections,
+		DirectCoordinatorConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
+			manifest.OperatorCLI.CoordinatorMaxConnections,
 		DomainClientConnections: manifest.OperatorCLI.MaxConcurrentInvocations *
 			manifest.OperatorCLI.DomainMaxConnections,
 	}
@@ -168,6 +179,7 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 		}
 
 		summary.DirectQueueControlConnections += process.MaxReplicas * process.QueueControlMaxConnections
+		summary.DirectCoordinatorConnections += process.MaxReplicas * process.CoordinatorMaxConnections
 		summary.DomainClientConnections += process.MaxReplicas * process.DomainMaxConnections
 
 		if process.Runtime != "river" {
@@ -200,7 +212,8 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	}
 	summary.ServerConnectionFootprint = manifest.PostgresBudget.ServerReservedConnections +
 		manifest.PostgresBudget.PgBouncerDefaultPoolSize*manifest.PostgresBudget.PgBouncerServerPoolCount +
-		summary.DirectQueueControlConnections
+		summary.DirectQueueControlConnections +
+		summary.DirectCoordinatorConnections
 	if summary.ServerConnectionFootprint > manifest.PostgresBudget.ServerMaxConnections {
 		return BudgetSummary{}, fmt.Errorf(
 			"PostgreSQL server connection budget exceeded: %d > %d",
@@ -280,16 +293,29 @@ func validateOperatorCLI(operator OperatorCLI) error {
 	if operator.Name != "worker-operator" || operator.Binary != "dev-health-workerctl" ||
 		operator.MaxConcurrentInvocations != 1 || operator.QueueControlMaxConnections < 1 ||
 		operator.QueueControlMaxConnections > 4 || operator.DomainMaxConnections < 1 ||
-		operator.DomainMaxConnections > 16 {
+		operator.DomainMaxConnections > 16 ||
+		// workerctl is one of the three coordinator profiles (with reconciler
+		// and scheduler) under the Option B split — see the "control" runtime
+		// case in validateProcess for why this is a direct, server-counted
+		// connection rather than a PgBouncer-pooled one.
+		operator.CoordinatorMaxConnections < 1 || operator.CoordinatorMaxConnections > 4 {
 		return errors.New("worker operator deployment identity or connection budget is invalid")
 	}
+	// COORDINATOR_DATABASE_URI and RIVER_COORDINATOR_DATABASE_ROLE are required
+	// here, not optional: workerctl authenticates its operator token against
+	// internal_service_credentials, a coordinator-exclusive table, before any
+	// command dispatches. Without the coordinator DSN the binary cannot do
+	// anything at all, so the deployment contract refuses to describe it as
+	// deployable without one.
 	if !equalStrings(operator.ConfigEnv, []string{
 		"PGBOUNCER_TRANSACTION_MODE",
+		"RIVER_COORDINATOR_DATABASE_ROLE",
 		"RIVER_DATABASE_SCHEMA",
 		"RIVER_DOMAIN_DATABASE_ROLE",
 		"RIVER_QUEUE_DATABASE_ROLE",
 		"WORKER_DATABASE_MODE",
 	}) || !equalStrings(operator.SecretEnv, []string{
+		"COORDINATOR_DATABASE_URI",
 		"POSTGRES_URI",
 		"WORKER_DATABASE_URI",
 		"WORKER_OPERATOR_TOKEN",
@@ -305,7 +331,8 @@ func validateProcess(process Process) error {
 		return errors.New("identity or coexistence replica policy is invalid")
 	}
 	if process.DomainMaxConnections < 1 || process.DomainMaxConnections > 16 ||
-		process.QueueControlMaxConnections < 0 || process.QueueControlMaxConnections > 4 {
+		process.QueueControlMaxConnections < 0 || process.QueueControlMaxConnections > 4 ||
+		process.CoordinatorMaxConnections < 0 || process.CoordinatorMaxConnections > 4 {
 		return errors.New("connection limits are invalid")
 	}
 	if !sortedUnique(process.Queues) || !sortedUnique(process.JobKinds) ||
@@ -338,6 +365,7 @@ func validateProcess(process Process) error {
 		if process.Binary != "dev-health-worker" || process.RegistryProfile == nil ||
 			!profilePattern.MatchString(*process.RegistryProfile) ||
 			process.QueueControlMaxConnections < 1 ||
+			process.CoordinatorMaxConnections != 0 ||
 			!contains(process.SecretEnv, "WORKER_DATABASE_URI") {
 			return errors.New("River runtime is missing its binary, profile, or queue-control DSN")
 		}
@@ -352,13 +380,26 @@ func validateProcess(process Process) error {
 		if expectedBinary == "" || process.Binary != expectedBinary || process.RegistryProfile != nil ||
 			len(process.Queues) != 0 || len(process.JobKinds) != 0 ||
 			process.QueueControlMaxConnections < 1 || !contains(process.SecretEnv, "WORKER_DATABASE_URI") ||
-			len(process.QueueWorkers) != 0 {
+			len(process.QueueWorkers) != 0 ||
+			// Control-runtime processes are the coordinator role's own worker
+			// pool under the Option B split — their control-plane database
+			// access is direct (server-counted), the same shape
+			// QueueControlMaxConnections already models for River's own
+			// queue-control access, not PgBouncer-pooled like
+			// DomainMaxConnections. See BudgetSummary.DirectCoordinatorConnections.
+			process.CoordinatorMaxConnections < 1 ||
+			// A coordinator budget without the coordinator DSN would describe a
+			// process that reserves connections it cannot open: the binary calls
+			// RuntimeConfig.WithCoordinator and fails closed at startup without
+			// this secret, so the contract must require them together.
+			!contains(process.SecretEnv, "COORDINATOR_DATABASE_URI") {
 			return errors.New("control runtime wiring is invalid")
 		}
 	case "stream":
 		if process.Binary != "dev-health-stream-runner" || process.RegistryProfile != nil ||
 			len(process.Queues) != 0 || len(process.JobKinds) != 0 ||
-			process.QueueControlMaxConnections != 0 || !process.RequiresValkey || len(process.QueueWorkers) != 0 {
+			process.QueueControlMaxConnections != 0 || process.CoordinatorMaxConnections != 0 ||
+			!process.RequiresValkey || len(process.QueueWorkers) != 0 {
 			return errors.New("stream runtime wiring is invalid")
 		}
 		// External ingest intentionally has one consumer identity and one

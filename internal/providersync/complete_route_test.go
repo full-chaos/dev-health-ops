@@ -192,6 +192,21 @@ func completeRouteExecutor(
 	ledger EffectLedger,
 	sink EffectSink,
 ) CompleteRouteExecutor {
+	// Deliberately skewed: the committer must never stamp the persisted
+	// ledger CreatedAt from its own clock, so pinning both to one fake value
+	// would hide a clock split between collection and commit.
+	return completeRouteExecutorWithCommitClock(
+		now, now.Add(90*time.Second), handler, ledger, sink,
+	)
+}
+
+func completeRouteExecutorWithCommitClock(
+	now time.Time,
+	commitNow time.Time,
+	handler CompleteRouteHandler,
+	ledger EffectLedger,
+	sink EffectSink,
+) CompleteRouteExecutor {
 	return CompleteRouteExecutor{
 		Credentials: providerfoundation.CredentialResolver{
 			Repository: completeRouteCredentialRepository{},
@@ -209,7 +224,8 @@ func completeRouteExecutor(
 		},
 		Handler: handler, Comparator: matchingCompleteRouteComparator{},
 		Committer: EffectCommitter{
-			Ledger: ledger, Sink: sink, Now: func() time.Time { return now },
+			Ledger: ledger, Sink: sink,
+			Now: func() time.Time { return commitNow },
 		},
 		HeartbeatInterval: 30 * time.Second,
 		Now:               func() time.Time { return now },
@@ -370,3 +386,148 @@ func (doer *trackingCompleteRouteDoer) Do(
 var _ CompleteRouteHandler = (*staticCompleteRouteHandler)(nil)
 var _ CompleteRouteHandler = (*requestingCompleteRouteHandler)(nil)
 var _ CompleteRouteComparator = matchingCompleteRouteComparator{}
+
+// TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnOrdinaryRetry is
+// the wedge regression. Effect digests cover the serialized rows, so a
+// wall-clock timestamp regenerated on an ordinary River retry changes the
+// digest and PrepareEffects rejects the manifest with ErrEffectLedgerConflict
+// before any readback can run — permanently wedging the unit.
+//
+// ReleaseForRetry returns the unit to `dispatching`, so the next claim is NOT
+// Recovered. Stabilization must therefore key off the persisted ledger, not
+// the recovery flag.
+func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnOrdinaryRetry(
+	t *testing.T,
+) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	if claim.Recovered {
+		t.Fatal("this regression requires a non-recovered claim")
+	}
+	firstAttemptAt := now.Add(-3 * time.Minute)
+	batch := completeRouteFixture(t, claim)
+	state, err := NewEffectLedgerState(claim, batch.Effects, firstAttemptAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := &memoryEffectLedger{state: state}
+	handler := &staticCompleteRouteHandler{batch: batch}
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+
+	if _, err := completeRouteExecutor(
+		now, handler, ledger, &memoryEffectSink{},
+	).Execute(context.Background(), session, descriptor); err != nil {
+		t.Fatalf("ordinary retry error=%v", err)
+	}
+
+	if !handler.normalizedAt.Equal(firstAttemptAt) {
+		t.Fatalf(
+			"normalization time=%s want=%s (retry regenerated the digest)",
+			handler.normalizedAt, firstAttemptAt,
+		)
+	}
+}
+
+// TestCompleteRouteExecutorStartsFreshWhenNoLedgerExists keeps the
+// stabilization from swallowing a genuinely absent ledger.
+func TestCompleteRouteExecutorStartsFreshWhenNoLedgerExists(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	handler := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+
+	if _, err := completeRouteExecutor(
+		now, handler, &memoryEffectLedger{}, &memoryEffectSink{},
+	).Execute(context.Background(), session, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if !handler.normalizedAt.Equal(now) {
+		t.Fatalf("normalization time=%s want=%s", handler.normalizedAt, now)
+	}
+}
+
+// TestCompleteRouteExecutorPersistsTheCollectionInstantNotTheCommitClock is
+// the clock-split regression. The executor picks the normalization instant
+// before collection; the committer runs later. If the committer stamps the
+// persisted ledger CreatedAt from its own clock, the ledger records an instant
+// the rows were never built with — so the next attempt reloads that later
+// instant, rebuilds different rows, and PrepareEffects rejects the digest.
+// The wedge returns, one layer down from where round 2 fixed it.
+func TestCompleteRouteExecutorPersistsTheCollectionInstantNotTheCommitClock(
+	t *testing.T,
+) {
+	t.Parallel()
+	collectedAt := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	committedAt := collectedAt.Add(90 * time.Second)
+	claim, session := completeRouteSession(t, collectedAt, false)
+	ledger := &memoryEffectLedger{}
+	handler := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+
+	if _, err := completeRouteExecutorWithCommitClock(
+		collectedAt, committedAt, handler, ledger, &memoryEffectSink{},
+	).Execute(context.Background(), session, descriptor); err != nil {
+		t.Fatal(err)
+	}
+
+	if !handler.normalizedAt.Equal(collectedAt) {
+		t.Fatalf("collection instant=%s want=%s", handler.normalizedAt, collectedAt)
+	}
+	if !ledger.state.CreatedAt.Equal(collectedAt) {
+		t.Fatalf(
+			"persisted ledger CreatedAt=%s want=%s (committer clock leaked in)",
+			ledger.state.CreatedAt, collectedAt,
+		)
+	}
+}
+
+// TestCompleteRouteExecutorRetryReproducesTheDigestAcrossSkewedClocks closes
+// the loop end to end: attempt one persists the ledger, attempt two runs with
+// a completely different wall clock and must still rebuild the identical
+// manifest. A regenerated instant would surface as ErrEffectLedgerConflict.
+func TestCompleteRouteExecutorRetryReproducesTheDigestAcrossSkewedClocks(
+	t *testing.T,
+) {
+	t.Parallel()
+	firstAt := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, firstAt, false)
+	ledger := &memoryEffectLedger{}
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+
+	first := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
+	if _, err := completeRouteExecutorWithCommitClock(
+		firstAt, firstAt.Add(30*time.Second), first, ledger, &memoryEffectSink{},
+	).Execute(context.Background(), session, descriptor); err != nil {
+		t.Fatal(err)
+	}
+
+	// A later River attempt: different executor clock, different committer
+	// clock, same unit occurrence.
+	retryAt := firstAt.Add(11 * time.Minute)
+	_, retrySession := completeRouteSession(t, retryAt, false)
+	second := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
+	if _, err := completeRouteExecutorWithCommitClock(
+		retryAt, retryAt.Add(45*time.Second), second, ledger, &memoryEffectSink{},
+	).Execute(context.Background(), retrySession, descriptor); err != nil {
+		t.Fatalf("retry error=%v", err)
+	}
+
+	if !second.normalizedAt.Equal(firstAt) {
+		t.Fatalf(
+			"retry collection instant=%s want=%s", second.normalizedAt, firstAt,
+		)
+	}
+	if !ledger.state.CreatedAt.Equal(firstAt) {
+		t.Fatalf("ledger CreatedAt drifted to %s", ledger.state.CreatedAt)
+	}
+}

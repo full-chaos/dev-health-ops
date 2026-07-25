@@ -184,9 +184,38 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 		strconv.Quote(s.service),
 		strconv.Quote(s.version),
 	)
-	if err := s.registry.WriteMetrics(&output); err != nil {
+	// Degrade rather than fail: a source whose dependency is unreachable must
+	// not take the process-level gauges above down with it, since live/ready/
+	// uptime matter most while the process is unready. The per-source failure
+	// gauge keeps that honest — a scraper can tell partial data from complete
+	// data, and alert on the failure series, instead of silently reading a
+	// short scrape as healthy.
+	outcomes, err := s.registry.WriteMetricsPartial(&output)
+	if err != nil {
 		writeJSON(response, http.StatusServiceUnavailable, map[string]any{"status": "metrics_unavailable"})
 		return
+	}
+	if len(outcomes) > 0 {
+		_, _ = fmt.Fprint(
+			&output,
+			"# HELP dev_health_runtime_metrics_source_failed Whether a registered metrics source failed to write its fragment for this scrape.\n"+
+				"# TYPE dev_health_runtime_metrics_source_failed gauge\n",
+		)
+		for _, outcome := range outcomes {
+			failed := 0
+			if outcome.Err != nil {
+				failed = 1
+			}
+			// The source NAME only. Outcome.Err is arbitrary dependency text
+			// and has been observed to contain a database DSN, so it must never
+			// reach this response; names are pre-registered and match
+			// checkNamePattern, so they are safe as a label value unquoted.
+			_, _ = fmt.Fprintf(
+				&output,
+				"dev_health_runtime_metrics_source_failed{source=%s} %d\n",
+				strconv.Quote(outcome.Source), failed,
+			)
+		}
 	}
 
 	response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

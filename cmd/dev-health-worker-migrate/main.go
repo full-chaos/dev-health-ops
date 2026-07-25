@@ -89,7 +89,7 @@ func execute(
 	// role must already exist as an eligible least-privilege login, so a
 	// migration run before the role is provisioned fails loudly rather than
 	// granting nothing and reporting success. See
-	// docs/architecture/chaos-3033-coordinator-pool-activation.md for the
+	// .github/docs-legacy/architecture/chaos-3033-coordinator-pool-activation.md for the
 	// required order of operations.
 	coordinatorRole := defaultCoordinatorRole
 	if value, present := lookup("RIVER_COORDINATOR_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {

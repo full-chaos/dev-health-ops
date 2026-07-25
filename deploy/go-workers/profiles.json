@@ -3,6 +3,7 @@
   "deployment_state": "coexistence_disabled",
   "registry": "contracts/jobs/v1/registry.json",
   "runtime_role_env": [
+    "RIVER_COORDINATOR_DATABASE_ROLE",
     "RIVER_DOMAIN_DATABASE_ROLE",
     "RIVER_QUEUE_DATABASE_ROLE"
   ],

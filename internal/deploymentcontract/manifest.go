@@ -126,7 +126,13 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 	if manifest.Registry != "contracts/jobs/v1/registry.json" {
 		return BudgetSummary{}, errors.New("deployment profile registry path is not canonical")
 	}
+	// All three runtime role identities of the Option B split. The coordinator
+	// role belongs here even though only the control-runtime processes and
+	// workerctl open a coordinator pool: the three names must be pairwise
+	// distinct deployment-wide, and platform/config enforces that on every
+	// process, including domain-only ones.
 	if !equalStrings(manifest.RuntimeRoleEnv, []string{
+		"RIVER_COORDINATOR_DATABASE_ROLE",
 		"RIVER_DOMAIN_DATABASE_ROLE",
 		"RIVER_QUEUE_DATABASE_ROLE",
 	}) {

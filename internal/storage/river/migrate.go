@@ -26,11 +26,38 @@ var (
 	ErrSchemaNotCurrent        = errors.New("River schema is not at the pinned version")
 )
 
+// TableGrant declares one relation's table-level DML posture for a runtime
+// role. SELECT is always implied and always granted; the flags add
+// INSERT/UPDATE/DELETE. TRUNCATE, REFERENCES, TRIGGER and MAINTAIN are not
+// expressible and are never granted, which matches
+// postgres.TablePrivilege's own contract.
+//
+// This package deliberately does NOT own the coordinator's table list. The
+// authority is postgres.CoordinatorPosture(), and it cannot be imported here:
+// internal/storage/postgres's own test files import this package, so a
+// production import in the other direction would be an import cycle. The grant
+// set is therefore INJECTED (see MigrationOptions.CoordinatorGrants) and
+// derived from that posture by the caller, rather than transcribed into a
+// second hand-maintained list that could silently drift from readiness.
+type TableGrant struct {
+	TableName   string
+	AllowInsert bool
+	AllowUpdate bool
+	AllowDelete bool
+}
+
 type MigrationOptions struct {
 	Schema     string
 	DomainRole string
 	QueueRole  string
-	Logger     *slog.Logger
+	// CoordinatorRole is optional. When empty no coordinator role is touched
+	// at all, which keeps every pre-split caller behaving identically. When
+	// set, CoordinatorGrants must be non-empty: a coordinator role that got a
+	// REVOKE ALL and no GRANTs would leave its binaries fail-closed forever,
+	// so an empty grant set is rejected rather than applied.
+	CoordinatorRole   string
+	CoordinatorGrants []TableGrant
+	Logger            *slog.Logger
 }
 
 type MigrationResult struct {
@@ -73,7 +100,10 @@ func ApplyPinnedMigrations(
 		_, _ = lockConnection.Exec(unlockContext, "SELECT pg_advisory_unlock($1)", migrationLockKey)
 	}()
 	var migrationRole string
-	var domainRoleEligible, queueRoleEligible bool
+	var domainRoleEligible, queueRoleEligible, coordinatorRoleEligible bool
+	// The coordinator arm is parameterized on options.CoordinatorRole and
+	// short-circuits to TRUE when no coordinator role is configured, so a
+	// pre-split caller sees the identical preflight it always did.
 	if err := lockConnection.QueryRow(
 		ctx,
 		`SELECT
@@ -97,13 +127,29 @@ func ApplyPinnedMigrations(
 					AND NOT rolcreaterole
 					AND NOT rolreplication
 					AND NOT rolbypassrls
+			),
+			(
+				$3 = ''
+				OR EXISTS (
+					SELECT 1 FROM pg_catalog.pg_roles
+					WHERE rolname = $3
+						AND rolcanlogin
+						AND NOT rolsuper
+						AND NOT rolcreatedb
+						AND NOT rolcreaterole
+						AND NOT rolreplication
+						AND NOT rolbypassrls
+				)
 			)`,
 		options.DomainRole,
 		options.QueueRole,
-	).Scan(&migrationRole, &domainRoleEligible, &queueRoleEligible); err != nil {
+		options.CoordinatorRole,
+	).Scan(&migrationRole, &domainRoleEligible, &queueRoleEligible, &coordinatorRoleEligible); err != nil {
 		return MigrationResult{}, migrationStageError("read migration role")
 	}
-	if err := validateRuntimeRolePreflight(migrationRole, domainRoleEligible, queueRoleEligible, options); err != nil {
+	if err := validateRuntimeRolePreflight(
+		migrationRole, domainRoleEligible, queueRoleEligible, coordinatorRoleEligible, options,
+	); err != nil {
 		return MigrationResult{}, err
 	}
 
@@ -185,6 +231,33 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 	if options.DomainRole == options.QueueRole {
 		return ErrMigrationConfiguration
 	}
+	if options.CoordinatorRole == "" {
+		// No coordinator provisioning requested. Grants supplied without a role
+		// are a caller bug, not a no-op: it would silently skip the grants the
+		// caller believed it was applying.
+		if len(options.CoordinatorGrants) != 0 {
+			return ErrMigrationConfiguration
+		}
+		return nil
+	}
+	if !validIdentifier(options.CoordinatorRole) ||
+		options.CoordinatorRole == options.DomainRole ||
+		options.CoordinatorRole == options.QueueRole {
+		return ErrMigrationConfiguration
+	}
+	if len(options.CoordinatorGrants) == 0 {
+		return ErrMigrationConfiguration
+	}
+	seen := make(map[string]struct{}, len(options.CoordinatorGrants))
+	for _, grant := range options.CoordinatorGrants {
+		if !validIdentifier(grant.TableName) {
+			return ErrMigrationConfiguration
+		}
+		if _, duplicate := seen[grant.TableName]; duplicate {
+			return ErrMigrationConfiguration
+		}
+		seen[grant.TableName] = struct{}{}
+	}
 	return nil
 }
 
@@ -192,9 +265,18 @@ func validateRuntimeRolePreflight(
 	migrationRole string,
 	domainRoleEligible bool,
 	queueRoleEligible bool,
+	coordinatorRoleEligible bool,
 	options MigrationOptions,
 ) error {
 	if migrationRole == options.DomainRole || migrationRole == options.QueueRole || !domainRoleEligible || !queueRoleEligible {
+		return ErrMigrationConfiguration
+	}
+	// The migration identity must not BE the coordinator role either: it holds
+	// DDL and ownership, and granting the runtime posture to the role that owns
+	// the objects would make the coordinator's own readiness check fail on the
+	// "owns nothing" predicate while quietly holding every grant option.
+	if options.CoordinatorRole != "" &&
+		(migrationRole == options.CoordinatorRole || !coordinatorRoleEligible) {
 		return ErrMigrationConfiguration
 	}
 	return nil
@@ -226,7 +308,7 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 	schema := pgx.Identifier{options.Schema}.Sanitize()
 	domainRole := pgx.Identifier{options.DomainRole}.Sanitize()
 	queueRole := pgx.Identifier{options.QueueRole}.Sanitize()
-	return []string{
+	return append([]string{
 		"DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC, %I, %I', current_database(), '" + options.DomainRole + "', '" + options.QueueRole + "'); END $$",
 		"GRANT USAGE ON SCHEMA public TO " + domainRole,
 		"REVOKE CREATE ON SCHEMA public FROM " + domainRole,
@@ -241,7 +323,11 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// fixed_schedule_occurrences are coordinator-exclusive under the
 		// Option B two-role split
 		// (docs/architecture/chaos-3033-role-partition-manifest.md @
-		// eda2d6b91) and deliberately have no domain-role GRANT here.
+		// eda2d6b91) and deliberately have no domain-role GRANT here. Their
+		// COORDINATOR-side grants are no longer deploy-deferred: when
+		// MigrationOptions.CoordinatorRole is set, coordinatorGrantStatements
+		// below emits them from the injected posture in this same transaction,
+		// so local dev and CI are self-provisioning for all three roles.
 		// sync_configurations is SELECT-only for the domain role: its
 		// coordinator-side FOR UPDATE row-locking use does not make the
 		// domain role's own posture require UPDATE. sync_runs, by contrast,
@@ -306,5 +392,62 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO " + queueRole,
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC",
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " GRANT EXECUTE ON FUNCTIONS TO " + queueRole,
+	}, coordinatorGrantStatements(options)...)
+}
+
+// coordinatorGrantStatements emits the coordinator role's privilege policy
+// using exactly the technique the domain block above uses: REVOKE ALL first so
+// the resulting posture is a function of this migration alone and never of
+// whatever a previous revision or a hand-run script left behind, then selective
+// GRANTs guarded by to_regclass so a table that does not exist yet is skipped
+// instead of failing the migration, with every identifier sanitized.
+//
+// The table list is never written here. It is derived from
+// options.CoordinatorGrants, which the caller builds from
+// postgres.CoordinatorPosture() — the same declaration
+// CheckCoordinatorAuthorization asserts against at readiness. That is what
+// makes the grant side and the assertion side incapable of drifting: they are
+// one list, not two that happen to agree.
+//
+// Returns nil when no coordinator role is configured, so every pre-split
+// caller produces a byte-identical statement list to before.
+func coordinatorGrantStatements(options MigrationOptions) []string {
+	if options.CoordinatorRole == "" {
+		return nil
 	}
+	coordinatorRole := pgx.Identifier{options.CoordinatorRole}.Sanitize()
+	statements := []string{
+		"DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM %I', current_database(), '" + options.CoordinatorRole + "'); END $$",
+		"GRANT USAGE ON SCHEMA public TO " + coordinatorRole,
+		"REVOKE CREATE ON SCHEMA public FROM " + coordinatorRole,
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + coordinatorRole,
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + coordinatorRole,
+		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM " + coordinatorRole,
+		// The coordinator is a public-schema control-plane role only. It never
+		// touches River's own tables, so it gets the same fail-closed treatment
+		// the domain role gets on the River schema.
+		"REVOKE ALL PRIVILEGES ON SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
+		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
+	}
+	for _, grant := range options.CoordinatorGrants {
+		privileges := "SELECT"
+		if grant.AllowInsert {
+			privileges += ", INSERT"
+		}
+		if grant.AllowUpdate {
+			privileges += ", UPDATE"
+		}
+		if grant.AllowDelete {
+			privileges += ", DELETE"
+		}
+		qualified := "public." + grant.TableName
+		statements = append(statements,
+			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT "+
+				privileges+" ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
+				" TO "+coordinatorRole+"; END IF; END $$",
+		)
+	}
+	return statements
 }

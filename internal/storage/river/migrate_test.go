@@ -134,26 +134,63 @@ func TestRuntimeRolePreflightRequiresSeparateLeastPrivilegeLoginRoles(t *testing
 		DomainRole: "domain_runtime",
 		QueueRole:  "queue_runtime",
 	}
+	// The coordinator role of the Option B split, checked with the same
+	// strictness as the other two but only when it is actually configured.
+	coordinatorOptions := MigrationOptions{
+		Schema:          options.Schema,
+		DomainRole:      options.DomainRole,
+		QueueRole:       options.QueueRole,
+		CoordinatorRole: "coordinator_runtime",
+	}
 	tests := []struct {
-		name           string
-		migrationRole  string
-		domainEligible bool
-		queueEligible  bool
-		wantErr        bool
+		name                string
+		migrationRole       string
+		domainEligible      bool
+		queueEligible       bool
+		coordinatorEligible bool
+		options             MigrationOptions
+		wantErr             bool
 	}{
 		{name: "separate least privilege login roles", migrationRole: "migration_owner", domainEligible: true, queueEligible: true},
 		{name: "domain role missing or privileged", migrationRole: "migration_owner", queueEligible: true, wantErr: true},
 		{name: "queue role missing or privileged", migrationRole: "migration_owner", domainEligible: true, wantErr: true},
 		{name: "migration uses domain role", migrationRole: options.DomainRole, domainEligible: true, queueEligible: true, wantErr: true},
 		{name: "migration uses queue role", migrationRole: options.QueueRole, domainEligible: true, queueEligible: true, wantErr: true},
+		// An unconfigured coordinator role must not be required to be
+		// eligible: pre-split callers pass no coordinator role at all.
+		{
+			name:          "coordinator unconfigured ignores its eligibility",
+			migrationRole: "migration_owner", domainEligible: true, queueEligible: true,
+			coordinatorEligible: false, options: options,
+		},
+		{
+			name:          "coordinator configured and eligible",
+			migrationRole: "migration_owner", domainEligible: true, queueEligible: true,
+			coordinatorEligible: true, options: coordinatorOptions,
+		},
+		{
+			name:          "coordinator role missing or privileged",
+			migrationRole: "migration_owner", domainEligible: true, queueEligible: true,
+			coordinatorEligible: false, options: coordinatorOptions, wantErr: true,
+		},
+		{
+			name:          "migration uses coordinator role",
+			migrationRole: coordinatorOptions.CoordinatorRole, domainEligible: true, queueEligible: true,
+			coordinatorEligible: true, options: coordinatorOptions, wantErr: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			effective := test.options
+			if effective.Schema == "" {
+				effective = options
+			}
 			err := validateRuntimeRolePreflight(
 				test.migrationRole,
 				test.domainEligible,
 				test.queueEligible,
-				options,
+				test.coordinatorEligible,
+				effective,
 			)
 			if test.wantErr && !errors.Is(err, ErrMigrationConfiguration) {
 				t.Fatalf("validateRuntimeRolePreflight() error = %v", err)

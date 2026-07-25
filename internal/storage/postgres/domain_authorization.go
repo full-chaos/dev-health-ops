@@ -635,6 +635,21 @@ func coordinatorPosture() RolePosture {
 	}
 }
 
+// CoordinatorPosture exposes the coordinator role's declared manifest so that
+// the one-shot migration command can derive the coordinator's GRANT statements
+// from the SAME declaration CheckCoordinatorAuthorization asserts against.
+//
+// It exists because internal/storage/river cannot import this package (this
+// package's own tests import it, so the reverse production import would be an
+// import cycle), and the alternative — a second hand-maintained table list
+// living in the migration code — is exactly the drift that let the domain
+// role's grants and its readiness assertion disagree before
+// domain_grant_reconciliation_integration_test.go was written. One list, read
+// by both sides.
+func CoordinatorPosture() RolePosture {
+	return coordinatorPosture()
+}
+
 // CheckRolePosture is a read-only readiness check proving the active login
 // holds exactly the declared posture: no more, no less, by any route
 // (direct grant, PUBLIC, role membership, column-level, table-level, with

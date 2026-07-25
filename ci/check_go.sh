@@ -15,7 +15,7 @@ DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 
 usage() {
   cat <<'EOF'
-Usage: ci/check_go.sh [fmt|vet|test|race|build|contract|integration|fast|all]
+Usage: ci/check_go.sh [fmt|vet|test|race|build|contract|integration-vet|integration-coverage|integration|fast|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -25,10 +25,25 @@ Usage: ci/check_go.sh [fmt|vet|test|race|build|contract|integration|fast|all]
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
          set, reject breaking in-place changes against that directory.
+  integration-vet
+         Compile-check every package under the integration build tag, across
+         the WHOLE tree. No Docker required. This is what would have caught a
+         compile break in an integration-tagged file the day it happened,
+         instead of it sitting broken and silently unrun until someone passed
+         -tags=integration by hand.
+  integration-coverage
+         Discover every integration-tagged package and print the run/skip
+         plan (see INTEGRATION_DENYLIST in this script). No Docker required.
+         Fails if the denylist names a package discovery does not find, or if
+         discovery finds nothing at all.
   integration
-         Run the isolated, integration-tagged testcontainers storage suite.
-  fast   Run fmt, vet, test, build, and contract checks.
-  all    Run fmt, vet, test, race, build, and contract checks (default).
+         Discover and run EVERY integration-tagged package's suite against
+         real containers, except the (small, justified) INTEGRATION_DENYLIST.
+         Inclusion is the default; exclusion is the explicit, loud exception.
+  fast   Run fmt, vet, test, build, contract, integration-vet, and
+         integration-coverage checks.
+  all    Run fmt, vet, test, race, build, contract, integration-vet, and
+         integration-coverage checks (default).
 EOF
 }
 
@@ -210,22 +225,160 @@ check_contract() {
   fi
 }
 
+# INTEGRATION_DENYLIST is the ONLY place an integration-tagged package may be
+# excluded from check_integration. It used to be the other way around: an
+# opt-IN allowlist that ran only the packages someone remembered to add. That
+# shape silently excluded internal/providerfoundation's ClickHouse/Valkey
+# suite, cmd/dev-health-workerctl's suite (which additionally did not even
+# compile — see main_integration_test.go), and was structurally guaranteed to
+# do it again to the next package anyone adds, because "not on the list" and
+# "not written yet" look identical from the gate's point of view.
+#
+# The default for every integration-tagged package is now "runs in CI".
+# Every key here needs a real, load-bearing reason -- "haven't gotten to it"
+# or "it currently fails" are NOT valid reasons; a failing package belongs in
+# the run set, failing loudly, not hidden here. Legitimate reasons look like
+# "needs a live vendor credential CI does not provision."
+declare -A INTEGRATION_DENYLIST=()
+
+# discover_integration_packages populates INTEGRATION_PACKAGES_BY_MODULE
+# (module_dir -> newline-separated list of module-relative "./pkg/dir"
+# entries) with every package that has at least one tracked or untracked,
+# non-vendor *_test.go file whose leading build-constraint comment names the
+# "integration" tag. This is a repo-wide scan for the literal constraint
+# every integration suite in this tree uses today
+# (`//go:build integration`), checked via git's own file listing so it
+# honours the same tracked/untracked/exclude-standard rules as the rest of
+# this script -- not `find`, and not a hand-maintained list.
+discover_integration_packages() {
+  local module_dir go_file dir
+  declare -gA INTEGRATION_PACKAGES_BY_MODULE=()
+
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    local -a found=()
+    while IFS= read -r -d '' go_file; do
+      [ -f "${ROOT}/${module_dir}/${go_file}" ] || continue
+      case "${go_file}" in
+        vendor/*|*/vendor/*) continue ;;
+      esac
+      # Matches `//go:build integration` and combined constraints such as
+      # `//go:build integration && !windows`; go:build lines are always a
+      # single line, so a plain grep for the tag token on that line is exact
+      # for this repository's usage and needs no build-constraint parser.
+      if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
+        "${ROOT}/${module_dir}/${go_file}"; then
+        dir="$(dirname -- "${go_file}")"
+        found+=("./${dir}")
+      fi
+    done < <(
+      git -C "${ROOT}/${module_dir}" ls-files --cached --others --exclude-standard -z -- '*_test.go'
+    )
+    if [ "${#found[@]}" -gt 0 ]; then
+      INTEGRATION_PACKAGES_BY_MODULE["${module_dir}"]="$(printf '%s\n' "${found[@]}" | sort -u)"
+    fi
+  done
+}
+
+# integration_denylist_reason prints the reason for "module_dir/pkg" if it is
+# denylisted, or nothing (and a false exit) if it is not.
+integration_denylist_reason() {
+  local key="$1"
+  if [ -n "${INTEGRATION_DENYLIST[${key}]+set}" ]; then
+    printf '%s' "${INTEGRATION_DENYLIST[${key}]}"
+    return 0
+  fi
+  return 1
+}
+
+# check_integration_coverage is the guard: it recomputes discovery
+# independently of check_integration's own run, prints the full plan (run vs.
+# skip, with every skip's reason), and fails loudly if the denylist names a
+# package discovery does not find (a stale or misspelled entry -- the
+# opt-out list drifting unnoticed is exactly the failure mode this replaces,
+# just on the small side of the ledger instead of the large one). It needs no
+# Docker and belongs in the fast path.
+check_integration_coverage() {
+  discover_integration_packages
+  local module_dir pkg key reason
+  local -a denylist_seen=()
+  local total=0
+
+  printf 'integration coverage: discovered packages (module: package)\n'
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    [ -n "${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]:-}" ] || continue
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] || continue
+      total=$((total + 1))
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      if reason="$(integration_denylist_reason "${key}")"; then
+        denylist_seen+=("${key}")
+        printf '  SKIP %s: %s\n' "${key}" "${reason}"
+      else
+        printf '  RUN  %s\n' "${key}"
+      fi
+    done <<<"${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]}"
+  done
+
+  if [ "${total}" -eq 0 ]; then
+    die "integration coverage: discovered zero integration-tagged packages -- the discovery mechanism itself is almost certainly broken, not a genuinely test-free tree"
+  fi
+
+  local denylisted_key covered
+  for denylisted_key in "${!INTEGRATION_DENYLIST[@]}"; do
+    covered=0
+    for key in "${denylist_seen[@]}"; do
+      [ "${key}" = "${denylisted_key}" ] && covered=1 && break
+    done
+    if [ "${covered}" -ne 1 ]; then
+      die "INTEGRATION_DENYLIST names '${denylisted_key}', which discover_integration_packages did not find -- stale or misspelled denylist entry"
+    fi
+  done
+
+  printf 'integration coverage: %d package(s) discovered, %d denylisted, %d will run\n' \
+    "${total}" "${#denylist_seen[@]}" "$((total - ${#denylist_seen[@]}))"
+}
+
 check_integration() {
-	printf 'go test integration: PostgreSQL roles, River, outbox, operator, reports, retention, provider sync\n'
-	(
-		cd "${ROOT}"
-		# This list is explicit rather than ./... so the gate never silently
-		# starts (or stops) exercising containers. A package holding
-		# integration-tagged tests but missing from this list is silently
-		# skipped — add every new integration suite here in the same change
-		# that adds its first integration test.
-		GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=20m \
-			./internal/testsupport/containers ./internal/storage/postgres ./internal/storage/river \
-			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute \
-			./internal/scheduler/sync ./internal/scheduler/fixed ./internal/syncdispatchruntime \
-			./internal/jobs/report ./internal/jobs/system ./internal/jobs/pagerduty \
-			./internal/providersync ./internal/providerfoundation
-	)
+  check_integration_coverage
+  local module_dir pkg key reason
+  local -a run_pkgs=()
+
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    [ -n "${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]:-}" ] || continue
+    run_pkgs=()
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] || continue
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      if reason="$(integration_denylist_reason "${key}")"; then
+        continue
+      fi
+      run_pkgs+=("${pkg}")
+    done <<<"${INTEGRATION_PACKAGES_BY_MODULE[${module_dir}]}"
+    [ "${#run_pkgs[@]}" -gt 0 ] || continue
+
+    printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
+    (
+      cd "${ROOT}/${module_dir}"
+      GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+    )
+  done
+}
+
+# check_integration_vet compiles every package under the integration tag,
+# across the WHOLE tree, in every Go module, unconditionally -- no discovery,
+# no denylist. check_integration_coverage's discovery answers "which packages
+# does the Docker-backed run cover"; this answers the orthogonal question "does
+# everything under the tag even compile", which matters independently: a
+# package can compile and still be (legitimately or not) denylisted, or it can
+# be in the run set and simply not build, the way
+# cmd/dev-health-workerctl/main_integration_test.go didn't after its
+# constructor's signature changed underneath it. `go vet -tags=integration
+# ./...` needs no Docker and runs in seconds, so it belongs in the fast path
+# rather than the Docker-backed integration job.
+check_integration_vet() {
+  run_in_modules "go vet -tags=integration" go vet -mod=readonly -tags=integration ./...
 }
 
 discover_modules
@@ -250,6 +403,12 @@ case "${1:-all}" in
   contract)
     check_contract
     ;;
+  integration-vet)
+    check_integration_vet
+    ;;
+  integration-coverage)
+    check_integration_coverage
+    ;;
   integration)
     check_integration
     ;;
@@ -259,6 +418,8 @@ case "${1:-all}" in
     check_test
     check_build
     check_contract
+    check_integration_vet
+    check_integration_coverage
     ;;
   all)
     check_format
@@ -267,6 +428,8 @@ case "${1:-all}" in
     check_race
     check_build
     check_contract
+    check_integration_vet
+    check_integration_coverage
     ;;
   -h|--help|help)
     usage

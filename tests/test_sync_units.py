@@ -2685,6 +2685,429 @@ def test_dispatch_sync_run_provider_outbox_claim_rolls_back_and_dedupes(
     assert db_session.query(WorkerJobOutbox).count() == 1
 
 
+# ---------------------------------------------------------------------------
+# CHAOS-3131: matrix-driven per-pair routing + mixed-transport coherence.
+#
+# The outbox path must stay reachable for a ready+enabled pair under BOTH
+# durable routes (river_canary and river), and readiness must generalize past
+# the single hardcoded launchdarkly/feature-flags pair. The riskiest property
+# in the program is that one SyncRun can legitimately contain units bound for
+# both River and Celery in the same dispatch pass, and that run-level status,
+# unit counts, and finalization stay coherent regardless of which transport
+# produced a given unit's terminal state.
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_sync_run_plain_river_route_also_reaches_outbox(
+    db_session, monkeypatch
+):
+    """Promoting sync.provider_unit from river_canary to plain river must not
+    silently revert every unit to legacy Celery dispatch -- that was the
+    latent bug this ticket closes. The checked-in migration policy for
+    sync.provider_unit is still river_canary
+    (contracts/jobs/v1/migration-state.json, out of this ticket's scope), so
+    a live "river" WorkerJobRoute row cannot be produced through the normal
+    resolver yet. Patching the resolver directly isolates and exercises
+    dispatch_sync_run's own per-pair branch under the route this ticket must
+    support, independent of when the policy itself is promoted.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    monkeypatch.setattr(
+        sync_units, "resolve_worker_job_route", lambda *args, **kwargs: "river"
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    rows = db_session.query(WorkerJobOutbox).all()
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert len(unit_publish_calls) == 0
+    assert len(rows) == 1
+    assert rows[0].dedupe_key == f"sync.provider_unit:{unit.id}"
+
+
+def test_dispatch_sync_run_mixed_transport_routes_every_ready_pair_independently(
+    db_session, monkeypatch
+):
+    """Proves the mechanism generalizes past the one production-ready pair,
+    not just that a ready pair coexists with celery fallback (already true
+    before CHAOS-3131). With a SECOND hypothetical route-ready+enabled pair
+    (github/commits, injected via monkeypatch fixture rather than editing the
+    checked-in matrix), a three-unit run routes BOTH ready pairs to the
+    outbox and leaves the one pair the matrix does not recognise on Celery,
+    in the same dispatch pass -- N pairs to River, the rest to Celery.
+    """
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+
+    run, launchdarkly_unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    github_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=launchdarkly_unit.integration_id,
+        source_id=launchdarkly_unit.source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_git": True, "sync_commits": True},
+    )
+    gitlab_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=launchdarkly_unit.integration_id,
+        source_id=launchdarkly_unit.source_id,
+        provider="gitlab",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_git": True, "sync_commits": True},
+    )
+    run.total_units = 3
+    db_session.add_all([github_unit, gitlab_unit])
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+
+    ready_pairs = {("launchdarkly", "feature-flags"), ("github", "commits")}
+
+    def fake_is_route_ready(provider: str, dataset: str) -> bool:
+        return (provider.lower(), dataset.lower()) in ready_pairs
+
+    real_routes_to_river = ProviderUnitRouteSwitches.routes_to_river
+
+    def fake_routes_to_river(self, provider, dataset):
+        self.require_complete_routes()
+        if (provider.lower(), dataset.lower()) == ("github", "commits"):
+            return True
+        return real_routes_to_river(self, provider, dataset)
+
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches, "is_route_ready", staticmethod(fake_is_route_ready)
+    )
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches, "routes_to_river", fake_routes_to_river
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    rows = {row.dedupe_key for row in db_session.query(WorkerJobOutbox).all()}
+    assert result == {"status": "dispatched", "queued_units": 3}
+    assert rows == {
+        f"sync.provider_unit:{launchdarkly_unit.id}",
+        f"sync.provider_unit:{github_unit.id}",
+    }
+    assert len(unit_publish_calls) == 1
+    assert unit_publish_calls[0][0] == str(gitlab_unit.id)
+
+
+def test_finalize_aggregates_success_across_mixed_transport_units(
+    db_session, monkeypatch
+):
+    """finalize_sync_run reads only SyncRunUnit.status; it must never need to
+    know which transport produced a terminal state. One unit's status is set
+    the way Celery's run_sync_unit would leave it; the other's is set the way
+    the Go River worker's UnitRepository.Complete would leave it (same table,
+    same enum, same result-JSON shape). Finalizing proves the two producers
+    stay coherent at the run-level aggregation boundary.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run, celery_unit = _seed_run(db_session, provider="github", dataset_key="commits")
+    river_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=celery_unit.integration_id,
+        source_id=celery_unit.source_id,
+        provider="launchdarkly",
+        dataset_key="feature-flags",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.SUCCESS.value,
+        attempts=1,
+        result={"go_provider_route": {"effects_written": 4, "effects_skipped": 0}},
+    )
+    celery_unit.status = SyncRunUnitStatus.SUCCESS.value
+    run.total_units = 2
+    db_session.add(river_unit)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert result["status"] == "finalized"
+    assert run.status == SyncRunStatus.SUCCESS.value
+    assert run.completed_units == 2
+    assert run.failed_units == 0
+
+
+def test_finalize_aggregates_partial_failure_across_mixed_transport_units(
+    db_session, monkeypatch
+):
+    """Same coherence proof as the all-success case, but for the partial
+    failure branch: the River-origin unit fails while the Celery-origin unit
+    succeeds, and the run must still land PARTIAL_FAILED with correct
+    per-status counts -- proving finalize's aggregation does not implicitly
+    assume every unit in a run shares one transport.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run, celery_unit = _seed_run(db_session, provider="github", dataset_key="commits")
+    river_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=celery_unit.integration_id,
+        source_id=celery_unit.source_id,
+        provider="launchdarkly",
+        dataset_key="feature-flags",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.FAILED.value,
+        attempts=1,
+        error="sync provider canary capability is unavailable",
+        result={"error_category": "provider_unit_exhausted"},
+    )
+    celery_unit.status = SyncRunUnitStatus.SUCCESS.value
+    run.total_units = 2
+    db_session.add(river_unit)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    result = sync_units.finalize_sync_run(str(run.id))
+
+    db_session.refresh(run)
+    assert result["status"] == "finalized"
+    assert run.status == SyncRunStatus.PARTIAL_FAILED.value
+    assert run.completed_units == 1
+    assert run.failed_units == 1
+
+
+def test_dispatch_sync_run_denial_fails_planned_units_regardless_of_transport(
+    db_session, monkeypatch
+):
+    """DispatchGuard denial ('cancel') must fail unresolved PLANNED units and
+    leave any unit already in flight alone, regardless of which transport
+    that in-flight unit is running under. Simulates a River unit already
+    RUNNING (as the Go worker's Claim would leave it: lease_owner + heartbeat
+    set) alongside a PLANNED Celery-only unit that has not dispatched yet.
+    """
+    from dev_health_ops.sync.guard import GuardDecision
+    from dev_health_ops.workers import sync_units
+
+    run, river_running = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    now = datetime.now(timezone.utc)
+    river_running.status = SyncRunUnitStatus.RUNNING.value
+    river_running.attempts = 1
+    river_running.lease_owner = "go-river-worker"
+    river_running.lease_expires_at = now + timedelta(minutes=5)
+    river_running.last_heartbeat_at = now
+    celery_planned = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=river_running.integration_id,
+        source_id=river_running.source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_git": True, "sync_commits": True},
+    )
+    run.status = SyncRunStatus.DISPATCHING.value
+    run.total_units = 2
+    db_session.add(celery_planned)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    reason = "sync run cancelled by operator"
+    monkeypatch.setattr(
+        sync_units.DispatchGuard,
+        "authorize_run",
+        lambda session, sync_run_id: GuardDecision(
+            False, reason, (str(river_running.id), str(celery_planned.id))
+        ),
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(river_running)
+    db_session.refresh(celery_planned)
+    assert result == {
+        "status": "denied_active",
+        "reason": reason,
+        "failed_planned_units": 1,
+        "failed_stale_dispatching_units": 0,
+    }
+    assert celery_planned.status == SyncRunUnitStatus.FAILED.value
+    # The in-flight River unit is untouched: cancellation must never
+    # terminalize a unit a live consumer might still be executing, no matter
+    # which transport that consumer is.
+    assert river_running.status == SyncRunUnitStatus.RUNNING.value
+    assert unit_publish_calls == []
+
+
+def test_dispatch_sync_run_concurrency_cap_defers_regardless_of_transport(
+    db_session, monkeypatch
+):
+    """A concurrency/budget partial-cap defers a unit before the per-pair
+    transport decision is ever made. Capping a unit that WOULD have routed to
+    River leaves it PLANNED exactly like capping a Celery-only unit would --
+    and once the cap clears, the very next dispatch pass must still route it
+    correctly, proving budget caps and transport routing are independent
+    concerns applied in the right order.
+    """
+    from dev_health_ops.sync.guard import GuardDecision
+    from dev_health_ops.workers import sync_units
+
+    run, river_unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    celery_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=river_unit.integration_id,
+        source_id=river_unit.source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_git": True, "sync_commits": True},
+    )
+    run.total_units = 2
+    db_session.add(celery_unit)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    monkeypatch.setattr(
+        sync_units.DispatchGuard,
+        "authorize_run",
+        lambda session, sync_run_id: GuardDecision(
+            True, "concurrency cap", (str(river_unit.id),), True
+        ),
+    )
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(river_unit)
+    db_session.refresh(celery_unit)
+    assert result == {"status": "dispatched", "queued_units": 1}
+    assert river_unit.status == SyncRunUnitStatus.PLANNED.value
+    assert celery_unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert db_session.query(WorkerJobOutbox).count() == 0
+    assert len(unit_publish_calls) == 1
+
+    monkeypatch.setattr(
+        sync_units.DispatchGuard,
+        "authorize_run",
+        lambda session, sync_run_id: GuardDecision(True, None, (), False),
+    )
+    result_after_cap_clears = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(river_unit)
+    assert result_after_cap_clears["status"] == "dispatched"
+    assert river_unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert db_session.query(WorkerJobOutbox).count() == 1
+
+
+def test_dispatch_sync_run_reclaims_stale_units_of_both_transports_and_redecides(
+    db_session, monkeypatch
+):
+    """A stale DISPATCHING unit means an earlier dispatch enqueued it but no
+    consumer ever picked it up (broker restart, or the producer died before a
+    River claim landed -- worker loss). Reclaim must work identically for a
+    unit that will route to River and one that stays on Celery, and the
+    transport decision must be re-made fresh on the reclaiming pass rather
+    than reusing whatever was decided (and lost) the first time.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run, river_unit = _seed_run(
+        db_session,
+        provider="launchdarkly",
+        source_type="project",
+        dataset_key="feature-flags",
+    )
+    celery_unit = SyncRunUnit(
+        org_id=run.org_id,
+        sync_run_id=run.id,
+        integration_id=river_unit.integration_id,
+        source_id=river_unit.source_id,
+        provider="github",
+        dataset_key="commits",
+        cost_class="medium",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunUnitStatus.PLANNED.value,
+        attempts=0,
+        processor_flags={"sync_git": True, "sync_commits": True},
+    )
+    stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+    river_unit.status = SyncRunUnitStatus.DISPATCHING.value
+    river_unit.updated_at = stale
+    run.total_units = 2
+    db_session.add(celery_unit)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "true")
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(river_unit)
+    db_session.refresh(celery_unit)
+    assert result == {"status": "dispatched", "queued_units": 2}
+    assert river_unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert celery_unit.status == SyncRunUnitStatus.DISPATCHING.value
+    rows = db_session.query(WorkerJobOutbox).all()
+    assert len(rows) == 1
+    assert rows[0].dedupe_key == f"sync.provider_unit:{river_unit.id}"
+    assert len(unit_publish_calls) == 1
+    assert unit_publish_calls[0][0] == str(celery_unit.id)
+
+
 def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(
     db_session, monkeypatch
 ):

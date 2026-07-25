@@ -108,6 +108,7 @@ from dev_health_ops.workers.job_contracts import ProviderUnitPayload
 from dev_health_ops.workers.job_outbox import enqueue_worker_job
 from dev_health_ops.workers.job_routes import (
     RIVER_CANARY_ROUTE,
+    RIVER_ROUTE,
     WorkerJobRouteError,
     resolve_worker_job_route,
 )
@@ -132,6 +133,16 @@ _TERMINAL_RUN_STATUSES = {
     SyncRunStatus.PARTIAL_FAILED.value,
     SyncRunStatus.FAILED.value,
 }
+# The sync.provider_unit outbox path is reachable under either transitional
+# durable route: river_canary (bounded scope, still comparable to Celery) and
+# river (post-canary, no comparison). Celery and shadow never queue an
+# individual unit here -- shadow's dual-dispatch semantics are not
+# implemented for this producer, and celery is the rollback route every
+# per-pair decision below falls back to. Per-pair routability is decided
+# independently per unit (ProviderUnitRouteSwitches.routes_to_river), so a
+# run whose units span both a ready+enabled pair and pairs that are not is
+# expected to dispatch a mix of river and celery units in the same pass.
+_PROVIDER_UNIT_OUTBOX_ROUTES = frozenset({RIVER_CANARY_ROUTE, RIVER_ROUTE})
 _WORK_ITEM_RESULT_OBSERVATION_FIELDS = (
     "linear_page_count",
     "linear_batch_count",
@@ -955,25 +966,31 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
         provider_unit_routes = (
             ProviderUnitRouteSwitches.from_environment()
-            if provider_unit_route == RIVER_CANARY_ROUTE
+            if provider_unit_route in _PROVIDER_UNIT_OUTBOX_ROUTES
             else None
         )
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
-            in_canary_scope = ProviderUnitRouteSwitches.is_canary_scope(
-                str(unit.provider), str(unit.dataset_key)
-            )
-            if in_canary_scope and provider_unit_route == RIVER_CANARY_ROUTE:
-                if (
-                    provider_unit_routes is None
-                    or not provider_unit_routes.routes_to_river(
-                        str(unit.provider), str(unit.dataset_key)
-                    )
+            unit_provider = str(unit.provider)
+            unit_dataset = str(unit.dataset_key)
+            # Routability is decided per pair, not per run: the matrix
+            # (ProviderUnitRouteSwitches.is_route_ready) is the only source of
+            # which pairs are even candidates, so a run mixing a route-ready
+            # pair with 58 pairs the matrix has not marked ready dispatches a
+            # mix of river and celery units in the same pass, by design.
+            if provider_unit_routes is not None and (
+                ProviderUnitRouteSwitches.is_route_ready(unit_provider, unit_dataset)
+            ):
+                if not provider_unit_routes.routes_to_river(
+                    unit_provider, unit_dataset
                 ):
-                    # A checked-in canary route without its complete runtime
-                    # capability is an ownership fault, never a reason to
-                    # silently publish legacy Celery work.
+                    # The matrix marks this pair complete and the durable
+                    # route makes the outbox transport live, but this pair's
+                    # own switch is off. That combination is an ownership
+                    # fault -- readiness and enablement fell out of step --
+                    # never a reason to silently fall back to legacy Celery
+                    # dispatch for a pair the matrix says is done.
                     raise WorkerJobRouteError(
                         "sync provider canary capability is unavailable"
                     )

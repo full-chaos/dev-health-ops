@@ -173,7 +173,15 @@ type ValkeyBackoffGate struct {
 	Observer BudgetWaitObserver
 }
 
-const backoffPenalizeLua = `local old=tonumber(redis.call('GET',KEYS[1]) or '0'); local proposed=tonumber(ARGV[1]); local applied=math.max(old,proposed); redis.call('SET',KEYS[1],applied,'EX',ARGV[2]); return applied`
+// applied is returned via tostring, not as a bare Lua number. Redis/Valkey's
+// Lua-to-RESP conversion truncates a returned Lua number to an integer reply
+// (dropping the millisecond fraction this value legitimately carries as a
+// Unix-seconds timestamp), and valkey-go's .AsFloat64() only parses
+// string-typed replies — so a bare `return applied` both loses precision on
+// the wire and fails client-side decoding ("message type int64 is not a
+// string") against a real server. tostring keeps the full value and matches
+// the bulk-string reply Penalize's caller already expects.
+const backoffPenalizeLua = `local old=tonumber(redis.call('GET',KEYS[1]) or '0'); local proposed=tonumber(ARGV[1]); local applied=math.max(old,proposed); redis.call('SET',KEYS[1],applied,'EX',ARGV[2]); return tostring(applied)`
 
 func (g ValkeyBackoffGate) key() string {
 	return fmt.Sprintf("rate_limit:%s:%s:%s", keyPart(g.Provider), keyPart(g.OrgID), keyPart(g.Host))

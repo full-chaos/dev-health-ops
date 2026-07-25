@@ -506,16 +506,20 @@ type RolePosture struct {
 // completion_key; deletion is queue-side, queue_authorization.go). A
 // table-wide privilege would let the domain role forge completed_at and mint
 // a fence retention never reaps, so its posture is column-scoped instead —
-// hence ColumnScoped below rather than a RequiredTables row. The manifest's
-// "possible 2nd reacher" flag on this table (a coordinator-side call into
-// the same helper, unresolved by the grant-deriver tool) was independently
-// run down by hand: internal/scheduler/fixed/producers.go only calls
-// joboutbox.CompletionKey(...), a pure function computing a string stored in
-// a DIFFERENT table's column (worker_job_outbox.prerequisite_completion_key)
-// — it never touches worker_job_completion_fences itself. Confirmed via
-// grep for MarkCompletionTx/worker_job_completion_fences across
-// internal/scheduler/fixed: zero hits. This is a false positive, not an
-// unresolved gap — coordinatorPosture has no row for this table.
+// hence ColumnScoped below rather than a RequiredTables row.
+//
+// The manifest's "possible 2nd reacher" flag on this table (a coordinator-side
+// call into the same helper, unresolved by the grant-deriver tool) was once
+// dismissed here as a false positive on the strength of a grep across
+// internal/scheduler/fixed for MarkCompletionTx/worker_job_completion_fences.
+// That dismissal was WRONG, and CHAOS-3114 corrected it: the grep was scoped
+// to one package while the reach is transitive. The fixed engine's fan-out
+// producer calls remaining.PostgresStore.StartRunTx and
+// workgraph.RequestWriter.WriteTx, and BOTH call joboutbox.MarkCompletionTx on
+// their already-succeeded replay arm. The flag was real. It is now declared on
+// the coordinator side too (see coordinatorPosture's ColumnScoped below); the
+// domain side is unchanged, and this is a second column-scoped role on one
+// table, not a domain-posture change.
 func domainPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
@@ -612,6 +616,52 @@ func domainPosture() RolePosture {
 //     hold this lock, and separately has no grant at all on worker_job_routes)
 //     is proven by coordinator_statement_privileges_integration_test.go, which
 //     executes the real statements as both roles.
+//
+//   - remaining_metric_runs, remaining_metric_partitions,
+//     work_graph_execution_requests (coordinator: SELECT, INSERT) and the
+//     INSERT half of worker_job_outbox, plus the ColumnScoped
+//     worker_job_completion_fences pair: CHAOS-3114's second half. The
+//     fixed-schedule engine (internal/scheduler/fixed) now runs on the
+//     coordinator pool, and Engine.runOccurrence commits its whole statement
+//     set in ONE transaction — the occurrence claim together with the domain
+//     rows its producers materialize. The flags are the transitive statement
+//     trace of runOccurrence, not the domain role's flags copied across:
+//
+//     fixed_schedule_occurrences  SELECT+INSERT+UPDATE  ledger.go Claim's
+//     `SELECT ... FOR UPDATE` needs UPDATE to take the lock; Complete UPDATEs.
+//     organizations               SELECT                organizations.go.
+//     remaining_metric_runs       SELECT+INSERT         remaining/postgres.go
+//     StartRunTx inserts; loadStartedRun re-reads on replay. NO UPDATE: every
+//     status transition is handler-side, on the domain role.
+//     remaining_metric_partitions SELECT+INSERT         same StartRunTx, plus
+//     verifyStartedPartitions' replay read. NO UPDATE, same reason.
+//     work_graph_execution_requests SELECT+INSERT       workgraph/publisher.go
+//     WriteTx inserts and re-reads. NO UPDATE: Claim/transition are handler-side.
+//     work_graph_execution_ledger is NOT reachable from runOccurrence at all —
+//     WriteTx never touches it — so it is deliberately absent here.
+//     worker_job_outbox           +INSERT               joboutbox/producer.go
+//     publish, reached from every producer's handoff. UPDATE was already
+//     required by the jobroute LOCK above; INSERT is the new half.
+//     worker_job_completion_fences completion_key SELECT+INSERT (ColumnScoped)
+//     joboutbox.MarkCompletionTx, reached transitively from StartRunTx and
+//     WriteTx on their already-succeeded replay arms. SELECT is required as
+//     well as INSERT, and not because anything reads the row: `INSERT ... ON
+//     CONFLICT (completion_key) DO NOTHING` names an arbiter, and PostgreSQL
+//     refuses the statement with 42501 when only INSERT (completion_key) is
+//     held — verified empirically against a live server, both directions. The
+//     grant stays column-scoped for exactly the reason it is on the domain
+//     side: completed_at is server-owned and a table-wide grant would let the
+//     coordinator forge a fence retention never reaps.
+//
+//     Widening the COORDINATOR rather than the domain role is the deliberate
+//     choice. The property the partition protects is that provider-sync
+//     workers — the code that handles third-party payloads, and the code that
+//     runs as the DOMAIN login — cannot reach control-plane tables (routes,
+//     credentials, audits, schedule markers). Adding domain-side tables to the
+//     coordinator does not weaken that; adding fixed_schedule_occurrences to
+//     the domain role would destroy it. The coordinator login is used only by
+//     the scheduler, the reconciler, and workerctl. Celery Beat, which this
+//     replaces, already spans both table sets under ONE identity.
 func coordinatorPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
@@ -630,7 +680,14 @@ func coordinatorPosture() RolePosture {
 			{"worker_job_runs", false, true, false},
 			{"organizations", false, false, false},
 			{"sync_configurations", false, true, false},
-			{"worker_job_outbox", false, true, false},
+			{"worker_job_outbox", true, true, false},
+			{"remaining_metric_runs", true, false, false},
+			{"remaining_metric_partitions", true, false, false},
+			{"work_graph_execution_requests", true, false, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"worker_job_completion_fences", "completion_key", "SELECT"},
+			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},
 	}
 }

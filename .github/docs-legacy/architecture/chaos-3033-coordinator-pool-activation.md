@@ -33,8 +33,9 @@ grants applied by `ApplyPinnedMigrations`, and asserts `42501` on each.
 | --- | --- | --- |
 | Third pool | `internal/storage/postgres/runtime.go` | `RuntimePools.Coordinator`, `CoordinatorPool()`, `RuntimeConfig.{CoordinatorURI,CoordinatorRole,CoordinatorMaxConns,RequireCoordinator}`, `WithCoordinator()` |
 | Config | `internal/platform/config/config.go` | `COORDINATOR_DATABASE_URI`, `RIVER_COORDINATOR_DATABASE_ROLE`, `WORKER_COORDINATOR_DATABASE_MAX_CONNS` |
-| Grants | `internal/storage/river/migrate.go` | `coordinatorGrantStatements`, `MigrationOptions.{CoordinatorRole,CoordinatorGrants}`, coordinator arm of the role preflight |
-| Grant source | `cmd/dev-health-worker-migrate/main.go` | derives `CoordinatorGrants` from `postgres.CoordinatorPosture()` |
+| Grants | `internal/storage/river/migrate.go` | `coordinatorGrantStatements`, `MigrationOptions.{CoordinatorRole,CoordinatorGrants,CoordinatorColumnGrants}`, `ColumnGrant`, coordinator arm of the role preflight |
+| Grant source | `cmd/dev-health-worker-migrate/main.go` | derives both grant halves from `postgres.CoordinatorPosture()` |
+| Repoint (CHAOS-3114) | `cmd/dev-health-scheduler/dependencies.go` | the sync repository, occurrence reconciler **and** fixed-schedule engine moved onto the coordinator pool |
 | Role creation | `docker/init-extra-dbs.sh`, `scripts/worker/provision_river_roles.sql` | create the coordinator login; drop the now-stale domain `worker_job_routes` grant |
 | Repoint | `cmd/dev-health-workerctl/main.go`, `cmd/dev-health-reconciler/dependencies.go` | coordinator call sites moved off the domain pool |
 | Contract | `internal/deploymentcontract/manifest.go`, `deploy/go-workers/profiles.json` | a declared coordinator budget now requires the coordinator DSN |
@@ -60,12 +61,16 @@ pointing it at a transaction-mode pooler endpoint is rejected
 `internal/storage/river` cannot import `internal/storage/postgres` — that
 package's own tests import river, so the reverse production import is an import
 cycle. The coordinator grant set is therefore **injected** via
-`MigrationOptions.CoordinatorGrants` and derived by the migration command from
+`MigrationOptions.CoordinatorGrants` (table-wide) and
+`MigrationOptions.CoordinatorColumnGrants` (column-scoped, added by
+CHAOS-3114), both derived by the migration command from
 `postgres.CoordinatorPosture()`, the same declaration
 `CheckCoordinatorAuthorization` asserts against. A second hand-maintained list
 in the migration is exactly the drift that previously let the domain grants and
 the domain assertion disagree. A role without grants, or grants without a role,
-is rejected rather than half-applied.
+is rejected rather than half-applied, as is a relation granted both table-wide
+and column-scoped — the readiness check refuses that combination outright, so
+provisioning it would produce a role that can never report ready.
 
 ### Where each pool is used
 
@@ -73,7 +78,7 @@ is rejected rather than half-applied.
 | --- | --- | --- | --- |
 | `workerctl` | `joboperator.Authenticator` (`internal_service_credentials`), `joboperator.PostgresAuditor` (`worker_operator_audits`), `syncroute.Controller` (`sync_dispatch_transport_routes` UPDATE/FOR UPDATE), `jobroute.Controller` (`worker_job_routes` + the outbox LOCK) | `PostgresDomainGuard` (`SELECT true`, no relation), the operator advisory lock, the jobroute Celery quiescer (`sync_run_units`) | `NewDirectPostgresBackend`, the River quiescer |
 | `reconciler` | `jobroute.NewController` in `buildReconcilerRelay` (always constructed), `syncreconciler.NewMaterializer` (dormant path) | `LeaseRepair`, `Kernel` observe side, `Observer`, `syncroute` **fence** (SELECT-only), `syncDispatchReference` | repository, River inserter, River quiescer, Kernel mutate side |
-| `scheduler` | `schedulersync.NewMutationRepository` (`sync_configurations`/`scheduled_jobs` `FOR UPDATE OF config, job` + UPDATE), `schedulersync.NewOccurrenceCoordinator` and `NewOccurrenceReconciler` (`scheduled_sync_occurrences`) | `schedulerfixed.NewEngine` — **still mixed, see CHAOS-3114 below** | — |
+| `scheduler` | `schedulersync.NewMutationRepository` (`sync_configurations`/`scheduled_jobs` `FOR UPDATE OF config, job` + UPDATE), `schedulersync.NewOccurrenceCoordinator` and `NewOccurrenceReconciler` (`scheduled_sync_occurrences`), **and `schedulerfixed.NewEngine`** — the whole `runOccurrence` transaction, `fixed_schedule_occurrences` together with the domain rows its producers materialize (CHAOS-3114) | nothing composes on it; the pool is opened and gated by `domain_postgres` readiness only, so the process's own domain login is still proven to hold exactly `domainPosture` | — |
 
 `syncroute` appears in both columns because it is two different constructors:
 `syncroute.NewController` mutates routes (coordinator), `syncroute.New` is the
@@ -132,43 +137,116 @@ migration in step 3, and step 3 before step 4.
 
 ### Connection budget
 
-Unchanged at **93 / 100** server connections. The coordinator budget was
-already modeled by `deploymentcontract`
-(`BudgetSummary.DirectCoordinatorConnections`) before this change: reconciler
-2×2, scheduler 2×2, `workerctl` 1×2 = 10 direct coordinator connections. This
-change added only environment wiring, no connections, so
-`TestManifestRejectsConnectionBudgetOverflow` is unaffected.
+Unchanged at **93 / 100** server connections, before and after CHAOS-3114. The
+coordinator budget was already modeled by `deploymentcontract`
+(`BudgetSummary.DirectCoordinatorConnections`): reconciler 2×2, scheduler 2×2,
+`workerctl` 1×2 = 10 direct coordinator connections. The footprint is
+`server_reserved` 15 + PgBouncer 25×2 + direct queue-control 18 + direct
+coordinator 10 = 93. Repointing call sites moves demand between pools that are
+already budgeted; it creates no new connection, so
+`TestManifestRejectsConnectionBudgetOverflow` is unaffected by either half.
+
+Within the scheduler's own `coordinator_max_connections: 2`, both loops are
+single-transaction-at-a-time and run on one goroutine each: `schedulersync.Loop`
+hands off and then reconciles **sequentially** in one step (and
+`dueOccurrenceKeys` drains its rows before `reconcileOne` begins a
+transaction), and `schedulerfixed.Engine` reads its anchor, rolls that read
+back, and only then opens the occurrence transaction. Peak concurrent demand is
+therefore one connection per loop — exactly 2.
 
 ## What remains
 
-- **CHAOS-3114 — `dev-health-scheduler`'s sync path is repointed; its
-  fixed-schedule engine is not.** The sync-path call sites
-  (`schedulersync.NewMutationRepository`, `NewOccurrenceCoordinator`,
-  `NewOccurrenceReconciler`) now run on the coordinator pool, which removes the
-  42501 that `FOR UPDATE OF config, job SKIP LOCKED` would have raised on the
-  first real handoff — that clause needs UPDATE on the locked rows purely to
-  take the lock, even though the statement writes nothing else.
-
-  What remains is `schedulerfixed.Engine.runOccurrence`, which commits, in
-  **one** transaction, `fixed_schedule_occurrences` (coordinator-exclusive)
-  together with `remaining_metric_runs`, `remaining_metric_partitions`, and
-  `work_graph_execution_requests`/`_ledger` (domain-exclusive). No single role
-  can serve that transaction under the declared postures, and the atomicity is
-  deliberate. Resolving it means either splitting the commit (outbox-style) or
-  granting an explicit exception — a design decision, not a pool swap. The fixed
-  loop therefore keeps the domain pool for now. Nothing regresses: the binary is
-  dormant (`checkedInSchedulerActivation` is the zero value, so it opens no pool
-  at all), and the fixed loop is already composed to fail independently of the
-  sync loop.
-
-  `coordinatorPolicyParity` was **deleted**, not left false. It was a bare bool
-  with no test, checklist, or document anywhere defining what it would prove, so
-  it could not honestly gate anything. `goOwnsMarkers` is now the sole
-  composition gate; its one open precondition is the CUT-09/CUT-10 occurrence
-  materializer stub.
 - **Reconciler mutation pipeline** is wired correctly but dormant
   (`checkedInReconcilerActivation.syncMutation` is false). It is repointed now so
   flipping that flag cannot ship the same defect.
+- **The occurrence materializer (CUT-09/CUT-10)** is the sole remaining
+  precondition on `checkedInSchedulerActivation.goOwnsMarkers`.
+  `productionSchedulerRuntimeSources.newOccurrences` still composes
+  `schedulersync.NewUnavailableMaterializer()`, so activating today would
+  durably record occurrences Go can never materialize. The binary stays dormant
+  and opens no pool at all. No privilege precondition remains — see below.
+
+## CHAOS-3114 — both halves shipped
+
+No privilege precondition remains on the scheduler. The sync-path call sites
+(`schedulersync.NewMutationRepository`, `NewOccurrenceCoordinator`,
+`NewOccurrenceReconciler`) moved to the coordinator pool first, removing the
+42501 that `FOR UPDATE OF config, job SKIP LOCKED` would have raised on the
+first real handoff — that clause needs UPDATE on the locked rows purely to take
+the lock, even though the statement writes nothing else.
+
+The second half moved `schedulerfixed.Engine.runOccurrence` onto the same pool.
+It commits, in **one** transaction, `fixed_schedule_occurrences`
+(coordinator-exclusive) together with the rows its producers materialize. The
+resolution was to widen the COORDINATOR role to cover the whole transaction:
+
+- The property the partition protects is that provider-sync workers — the code
+  that handles third-party payloads, and the code that runs as the **domain**
+  login — cannot reach control-plane tables (routes, credentials, audits,
+  schedule markers). Widening the coordinator does not weaken that. Widening the
+  domain role, by granting it `fixed_schedule_occurrences`, would destroy it. The
+  coordinator login is used only by the scheduler, the reconciler, and
+  `workerctl`.
+- The atomicity is deliberate and load-bearing: it is what makes "occurrence
+  recorded ⇒ work enqueued" exactly-once. Splitting it outbox-style would let a
+  fixed schedule double-run or silently skip.
+- Celery Beat, the thing this replaces, already runs as ONE identity spanning
+  both table sets. The Go cutover is not blocked on a privilege model stricter
+  than its predecessor.
+
+The grant set is the **verified statement trace** of `runOccurrence`, not the
+domain role's flags copied across. `coordinatorPosture()` gained:
+
+| Table | Coordinator privileges | Why |
+| --- | --- | --- |
+| `remaining_metric_runs` | SELECT, INSERT | `remaining.StartRunTx` inserts; `loadStartedRun` re-reads on the replay arm. **No UPDATE** — every status transition is handler-side, on the domain role. |
+| `remaining_metric_partitions` | SELECT, INSERT | same `StartRunTx`, plus `verifyStartedPartitions`. No UPDATE, same reason. |
+| `work_graph_execution_requests` | SELECT, INSERT | `workgraph.RequestWriter.WriteTx` inserts and re-reads. No UPDATE: `Claim`/`transition` are handler-side. |
+| `worker_job_outbox` | **+ INSERT** | `joboutbox.Producer.publish`, reached from every producer handoff. UPDATE was already required by the `jobroute` LOCK. |
+| `worker_job_completion_fences` | `completion_key` SELECT + INSERT, **column-scoped** | `joboutbox.MarkCompletionTx`, reached transitively from `StartRunTx` and `WriteTx` on their already-succeeded replay arms. |
+
+Two corrections to what this document previously asserted, both found by tracing
+the code rather than reading the manifest:
+
+- **`work_graph_execution_ledger` is NOT in the transaction.** `WriteTx` never
+  touches it; the ledger belongs to the handler-side `Claim`. The earlier bullet
+  listing it as one of the commit's domain-exclusive tables was wrong, and it is
+  deliberately absent from the coordinator posture.
+- **`worker_job_completion_fences` IS reached from the fixed engine.**
+  `domainPosture()`'s comment previously dismissed the manifest's "possible 2nd
+  reacher" flag on this table as a false positive, on the strength of a grep
+  across `internal/scheduler/fixed` for `MarkCompletionTx`. The grep was scoped
+  to one package while the reach is transitive, through `StartRunTx` and
+  `WriteTx`. The flag was real.
+
+The fence grant stays **column-scoped** for the same reason it is on the domain
+side: `completed_at` is server-owned, and a table-wide grant would let the
+coordinator forge a fence retention never reaps. Supporting that required the
+migration to learn column grants —
+`MigrationOptions.CoordinatorColumnGrants`, derived by
+`cmd/dev-health-worker-migrate` from `CoordinatorPosture().ColumnScoped`, the
+same single-declaration route the table grants already take. A relation may be
+granted table-wide or column-scoped, never both; the migration rejects the
+combination, because the readiness check refuses it outright.
+
+`SELECT` on `completion_key` is required as well as `INSERT`, and not because
+anything reads the row: `INSERT ... ON CONFLICT (completion_key) DO NOTHING`
+names an arbiter, and PostgreSQL refuses the statement with 42501 when only
+`INSERT (completion_key)` is held. Verified empirically against a live server,
+both directions. This is the same class of trap as the LOCK-implied UPDATE:
+invisible to any verb-based reading of the code.
+
+All of it is measured, not inferred:
+`internal/storage/postgres/fixed_engine_statement_privileges_integration_test.go`
+runs the 14 real `runOccurrence` statement shapes as the real coordinator role
+with grants applied by `ApplyPinnedMigrations`, and its mutation half restores
+the pre-3114 grant set and demands 42501 on each of the eight statements this
+change unblocked, plus a closed readiness check.
+
+`coordinatorPolicyParity` was **deleted**, not left false. It was a bare bool
+with no test, checklist, or document anywhere defining what it would prove, so
+it could not honestly gate anything. `goOwnsMarkers` is now the sole composition
+gate, and it stays false.
 
 ## Known disagreements with the manifest
 
@@ -179,8 +257,21 @@ change added only environment wiring, no connections, so
   not by re-granting the table to the domain role. If the reconciler were ever
   reclassified as domain-only, `worker_job_routes` would have to become
   dual-granted instead.
-- `fixed_schedule_occurrences` is attributed coordinator-exclusive, but its only
-  writer shares a transaction with domain-exclusive tables. See CHAOS-3114.
+- `fixed_schedule_occurrences` is attributed coordinator-exclusive, and its only
+  writer shares a transaction with tables the manifest attributes to the domain
+  role. **Resolved** by CHAOS-3114: the coordinator role holds both sides and
+  the whole engine runs as coordinator, so the attribution stands as written —
+  `fixed_schedule_occurrences` was never granted to the domain role and is not
+  dual-granted. What the manifest now understates is the coordinator side of
+  `remaining_metric_runs`, `remaining_metric_partitions`,
+  `work_graph_execution_requests`, `worker_job_outbox` and
+  `worker_job_completion_fences`: each is a dual-grant table, with the
+  coordinator holding strictly less than the domain role on the first three (no
+  UPDATE — the status transitions are handler-side). The Go postures are what
+  the code is built against.
+- `worker_job_completion_fences` carried a "possible 2nd reacher" flag the
+  postures previously dismissed as a false positive. It was real; see CHAOS-3114
+  above. The manifest's flag was right and the dismissal was wrong.
 - `docker/init-extra-dbs.sh` and `scripts/worker/provision_river_roles.sql` still
   carry their own partial domain grant lists, which predate the posture split and
   are superseded by the migration's `REVOKE ALL` + selective re-grant. Their

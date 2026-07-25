@@ -277,7 +277,30 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
-		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
+		// Production column shape, not a stub: the fixed-schedule engine's
+		// handoff INSERT names every one of these columns, and an undefined
+		// column (42703) is raised during parse analysis BEFORE the permission
+		// check, which would silently stop the privilege assertions in
+		// fixed_engine_statement_privileges_integration_test.go from measuring
+		// anything.
+		`CREATE TABLE public.worker_job_outbox (
+			id uuid PRIMARY KEY,
+			dedupe_key text NOT NULL UNIQUE,
+			job_kind text NOT NULL,
+			contract_version integer NOT NULL,
+			args json NOT NULL,
+			payload_hash text NOT NULL,
+			queue text NOT NULL,
+			priority integer NOT NULL,
+			max_attempts integer NOT NULL,
+			scheduled_at timestamptz NOT NULL,
+			status text NOT NULL,
+			attempt_count integer NOT NULL,
+			next_attempt_at timestamptz NOT NULL,
+			prerequisite_completion_key text,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL
+		)`,
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
@@ -315,12 +338,25 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			AllowDelete: table.AllowDelete,
 		})
 	}
+	// The column-scoped half is derived the same way, for the same reason: the
+	// coordinator posture gained worker_job_completion_fences.completion_key
+	// with CHAOS-3114, and a harness that granted only the table half would
+	// test a privilege set no real migration produces.
+	coordinatorColumnGrants := make([]riverstore.ColumnGrant, 0, len(coordinatorPosture.ColumnScoped))
+	for _, column := range coordinatorPosture.ColumnScoped {
+		coordinatorColumnGrants = append(coordinatorColumnGrants, riverstore.ColumnGrant{
+			TableName:  column.TableName,
+			ColumnName: column.ColumnName,
+			Privilege:  column.Privilege,
+		})
+	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
-		Schema:            grantSchema,
-		DomainRole:        grantDomainRole,
-		QueueRole:         grantQueueRole,
-		CoordinatorRole:   grantCoordinatorRole,
-		CoordinatorGrants: coordinatorGrants,
+		Schema:                  grantSchema,
+		DomainRole:              grantDomainRole,
+		QueueRole:               grantQueueRole,
+		CoordinatorRole:         grantCoordinatorRole,
+		CoordinatorGrants:       coordinatorGrants,
+		CoordinatorColumnGrants: coordinatorColumnGrants,
 	}); err != nil {
 		t.Fatal(err)
 	}

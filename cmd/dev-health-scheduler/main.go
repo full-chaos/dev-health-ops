@@ -39,14 +39,15 @@ var schedulerSpec = shell.Spec{
 //     CUT-09/CUT-10 work, not this change. Activating today would durably
 //     record occurrences Go can never materialize.
 //
-// CHAOS-3114 repointed dependencies.go's sync-path repository and occurrence
-// reconciler construction onto the coordinator pool
+// CHAOS-3114 repointed every database call site in dependencies.go onto the
+// coordinator pool: first the sync-path repository and occurrence reconciler
 // (schedulersync.NewMutationRepository/NewOccurrenceCoordinator/
 // NewOccurrenceReconciler's SQL -- scheduled_jobs, sync_configurations
-// UPDATE, scheduled_sync_occurrences -- is coordinator-exclusive per
-// internal/storage/postgres/domain_authorization.go's coordinatorPosture),
-// so that 42501 precondition no longer blocks activation. The unavailable
-// materializer above still does.
+// UPDATE, scheduled_sync_occurrences), then the fixed maintenance engine,
+// whose runOccurrence transaction is now covered end to end by
+// coordinatorPosture (internal/storage/postgres/domain_authorization.go). No
+// 42501 precondition remains. The unavailable materializer above is the sole
+// remaining blocker on goOwnsMarkers.
 var schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
 
 var errSchedulerActivationUnavailable = errors.New("scheduler activation is unavailable")
@@ -68,11 +69,15 @@ var errSchedulerActivationUnavailable = errors.New("scheduler activation is unav
 // proves.
 //
 // CHAOS-3128 transferred marker-mutation ownership itself (schedulerOwnership
-// above) but deliberately leaves goOwnsMarkers false: this binary's
-// occurrence materializer is still the CUT-09/CUT-10 stub (see
-// schedulerOwnership's doc comment). Flipping goOwnsMarkers to true without
-// also resolving that would ship a stranded-occurrence backlog on the first
-// real due schedule, not a working scheduler.
+// above) but deliberately leaves goOwnsMarkers false, and CHAOS-3114 leaves it
+// false too: this binary's occurrence materializer is still the CUT-09/CUT-10
+// stub (see schedulerOwnership's doc comment). Flipping goOwnsMarkers to true
+// without also resolving that would ship a stranded-occurrence backlog on the
+// first real due schedule, not a working scheduler. The binary therefore stays
+// dormant -- it opens no database pool at all -- and the privilege work in
+// CHAOS-3114 changes nothing about that; it only means the composition this
+// gate guards would no longer fail on a privilege error once the materializer
+// exists.
 type schedulerActivation struct {
 	goOwnsMarkers bool
 }

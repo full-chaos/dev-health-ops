@@ -193,8 +193,14 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			return stubOccurrenceSource(pool)
 		},
 		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry) (fixedScheduleRuntime, error) {
-			if pool != database.pool {
-				t.Fatal("fixed schedule loop received the wrong domain pool")
+			// CHAOS-3114 (second half): the fixed engine runs on the
+			// coordinator pool as well. runOccurrence commits the
+			// coordinator-exclusive occurrence ledger together with the
+			// producers' domain rows in one transaction, and coordinatorPosture
+			// is what covers that whole statement set -- handing this call site
+			// the domain pool fails the ledger claim with SQLSTATE 42501.
+			if pool != database.coordinatorPool {
+				t.Fatal("fixed schedule loop received the wrong pool; want the coordinator pool")
 			}
 			return fixedLoop, nil
 		},

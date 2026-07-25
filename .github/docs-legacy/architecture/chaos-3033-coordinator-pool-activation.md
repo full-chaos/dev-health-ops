@@ -73,18 +73,19 @@ is rejected rather than half-applied.
 | --- | --- | --- | --- |
 | `workerctl` | `joboperator.Authenticator` (`internal_service_credentials`), `joboperator.PostgresAuditor` (`worker_operator_audits`), `syncroute.Controller` (`sync_dispatch_transport_routes` UPDATE/FOR UPDATE), `jobroute.Controller` (`worker_job_routes` + the outbox LOCK) | `PostgresDomainGuard` (`SELECT true`, no relation), the operator advisory lock, the jobroute Celery quiescer (`sync_run_units`) | `NewDirectPostgresBackend`, the River quiescer |
 | `reconciler` | `jobroute.NewController` in `buildReconcilerRelay` (always constructed), `syncreconciler.NewMaterializer` (dormant path) | `LeaseRepair`, `Kernel` observe side, `Observer`, `syncroute` **fence** (SELECT-only), `syncDispatchReference` | repository, River inserter, River quiescer, Kernel mutate side |
-| `scheduler` | **not repointed — blocked on CHAOS-3114** | — | — |
+| `scheduler` | `schedulersync.NewMutationRepository` (`sync_configurations`/`scheduled_jobs` `FOR UPDATE OF config, job` + UPDATE), `schedulersync.NewOccurrenceCoordinator` and `NewOccurrenceReconciler` (`scheduled_sync_occurrences`) | `schedulerfixed.NewEngine` — **still mixed, see CHAOS-3114 below** | — |
 
 `syncroute` appears in both columns because it is two different constructors:
 `syncroute.NewController` mutates routes (coordinator), `syncroute.New` is the
 read-only fence (domain).
 
-Both repointed binaries additionally gate readiness on
+Every repointed binary additionally gates readiness on
 `CheckCoordinatorAuthorization`. That is not redundant with the domain check:
 cross-role attribution is a *distributed* property, so only the coordinator's
 own check can catch a privilege wrongly granted to the coordinator login. The
-reconciler exposes it as a separately named `coordinator_postgres` readiness
-check so a coordinator privilege fault is attributable.
+reconciler and the scheduler each expose it as a separately named
+`coordinator_postgres` readiness check so a coordinator privilege fault is
+attributable.
 
 ## Deploy prerequisites — ordered
 
@@ -140,21 +141,31 @@ change added only environment wiring, no connections, so
 
 ## What remains
 
-- **CHAOS-3114 — `dev-health-scheduler` cannot be repointed as-is.** Its
-  fixed-schedule `Engine.runOccurrence` commits, in **one** transaction,
-  `fixed_schedule_occurrences` (coordinator-exclusive) together with
-  `remaining_metric_runs`, `remaining_metric_partitions`, and
+- **CHAOS-3114 — `dev-health-scheduler`'s sync path is repointed; its
+  fixed-schedule engine is not.** The sync-path call sites
+  (`schedulersync.NewMutationRepository`, `NewOccurrenceCoordinator`,
+  `NewOccurrenceReconciler`) now run on the coordinator pool, which removes the
+  42501 that `FOR UPDATE OF config, job SKIP LOCKED` would have raised on the
+  first real handoff — that clause needs UPDATE on the locked rows purely to
+  take the lock, even though the statement writes nothing else.
+
+  What remains is `schedulerfixed.Engine.runOccurrence`, which commits, in
+  **one** transaction, `fixed_schedule_occurrences` (coordinator-exclusive)
+  together with `remaining_metric_runs`, `remaining_metric_partitions`, and
   `work_graph_execution_requests`/`_ledger` (domain-exclusive). No single role
   can serve that transaction under the declared postures, and the atomicity is
   deliberate. Resolving it means either splitting the commit (outbox-style) or
-  granting an explicit exception — a design decision, not a pool swap. The
-  binary is dormant today (`checkedInSchedulerActivation` is the zero value, so
-  it opens no pool at all), so nothing regresses by leaving it. Its coordinator
-  call sites, for when this is unblocked: `schedulersync.NewMutationRepository`
-  (`scheduled_jobs` FOR UPDATE + UPDATE), `schedulersync.NewOccurrenceCoordinator`
-  (`scheduled_sync_occurrences`), `schedulersync.NewOccurrenceReconciler`
-  (`scheduled_sync_occurrences`, `scheduled_jobs`), and the mixed
-  `schedulerfixed.NewEngine`.
+  granting an explicit exception — a design decision, not a pool swap. The fixed
+  loop therefore keeps the domain pool for now. Nothing regresses: the binary is
+  dormant (`checkedInSchedulerActivation` is the zero value, so it opens no pool
+  at all), and the fixed loop is already composed to fail independently of the
+  sync loop.
+
+  `coordinatorPolicyParity` was **deleted**, not left false. It was a bare bool
+  with no test, checklist, or document anywhere defining what it would prove, so
+  it could not honestly gate anything. `goOwnsMarkers` is now the sole
+  composition gate; its one open precondition is the CUT-09/CUT-10 occurrence
+  materializer stub.
 - **Reconciler mutation pipeline** is wired correctly but dormant
   (`checkedInReconcilerActivation.syncMutation` is false). It is repointed now so
   flipping that flag cannot ship the same defect.

@@ -76,10 +76,10 @@ func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
 // actually happen in production. allowsMutation() still requires
 // {owner: go, mode: mutation} on the specific Repository that runs the
 // write, and cmd/dev-health-scheduler's composition root additionally gates
-// on its own checkedInSchedulerActivation flags (goOwnsMarkers,
-// coordinatorPolicyParity) before it will even open a database pool. Those
-// gates exist precisely so that this function's existence does not, by
-// itself, put a marker mutation on the wire.
+// on its own checkedInSchedulerActivation.goOwnsMarkers flag before it will
+// even open a database pool. That gate exists precisely so that this
+// function's existence does not, by itself, put a marker mutation on the
+// wire.
 //
 // Why a second, concurrently running Celery Beat cannot also mutate the same
 // marker once this policy is in effect: HandoffDueResult (transaction.go)
@@ -101,8 +101,8 @@ func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
 // with Python's for every schedule (see NextOccurrence's golden-vector tests
 // for that), and that Go can complete a materialization once it wins a race
 // (see the occurrence reconciler's Materializer — a stub until CUT-09/CUT-10
-// lands). Both are the separate coordinatorPolicyParity precondition on the
-// composition root, and this function does not claim to satisfy it.
+// lands). Both are separate preconditions on the composition root's
+// goOwnsMarkers gate, and this function does not claim to satisfy either.
 func TransferScheduleMarkerOwnershipToGo() OwnershipPolicy {
 	return reviewedGoMutationOwnershipPolicy()
 }

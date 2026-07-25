@@ -10,6 +10,7 @@ from typing import Any
 
 from .models import (
     CONTRACT_VERSION_V1,
+    CONTRACT_VERSION_V2,
     KIND_BILLING_NOTIFICATION,
     KIND_DAILY_METRICS_DISPATCH,
     KIND_DAILY_METRICS_FINALIZE,
@@ -79,6 +80,13 @@ _REMAINING_PAYLOAD_TYPES = (
 _REMAINING_PAYLOAD_BY_KIND = {
     payload_type.KIND: payload_type for payload_type in _REMAINING_PAYLOAD_TYPES
 }
+# Contract versions this decoder accepts, per kind. A kind absent from this map
+# accepts v1 only, so a new version is never admitted by omission. Keep it in
+# step with supported_versions in contracts/jobs/v1/registry.json; the registry
+# drift check in registry.py fails closed when the two disagree.
+_SUPPORTED_DECODE_VERSIONS: dict[str, tuple[int, ...]] = {
+    KIND_RETENTION_CLEANUP: (CONTRACT_VERSION_V1, CONTRACT_VERSION_V2),
+}
 
 
 class ContractDecodeError(ValueError):
@@ -122,7 +130,11 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         label="envelope",
     )
     version = _expect_int(envelope["contract_version"], "contract_version")
-    if version != CONTRACT_VERSION_V1:
+    # Versions are admitted per kind, never by default: a kind without an
+    # entry here has no decoder for anything but v1, so declaring a new
+    # contract version requires teaching this decoder about it. Only
+    # system.retention_cleanup has a v2, which widened retention_policy.
+    if version not in _SUPPORTED_DECODE_VERSIONS.get(kind, (CONTRACT_VERSION_V1,)):
         raise ContractDecodeError("unsupported contract version")
 
     organization_id_value = envelope.get("organization_id")

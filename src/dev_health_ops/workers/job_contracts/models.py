@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import ClassVar, Protocol, TypeAlias
 
 CONTRACT_VERSION_V1 = 1
+# v2 exists only for system.retention_cleanup, which widened retention_policy
+# to carry the two prune policies the Go fixed scheduler owns. Producers here
+# still emit v1: this side reaches Celery directly rather than through the
+# envelope, and v1 remains supported.
+CONTRACT_VERSION_V2 = 2
 KIND_HEARTBEAT = "system.heartbeat"
 KIND_BILLING_NOTIFICATION = "operational.billing_notification"
 KIND_WEBHOOK_DELIVERY = "operational.webhook_delivery"

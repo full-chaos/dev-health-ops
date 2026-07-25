@@ -156,6 +156,36 @@ hand, not grant blind.
 | sync_dispatch_transport_routes | **both** | coordinator: SELECT, UPDATE | verified | `internal/syncroute/control.go`, workerctl `main.go:206` + reconciler `dependencies.go:273` |
 | worker_job_runs | **both** | domain: SELECT, INSERT, UPDATE | verified | `internal/jobruntime/idempotency_postgres.go`, heavy+ops |
 | worker_job_runs | **both** | coordinator: SELECT, UPDATE | verified | `internal/jobroute/control.go` LOCK/count, workerctl+reconciler |
+| worker_job_outbox | **both** | domain: SELECT, INSERT | verified | `internal/joboutbox/producer.go:127-153` (`Producer.publish`: `INSERT INTO public.worker_job_outbox ... ON CONFLICT (dedupe_key) DO NOTHING`, plus the fallback `SELECT job_kind, contract_version, payload_hash, ... FROM public.worker_job_outbox WHERE dedupe_key = $1` when the insert no-ops). Constructed with the domain pool at `cmd/dev-health-worker/sync_dispatch.go:283`: `joboutbox.NewProducer(postgresDatabase.pools.Domain, registry)`. Domain-role migration grant: `internal/storage/river/migrate.go:256` (`GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO` domainRole). |
+| worker_job_outbox | **both** | coordinator: SELECT, UPDATE (LOCK-implied, no UPDATE statement) | verified | `internal/jobroute/control.go:197`: `LOCK TABLE public.worker_job_outbox IN SHARE ROW EXCLUSIVE MODE`, inside `Controller.Rollback` only — confirmed by reading `ApplyCheckedIn` (lines 126-175) directly: it never touches `worker_job_outbox`, only `public.worker_job_routes`, so the LOCK is NOT also in `ApplyCheckedIn` as an earlier note assumed. `Rollback` also runs `SELECT count(*) FROM public.worker_job_outbox WHERE job_kind = $1 AND status IN ('pending', 'claimed')` at control.go:212-215 (the pending-drain check), which needs SELECT. The LOCK is the source of the UPDATE requirement: `LOCK TABLE t IN SHARE ROW EXCLUSIVE MODE` requires UPDATE/DELETE/TRUNCATE/MAINTAIN in Postgres — verified empirically on live PG16 (a role holding only SELECT+INSERT gets `permission denied for table worker_job_outbox` on the LOCK statement, no row written). `Controller` is constructed at two coordinator-candidate sites, both currently wired to the *domain* pool (not yet the coordinator pool): `cmd/dev-health-workerctl/main.go:210` → `newJobRouteController(pools.Domain, pools.QueueControl, schema, registry)` → `jobroute.NewControllerWithCeleryQuiescer(domainPool, ...)` at main.go:271-273; and `cmd/dev-health-reconciler/dependencies.go:273`: `jobroute.NewController(domainPool, registry, quiescer)`. Repointing that pool to the coordinator role is a deploy prerequisite this posture row is the readiness spec for (see `internal/storage/postgres/domain_authorization.go:599-613`'s doc comment on `coordinatorPosture`). **Three-role table:** `internal/storage/river/migrate.go:291` separately grants the *queue* role `SELECT, UPDATE, DELETE` on `worker_job_outbox` (the dispatch-drain path in `internal/joboutbox/repository.go`, constructed with the queue pool — see `cmd/dev-health-worker/operational.go:95`). The domain/coordinator split this manifest documents excludes the queue role; it is noted here only so the three-role shape isn't lost. |
+
+## Privilege-implication rule: locking clauses need no write statement
+
+A DML-verb grep (`INSERT|UPDATE|DELETE`) undercounts required privileges.
+Two Postgres locking constructs imply write-level grants with no write verb
+anywhere in the reaching Go statement — both verified empirically against a
+live Postgres 16 instance (this is how the `worker_job_outbox` coordinator
+row above was derived):
+
+1. `LOCK TABLE t IN SHARE ROW EXCLUSIVE MODE` (and `SHARE UPDATE EXCLUSIVE`,
+   `SHARE`, `EXCLUSIVE`, `ACCESS EXCLUSIVE`) requires `UPDATE`, `DELETE`,
+   `TRUNCATE`, or `MAINTAIN` on the locked table — a role holding only
+   `SELECT`+`INSERT` gets `permission denied` on the `LOCK` statement itself,
+   before any row is touched. `ACCESS SHARE` (implied by a plain `SELECT`)
+   needs only `SELECT`.
+2. `SELECT ... FOR UPDATE` / `FOR NO KEY UPDATE` / `FOR SHARE` / `FOR KEY
+   SHARE` all require `UPDATE` on every table in scope. `FOR UPDATE OF
+   <list>` scopes the requirement to only the named tables — a joined,
+   read-only table outside the `OF` list does not need `UPDATE` just because
+   it appears in the same query.
+
+Re-deriving a posture row must grep both `LOCK TABLE` and
+`FOR (UPDATE|SHARE|NO KEY UPDATE|KEY SHARE)` — prefix- and JOIN-inclusive,
+not restricted to `public.<table>` or `FROM|INTO` — alongside the usual
+DML-verb sweep, or this class of gap recurs. A full sweep of `internal/` and
+`cmd/` at `87f66b838` for all four constructs found `worker_job_outbox` as
+the only table missing its lock-implied privilege from the manifest; every
+other hit already matched an existing row.
 
 ## Schema-level blocker (unchanged)
 
@@ -212,11 +242,15 @@ Nothing else to add.
 ## Dual-grant ("both") whitelist for the attribution test
 
 `sync_dispatch_outbox`, `sync_run_units`, `sync_runs`, `worker_job_runs`,
-`sync_dispatch_transport_routes`, `organizations`, `sync_configurations` —
-**7 tables**, updated from the prior 6-table list now that
-`sync_configurations` is confirmed dual-grant (the closure-typed-field
-blind spot's second and, per the sweep above, final instance). This is the
-whitelist `TestDomainGrantSurfaceMatchesQuerySurface`'s future
-role-attribution extension and grants-finisher2's posture manifest must
-both reference — coordinate before either side hard-codes it
+`sync_dispatch_transport_routes`, `organizations`, `sync_configurations`,
+`worker_job_outbox` — **8 tables**, updated from the prior 7-table list now
+that `worker_job_outbox` is confirmed dual-grant (coordinator side is
+LOCK-implied, not from a DML-verb sweep — see "Privilege-implication rule"
+above). `worker_job_outbox` differs from the other 7: it is also granted to
+a third role (queue, `internal/storage/river/migrate.go:291`) that this
+domain/coordinator whitelist does not track — the "both" tag here means
+"both domain and coordinator," not "only these two roles hold a grant on
+this table." This is the whitelist `TestDomainGrantSurfaceMatchesQuerySurface`'s
+future role-attribution extension and grants-finisher2's posture manifest
+must both reference — coordinate before either side hard-codes it
 independently.

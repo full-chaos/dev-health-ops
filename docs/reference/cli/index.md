@@ -425,7 +425,7 @@ dev-hops metrics complexity \
 | `-s, --search` | Repo name search pattern (glob) |
 | `--lang` | Include language globs (e.g. `*.py`) |
 | `--exclude` | Exclude language globs (e.g. `*/tests/*`) |
-| `--max-files` | Limit number of files scanned per repo |
+| `--max-files` | Limit files scanned per repo; the resulting rows are that day's complete replacement slice, not an additive preview |
 | `--sink` | Analytics backend (`clickhouse` only) |
 
 ### `metrics capacity`

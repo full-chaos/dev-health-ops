@@ -9,9 +9,11 @@ import (
 )
 
 // riverRoutedRegistry promotes every checked-in kind to a River route so
-// startup validation can be exercised against the real contract. Production
-// routes stay Celery until an operator promotes them; without this fixture the
-// executable set would be empty and every case would pass vacuously.
+// startup validation can be exercised against the real contract. Every kind is
+// already checked in at go_default/river, so this fixture is a no-op over the
+// real registry today, but it still guards profile-coverage assertions against
+// a future rollback that moves some kinds back to Celery, which would make the
+// executable set partial and some of these cases pass vacuously.
 func riverRoutedRegistry(t *testing.T) *Registry {
 	t.Helper()
 	contracts, err := jobcontract.LoadRegistry("../../contracts/jobs/v1")
@@ -146,7 +148,7 @@ func TestRegistryInvestmentDispatchStartupBudgetMatchesMaterialization(t *testin
 	if dispatch.Timeout != 2*time.Hour {
 		t.Fatalf("investment.dispatch timeout = %s, want 2h", dispatch.Timeout)
 	}
-	if dispatch.CurrentVersion != 1 || dispatch.Route != "celery" {
+	if dispatch.CurrentVersion != 1 || dispatch.Route != "river" {
 		t.Fatalf(
 			"investment.dispatch rollout contract drifted: version=%d route=%q",
 			dispatch.CurrentVersion,
@@ -253,13 +255,23 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		descriptors[23].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
+	// Every checked-in kind is executable, and no kind is Celery-routed any
+	// more. sync.provider_unit is the single deliberate exception to
+	// go_default/river: Go's provider route surface covers one of the 59
+	// provider/dataset pairs in contracts/provider-matrix/v1/matrix.json, so it
+	// stays on river_canary where ProviderUnitRouteSwitches can confine River to
+	// that one ready pair. Asserting its route by name rather than skipping it
+	// keeps an accidental promotion visible here.
 	for _, descriptor := range descriptors {
+		wantRoute := "river"
 		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
-			if descriptor.Route != "river_canary" || !descriptor.Executable() {
-				t.Fatalf("provider-unit canary policy is not executable: %#v", descriptor)
-			}
-		} else if descriptor.Route != "celery" || descriptor.Executable() {
-			t.Fatalf("checked-in compatibility policy became executable: %#v", descriptor)
+			wantRoute = "river_canary"
+		}
+		if descriptor.Route != wantRoute || !descriptor.Executable() {
+			t.Fatalf(
+				"checked-in policy drifted: kind=%s route=%q want=%q executable=%v",
+				descriptor.Kind, descriptor.Route, wantRoute, descriptor.Executable(),
+			)
 		}
 	}
 

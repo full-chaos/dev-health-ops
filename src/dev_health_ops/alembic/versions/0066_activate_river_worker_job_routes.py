@@ -1,12 +1,15 @@
-"""Move every checked-in worker job kind to the River transport.
+"""Move the checked-in worker job kinds to the River transport.
 
 Revision ID: 0066
 Revises: 0065
 
-This is the CHAOS-3033 wholesale Celery-to-Go cutover.  Every kind in
-``contracts/jobs/v1/migration-state.json`` moves to ``go_default`` in the same
-release, which makes ``river`` the checked-in route and leaves ``celery`` as the
-declared rollback route.
+This is the CHAOS-3033 Celery-to-Go cutover.  23 of the 24 checked-in kinds move
+to ``go_default`` in the same release, which makes ``river`` the checked-in route
+and leaves ``celery`` as the declared rollback route.
+
+``sync.provider_unit`` is the exception and stays on its canary route.  See
+``_PROMOTABLE_TRANSPORTS`` below for why: its Go route surface covers one of the
+59 provider/dataset pairs, so promoting it would stop the other 58 from syncing.
 
 Why the route rows are seeded here rather than promoted one at a time with
 ``dev-health-workerctl job-routes apply``:
@@ -53,13 +56,35 @@ depends_on = None
 
 _RIVER_TRANSPORT = "river"
 _ROLLBACK_TRANSPORT = "celery"
-# river_canary is accepted because 0061 seeded sync.provider_unit as the one
-# active canary; promoting it to river is exactly this cutover.
-_PROMOTABLE_TRANSPORTS = frozenset({_ROLLBACK_TRANSPORT, "river_canary"})
+_PROMOTABLE_TRANSPORTS = frozenset({_ROLLBACK_TRANSPORT})
+
+# sync.provider_unit is deliberately NOT migrated here and keeps the
+# river_canary row that 0061 seeded.
+#
+# Its Go route surface covers exactly one provider/dataset pair --
+# launchdarkly/feature-flags is the only entry in
+# contracts/provider-matrix/v1/matrix.json with route_ready true, against 58
+# that are not (github 17, gitlab 19, jira 6, linear 5, pagerduty 11). The
+# canary route exists so ProviderUnitRouteSwitches can confine River to that
+# one ready pair while every other pair still dispatches through Celery.
+#
+# Promoting this kind to plain river would route all 59 pairs at a handler that
+# serves one, so the 58 unserved pairs would fail closed and stop syncing.
+# Leaving it at river_canary is not an oversight or a deferral of cleanup: it is
+# the only state in which this kind currently works.
+#
+# Its durable row is never read here, so whatever an operator decided stays
+# intact. On a fresh database 0061 and 0064 leave it on celery at generation 1
+# precisely so the canary is an explicit operator decision, and this kind is the
+# one that ``dev-health-workerctl job-routes apply`` can actually promote:
+# PostgresCelerySyncProviderQuiescer serves sync.provider_unit and rejects every
+# other kind, which is the same limitation that makes the other 23 rows worth
+# seeding here rather than promoting one at a time.
 
 # Pinned rather than derived from the contract tree: a migration records the
 # decision taken at one revision, so a later contract edit must not silently
-# change what this revision did.  This list matches the 24 kinds seeded by 0064.
+# change what this revision did.  These are the 24 kinds seeded by 0064 minus
+# sync.provider_unit, which stays on its canary route for the reason above.
 _KINDS = (
     "investment.chunk",
     "investment.dispatch",
@@ -80,7 +105,6 @@ _KINDS = (
     "operational.webhook_delivery",
     "report.execute_on_demand",
     "report.execute_scheduled",
-    "sync.provider_unit",
     "sync.team_autoimport",
     "system.heartbeat",
     "system.retention_cleanup",

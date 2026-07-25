@@ -101,9 +101,16 @@ def test_rejects_implicit_autobegin_after_prior_read(engine):
 
 
 def test_rejects_celery_route_without_writing_or_weakening_transaction(engine):
+    # system.heartbeat's checked-in migration route flipped to go_default
+    # ("river") with the CHAOS-3033 wholesale cutover, so the real, unpatched
+    # migration state no longer exercises a celery-routed kind. A kind can
+    # still legitimately have a durable route of "celery" (every kind's
+    # rollback_route is "celery", and a rollback sets it), so pin the route
+    # explicitly to keep guarding that a celery-routed kind is rejected
+    # without writing an outbox row or weakening the caller's transaction.
     with Session(engine) as session, session.begin():
         with pytest.raises(OutboxEnqueueError, match="worker job contract is invalid"):
-            _enqueue(session)
+            _enqueue(session, migration_route="celery")
         assert session.scalar(select(WorkerJobOutbox)) is None
 
 

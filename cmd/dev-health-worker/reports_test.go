@@ -61,6 +61,50 @@ func promotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, 
 	return registry, root
 }
 
+// demotedContractRoot copies the checked-in contract tree and routes exactly
+// the named kinds back to Celery. It is the inverse of promotedContractRoot:
+// the checked-in tree now ships every kind at go_default (CHAOS-3033), so a
+// genuinely celery-routed/dormant scenario has to be constructed explicitly
+// rather than found by loading the production tree unmodified.
+func demotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "v1")
+	if err := os.CopyFS(root, os.DirFS(defaultContractRoot)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "migration-state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		SchemaVersion int              `json:"schema_version"`
+		Jobs          []map[string]any `json:"jobs"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range document.Jobs {
+		kind, _ := job["kind"].(string)
+		if slices.Contains(kinds, kind) {
+			job["state"] = "go_implemented"
+			job["route"] = "celery"
+		}
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := jobruntime.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry, root
+}
+
 func reportBuilderDatabase(t *testing.T) *postgresWorkerDatabase {
 	t.Helper()
 	ctx := context.Background()
@@ -81,10 +125,15 @@ func reportBuilderDatabase(t *testing.T) *postgresWorkerDatabase {
 
 func TestReportBuilderStaysDormantWhileRoutesAreCelery(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	registry, err := jobruntime.Load(defaultContractRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// report.execute_on_demand and report.execute_scheduled now ship at
+	// go_default in the checked-in contract, so dormancy is no longer the
+	// production default for this pair; it has to be constructed explicitly
+	// to prove the builder still refuses to touch ClickHouse while the route
+	// is not River.
+	registry, _ := demotedContractRoot(t,
+		jobcontract.KindReportExecuteOnDemand,
+		jobcontract.KindReportExecuteScheduled,
+	)
 	family, err := buildReportWorker(
 		context.Background(),
 		config.Config{Profile: "heavy", RiverDatabaseSchema: "river"},

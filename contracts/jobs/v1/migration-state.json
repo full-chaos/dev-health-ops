@@ -125,11 +125,11 @@
     },
     {
       "kind": "sync.provider_unit",
-      "state": "go_default",
+      "state": "canary",
       "producer_version": 1,
       "consumer_versions": [1],
       "required_profiles": ["sync"],
-      "route": "river",
+      "route": "river_canary",
       "rollback_route": "celery",
       "evidence": ["contract_schema", "cross_language_golden", "duplicate_delivery", "kill_window", "provider_parity"]
     },

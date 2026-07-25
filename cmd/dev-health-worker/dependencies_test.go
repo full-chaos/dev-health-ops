@@ -136,13 +136,26 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	if err != nil {
 		t.Fatal(err)
 	}
+	// sync.team_autoimport ships at go_default in the checked-in contract
+	// too, so the sync profile is only complete once something reports it.
+	// A fake sync-coordinator builder supplies that coverage so this test
+	// stays isolated to what it actually exercises: the LaunchDarkly
+	// provider-route-switch gate on the provider_sync builder.
+	autoimportSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindTeamAutoimport)
+	if !ok {
+		t.Fatal("sync.team_autoimport descriptor missing")
+	}
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
 		return database, nil
 	}
 	sources.buildOperational = nil
-	sources.buildSyncCoordinator = nil
+	sources.buildSyncCoordinator = fakeHandlerBuilder(
+		"sync-coordinator",
+		[]jobruntime.HandlerSpec{autoimportSpec},
+		jobruntime.QueueBudget{Queue: syncCoordinatorQueue, MaxWorkers: syncCoordinatorQueueWorkers},
+	)
 	sources.buildProviderSync = func(
 		_ context.Context,
 		_ config.Config,
@@ -185,6 +198,13 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	}
 
 	sources.buildProviderSync = nil
+	// Drop the sync-coordinator fake too: this half isolates the
+	// LaunchDarkly provider-route-switch gate itself, and partial handler
+	// coverage (team_autoimport alone) would instead fail closed at
+	// construction time -- the invariant TestNestedRiverClientCapabilityIsValidated
+	// already proves -- before the readiness gate this assertion inspects
+	// ever opens.
+	sources.buildSyncCoordinator = nil
 	missingRegistry := health.NewRegistry(100 * time.Millisecond)
 	_, err = configureWorkerDependenciesWithSources(
 		context.Background(),
@@ -266,7 +286,14 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 			ExecutionSaturation: 0.5,
 		},
 	}}
+	// The ops kinds now ship at go_default, so the production operational
+	// builder would demand a real postgres pool this test's fake database
+	// cannot satisfy. This test only exercises the metrics path (registry-
+	// bounded dimensions over queue telemetry), so the ops profile is
+	// demoted back to Celery here to keep it dormant and out of the way.
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
 	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
 		return database, nil
 	}
@@ -298,10 +325,22 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 	}
 }
 
+// celeryRoutedOpsKinds is every ops-profile kind. The checked-in contract now
+// ships all four at go_default, so a genuinely dormant ops profile has to be
+// built explicitly by demoting them back to Celery in a scoped fixture.
+var celeryRoutedOpsKinds = []string{
+	jobcontract.KindBillingNotification,
+	jobcontract.KindWebhookDelivery,
+	jobcontract.KindHeartbeat,
+	jobcontract.KindRetentionCleanup,
+}
+
 func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{domainSaturation: 0.25, queueSaturation: 0.5}
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
 	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
 		return database, nil
 	}
@@ -389,10 +428,23 @@ func TestHeavyProfileComposesMultipleBuilderFamilies(t *testing.T) {
 		jobcontract.KindReportExecuteOnDemand:  true,
 		jobcontract.KindReportExecuteScheduled: true,
 	}
+	// dailyKinds also covers the remaining-metrics families: their route is
+	// cross-validated against families.json's unconditional "river" value,
+	// so they stay executable regardless of this fixture and the fake
+	// "daily" builder below must report them or profile completeness sees
+	// uncovered registry kinds.
 	dailyKinds := map[string]bool{
-		jobcontract.KindDailyMetricsDispatch:  true,
-		jobcontract.KindDailyMetricsPartition: true,
-		jobcontract.KindDailyMetricsFinalize:  true,
+		jobcontract.KindDailyMetricsDispatch:     true,
+		jobcontract.KindDailyMetricsPartition:    true,
+		jobcontract.KindDailyMetricsFinalize:     true,
+		jobcontract.KindRemainingCapacity:        true,
+		jobcontract.KindRemainingComplexity:      true,
+		jobcontract.KindRemainingDORA:            true,
+		jobcontract.KindRemainingExtraMetrics:    true,
+		jobcontract.KindRemainingMembership:      true,
+		jobcontract.KindRemainingRecommendations: true,
+		jobcontract.KindRemainingReleaseImpact:   true,
+		jobcontract.KindRemainingTeamMetrics:     true,
 	}
 	// The real report builder is replaced by a fake here so the composition
 	// rules are tested without a ClickHouse dependency; the production builder
@@ -556,7 +608,12 @@ func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 		},
 		checkErr: riverstore.ErrUnsupportedAvailableContractVersion,
 	}}
+	// Demote the ops kinds so the production operational builder (which now
+	// requires a real postgres pool once they are executable) stays a
+	// no-op; this test only exercises the queued-contract-versions gate.
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
 	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
 	sources.newRiverClientID = func() string { return "test-client" }
 
@@ -584,7 +641,12 @@ func TestQueueTelemetryFailureMakesMetricsUnavailable(t *testing.T) {
 	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{
 		snapshotErr: errors.New("postgresql://queue:secret@db/app"),
 	}}
+	// Demote the ops kinds so the production operational builder (which now
+	// requires a real postgres pool once they are executable) stays a
+	// no-op; this test only exercises the queue-telemetry metrics path.
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOpsKinds...)
 	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
 	sources.newRiverClientID = func() string { return "test-client" }
 
@@ -734,12 +796,39 @@ func executableHeavyRegistry(
 	if err := json.Unmarshal(data, &document); err != nil {
 		t.Fatal(err)
 	}
+	// The checked-in contract now ships every heavy-profile kind at
+	// go_default, but this fixture only exercises the daily-metrics and
+	// (optionally) report builders. work-graph and investment have no
+	// builder in this binary at all, so they are demoted back to Celery here
+	// -- otherwise the heavy profile would demand handlers nothing ever
+	// constructs. The remaining-metrics families are left alone: their route
+	// is cross-validated against families.json's own (unconditional) "river"
+	// value, so demoting them independently would make the fixture
+	// internally inconsistent rather than scoped.
+	demoted := map[string]bool{
+		jobcontract.KindWorkGraphBuild:        true,
+		jobcontract.KindInvestmentMaterialize: true,
+		jobcontract.KindInvestmentDispatch:    true,
+		jobcontract.KindInvestmentChunk:       true,
+		jobcontract.KindInvestmentFinalize:    true,
+	}
 	for _, job := range document.Jobs {
 		kind, _ := job["kind"].(string)
-		if strings.HasPrefix(kind, "metrics.daily_") ||
-			(promoteReports && strings.HasPrefix(kind, "report.execute_")) {
+		switch {
+		case strings.HasPrefix(kind, "metrics.daily_"):
 			job["state"] = "go_default"
 			job["route"] = "river"
+		case strings.HasPrefix(kind, "report.execute_"):
+			if promoteReports {
+				job["state"] = "go_default"
+				job["route"] = "river"
+			} else {
+				job["state"] = "go_implemented"
+				job["route"] = "celery"
+			}
+		case demoted[kind]:
+			job["state"] = "go_implemented"
+			job["route"] = "celery"
 		}
 	}
 	encoded, err := json.Marshal(document)
@@ -965,10 +1054,24 @@ func TestFakeBuilderCannotSatisfyProfileCoverage(t *testing.T) {
 func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	runtimeRegistry, contractRoot := executableHeavyRegistry(t, false)
+	// The remaining-metrics families stay executable regardless of this
+	// fixture (their route is cross-validated against families.json's
+	// unconditional "river" value), so the fake "daily" builder below must
+	// report them too or profile completeness sees uncovered registry kinds
+	// before the queue-budget assertions this test actually exercises ever
+	// run.
 	daily := selectSpecs(runtimeRegistry.Profile("heavy"), map[string]bool{
-		jobcontract.KindDailyMetricsDispatch:  true,
-		jobcontract.KindDailyMetricsPartition: true,
-		jobcontract.KindDailyMetricsFinalize:  true,
+		jobcontract.KindDailyMetricsDispatch:     true,
+		jobcontract.KindDailyMetricsPartition:    true,
+		jobcontract.KindDailyMetricsFinalize:     true,
+		jobcontract.KindRemainingCapacity:        true,
+		jobcontract.KindRemainingComplexity:      true,
+		jobcontract.KindRemainingDORA:            true,
+		jobcontract.KindRemainingExtraMetrics:    true,
+		jobcontract.KindRemainingMembership:      true,
+		jobcontract.KindRemainingRecommendations: true,
+		jobcontract.KindRemainingReleaseImpact:   true,
+		jobcontract.KindRemainingTeamMetrics:     true,
 	})
 	for _, test := range []struct {
 		name    string

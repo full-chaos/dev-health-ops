@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -99,7 +100,16 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			registry, _ := promotedContractRoot(t, test.promote...)
+			// sync.team_autoimport now ships at go_default in the checked-in
+			// contract, so the "not consumed at all" case has to demote it
+			// back to Celery explicitly; promotedContractRoot alone would be
+			// a no-op against an already-promoted production tree.
+			var registry *jobruntime.Registry
+			if len(test.promote) == 0 {
+				registry, _ = demotedContractRoot(t, jobcontract.KindTeamAutoimport)
+			} else {
+				registry, _ = promotedContractRoot(t, test.promote...)
+			}
 			family, err := buildSyncCoordinatorWorker(
 				config.Config{
 					Profile:                        "sync",

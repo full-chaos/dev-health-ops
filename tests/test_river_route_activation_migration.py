@@ -73,21 +73,27 @@ def test_upgrade_moves_every_checked_in_kind_to_river_and_is_idempotent() -> Non
     try:
         with engine.begin() as connection:
             _create_schema(connection)
-            # sync.provider_unit is the one live canary (seeded by 0061/0064);
-            # every other kind sits on the Celery rollback route.
+            # sync.provider_unit is the one live canary (seeded by 0061/0064)
+            # and is excluded from this migration; every migrated kind sits on
+            # the Celery rollback route beforehand.
             canary = "sync.provider_unit"
-            _seed(connection, [k for k in migration._KINDS if k != canary])
+            assert canary not in migration._KINDS
+            _seed(connection, migration._KINDS)
             _seed(connection, [canary], transport="river_canary", generation=2)
 
             _run(migration, connection, "upgrade")
             routes = _routes(connection)
 
             assert len(routes) == 24
-            assert {transport for transport, _, _ in routes.values()} == {"river"}
-            assert all(paused == 0 for _, paused, _ in routes.values())
-            # Every row was promoted, so every generation advanced exactly once.
+            migrated = {k: v for k, v in routes.items() if k != canary}
+            assert len(migrated) == 23
+            assert {transport for transport, _, _ in migrated.values()} == {"river"}
+            assert all(paused == 0 for _, paused, _ in migrated.values())
+            # Every migrated row advanced its generation exactly once.
             assert routes["workgraph.build"][2] == 2
-            assert routes[canary][2] == 3
+            # The canary must be left completely untouched -- not promoted, and
+            # not generation-bumped, since no route decision was made about it.
+            assert routes[canary] == ("river_canary", 0, 2)
 
             # A second run must not bump the generation again: an operator reads
             # generation as the count of real route decisions.
@@ -169,8 +175,18 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
             Path(__file__).parents[1] / "contracts/jobs/v1/migration-state.json"
         ).read_text(encoding="utf-8")
     )
-    assert sorted(job["kind"] for job in state["jobs"]) == sorted(_migration()._KINDS)
-    # Every kind must be routed to River by checked-in policy, otherwise this
-    # migration would drive a row outside what the producer accepts.
-    assert {job["route"] for job in state["jobs"]} == {"river"}
-    assert {job["rollback_route"] for job in state["jobs"]} == {"celery"}
+    by_kind = {job["kind"]: job for job in state["jobs"]}
+    pinned = set(_migration()._KINDS)
+
+    # Each pinned kind must be routed to River by checked-in policy, otherwise
+    # this migration would drive a row outside what the producer accepts.
+    for kind in pinned:
+        assert by_kind[kind]["route"] == "river", kind
+        assert by_kind[kind]["rollback_route"] == "celery", kind
+
+    # Exactly one checked-in kind is deliberately excluded. Asserting the
+    # identity of the exclusion, not merely its count, is what stops a future
+    # kind from being dropped from the migration unnoticed.
+    assert set(by_kind) - pinned == {"sync.provider_unit"}
+    assert by_kind["sync.provider_unit"]["state"] == "canary"
+    assert by_kind["sync.provider_unit"]["route"] == "river_canary"

@@ -81,6 +81,12 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-3033 (PR #1292, ee2141eca) moved every checked-in job kind except
+	// sync.provider_unit to state go_default / route river. provider_unit
+	// remains the sole canary at river_canary. This loop is a drift tripwire:
+	// it asserts the *current* checked-in policy shape, not the pre-cutover
+	// all-celery baseline, so a future accidental state/route edit in
+	// migration-state.json still fails loudly here.
 	for _, descriptor := range productionRegistry.Descriptors() {
 		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
 			if descriptor.Route != "river_canary" || descriptor.MigrationState != "canary" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
@@ -88,8 +94,8 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 			}
 			continue
 		}
-		if descriptor.Route != "celery" || descriptor.Executable() {
-			t.Fatalf("checked-in production route became executable: %#v", descriptor)
+		if descriptor.Route != "river" || descriptor.MigrationState != "go_default" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
+			t.Fatalf("checked-in production route drifted from post-cutover go_default/river policy: %#v", descriptor)
 		}
 	}
 	registry := integrationRouteRegistry(productionRegistry, map[string]string{
@@ -332,7 +338,7 @@ INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)`, c
 		assertErrorEvidence(t, ctx, adminPool, "contract_rejected", "stored job contract was rejected")
 	})
 
-	t.Run("all-celery production policy defers known rows but terminalizes unknown rows", func(t *testing.T) {
+	t.Run("celery-deferred known kind defers rows but terminalizes unknown rows", func(t *testing.T) {
 		resetOutboxTables(t, ctx, adminPool)
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		deferred := normalSeed(85, now)
@@ -341,11 +347,18 @@ INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)`, c
 		unknown.Kind = "secret.unknown"
 		seedOutbox(t, ctx, adminPool, unknown)
 
-		productionInserter, err := NewRiverInserter(queuePool, "river", productionRegistry)
+		// Post-CHAOS-3033 the checked-in registry has zero celery-routed
+		// known kinds (see the drift tripwire above), so exercise "deferred
+		// known kind stays pending" against an explicit celery override
+		// instead of an incidentally-still-celery production kind.
+		deferredRegistry := integrationRouteRegistry(productionRegistry, map[string]string{
+			jobcontract.KindHeartbeat: "celery",
+		})
+		deferredInserter, err := NewRiverInserter(queuePool, "river", deferredRegistry)
 		if err != nil {
 			t.Fatal(err)
 		}
-		relay, err := NewRelay(repository, productionInserter, DefaultRelayConfig())
+		relay, err := NewRelay(repository, deferredInserter, DefaultRelayConfig())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -364,11 +377,17 @@ INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)`, c
 		seedOutbox(t, ctx, adminPool, deferred)
 		claim := claimOne(t, ctx, repository, now, time.Second)
 
-		productionInserter, err := NewRiverInserter(queuePool, "river", productionRegistry)
+		// Same rationale as above: force this known kind back onto celery so
+		// the relay's claim-exclusion behavior for a deferred kind is still
+		// exercised even though production no longer defers any kind itself.
+		deferredRegistry := integrationRouteRegistry(productionRegistry, map[string]string{
+			jobcontract.KindHeartbeat: "celery",
+		})
+		deferredInserter, err := NewRiverInserter(queuePool, "river", deferredRegistry)
 		if err != nil {
 			t.Fatal(err)
 		}
-		relay, err := NewRelay(repository, productionInserter, DefaultRelayConfig())
+		relay, err := NewRelay(repository, deferredInserter, DefaultRelayConfig())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -430,8 +449,12 @@ INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)`, c
 		unknown.Kind = "secret.unknown"
 		seedOutbox(t, ctx, adminPool, unknown)
 
+		// Post-CHAOS-3033 retention_cleanup is already go_default/river in
+		// production, so it must be forced back onto celery here for the
+		// "known but deferred" arm of this scenario to still exist.
 		mixedRegistry := integrationRouteRegistry(productionRegistry, map[string]string{
-			jobcontract.KindHeartbeat: "river",
+			jobcontract.KindHeartbeat:        "river",
+			jobcontract.KindRetentionCleanup: "celery",
 		})
 		mixedInserter, err := NewRiverInserter(queuePool, "river", mixedRegistry)
 		if err != nil {
@@ -714,6 +737,8 @@ func integrationRouteRegistry(
 				descriptors[index].MigrationState = "canary"
 			case "river":
 				descriptors[index].MigrationState = "go_default"
+			case "celery":
+				descriptors[index].MigrationState = "go_implemented"
 			}
 		}
 		byKind[descriptors[index].Kind] = descriptors[index]

@@ -82,7 +82,21 @@ func StartClickHouse(ctx context.Context) (*Instance, error) {
 			"CLICKHOUSE_DB":                        database,
 			"CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1",
 		},
-		WaitingFor: wait.ForHTTP("/ping").WithPort(httpPort).WithStartupTimeout(90 * time.Second),
+		// The HTTP ping only proves port 8123 is serving; every caller of
+		// this harness dials the native protocol on 9000. Under heavy host
+		// contention the two ports' Docker NAT rules do not land atomically,
+		// so 9000 can still be mid-setup for a few hundred ms after 8123
+		// answers. Reproduced directly: running this harness's callers
+		// concurrently with the rest of the integration gate (matching
+		// ci/check_go.sh's package list) surfaced
+		// `container.MappedPort(ctx, "9000/tcp")` failing with `port
+		// "9000/tcp" not found` even though the container was otherwise
+		// healthy and every prior/later run of the same test was green.
+		// Waiting on both ports closes that gap.
+		WaitingFor: wait.ForAll(
+			wait.ForHTTP("/ping").WithPort(httpPort).WithStartupTimeout(90*time.Second),
+			wait.ForListeningPort(port).WithStartupTimeout(90*time.Second),
+		),
 	}, port)
 	if err != nil {
 		return nil, fmt.Errorf("start ClickHouse test dependency: %w", err)

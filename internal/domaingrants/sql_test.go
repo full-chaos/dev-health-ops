@@ -177,3 +177,54 @@ SELECT 1 /* JOIN public.also_fake */ FROM public.real_table`
 	notPresent(t, res, "also_fake")
 	has(t, res, "real_table", PrivSelect)
 }
+
+// TestLockModeRequiresWritePrivilege pins the PostgreSQL LOCK privilege rule
+// this detector previously got wrong. It matched a substring "EXCLUSIVE", which
+// silently missed SHARE and ROW SHARE — both of which require a write privilege
+// — so a LOCK in either mode passed the grant-surface gate unflagged.
+func TestLockModeRequiresWritePrivilege(t *testing.T) {
+	t.Parallel()
+
+	// Only ACCESS SHARE is satisfied by SELECT alone.
+	for _, mode := range []string{"ACCESS SHARE", "access share", "  ACCESS   SHARE  "} {
+		if lockModeRequiresWritePrivilege(mode) {
+			t.Errorf("lockModeRequiresWritePrivilege(%q) = true, want false", mode)
+		}
+	}
+	// Every other mode needs at least one write privilege. SHARE and ROW SHARE
+	// are the two the old substring test failed open on.
+	for _, mode := range []string{
+		"ROW SHARE",
+		"SHARE",
+		"ROW EXCLUSIVE",
+		"SHARE UPDATE EXCLUSIVE",
+		"SHARE ROW EXCLUSIVE",
+		"EXCLUSIVE",
+		"ACCESS EXCLUSIVE",
+	} {
+		if !lockModeRequiresWritePrivilege(mode) {
+			t.Errorf("lockModeRequiresWritePrivilege(%q) = false, want true", mode)
+		}
+	}
+}
+
+// TestAnalyzeFlagsBareShareLockAsRequiringWrite exercises the same rule through
+// the real statement analyzer rather than the helper alone.
+func TestAnalyzeFlagsBareShareLockAsRequiringWrite(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{name: "bare share", sql: "LOCK TABLE public.worker_job_outbox IN SHARE MODE", want: true},
+		{name: "row share", sql: "LOCK TABLE public.worker_job_outbox IN ROW SHARE MODE", want: true},
+		{name: "access share", sql: "LOCK TABLE public.worker_job_outbox IN ACCESS SHARE MODE", want: false},
+	} {
+		result := ParseStatement(testCase.sql)
+		if got := result.RequiresAnyWriteLock["worker_job_outbox"]; got != testCase.want {
+			t.Errorf("%s: RequiresAnyWriteLock = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}

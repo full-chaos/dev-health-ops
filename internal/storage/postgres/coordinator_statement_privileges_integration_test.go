@@ -25,13 +25,15 @@ import (
 //
 // It pins both directions of one fact:
 //
-//   - Every coordinator statement is DENIED to the domain role (42501). This
-//     is the bug: dev-health-workerctl and dev-health-reconciler wire these
-//     call sites to pools.Domain today, so each denial is a live runtime
-//     failure, not a hypothetical. CHAOS-3113.
-//   - Every one of those same statements is PERMITTED to a role granted from
-//     coordinatorPosture(). This is the fix being sufficient: repointing those
-//     call sites at a coordinator pool is enough, with no further widening.
+//   - Every coordinator statement is DENIED to the domain role (42501). This is
+//     what CHAOS-3113 was: dev-health-workerctl and dev-health-reconciler ran
+//     these call sites on pools.Domain, so each denial was a live runtime
+//     failure rather than a hypothetical. Those call sites now run on the
+//     coordinator pool, so this half is the regression test for the fix — it
+//     fails the moment anything is wired back onto the domain role.
+//   - Every one of those same statements is PERMITTED to the coordinator role
+//     with the grants the migration emits. This is the fix being sufficient:
+//     the repoint needs no further widening of either role.
 //
 // The second half is what would have caught CHAOS-3113 before it was filed. A
 // posture that omits a privilege some real statement needs — the LOCK-implied
@@ -115,7 +117,7 @@ func coordinatorStatements() []coordinatorStatement {
 	return []coordinatorStatement{
 		{
 			name: "workerctl authenticator touches its credential",
-			site: "internal/joboperator/auth.go Authenticate, wired at cmd/dev-health-workerctl/main.go with pools.Domain",
+			site: "internal/joboperator/auth.go Authenticate, wired at cmd/dev-health-workerctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
 			// The UPDATE inside the CTE is why SELECT alone is not enough:
 			// authentication is a write. This runs on EVERY workerctl
 			// invocation, before any command dispatches, so its denial makes
@@ -139,7 +141,7 @@ func coordinatorStatements() []coordinatorStatement {
 		},
 		{
 			name:      "workerctl audit trail opens an entry",
-			site:      "internal/joboperator/audit.go PostgresAuditor.Begin, wired at cmd/dev-health-workerctl/main.go with pools.Domain",
+			site:      "internal/joboperator/audit.go PostgresAuditor.Begin, wired at cmd/dev-health-workerctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
 			privilege: "worker_operator_audits INSERT",
 			sql: `INSERT INTO public.worker_operator_audits (
 					credential_id, principal_type, principal_id, action, resource_type,
@@ -195,7 +197,7 @@ func coordinatorStatements() []coordinatorStatement {
 		},
 		{
 			name:      "sync-dispatch route pause",
-			site:      "internal/syncroute/control.go Pause, wired at cmd/dev-health-workerctl/main.go with pools.Domain",
+			site:      "internal/syncroute/control.go Pause, wired at cmd/dev-health-workerctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
 			privilege: "sync_dispatch_transport_routes UPDATE (domain side is SELECT-only)",
 			sql: `UPDATE public.sync_dispatch_transport_routes
 				SET paused = TRUE, paused_at = now(), generation = generation + 1, updated_at = now()
@@ -212,7 +214,7 @@ func coordinatorStatements() []coordinatorStatement {
 		},
 		{
 			name:      "reconciler materializer reads its reference discoveries",
-			site:      "internal/syncreconciler/materializer.go, wired at cmd/dev-health-reconciler/dependencies.go with pools.Domain",
+			site:      "internal/syncreconciler/materializer.go, wired at cmd/dev-health-reconciler/dependencies.go, on the coordinator pool since the CHAOS-3113 repoint",
 			privilege: "sync_run_reference_discoveries SELECT",
 			sql:       "SELECT id FROM public.sync_run_reference_discoveries WHERE sync_run_id = gen_random_uuid()",
 		},
@@ -225,12 +227,13 @@ func coordinatorStatements() []coordinatorStatement {
 	}
 }
 
-// TestCoordinatorStatementsAreDeniedToTheDomainRole is the bug, executed.
-// Every statement here is one a coordinator binary runs today against
-// pools.Domain, and every one of them is refused by the role that pool
-// connects as. The grants in force are the real ones — startGrantHarness
-// applies ApplyPinnedMigrations, not a copy of its statements — so this
-// measures deployment behaviour rather than a model of it.
+// TestCoordinatorStatementsAreDeniedToTheDomainRole is the bug, executed, and
+// now the regression test for its fix. Every statement here is one a
+// coordinator binary runs, and every one is refused by the domain role — which
+// is why running them on pools.Domain was CHAOS-3113, and why wiring any of
+// them back there fails this test. The grants in force are the real ones —
+// startGrantHarness applies ApplyPinnedMigrations, not a copy of its
+// statements — so this measures deployment behaviour rather than a model of it.
 func TestCoordinatorStatementsAreDeniedToTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

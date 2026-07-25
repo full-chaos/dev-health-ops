@@ -353,11 +353,14 @@ func grantStatementsForPosture(role string, posture RolePosture) []string {
 // TestCheckRolePostureAllowsATableRequiredByBothRoles already established for
 // arbitrary and synthetic postures holds for the ACTUAL production partition:
 // domainPosture() and coordinatorPosture(), per
-// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91. Every
-// one of the manifest's six dual-grant ("both") tables — sync_dispatch_outbox,
+// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md. Every
+// one of the eight dual-grant ("both") tables — sync_dispatch_outbox,
 // sync_run_units, sync_runs, worker_job_runs, sync_dispatch_transport_routes,
-// organizations — is exercised here with each role's real flags side by
-// side, not a single stand-in shared table. The two postures' own grant
+// organizations, sync_configurations and worker_job_outbox — is exercised here
+// with each role's real flags side by side, not a single stand-in shared table.
+// (The last two joined the partition after the manifest's first pass: both are
+// LOCK/FOR-UPDATE-implied UPDATEs on the coordinator side, the privilege class a
+// DML-verb reading of the code cannot see.) The two postures' own grant
 // statements (derived from their own data, not copy-pasted) are what get
 // applied, so a future manifest change that adds, removes, or reflags a
 // table is exercised by this test without any hand-maintained list here to

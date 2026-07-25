@@ -600,18 +600,18 @@ func domainPosture() RolePosture {
 //     control.go:197 runs `LOCK TABLE public.worker_job_outbox IN SHARE ROW
 //     EXCLUSIVE MODE` (needs UPDATE, confirmed empirically) inside Rollback
 //     only — ApplyCheckedIn touches worker_job_routes and nothing else —
-//     reached by dev-health-workerctl (a coordinator
-//     binary once its jobroute pool repoints from domainPool to the
-//     coordinator pool — a deploy prerequisite). The table is a THREE-role
-//     table: domain SELECT+INSERT (outbox producer), queue SELECT+UPDATE+DELETE
-//     (dispatch drain), coordinator SELECT+UPDATE (this lock). Its coordinator
-//     grant is NOT in migrate.go (which emits only domain+queue); the
-//     coordinator role's grants are provisioned at deploy alongside its
-//     role/DSN/secret. This posture row is the readiness SPEC that enforcement
-//     will check once that provisioning lands. See the LOCK-aware coordinator
-//     sweep in .remember/chaos-3033-option-b-role-split.md; the pre-existing
-//     latent 42501 (domain-pool workerctl cannot hold this lock today) is
-//     tracked as CHAOS-3113.
+//     reached by dev-health-workerctl and dev-health-reconciler, both of which
+//     now run their jobroute controller on the coordinator pool. The table is a
+//     THREE-role table: domain SELECT+INSERT (outbox producer), queue
+//     SELECT+UPDATE+DELETE (dispatch drain), coordinator SELECT+UPDATE (this
+//     lock). The coordinator grant IS emitted by migrate.go —
+//     coordinatorGrantStatements derives it from CoordinatorPosture(), so this
+//     declaration is the single source for both the GRANT and the readiness
+//     check. Only the role's credential and DSN remain environment
+//     provisioning. CHAOS-3113 (the 42501 this closes: the domain role cannot
+//     hold this lock, and separately has no grant at all on worker_job_routes)
+//     is proven by coordinator_statement_privileges_integration_test.go, which
+//     executes the real statements as both roles.
 func coordinatorPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{

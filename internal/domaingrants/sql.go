@@ -116,6 +116,9 @@ var (
 	deleteFromRE = regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:ONLY\s+)?((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)`)
 	fromJoinRE   = regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)`)
 	lockTableRE  = regexp.MustCompile(`(?i)\bLOCK\s+TABLE\s+(?:ONLY\s+)?((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+IN\s+([A-Z ]+?)\s+MODE\b`)
+	// lockModeWhitespaceRE normalizes the captured mode so "SHARE   ROW
+	// EXCLUSIVE" compares equal to "SHARE ROW EXCLUSIVE".
+	lockModeWhitespaceRE = regexp.MustCompile(`\s+`)
 
 	doUpdateRE = regexp.MustCompile(`(?i)\bON\s+CONFLICT\b[\s\S]*?\bDO\s+UPDATE\b`)
 	forWriteRE = regexp.MustCompile(`(?i)\bFOR\s+(?:NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b`)
@@ -269,6 +272,31 @@ func findFromJoinWithAliases(sql string, ctes map[string]bool, nonPublic map[str
 // internal/providersync/repository_postgres.go's claimUnitSQL, which joins
 // integrations/integration_sources/integration_datasets read-only alongside
 // a `FOR UPDATE OF unit` lock on sync_run_units.
+// lockModeRequiresWritePrivilege reports whether an explicit LOCK TABLE in the
+// given mode needs a write privilege on the target, per the PostgreSQL LOCK
+// documentation: ACCESS SHARE requires only SELECT, ROW EXCLUSIVE requires
+// INSERT/UPDATE/DELETE/TRUNCATE, and every other mode requires
+// UPDATE/DELETE/TRUNCATE. So the predicate is simply "not ACCESS SHARE".
+//
+// This replaced a substring test for "EXCLUSIVE", which failed open on exactly
+// the modes hardest to reason about: bare SHARE MODE and ROW SHARE MODE both
+// require a write privilege and contain no "EXCLUSIVE", so a LOCK in either
+// mode passed the grant-surface gate unflagged. That is the under-attribution
+// this package exists to catch, and the FOR UPDATE branch above states the
+// standard — a false negative is worse than a false positive here.
+//
+// Known remaining imprecision, deliberately not modelled: ROW EXCLUSIVE is
+// satisfied by INSERT alone, while stricter modes are not. RequiresAnyWriteLock
+// is one boolean, so a table holding only INSERT and locked in a stricter mode
+// is not reported. Every LOCK TABLE in this repository is SHARE ROW EXCLUSIVE,
+// so distinguishing the two would add a second field for no present caller;
+// recording the gap here is better than implying precision that is absent.
+func lockModeRequiresWritePrivilege(mode string) bool {
+	normalized := strings.TrimSpace(strings.ToUpper(mode))
+	normalized = lockModeWhitespaceRE.ReplaceAllString(normalized, " ")
+	return normalized != "ACCESS SHARE"
+}
+
 func resolveForUpdateOf(clean string, selectTables []string, aliasToTable map[string]string, add func(string, Privilege)) {
 	m := forUpdateOfRE.FindStringSubmatch(clean)
 	if m == nil {
@@ -360,8 +388,8 @@ func ParseStatement(sql string) StatementResult {
 	// false positive here.
 	resolveForUpdateOf(clean, selectTables, aliasToTable, add)
 
-	// LOCK TABLE ... IN <mode> MODE: SELECT is always required; a mode
-	// stricter than ROW EXCLUSIVE additionally requires at least one of
+	// LOCK TABLE ... IN <mode> MODE: SELECT is always required; every mode
+	// except ACCESS SHARE additionally requires at least one of
 	// INSERT/UPDATE/DELETE/TRUNCATE (see RequiresAnyWriteLock's doc
 	// comment for why this is not simply added as PrivUpdate).
 	for _, m := range lockTableRE.FindAllStringSubmatch(clean, -1) {
@@ -371,7 +399,7 @@ func ParseStatement(sql string) StatementResult {
 			continue
 		}
 		add(table, PrivSelect)
-		if strings.Contains(strings.ToUpper(m[2]), "EXCLUSIVE") {
+		if lockModeRequiresWritePrivilege(m[2]) {
 			result.RequiresAnyWriteLock[table] = true
 		}
 	}

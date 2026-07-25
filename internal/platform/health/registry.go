@@ -2,6 +2,7 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -90,9 +91,71 @@ func (r *Registry) RegisterMetrics(name string, source MetricsSource) error {
 	return nil
 }
 
-// WriteMetrics writes registered sources in stable name order. The caller is
-// responsible for buffering before committing an HTTP response so a source
-// failure cannot produce a partial scrape.
+// MetricsSourceOutcome reports whether one registered source's fragment made
+// it into a scrape. Err is nil when the fragment was written.
+//
+// Only Source is ever safe to expose: it is a pre-registered identifier
+// matching checkNamePattern, whereas Err comes from arbitrary dependency code
+// and has been observed to carry a database DSN. Callers rendering this to an
+// HTTP surface must use the name alone.
+type MetricsSourceOutcome struct {
+	Source string
+	Err    error
+}
+
+// WriteMetricsPartial writes every source that can be written and reports the
+// per-source outcome, rather than abandoning the whole scrape at the first
+// failure the way WriteMetrics does.
+//
+// This exists because the process-level gauges — live, ready, uptime — are most
+// useful exactly when a dependency is down, which is precisely when a source
+// backed by that dependency returns an error. Failing the endpoint then costs
+// an operator the liveness signal at the moment they need it.
+//
+// Each source writes into its own buffer and is appended only on success, so a
+// source that errors part-way through cannot leave a truncated fragment in the
+// scrape and corrupt the sources that follow it.
+func (r *Registry) WriteMetricsPartial(output io.Writer) ([]MetricsSourceOutcome, error) {
+	if output == nil {
+		return nil, fmt.Errorf("metrics output is required")
+	}
+	r.mu.RLock()
+	sources := make(map[string]MetricsSource, len(r.metricsSource))
+	for name, source := range r.metricsSource {
+		sources[name] = source
+	}
+	r.mu.RUnlock()
+
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	outcomes := make([]MetricsSourceOutcome, 0, len(names))
+	for _, name := range names {
+		var fragment bytes.Buffer
+		if err := sources[name].WritePrometheus(&fragment); err != nil {
+			outcomes = append(outcomes, MetricsSourceOutcome{
+				Source: name,
+				Err:    fmt.Errorf("write metrics source %q: %w", name, err),
+			})
+			continue
+		}
+		if _, err := output.Write(fragment.Bytes()); err != nil {
+			return outcomes, fmt.Errorf("write metrics output: %w", err)
+		}
+		outcomes = append(outcomes, MetricsSourceOutcome{Source: name})
+	}
+	return outcomes, nil
+}
+
+// WriteMetrics writes registered sources in stable name order, failing on the
+// first source that errors. Prefer WriteMetricsPartial for anything serving a
+// scrape; this remains for callers that genuinely want all-or-nothing, and for
+// tests asserting a specific source's error. The caller is responsible for
+// buffering before committing an HTTP response so a source failure cannot
+// produce a partial scrape.
 func (r *Registry) WriteMetrics(output io.Writer) error {
 	if output == nil {
 		return fmt.Errorf("metrics output is required")

@@ -221,6 +221,9 @@ func TestMetricsSourcesAreStableAndFailWithoutPartialOutput(t *testing.T) {
 	if err := failing.RegisterMetrics("broken", testMetricsSource{err: errors.New("postgres://user:secret@db/app")}); err != nil {
 		t.Fatal(err)
 	}
+	if err := failing.RegisterMetrics("healthy", testMetricsSource{text: "healthy_metric 1\n"}); err != nil {
+		t.Fatal(err)
+	}
 	server, err := NewServer(ServerOptions{Address: "127.0.0.1:0", Registry: failing, Service: "test", Version: "dev"})
 	if err != nil {
 		t.Fatal(err)
@@ -228,8 +231,29 @@ func TestMetricsSourcesAreStableAndFailWithoutPartialOutput(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusServiceUnavailable || response.Body.String() != "{\"status\":\"metrics_unavailable\"}\n" {
-		t.Fatalf("metrics failure response: status=%d body=%q", response.Code, response.Body.String())
+
+	// A failing source degrades the scrape, it does not fail the endpoint: the
+	// process-level gauges are most useful while a dependency is down.
+	if response.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want 200 despite a failing source", response.Code)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		"dev_health_runtime_live 1\n",
+		"healthy_metric 1\n",
+		"dev_health_runtime_metrics_source_failed{source=\"broken\"} 1\n",
+		"dev_health_runtime_metrics_source_failed{source=\"healthy\"} 0\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics body missing %q\nbody:\n%s", want, body)
+		}
+	}
+	// The failing source's error text carries a DSN on purpose here. Degrading
+	// gracefully must not become a way to leak it.
+	for _, forbidden := range []string{"secret", "postgres://", "db/app"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("metrics body leaked source error text %q\nbody:\n%s", forbidden, body)
+		}
 	}
 }
 

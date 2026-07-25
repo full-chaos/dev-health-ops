@@ -259,32 +259,19 @@ func TestCoordinatorStatementsAreDeniedToTheDomainRole(t *testing.T) {
 // TestCoordinatorStatementsArePermittedToTheCoordinatorRole is the other half:
 // coordinatorPosture() is sufficient for every statement above, so repointing
 // those call sites at a coordinator pool is a complete fix and needs no
-// additional grant. The grants applied here are derived from the posture data
-// itself (grantStatementsForPosture), so a posture edit that drops a privilege
-// some real statement needs fails here rather than in production.
+// additional grant.
+//
+// The grants in force here are now the ones ApplyPinnedMigrations itself
+// emits — startGrantHarness passes CoordinatorRole and a CoordinatorGrants set
+// derived from CoordinatorPosture(), the same way cmd/dev-health-worker-migrate
+// does. That is strictly stronger than granting the posture directly in the
+// test: it proves the MIGRATION grants what the statements need, so a bug in
+// coordinatorGrantStatements (a dropped flag, a mis-sanitized identifier, a
+// to_regclass guard that never matches) fails here instead of in production.
 func TestCoordinatorStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-
-	// migrate.go emits no coordinator grants at all — the coordinator role is
-	// provisioned at deploy time — so schema USAGE and CONNECT are granted
-	// explicitly here. That is not test scaffolding to be tidied away: it is
-	// the provisioning contract this test pins, and the deploy prerequisite
-	// has to reproduce exactly this, posture grants included.
-	provisioning := []string{
-		"CREATE ROLE " + grantCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +
-			"NOREPLICATION NOBYPASSRLS PASSWORD '" + grantCoordinatorPass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + grantCoordinatorRole,
-		"GRANT USAGE ON SCHEMA public TO " + grantCoordinatorRole,
-		"REVOKE CREATE ON SCHEMA public FROM " + grantCoordinatorRole,
-	}
-	provisioning = append(provisioning, grantStatementsForPosture(grantCoordinatorRole, coordinatorPosture())...)
-	for _, statement := range provisioning {
-		if _, err := admin.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
+	_, uri := startGrantHarness(t, ctx)
 
 	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
 	for _, statement := range coordinatorStatements() {
@@ -300,28 +287,20 @@ func TestCoordinatorStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 // the same role, and readiness passing is worthless if it would also pass
 // without the grants. Both are checked, the second by revoking one privilege
 // the posture requires and demanding the check notices.
+//
+// Because the grants now come from ApplyPinnedMigrations rather than from the
+// posture directly, this is also the grants-versus-assertion reconciliation
+// for the coordinator role — the coordinator counterpart of
+// TestDomainAuthorizationAcceptsTheGrantsItIsPairedWith. If
+// coordinatorGrantStatements and coordinatorPosture ever disagree, this fails.
 func TestCoordinatorReadinessAcceptsTheGrantsThePostureDescribes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	admin, uri := startGrantHarness(t, ctx)
 
-	provisioning := []string{
-		"CREATE ROLE " + grantCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +
-			"NOREPLICATION NOBYPASSRLS PASSWORD '" + grantCoordinatorPass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + grantCoordinatorRole,
-		"GRANT USAGE ON SCHEMA public TO " + grantCoordinatorRole,
-		"REVOKE CREATE ON SCHEMA public FROM " + grantCoordinatorRole,
-	}
-	provisioning = append(provisioning, grantStatementsForPosture(grantCoordinatorRole, coordinatorPosture())...)
-	for _, statement := range provisioning {
-		if _, err := admin.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-
 	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
 	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err != nil {
-		t.Fatalf("coordinator readiness rejected the grants coordinatorPosture itself describes: %v", err)
+		t.Fatalf("coordinator readiness rejected the grants the migration emitted for it: %v", err)
 	}
 
 	// Non-vacuity: the UPDATE that only the LOCK needs is the one most likely

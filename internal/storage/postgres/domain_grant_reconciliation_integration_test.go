@@ -225,10 +225,16 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	}
 	t.Cleanup(admin.Close)
 
+	// The coordinator role is created here, before ApplyPinnedMigrations, for
+	// the same reason the coordinator tables are: the migration's own
+	// role-eligibility preflight rejects a coordinator role that does not yet
+	// exist as a least-privilege login, so this mirrors the real deploy order
+	// (provision roles, then migrate) rather than working around it.
 	setup := []string{
 		"CREATE ROLE " + grantDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantDomainPass + "'",
 		"CREATE ROLE " + grantQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantQueuePass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + grantDomainRole + ", " + grantQueueRole,
+		"CREATE ROLE " + grantCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantCoordinatorPass + "'",
+		"GRANT CONNECT ON DATABASE worker_test TO " + grantDomainRole + ", " + grantQueueRole + ", " + grantCoordinatorRole,
 		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 	}
@@ -294,11 +300,27 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	// Apply the REAL production grants, not a copy of them.
+	// Apply the REAL production grants, not a copy of them — for all three
+	// roles. CoordinatorGrants is derived from CoordinatorPosture() exactly the
+	// way cmd/dev-health-worker-migrate derives it, so the coordinator
+	// privileges these tests observe are the ones a real migration produces,
+	// not a posture-shaped stand-in for them.
+	coordinatorPosture := CoordinatorPosture()
+	coordinatorGrants := make([]riverstore.TableGrant, 0, len(coordinatorPosture.RequiredTables))
+	for _, table := range coordinatorPosture.RequiredTables {
+		coordinatorGrants = append(coordinatorGrants, riverstore.TableGrant{
+			TableName:   table.TableName,
+			AllowInsert: table.AllowInsert,
+			AllowUpdate: table.AllowUpdate,
+			AllowDelete: table.AllowDelete,
+		})
+	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
-		Schema:     grantSchema,
-		DomainRole: grantDomainRole,
-		QueueRole:  grantQueueRole,
+		Schema:            grantSchema,
+		DomainRole:        grantDomainRole,
+		QueueRole:         grantQueueRole,
+		CoordinatorRole:   grantCoordinatorRole,
+		CoordinatorGrants: coordinatorGrants,
 	}); err != nil {
 		t.Fatal(err)
 	}

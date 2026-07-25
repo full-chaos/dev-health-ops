@@ -36,12 +36,14 @@
     "coordinator_max_connections": 2,
     "config_env": [
       "PGBOUNCER_TRANSACTION_MODE",
+      "RIVER_COORDINATOR_DATABASE_ROLE",
       "RIVER_DATABASE_SCHEMA",
       "RIVER_DOMAIN_DATABASE_ROLE",
       "RIVER_QUEUE_DATABASE_ROLE",
       "WORKER_DATABASE_MODE"
     ],
     "secret_env": [
+      "COORDINATOR_DATABASE_URI",
       "POSTGRES_URI",
       "WORKER_DATABASE_URI",
       "WORKER_OPERATOR_TOKEN"
@@ -171,6 +173,7 @@
       "requires_clickhouse": false,
       "requires_valkey": false,
       "secret_env": [
+        "COORDINATOR_DATABASE_URI",
         "POSTGRES_URI",
         "WORKER_DATABASE_URI"
       ]
@@ -191,6 +194,7 @@
       "requires_clickhouse": false,
       "requires_valkey": false,
       "secret_env": [
+        "COORDINATOR_DATABASE_URI",
         "POSTGRES_URI",
         "WORKER_DATABASE_URI"
       ]

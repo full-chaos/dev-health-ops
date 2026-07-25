@@ -126,6 +126,113 @@ func TestMigrationOptionsRequireSeparateSafeIdentifiers(t *testing.T) {
 	}
 }
 
+// The coordinator arm of MigrationOptions is optional, but every way of
+// half-configuring it is rejected: a role with no grants would REVOKE ALL and
+// grant nothing back, leaving the coordinator binaries fail-closed forever,
+// while grants with no role would silently skip the privileges the caller
+// believed it was applying.
+func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.T) {
+	t.Parallel()
+
+	base := MigrationOptions{Schema: "river", DomainRole: "dev_health_domain", QueueRole: "dev_health_queue"}
+	grants := []TableGrant{{TableName: "worker_job_routes", AllowUpdate: true}}
+
+	valid := base
+	valid.CoordinatorRole = "dev_health_coordinator"
+	valid.CoordinatorGrants = grants
+	if err := ValidateMigrationOptions(valid); err != nil {
+		t.Fatalf("ValidateMigrationOptions(valid coordinator) error = %v", err)
+	}
+	// Omitting the coordinator entirely stays valid: pre-split callers.
+	if err := ValidateMigrationOptions(base); err != nil {
+		t.Fatalf("ValidateMigrationOptions(no coordinator) error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*MigrationOptions)
+	}{
+		{"role without grants", func(o *MigrationOptions) { o.CoordinatorGrants = nil }},
+		{"grants without role", func(o *MigrationOptions) { o.CoordinatorRole = "" }},
+		{"role collides with domain", func(o *MigrationOptions) { o.CoordinatorRole = o.DomainRole }},
+		{"role collides with queue", func(o *MigrationOptions) { o.CoordinatorRole = o.QueueRole }},
+		{"unsafe role identifier", func(o *MigrationOptions) {
+			o.CoordinatorRole = "coordinator; DROP SCHEMA public"
+		}},
+		{"unsafe table identifier", func(o *MigrationOptions) {
+			o.CoordinatorGrants = []TableGrant{{TableName: "routes; DROP TABLE x"}}
+		}},
+		{"duplicate table grant", func(o *MigrationOptions) {
+			o.CoordinatorGrants = []TableGrant{
+				{TableName: "worker_job_routes", AllowUpdate: true},
+				{TableName: "worker_job_routes"},
+			}
+		}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := valid
+			test.mutate(&candidate)
+			if err := ValidateMigrationOptions(candidate); !errors.Is(err, ErrMigrationConfiguration) {
+				t.Fatalf("ValidateMigrationOptions() error = %v, want ErrMigrationConfiguration", err)
+			}
+		})
+	}
+}
+
+// The coordinator grant statements must be derived from the injected posture
+// data, sanitized, and to_regclass-guarded -- and must vanish entirely when no
+// coordinator role is configured, so pre-split callers are unaffected.
+func TestCoordinatorGrantStatementsDeriveFromTheInjectedPosture(t *testing.T) {
+	t.Parallel()
+
+	if statements := coordinatorGrantStatements(MigrationOptions{Schema: "river"}); statements != nil {
+		t.Fatalf("coordinator statements emitted without a coordinator role: %v", statements)
+	}
+
+	statements := coordinatorGrantStatements(MigrationOptions{
+		Schema:          "river",
+		CoordinatorRole: "coordinator_runtime",
+		CoordinatorGrants: []TableGrant{
+			{TableName: "worker_job_routes", AllowUpdate: true},
+			{TableName: "worker_operator_audits", AllowInsert: true, AllowUpdate: true},
+			{TableName: "sync_run_post_dispatches"},
+		},
+	})
+	joined := strings.Join(statements, "\n")
+
+	// REVOKE ALL must precede the grants so the posture is a function of this
+	// migration alone rather than of whatever ran before it.
+	revokeIndex := strings.Index(joined, "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public")
+	grantIndex := strings.Index(joined, "GRANT SELECT, UPDATE ON TABLE \"public\".\"worker_job_routes\"")
+	if revokeIndex < 0 || grantIndex < 0 || revokeIndex > grantIndex {
+		t.Fatalf("REVOKE ALL must precede the per-table grants:\n%s", joined)
+	}
+	for _, expected := range []string{
+		// Flags translate to exactly SELECT plus what the posture allows.
+		"GRANT SELECT, UPDATE ON TABLE \"public\".\"worker_job_routes\" TO \"coordinator_runtime\"",
+		"GRANT SELECT, INSERT, UPDATE ON TABLE \"public\".\"worker_operator_audits\" TO \"coordinator_runtime\"",
+		"GRANT SELECT ON TABLE \"public\".\"sync_run_post_dispatches\" TO \"coordinator_runtime\"",
+		// Guarded, so a table that does not exist yet is skipped rather than
+		// failing the whole migration.
+		"IF to_regclass('public.worker_job_routes') IS NOT NULL THEN",
+		// The coordinator is a public-schema control-plane role only.
+		"REVOKE ALL PRIVILEGES ON SCHEMA \"river\" FROM \"coordinator_runtime\"",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("coordinator grants missing %q:\n%s", expected, joined)
+		}
+	}
+	// No privilege the posture never allowed may appear.
+	for _, forbidden := range []string{"DELETE ON TABLE \"public\".\"worker_job_routes\"", "TRUNCATE", "TRIGGER", "REFERENCES"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("coordinator grants unexpectedly include %q:\n%s", forbidden, joined)
+		}
+	}
+}
+
 func TestRuntimeRolePreflightRequiresSeparateLeastPrivilegeLoginRoles(t *testing.T) {
 	t.Parallel()
 

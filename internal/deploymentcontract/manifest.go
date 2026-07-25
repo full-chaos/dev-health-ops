@@ -295,13 +295,21 @@ func validateOperatorCLI(operator OperatorCLI) error {
 		operator.CoordinatorMaxConnections < 1 || operator.CoordinatorMaxConnections > 4 {
 		return errors.New("worker operator deployment identity or connection budget is invalid")
 	}
+	// COORDINATOR_DATABASE_URI and RIVER_COORDINATOR_DATABASE_ROLE are required
+	// here, not optional: workerctl authenticates its operator token against
+	// internal_service_credentials, a coordinator-exclusive table, before any
+	// command dispatches. Without the coordinator DSN the binary cannot do
+	// anything at all, so the deployment contract refuses to describe it as
+	// deployable without one.
 	if !equalStrings(operator.ConfigEnv, []string{
 		"PGBOUNCER_TRANSACTION_MODE",
+		"RIVER_COORDINATOR_DATABASE_ROLE",
 		"RIVER_DATABASE_SCHEMA",
 		"RIVER_DOMAIN_DATABASE_ROLE",
 		"RIVER_QUEUE_DATABASE_ROLE",
 		"WORKER_DATABASE_MODE",
 	}) || !equalStrings(operator.SecretEnv, []string{
+		"COORDINATOR_DATABASE_URI",
 		"POSTGRES_URI",
 		"WORKER_DATABASE_URI",
 		"WORKER_OPERATOR_TOKEN",
@@ -373,7 +381,12 @@ func validateProcess(process Process) error {
 			// QueueControlMaxConnections already models for River's own
 			// queue-control access, not PgBouncer-pooled like
 			// DomainMaxConnections. See BudgetSummary.DirectCoordinatorConnections.
-			process.CoordinatorMaxConnections < 1 {
+			process.CoordinatorMaxConnections < 1 ||
+			// A coordinator budget without the coordinator DSN would describe a
+			// process that reserves connections it cannot open: the binary calls
+			// RuntimeConfig.WithCoordinator and fails closed at startup without
+			// this secret, so the contract must require them together.
+			!contains(process.SecretEnv, "COORDINATOR_DATABASE_URI") {
 			return errors.New("control runtime wiring is invalid")
 		}
 	case "stream":

@@ -133,16 +133,21 @@ def test_per_pair_metadata_matches_the_python_registry(
         assert pair["python_source"].endswith(f'["{pair["provider"]}"]'), scope
 
 
-def test_producer_canary_scope_is_a_subset_of_route_ready_descriptors(
+def test_producer_route_readiness_matches_the_checked_in_matrix_exactly(
     matrix: dict[str, Any],
 ) -> None:
-    """CUT-08 acceptance: 'No producer can route a scope whose Go descriptor is
-    absent or disabled.'
+    """CUT-08 acceptance, generalized for CHAOS-3131: 'No producer can route a
+    scope whose Go descriptor is absent or disabled.'
 
-    This is the one regression test binding both sides. It fails if a future
-    change widens ``is_canary_scope`` before the corresponding Go descriptor
-    becomes route-ready — the exact ordering that would make TRD §5.3's
-    ``route_disabled`` hazard reachable.
+    Pre-CHAOS-3131 this only had to hold for one hardcoded pair
+    (``is_canary_scope``). Now that ``ProviderUnitRouteSwitches.is_route_ready``
+    reads the checked-in matrix directly, this is the test that binds Python's
+    readiness notion to Go's: Go regenerates the same contract from
+    ``CompleteRouteSwitches.Descriptor`` and fails CI on any byte-level
+    divergence (``internal/providersync/capability_matrix_test.go`` ->
+    ``TestProviderMatrixMatchesCheckedInContract``), so asserting Python's
+    reader agrees with every row of that file transitively binds Python to
+    Go's descriptor logic without a live cross-language call.
     """
 
     route_ready = {
@@ -150,16 +155,25 @@ def test_producer_canary_scope_is_a_subset_of_route_ready_descriptors(
         for pair in matrix["pairs"]
         if pair["route_ready"]
     }
-    canary = {
+    python_ready = {
         (provider, dataset)
         for provider, dataset in _python_pairs()
-        if ProviderUnitRouteSwitches.is_canary_scope(provider, dataset)
+        if ProviderUnitRouteSwitches.is_route_ready(provider, dataset)
     }
 
-    assert canary, "the producer gate must recognise at least one scope"
-    assert canary <= route_ready, {
-        "producer_scopes_without_a_ready_go_descriptor": sorted(canary - route_ready)
+    assert python_ready, "the producer gate must recognise at least one scope"
+    assert python_ready == route_ready, {
+        "python_says_ready_matrix_disagrees": sorted(python_ready - route_ready),
+        "matrix_says_ready_python_disagrees": sorted(route_ready - python_ready),
     }
+
+    # Membership equality is necessary but not sufficient: a pair that is not
+    # even a member of the frozen provider/dataset universe must also read as
+    # not-ready, so a typo'd or renamed pair fails closed rather than
+    # silently matching nothing.
+    assert not ProviderUnitRouteSwitches.is_route_ready(
+        "not-a-real-provider", "not-a-real-dataset"
+    )
 
 
 def test_producer_gate_cannot_route_any_scope_outside_the_ready_set(

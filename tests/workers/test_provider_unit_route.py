@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
+from dev_health_ops.workers import provider_unit_route
 from dev_health_ops.workers.provider_unit_route import (
     ProviderUnitRouteError,
     ProviderUnitRouteSwitches,
 )
+
+
+@pytest.fixture(autouse=True)
+def _restore_matrix_contract_path():
+    """Every test in this module may repoint the module-level matrix path at
+    a fixture. Always restore the production path and drop any cached read
+    afterwards so later test modules see the real checked-in contract."""
+
+    original = provider_unit_route._MATRIX_CONTRACT_PATH
+    try:
+        yield
+    finally:
+        provider_unit_route._MATRIX_CONTRACT_PATH = original
+        provider_unit_route.clear_matrix_cache()
 
 
 def test_route_switch_is_exact_and_independent() -> None:
@@ -37,3 +55,99 @@ def test_invalid_switch_fails_closed_without_echoing_value() -> None:
             {"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": value}
         )
     assert value not in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3131: routability is derived from the checked-in matrix, not from a
+# hardcoded provider/dataset literal.
+# ---------------------------------------------------------------------------
+
+
+def test_is_route_ready_reflects_the_checked_in_matrix() -> None:
+    assert ProviderUnitRouteSwitches.is_route_ready("launchdarkly", "feature-flags")
+    # Same dataset name, different provider: the matrix marks gitlab's
+    # feature-flags pair route_ready=false, so it must stay closed even
+    # though the string "feature-flags" matches.
+    assert not ProviderUnitRouteSwitches.is_route_ready("gitlab", "feature-flags")
+    # Case/whitespace must not matter -- callers pass live DB column values.
+    assert ProviderUnitRouteSwitches.is_route_ready(" LaunchDarkly ", "Feature-Flags")
+
+
+def test_is_route_ready_fails_closed_for_unknown_pairs() -> None:
+    assert not ProviderUnitRouteSwitches.is_route_ready("acme", "widgets")
+    assert not ProviderUnitRouteSwitches.is_route_ready("github", "commits")
+
+
+def _write_matrix_fixture(path: Path, *, ready_pairs: set[tuple[str, str]]) -> None:
+    pairs = []
+    for provider, dataset in sorted(ready_pairs):
+        pairs.append(
+            {
+                "provider": provider,
+                "dataset": dataset,
+                "route_ready": True,
+            }
+        )
+    # A not-ready pair alongside the ready ones proves the loader filters on
+    # route_ready rather than treating "present in the file" as sufficient.
+    pairs.append({"provider": "github", "dataset": "commits", "route_ready": False})
+    path.write_text(json.dumps({"schema_version": 1, "pairs": pairs}))
+
+
+def test_is_route_ready_generalizes_to_a_hypothetical_second_ready_pair(
+    tmp_path,
+) -> None:
+    """Proves the mechanism, not just the one production pair: pointing the
+    loader at a fixture contract with TWO route_ready pairs makes BOTH
+    routable through the exact same code path, with no edit to this module.
+    """
+
+    fixture = tmp_path / "matrix.json"
+    _write_matrix_fixture(
+        fixture,
+        ready_pairs={
+            ("launchdarkly", "feature-flags"),
+            ("acme", "widgets"),
+        },
+    )
+    provider_unit_route._MATRIX_CONTRACT_PATH = fixture
+    provider_unit_route.clear_matrix_cache()
+
+    assert ProviderUnitRouteSwitches.is_route_ready("launchdarkly", "feature-flags")
+    assert ProviderUnitRouteSwitches.is_route_ready("acme", "widgets")
+    # The explicitly not-ready row in the same fixture stays closed.
+    assert not ProviderUnitRouteSwitches.is_route_ready("github", "commits")
+    # A pair entirely absent from the fixture also stays closed.
+    assert not ProviderUnitRouteSwitches.is_route_ready("jira", "incidents")
+
+
+def test_a_hypothetical_ready_pair_still_requires_its_own_switch(tmp_path) -> None:
+    """route_ready alone is never sufficient -- adding a matrix row cannot
+    widen the routable surface by itself. ``acme/widgets`` has no matching
+    field on ProviderUnitRouteSwitches, so it can never be enabled no matter
+    how the matrix reads."""
+
+    fixture = tmp_path / "matrix.json"
+    _write_matrix_fixture(fixture, ready_pairs={("acme", "widgets")})
+    provider_unit_route._MATRIX_CONTRACT_PATH = fixture
+    provider_unit_route.clear_matrix_cache()
+
+    assert ProviderUnitRouteSwitches.is_route_ready("acme", "widgets")
+    switches = ProviderUnitRouteSwitches.from_environment({})
+    assert not switches.routes_to_river("acme", "widgets")
+
+    # Even a switch dataclass with every real field enabled cannot route it,
+    # because none of those fields derive to "acme_widgets".
+    all_enabled = ProviderUnitRouteSwitches(launchdarkly_feature_flags=True)
+    assert not all_enabled.routes_to_river("acme", "widgets")
+
+
+def test_switch_field_name_is_a_pure_naming_convention() -> None:
+    assert (
+        provider_unit_route._switch_field_name("launchdarkly", "feature-flags")
+        == "launchdarkly_feature_flags"
+    )
+    assert (
+        provider_unit_route._switch_field_name("Jira", "Work-Items")
+        == "jira_work_items"
+    )

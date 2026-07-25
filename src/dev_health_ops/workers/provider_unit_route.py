@@ -1,13 +1,50 @@
-"""Fail-closed transport gate for complete provider sync-unit routes."""
+"""Fail-closed transport gate for complete provider sync-unit routes.
+
+Routability is derived from the checked-in provider capability matrix
+(``contracts/provider-matrix/v1/matrix.json``) instead of a hardcoded
+provider/dataset literal. A pair is routable only when BOTH hold:
+
+  1. The matrix marks the pair ``route_ready`` (TRD: "A provider/dataset pair
+     without a field here can never be enabled, which is why adding github,
+     gitlab, and pagerduty descriptors ... cannot widen the live route
+     surface.").
+  2. Its declared environment switch (see ``_switch_field_name``) is enabled.
+
+Neither condition is sufficient alone (PRD: "Declarative registry with
+complete policy; unknown or incomplete kinds fail readiness."). Landing a new
+``route_ready`` row in the matrix can never, by itself, move live traffic --
+only a change that ALSO wires and enables the matching switch can. This keeps
+CHAOS-3123..3127 (the per-provider readiness work) fully decoupled from any
+edit in this module: flipping a matrix row and turning on its switch is
+sufficient to route a pair, with no code change here.
+"""
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 
 _FALSE = frozenset({"", "0", "false", "no", "off"})
 _TRUE = frozenset({"1", "true", "yes", "on"})
+
+# src/dev_health_ops/workers/provider_unit_route.py -> repo root is 3 parents up.
+_DEFAULT_MATRIX_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "contracts"
+    / "provider-matrix"
+    / "v1"
+    / "matrix.json"
+)
+
+# Reassignable only by tests (see tests/workers/test_provider_unit_route.py),
+# so a hypothetical second route_ready pair can be exercised end to end
+# through a fixture contract without ever editing the checked-in matrix.
+# Production code never assigns to this.
+_MATRIX_CONTRACT_PATH = _DEFAULT_MATRIX_CONTRACT_PATH
 
 
 class ProviderUnitRouteError(ValueError):
@@ -21,6 +58,59 @@ def _flag(environment: Mapping[str, str], name: str) -> bool:
     if value in _TRUE:
         return True
     raise ProviderUnitRouteError("provider unit route switch is invalid")
+
+
+@cache
+def _load_route_ready_pairs(path: Path) -> frozenset[tuple[str, str]]:
+    """Read a capability matrix contract and return every pair it marks
+    ``route_ready``.
+
+    This is the single Python reader of the contract that Go's
+    ``BuildProviderMatrix`` / ``TestProviderMatrixMatchesCheckedInContract``
+    (``internal/providersync/capability_matrix_test.go``) produces and
+    freezes byte-for-byte (CUT-08). A pair absent from the file, or present
+    with ``route_ready: false``, can never be routable regardless of switch
+    state -- this is the "unknown or incomplete kinds fail readiness" half of
+    the PRD requirement.
+    """
+
+    raw = json.loads(path.read_text())
+    return frozenset(
+        (str(pair["provider"]).strip().lower(), str(pair["dataset"]).strip().lower())
+        for pair in raw.get("pairs", ())
+        if pair.get("route_ready") is True
+    )
+
+
+def _route_ready_pairs() -> frozenset[tuple[str, str]]:
+    return _load_route_ready_pairs(_MATRIX_CONTRACT_PATH)
+
+
+def clear_matrix_cache() -> None:
+    """Drop the cached matrix read.
+
+    Test-only: production reads the checked-in contract exactly once per
+    process and never reloads it mid-run. Tests call this after repointing
+    ``_MATRIX_CONTRACT_PATH`` at a fixture, or after restoring the default,
+    so a stale cache entry from an earlier test can't leak in.
+    """
+
+    _load_route_ready_pairs.cache_clear()
+
+
+def _switch_field_name(provider: str, dataset: str) -> str:
+    """The ``ProviderUnitRouteSwitches`` field name a matrix pair's switch
+    must use -- e.g. ``launchdarkly`` + ``feature-flags`` ->
+    ``launchdarkly_feature_flags``.
+
+    This is a naming convention, not a routing decision on its own: a pair is
+    only enabled if a field of this name also exists on the dataclass AND is
+    True. A provider/dataset combination with no matching field derives a
+    name that resolves to nothing, so it fails closed by construction rather
+    than through an explicit denylist.
+    """
+
+    return f"{provider.strip().lower()}_{dataset.strip().lower()}".replace("-", "_")
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,15 +142,28 @@ class ProviderUnitRouteSwitches:
 
     def routes_to_river(self, provider: str, dataset: str) -> bool:
         self.require_complete_routes()
-        return self.launchdarkly_feature_flags and self.is_canary_scope(
+        return self.is_route_ready(provider, dataset) and self._switch_enabled(
             provider, dataset
         )
 
+    def _switch_enabled(self, provider: str, dataset: str) -> bool:
+        # getattr's default is what makes "no field declared for this pair"
+        # resolve to False instead of raising -- the mechanism behind "a pair
+        # can never be enabled by omission".
+        return bool(getattr(self, _switch_field_name(provider, dataset), False))
+
     @staticmethod
-    def is_canary_scope(provider: str, dataset: str) -> bool:
-        """Return whether a unit is covered by the checked-in canary scope."""
+    def is_route_ready(provider: str, dataset: str) -> bool:
+        """Return whether the checked-in capability matrix marks this
+        provider/dataset pair ``route_ready``.
+
+        This is the only source of readiness in this module: nothing here
+        hardcodes a provider/dataset literal, so a pair becomes eligible the
+        moment the matrix says it is ready -- routability still requires its
+        switch too (see ``routes_to_river``).
+        """
 
         return (
-            provider.strip().lower() == "launchdarkly"
-            and dataset.strip().lower() == "feature-flags"
-        )
+            provider.strip().lower(),
+            dataset.strip().lower(),
+        ) in _route_ready_pairs()

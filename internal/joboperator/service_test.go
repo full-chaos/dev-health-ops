@@ -49,15 +49,28 @@ func TestCancelRunningFailsClosedWithoutPromptCancellationSupport(t *testing.T) 
 	}
 }
 
-func TestRetryFailsClosedWhileMigrationRouteIsCelery(t *testing.T) {
+// TestRetryFailsClosedWhenRouteIsRolledBackToCelery guards the same
+// fail-closed rule the name previously described for a different reason.
+// Every checked-in kind now defaults to go_default/river, so the raw checked-in
+// registry can no longer stand in for a Celery-routed kind. The guard is still
+// load-bearing: an operator can durably roll a kind's active route back to
+// celery (RollbackJobRoute) while the checked-in default stays river, and a
+// manual retry must still refuse to hand that job back to River in that state.
+// rolledBackRegistry simulates the registry a route-aware composition root
+// would report for a kind whose live route was rolled back.
+func TestRetryFailsClosedWhenRouteIsRolledBackToCelery(t *testing.T) {
 	t.Parallel()
-	fixture := newServiceFixture(t)
+	base, err := jobruntime.Load("../../contracts/jobs/v1")
+	if err != nil {
+		t.Fatalf("Load runtime registry: %v", err)
+	}
+	fixture := newServiceFixtureWithRegistry(t, rolledBackRegistry{RuntimeRegistry: base})
 	fixture.backend.job = jobSummary(StateDiscarded, jobcontract.KindRetentionCleanup, "retention", 3)
 
-	_, err := fixture.service.Retry(context.Background(), testPrincipal(), 42, "operator_request", "corr-op-1")
+	_, err = fixture.service.Retry(context.Background(), testPrincipal(), 42, "operator_request", "corr-op-1")
 	assertCode(t, err, CodeConflict)
 	if fixture.backend.retryCalls != 0 || fixture.auditor.beginCalls != 0 {
-		t.Fatal("Celery-routed job reached retry mutation")
+		t.Fatal("rolled-back-to-Celery job reached retry mutation")
 	}
 }
 
@@ -487,6 +500,21 @@ func (registry executableRegistry) Descriptor(kind string) (jobruntime.Descripto
 	if ok && kind == jobcontract.KindRetentionCleanup {
 		descriptor.MigrationState = "canary"
 		descriptor.Route = "river_canary"
+	}
+	return descriptor, ok
+}
+
+// rolledBackRegistry represents a kind whose durable, live route has been
+// rolled back to Celery (RollbackJobRoute) even though the checked-in
+// contract still defaults it to go_default/river. rollback_route stays
+// "celery" for every checked-in kind precisely so this state remains
+// representable and reachable at any time, not only during the migration.
+type rolledBackRegistry struct{ RuntimeRegistry }
+
+func (registry rolledBackRegistry) Descriptor(kind string) (jobruntime.Descriptor, bool) {
+	descriptor, ok := registry.RuntimeRegistry.Descriptor(kind)
+	if ok && kind == jobcontract.KindRetentionCleanup {
+		descriptor.Route = "celery"
 	}
 	return descriptor, ok
 }

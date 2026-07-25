@@ -6,7 +6,10 @@ import (
 	"testing"
 )
 
-func TestInventoryIsExactBoundedAndCeleryRouted(t *testing.T) {
+// TestInventoryIsExactBoundedAndSourceBacked guards family count/source
+// existence; per-family routing is asserted by
+// TestEveryFamilyHasIndependentRollbackAndReviewedReplay below.
+func TestInventoryIsExactBoundedAndSourceBacked(t *testing.T) {
 	inventory, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -24,6 +27,13 @@ func TestInventoryIsExactBoundedAndCeleryRouted(t *testing.T) {
 	}
 }
 
+// TestEveryFamilyHasIndependentRollbackAndReviewedReplay guards that every
+// family in the reviewed inventory keeps its own, non-shared route key so an
+// operator can roll one family back to Celery without touching its siblings.
+// Every family is now checked in at go_default/river (route: "river",
+// rollback_route: "celery"), so the independent-rollback path is live rather
+// than dormant; the per-family rollback route must still be independently
+// reachable for each family.
 func TestEveryFamilyHasIndependentRollbackAndReviewedReplay(t *testing.T) {
 	inventory, err := Load()
 	if err != nil {
@@ -35,8 +45,8 @@ func TestEveryFamilyHasIndependentRollbackAndReviewedReplay(t *testing.T) {
 			t.Fatalf("%s shares rollback key with %s", family.Name, previous)
 		}
 		routeKeys[family.RouteKey] = family.Name
-		if family.Route != family.RollbackRoute || family.Route != "celery" {
-			t.Fatalf("%s is prematurely enabled: route=%s rollback=%s", family.Name, family.Route, family.RollbackRoute)
+		if family.Route != "river" || family.RollbackRoute != "celery" || !family.Executable() {
+			t.Fatalf("%s is not independently executable: route=%s rollback=%s", family.Name, family.Route, family.RollbackRoute)
 		}
 	}
 }

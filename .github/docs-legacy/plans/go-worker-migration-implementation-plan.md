@@ -125,6 +125,40 @@ inventory -> contract_frozen -> go_implemented -> shadow
 
 Promotion state is tracked in the registry or a generated migration manifest. CI rejects a state that lacks its required evidence.
 
+#### 3.3.1 Approved deviation — shadow and canary waived (CHAOS-3033, 2026-07-25)
+
+23 of the 24 checked-in kinds moved directly from `go_implemented` to
+`go_default`, skipping `shadow` and `canary`. This was an explicit decision by
+the program owner, recorded here rather than left implicit in a diff.
+
+Rationale: the platform has no production users, and the Celery baseline is
+already captured, so the staged ladder protects nobody. Its purpose is to
+migrate a system with live traffic that cannot be disrupted; that risk does not
+exist here. Parity against the existing Python implementation remains the
+acceptance bar for each family, and rollback remains available — every kind
+keeps `rollback_route: celery`, and `workerctl job-routes rollback` still proves
+quiescence before moving a route.
+
+Consequences accepted with the waiver:
+
+- No shadow or canary evidence exists for those 23 kinds. The per-family
+  evidence list in §3.2 is therefore only partly satisfied; parity evidence,
+  tests, and rollback remain required, while shadow/canary evidence does not.
+- The two-stable-release gate in Phase 7 is likewise waived.
+
+Two limits on the waiver, both deliberate:
+
+- `sync.provider_unit` is **not** covered by it and stays at `canary`. Its Go
+  route surface serves one of the 59 provider/dataset pairs in
+  `contracts/provider-matrix/v1/matrix.json`, so the canary route is what
+  confines River to that pair while the rest still dispatch through Celery.
+  Promoting it would stop the other 58 from syncing. Tracked by CHAOS-3122.
+- The CI control described above — rejecting a promotion state that lacks its
+  required evidence — **does not exist**. The wholesale promotion passed
+  `worker-contractcheck` without objection. The waiver excuses missing
+  shadow/canary evidence; it does not excuse a missing gate, which should be
+  built before any future promotion relies on it.
+
 ## 4. Phase 0 — architecture and compatibility lock
 
 ### CHAOS-3034 — Validate River, PgBouncer, Python enqueue, and licensing

@@ -173,7 +173,10 @@ func TestDecodeReportDefinitionAcceptsChartSpecsWithoutLeakingJobData(t *testing
 	}
 }
 
-func TestReportRouteCapabilitiesRemainIndependentAndDormant(t *testing.T) {
+// TestReportRouteCapabilitiesRemainIndependentAndExecutable guards that the
+// two report kinds stay independently routed (distinct kinds, individually
+// reachable rollback) even though both are now checked in at go_default/river.
+func TestReportRouteCapabilitiesRemainIndependentAndExecutable(t *testing.T) {
 	t.Chdir(filepath.Join("..", "..", ".."))
 	registry, err := jobruntime.Load("contracts/jobs/v1")
 	if err != nil {
@@ -187,9 +190,9 @@ func TestReportRouteCapabilitiesRemainIndependentAndDormant(t *testing.T) {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
 	for _, capability := range capabilities {
-		if !capability.Compiled || capability.Route != "celery" ||
-			capability.RollbackRoute != "celery" || capability.Executable {
-			t.Fatalf("route unexpectedly active: %#v", capability)
+		if !capability.Compiled || capability.Route != "river" ||
+			capability.RollbackRoute != "celery" || !capability.Executable {
+			t.Fatalf("route unexpectedly inactive: %#v", capability)
 		}
 	}
 }

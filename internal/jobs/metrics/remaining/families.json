@@ -12,7 +12,7 @@
       "clickhouse_write_budget": 2,
       "replay": "generation_replace",
       "route_key": "metrics.remaining.complexity",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Only persisted git_files and git_blame contents can be scanned; missing historical contents are skipped and max_files remains a hard bound.",
       "parity_state": "numerical_oracle"
@@ -27,7 +27,7 @@
       "clickhouse_write_budget": 1,
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.dora",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Only already-synced canonical deployments and incidents are eligible; no provider API reconstruction is performed.",
       "parity_state": "numerical_oracle"
@@ -42,7 +42,7 @@
       "clickhouse_write_budget": 1,
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.release_impact",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The existing seven-day late-data recomputation window and retained telemetry buckets define the recoverable history.",
       "parity_state": "partial_numerical_oracle"
@@ -57,7 +57,7 @@
       "clickhouse_write_budget": 1,
       "replay": "generation_replace",
       "route_key": "metrics.remaining.capacity",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The configured throughput history window remains authoritative; deterministic replay additionally requires a persisted generation seed.",
       "parity_state": "partial_numerical_oracle"
@@ -72,7 +72,7 @@
       "clickhouse_write_budget": 1,
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.recommendations",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Evaluation only reads finalized persisted daily metric partitions and preserves explicit non-fired tombstones.",
       "parity_state": "inventory_only"
@@ -87,7 +87,7 @@
       "clickhouse_write_budget": 2,
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.extra_metrics",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Each existing metric's checked-in lookback and recomputation window remains unchanged.",
       "parity_state": "inventory_only"
@@ -102,7 +102,7 @@
       "clickhouse_write_budget": 1,
       "replay": "completion_marker_generation",
       "route_key": "metrics.remaining.membership_backfill",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The full current work graph is projected from existing persisted investments; components without a current persisted categorization are skipped and no LLM is invoked.",
       "parity_state": "inventory_only"
@@ -117,7 +117,7 @@
       "clickhouse_write_budget": 2,
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.team_metrics",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Only persisted identity and ClickHouse team-attribution facts are used; legacy PostgreSQL team mappings are not reconstructed.",
       "parity_state": "inventory_only"

@@ -83,8 +83,11 @@ func buildProviderSyncWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	spec, ok := registry.Descriptor(jobcontract.KindSyncProviderUnit)
-	if !ok || !spec.Executable() || spec.Route != "river_canary" ||
-		spec.RollbackRoute != "celery" {
+	// Executable() already restricts this to shadow, river_canary, and river.
+	// Pinning the literal canary route here would make the handler refuse to
+	// register the moment the kind was promoted past canary, which is the one
+	// transition the pin was meant to protect.
+	if !ok || !spec.Executable() || spec.RollbackRoute != "celery" {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)

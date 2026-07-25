@@ -199,8 +199,21 @@ type schedulerRuntimeSources struct {
 
 var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 	openDatabase: openSchedulerDatabase,
+	// This branches on the package-level schedulerOwnership variable (main.go)
+	// rather than calling schedulersync.NewMutationRepository unconditionally,
+	// so that variable is the actual, single source of truth for which
+	// ownership policy this binary composes -- not a value that is validated
+	// but otherwise ignored. OwnershipPolicy's fields stay unexported in the
+	// sync package, so the only two values schedulerOwnership can ever hold
+	// are schedulersync.DefaultOwnershipPolicy() and
+	// schedulersync.TransferScheduleMarkerOwnershipToGo(); this comparison
+	// cannot be fooled into selecting the mutation repository by anything
+	// short of a source change to schedulerOwnership itself.
 	newRepository: func(pool *pgxpool.Pool) (schedulersync.HandoffStepper, error) {
-		return schedulersync.NewMutationRepository(pool)
+		if schedulerOwnership == schedulersync.TransferScheduleMarkerOwnershipToGo() {
+			return schedulersync.NewMutationRepository(pool)
+		}
+		return schedulersync.NewRepository(pool)
 	},
 	newCoordinator: schedulersync.NewOccurrenceCoordinator,
 	newLoop:        schedulersync.NewLoop,

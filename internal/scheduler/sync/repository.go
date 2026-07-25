@@ -29,12 +29,14 @@ func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
 }
 
 // NewMutationRepository is the source-reviewed production composition seam
-// for transferring schedule-marker ownership to Go. Calling it is not an
+// for transferring schedule-marker ownership to Go. It composes
+// TransferScheduleMarkerOwnershipToGo — see that function's doc comment for
+// what the transfer does and does not prove. Calling it is not an
 // environment-level activation: the scheduler command additionally requires
 // its checked-in ownership and coordinator-parity gates before this repository
 // can be constructed.
 func NewMutationRepository(pool *pgxpool.Pool) (*Repository, error) {
-	return newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
+	return newRepositoryWithOwnership(pool, TransferScheduleMarkerOwnershipToGo())
 }
 
 // newRepositoryWithOwnership constructs the scheduler repository with an

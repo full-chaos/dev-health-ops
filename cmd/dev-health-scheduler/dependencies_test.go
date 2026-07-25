@@ -96,6 +96,40 @@ func (loop *fakeFixedLoop) Readiness(context.Context) error { return loop.readin
 
 func (loop *fakeFixedLoop) Coverage(context.Context) error { return loop.coverageErr }
 
+// TestProductionSchedulerRuntimeSourcesRepositoryFollowsSchedulerOwnership
+// proves schedulerOwnership (main.go) is the actual source of truth for which
+// repository the production composition builds, not a value that is merely
+// validated. The default-ownership branch is exercised behaviorally (its
+// HandoffDueResult must refuse before ever touching the pool, so a zero-value
+// pool is safe to use here); the transferred branch is checked structurally,
+// since exercising HandoffDueResult against an unconnected pool would reach
+// past the ownership check into pool.BeginTx.
+func TestProductionSchedulerRuntimeSourcesRepositoryFollowsSchedulerOwnership(t *testing.T) {
+	original := schedulerOwnership
+	defer func() { schedulerOwnership = original }()
+	pool := &pgxpool.Pool{}
+
+	schedulerOwnership = schedulersync.DefaultOwnershipPolicy()
+	defaultStepper, err := productionSchedulerRuntimeSources.newRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := defaultStepper.HandoffDueResult(
+		context.Background(), time.Now(), 1, schedulersync.NewOccurrenceCoordinator(),
+	); !errors.Is(err, schedulersync.ErrSchedulerMutationDisabled) {
+		t.Fatalf("default ownership HandoffDueResult() = %v, want ErrSchedulerMutationDisabled", err)
+	}
+
+	schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
+	mutationStepper, err := productionSchedulerRuntimeSources.newRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mutationStepper.(*schedulersync.Repository); !ok || mutationStepper == nil {
+		t.Fatalf("transferred ownership repository = %#v, want a non-nil *schedulersync.Repository", mutationStepper)
+	}
+}
+
 func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
 	fixedLoop := &fakeFixedLoop{}

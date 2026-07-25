@@ -51,12 +51,60 @@ func DefaultOwnershipPolicy() OwnershipPolicy {
 	}
 }
 
-// reviewedGoMutationOwnershipPolicy is intentionally package-private. Tests
-// and a future audited command composition can exercise the Go-owned kernel,
-// but neither environment nor an external package can manufacture marker
-// mutation authority.
+// reviewedGoMutationOwnershipPolicy is intentionally package-private so that
+// TransferScheduleMarkerOwnershipToGo is the one and only exported spelling
+// of it. Tests reach the value directly because they live in this package;
+// everything outside it goes through the exported wrapper below.
 func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
 	return OwnershipPolicy{owner: schedulerOwnerGo, mode: schedulerModeMutation}
+}
+
+// TransferScheduleMarkerOwnershipToGo performs the reviewed, in-source
+// transfer of schedule-marker mutation authority from Celery to Go.
+//
+// This is the ownership transfer, not a step toward it. There is no
+// environment variable, deployment profile, or runtime flag that can produce
+// this OwnershipPolicy value: OwnershipPolicy's fields stay unexported, so
+// this function and DefaultOwnershipPolicy are the complete, closed set of
+// policies any caller outside this package can ever obtain. Calling this
+// function and shipping the resulting binary IS the act of transfer; nothing
+// else can activate it, and nothing else is required to have already
+// activated it (see the composition-root gates below, which are a separate,
+// additional precondition on top of this one).
+//
+// Obtaining this policy is necessary but not sufficient for mutation to
+// actually happen in production. allowsMutation() still requires
+// {owner: go, mode: mutation} on the specific Repository that runs the
+// write, and cmd/dev-health-scheduler's composition root additionally gates
+// on its own checkedInSchedulerActivation flags (goOwnsMarkers,
+// coordinatorPolicyParity) before it will even open a database pool. Those
+// gates exist precisely so that this function's existence does not, by
+// itself, put a marker mutation on the wire.
+//
+// Why a second, concurrently running Celery Beat cannot also mutate the same
+// marker once this policy is in effect: HandoffDueResult (transaction.go)
+// deliberately reproduces the Python scheduler's exact row-lock order and
+// clause — `FOR UPDATE OF config, job SKIP LOCKED` against the same
+// public.sync_configurations/public.scheduled_jobs rows Beat locks with
+// SQLAlchemy's `.with_for_update(skip_locked=True)` in the same
+// config -> job -> occurrence order — and advances next_run_at inside the
+// same transaction that holds the lock. PostgreSQL enforces that lock
+// regardless of which process or language acquired it, so at most one of
+// {a Beat transaction, a Go transaction} can ever hold it at a time; the
+// other's SKIP LOCKED clause makes it skip the row this pass rather than
+// block or race past a stale read. That is a database-level guarantee, not
+// an application-level convention either side could accidentally violate by
+// itself — see TestHandoffDuePostgresRespectsExternalRowLock, which proves
+// it against a raw connection standing in for Beat.
+//
+// What this policy does NOT prove: that Go's cron evaluation always agrees
+// with Python's for every schedule (see NextOccurrence's golden-vector tests
+// for that), and that Go can complete a materialization once it wins a race
+// (see the occurrence reconciler's Materializer — a stub until CUT-09/CUT-10
+// lands). Both are the separate coordinatorPolicyParity precondition on the
+// composition root, and this function does not claim to satisfy it.
+func TransferScheduleMarkerOwnershipToGo() OwnershipPolicy {
+	return reviewedGoMutationOwnershipPolicy()
 }
 
 // Validate rejects every owner/mode pair except the bounded current and future

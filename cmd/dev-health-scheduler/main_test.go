@@ -20,8 +20,14 @@ func (schedulerTestComponent) Start(context.Context) error    { return nil }
 func (schedulerTestComponent) Shutdown(context.Context) error { return nil }
 
 func TestSchedulerSpecConfiguresFailClosedDependencies(t *testing.T) {
-	if schedulerOwnership != schedulersync.DefaultOwnershipPolicy() {
+	// CHAOS-3128: schedulerOwnership is the reviewed transfer, not the
+	// checked-in Celery default. That alone must not open a database pool or
+	// change readiness -- both gates below are still checked separately.
+	if schedulerOwnership != schedulersync.TransferScheduleMarkerOwnershipToGo() {
 		t.Fatalf("scheduler ownership = %#v", schedulerOwnership)
+	}
+	if err := schedulerOwnership.Validate(); err != nil {
+		t.Fatalf("transferred ownership failed validation: %v", err)
 	}
 	if schedulerSpec.Service != "dev-health-scheduler" {
 		t.Fatalf("service = %q", schedulerSpec.Service)

@@ -15,6 +15,7 @@ const (
 	MaxEnvelopeBytes = 16 * 1024
 
 	ContractVersionV1            = 1
+	ContractVersionV2            = 2
 	KindBillingNotification      = "operational.billing_notification"
 	KindWebhookDelivery          = "operational.webhook_delivery"
 	KindHeartbeat                = "system.heartbeat"
@@ -54,6 +55,15 @@ func RetentionPolicies() []string {
 		RetentionRateLimitObservations,
 		RetentionExternalIngestBatches,
 	}
+}
+
+// FrozenRetentionPoliciesV1 is the retention_policy value domain as v1 shipped.
+// A published contract version is immutable: widening the enum of a required
+// field in place would let a producer emit a value an existing v1 consumer
+// rejects, which is why the widened set became v2 rather than editing v1. This
+// list must never grow.
+func FrozenRetentionPoliciesV1() []string {
+	return []string{RetentionWorkerTerminal}
 }
 
 // SupportedRetentionPolicy reports whether policy is contract-declared.
@@ -232,9 +242,15 @@ var definitions = map[string]contractDefinition{
 		OrganizationScope: "global",
 	},
 	KindRetentionCleanup: {
-		Kind:              KindRetentionCleanup,
-		CurrentVersion:    ContractVersionV1,
-		SupportedVersions: []int{ContractVersionV1},
+		Kind: KindRetentionCleanup,
+		// v2 widened retention_policy to carry the two prune policies the Go
+		// fixed scheduler owns (see internal/scheduler/fixed/producers.go).
+		// v1 stays supported and unchanged: widening the value domain of a
+		// required field is a breaking change for a v1 consumer, so it cannot
+		// be edited in place under the registry's additive_optional_only
+		// policy.
+		CurrentVersion:    ContractVersionV2,
+		SupportedVersions: []int{ContractVersionV1, ContractVersionV2},
 		DomainLink:        "maintenance_run",
 		OrganizationScope: "global",
 	},

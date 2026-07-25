@@ -156,8 +156,8 @@
     {
       "kind": "system.retention_cleanup",
       "state": "go_implemented",
-      "producer_version": 1,
-      "consumer_versions": [1],
+      "producer_version": 2,
+      "consumer_versions": [1, 2],
       "required_profiles": ["ops"],
       "route": "celery",
       "rollback_route": "celery",

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://contracts.fullchaos.dev/jobs/v1/schemas/system.retention_cleanup.v1.schema.json",
-  "title": "system.retention_cleanup payload v1",
+  "$id": "https://contracts.fullchaos.dev/jobs/v1/schemas/system.retention_cleanup.v2.schema.json",
+  "title": "system.retention_cleanup payload v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["batch_size", "delete_before", "retention_policy"],
@@ -18,7 +18,11 @@
     },
     "retention_policy": {
       "type": "string",
-      "enum": ["worker_job_terminal"]
+      "enum": [
+        "worker_job_terminal",
+        "rate_limit_observations",
+        "external_ingest_batches"
+      ]
     }
   }
 }

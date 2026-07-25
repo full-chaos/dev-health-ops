@@ -69,7 +69,12 @@ func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
 		mutate func(*HandlerSpec)
 	}{
 		{"current_version", func(spec *HandlerSpec) { spec.CurrentVersion++ }},
-		{"supported_versions", func(spec *HandlerSpec) { spec.SupportedVersions = []int{1, 2} }},
+		// Derived from the descriptor rather than a literal: pinning {1, 2} here
+		// silently stopped drifting once retention_cleanup really did support
+		// both versions, which turned this case into a no-op assertion.
+		{"supported_versions", func(spec *HandlerSpec) {
+			spec.SupportedVersions = append(append([]int(nil), spec.SupportedVersions...), 99)
+		}},
 		{"profile", func(spec *HandlerSpec) { spec.Profile = "heavy" }},
 		{"queue", func(spec *HandlerSpec) { spec.Queue = "other" }},
 		{"execution_mode", func(spec *HandlerSpec) { spec.ExecutionMode = "coordinator" }},

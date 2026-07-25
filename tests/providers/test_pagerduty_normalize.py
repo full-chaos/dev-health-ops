@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -181,6 +181,23 @@ def test_oncall_without_global_id_uses_stable_composite_external_id() -> None:
     assert first.id == second.id
 
 
+def test_oncall_without_schedule_or_window_uses_permanent_fallback() -> None:
+    payload = {
+        **REAL_PAGERDUTY_PAYLOADS["oncalls"],
+        "schedule": None,
+        "start": None,
+        "end": None,
+    }
+
+    oncall = Oncall.model_validate(payload)
+
+    first = _normalizer().oncall(oncall)
+    second = _normalizer().oncall(oncall)
+
+    assert first.external_id == "PESCAL1|<permanent>|PUSER01|1|<permanent>|<permanent>"
+    assert first.id == second.id
+
+
 def test_oncall_rejects_missing_stable_composite_dimension() -> None:
     payload = {
         **REAL_PAGERDUTY_PAYLOADS["oncalls"],
@@ -205,6 +222,48 @@ def test_incident_preserves_resolution_time_and_raw_priority() -> None:
     assert incident.raw_severity == "high"
     assert incident.raw_priority == "P1"
     assert incident.normalized_priority == "high"
+
+
+def test_normalizer_canonicalizes_provider_timestamps_to_utc_fold_zero() -> None:
+    provider_time = datetime(
+        2026,
+        7,
+        17,
+        5,
+        tzinfo=timezone(timedelta(hours=-7)),
+        fold=1,
+    )
+    normalizer = PagerDutyNormalizer(
+        org_id="org-1",
+        provider_instance_id="acme",
+        observed_at=provider_time,
+    )
+
+    service = normalizer.service(
+        Service(id="service-1", name="Payments", updated_at=provider_time)
+    )
+    incident = normalizer.incident(
+        Incident(
+            id="incident-1",
+            title="Payments unavailable",
+            status="resolved",
+            created_at=provider_time,
+            updated_at=provider_time,
+            resolved_at=provider_time,
+        )
+    )
+
+    for timestamp in (
+        service.source_version_at,
+        service.observed_at,
+        service.last_synced,
+        incident.source_event_at,
+        incident.started_at,
+        incident.resolved_at,
+    ):
+        assert timestamp is not None
+        assert timestamp.utcoffset() == timedelta(0)
+        assert timestamp.fold == 0
 
 
 def test_service_normalization_does_not_compute_discarded_canonical_id() -> None:

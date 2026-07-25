@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000009",
+  "correlation_id": "investment-dispatch-2026-07-23",
+  "idempotency_key": "investment:dispatch:00000000-0000-4000-8000-000000000103",
+  "domain": {
+    "type": "investment_request",
+    "id": "00000000-0000-4000-8000-000000000103"
+  },
+  "payload": {
+    "request_id": "00000000-0000-4000-8000-000000000103"
+  }
+}

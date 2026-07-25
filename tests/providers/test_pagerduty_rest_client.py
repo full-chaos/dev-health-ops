@@ -92,6 +92,28 @@ async def test_incident_alert_page_iterator_fetches_only_requested_pages() -> No
 
 
 @pytest.mark.asyncio
+async def test_incident_notes_accept_non_paginated_envelope() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"notes": [{"id": "note-1", "content": "Recovered"}]},
+        )
+
+    client = PagerDutyClient(
+        OAuthBearerAuth("oauth"), transport=httpx.MockTransport(handler)
+    )
+
+    notes = await client.list_incident_notes("incident-1")
+
+    assert [note.id for note in notes] == ["note-1"]
+    assert len(requests) == 1
+    assert requests[0].url.params == httpx.QueryParams()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [429, 503])
 async def test_retries_transient_response_with_bounded_attempts(
     monkeypatch: pytest.MonkeyPatch, status: int

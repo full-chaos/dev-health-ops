@@ -20,6 +20,7 @@ from typing import Any
 
 import clickhouse_connect
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.schemas import (
     ManualAttributionFallbackRecord,
     MemberRecord,
@@ -486,6 +487,8 @@ class ClickHouseCore(BaseMetricsSink):
                     raise
             elif path.suffix == ".py":
                 # Execute python migration script
+                from dev_health_ops.migrations.clickhouse import MigrationDeferred
+
                 try:
                     import importlib.util
 
@@ -496,6 +499,12 @@ class ClickHouseCore(BaseMetricsSink):
                         if hasattr(module, "upgrade"):
                             logger.info(f"Executing Python migration: {path.name}")
                             module.upgrade(self.client)
+                except MigrationDeferred:
+                    logger.info(
+                        "clickhouse_migration_deferred",
+                        extra={"migration": version},
+                    )
+                    continue
                 except Exception as e:
                     logger.error(f"Failed to apply python migration {path.name}: {e}")
                     raise
@@ -614,7 +623,7 @@ class ClickHouseCore(BaseMetricsSink):
             sum(delivery_units) as delivery_units_30d,
             quantile(0.5)(if(cycle_p50_hours > 0, cycle_p50_hours, null)) as cycle_p50_30d_hours,
             max(work_items_active) as wip_max_30d
-        FROM user_metrics_daily
+        FROM {dedup_from("user_metrics_daily")}
         WHERE {where_clause}
         GROUP BY identity_id
         HAVING identity_id != ''

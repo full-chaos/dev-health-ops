@@ -48,6 +48,20 @@ def run_backfill_via_planner(
             ),
         )
 
+    if not plan.dispatch_required:
+        return {
+            "status": "disabled",
+            "mode": "backfill",
+            "integration_id": integration_id,
+            "org_id": org_id,
+            "sync_run_id": plan.sync_run_id,
+            "unit_count": plan.total_units,
+            "unit_ids": list(plan.unit_ids),
+            "reason": plan.terminal_reason,
+            "since": _as_utc_datetime(since, end_of_day=False).isoformat(),
+            "before": _as_utc_datetime(before, end_of_day=True).isoformat(),
+        }
+
     dispatch_result = dispatch_sync_run(plan.sync_run_id)
     return {
         "status": "success",

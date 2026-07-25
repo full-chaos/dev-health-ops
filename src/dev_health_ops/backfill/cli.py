@@ -39,17 +39,9 @@ def register_backfill_commands(subparsers: argparse._SubParsersAction) -> None:
 
     operational_parser = backfill_subparsers.add_parser(
         "operational",
-        help="Migrate legacy incident producers into canonical operational tables.",
+        help="Migrate legacy Atlassian Ops rows into canonical operational tables.",
     )
     operational_parser.add_argument("--org", required=True, help="Organization id")
-    operational_parser.add_argument(
-        "--github-provider-instance-id",
-        help="Explicit GitHub instance override for legacy rows without a persisted host",
-    )
-    operational_parser.add_argument(
-        "--gitlab-provider-instance-id",
-        help="Explicit GitLab instance override for legacy rows without a persisted host",
-    )
     operational_parser.add_argument(
         "--atlassian-provider-instance-id",
         default="atlassian-ops",
@@ -97,8 +89,6 @@ def _cmd_backfill_operational(ns: argparse.Namespace) -> int:
             run_canonical_operational_backfill(
                 clickhouse_uri=resolve_sink_uri(ns),
                 org_id=ns.org,
-                github_provider_instance_id=ns.github_provider_instance_id,
-                gitlab_provider_instance_id=ns.gitlab_provider_instance_id,
                 atlassian_provider_instance_id=ns.atlassian_provider_instance_id,
             )
         )
@@ -106,7 +96,12 @@ def _cmd_backfill_operational(ns: argparse.Namespace) -> int:
             "Migrated canonical operational rows: "
             f"services={result.services}, incidents={result.incidents}, "
             f"alerts={result.alerts}, schedules={result.schedules}, "
-            f"service_repository_mappings={result.service_repository_mappings}"
+            f"service_repository_mappings={result.service_repository_mappings}; "
+            f"parity_verified={str(result.parity_verified).lower()}, "
+            f"incidents={result.verified_incidents}/{result.expected_incidents}, "
+            "service_repository_mappings="
+            f"{result.verified_service_repository_mappings}/"
+            f"{result.expected_service_repository_mappings}"
         )
         return 0
     except Exception as exc:

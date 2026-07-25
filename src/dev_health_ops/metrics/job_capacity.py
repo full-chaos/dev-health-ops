@@ -59,6 +59,7 @@ async def run_capacity_forecast(
     simulations: int = 10000,
     all_teams: bool = False,
     persist: bool = True,
+    seed: int | None = None,
 ) -> list[ForecastResult]:
     if not org_id:
         raise ValueError("org_id is required for capacity forecast")
@@ -101,6 +102,7 @@ async def run_capacity_forecast(
                 team_id=tid,
                 work_scope_id=wsid,
                 simulations=simulations,
+                seed=seed,
             )
             results.append(result)
 

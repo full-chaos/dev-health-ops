@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/jobs/v1/envelope.schema.json",
+  "title": "Dev Health bounded job envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "correlation_id",
+    "idempotency_key",
+    "domain",
+    "payload"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "organization_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "maxProperties": 32
+    }
+  }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protect objective Investment taxonomy facts used by the docs candidate."""
+"""Protect objective Investment taxonomy facts used by the canonical docs."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "src" / "dev_health_ops" / "investment_taxonomy.py"
-DOCUMENT = ROOT / "docs-prototype" / "reference" / "taxonomies" / "investment.md"
+DOCUMENT = ROOT / "docs" / "reference" / "taxonomies" / "investment.md"
 KEY_RE = re.compile(r"`([a-z][a-z_]*(?:\.[a-z][a-z_]*)?)`")
 
 
@@ -46,7 +46,7 @@ def _literal_set(path: Path, name: str) -> set[str]:
 
 def main() -> int:
     if not REGISTRY.is_file() or not DOCUMENT.is_file():
-        print("ERROR: candidate taxonomy source or page is missing")
+        print("ERROR: canonical taxonomy source or page is missing")
         return 1
 
     try:
@@ -73,7 +73,7 @@ def main() -> int:
         return 1
 
     print(
-        "Candidate fact drift check passed for "
+        "Canonical fact drift check passed for "
         f"{len(themes)} themes and {len(subcategories)} subcategories"
     )
     return 0

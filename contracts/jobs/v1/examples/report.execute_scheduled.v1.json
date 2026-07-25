@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "correlation_id": "report-run-0002",
+  "idempotency_key": "report.run:00000000-0000-4000-8000-000000000003",
+  "domain": {
+    "type": "report_run",
+    "id": "00000000-0000-4000-8000-000000000003"
+  },
+  "payload": {
+    "report_id": "00000000-0000-4000-8000-000000000004"
+  }
+}

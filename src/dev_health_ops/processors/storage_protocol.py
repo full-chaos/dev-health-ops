@@ -31,7 +31,6 @@ from dev_health_ops.models.git import (
     GitFile,
     GitPullRequest,
     GitPullRequestReview,
-    Incident,
     Repo,
     SecurityAlert,
 )
@@ -91,10 +90,6 @@ class GitSyncStore(Protocol):
 
     async def insert_deployments(self, deployments: list[Deployment]) -> None:
         """Insert a batch of deployment records."""
-        ...
-
-    async def insert_incidents(self, incidents: list[Incident]) -> None:
-        """Insert a batch of incident records."""
         ...
 
     async def insert_security_alerts(self, alerts: list[SecurityAlert]) -> None:

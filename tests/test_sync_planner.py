@@ -24,6 +24,7 @@ from dev_health_ops.models import (
 )
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.users import Organization
+from dev_health_ops.sync import planner
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
@@ -309,7 +310,9 @@ def test_backfill_creates_one_unit_per_source_dataset_window(db_session):
     }
 
 
-def test_disabled_source_produces_zero_units(db_session):
+def test_disabled_source_produces_zero_units_without_hydrating_credentials(
+    db_session, monkeypatch: pytest.MonkeyPatch
+):
     integration = _create_integration(db_session)
     _create_source(
         db_session,
@@ -318,6 +321,11 @@ def test_disabled_source_produces_zero_units(db_session):
         is_enabled=False,
     )
     _create_dataset(db_session, integration, "commits")
+    monkeypatch.setattr(
+        planner,
+        "_resolve_credential_stamp",
+        lambda *_args: pytest.fail("zero-unit plan hydrated credentials"),
+    )
 
     plan = plan_sync_run(
         db_session,
@@ -336,10 +344,17 @@ def test_disabled_source_produces_zero_units(db_session):
     assert _planned_units(db_session, plan.sync_run_id) == []
 
 
-def test_disabled_dataset_produces_zero_units(db_session):
+def test_disabled_dataset_produces_zero_units_without_hydrating_credentials(
+    db_session, monkeypatch: pytest.MonkeyPatch
+):
     integration = _create_integration(db_session)
     _create_source(db_session, integration, external_id="full-chaos/dev-health")
     _create_dataset(db_session, integration, "commits", is_enabled=False)
+    monkeypatch.setattr(
+        planner,
+        "_resolve_credential_stamp",
+        lambda *_args: pytest.fail("zero-unit plan hydrated credentials"),
+    )
 
     plan = plan_sync_run(
         db_session,

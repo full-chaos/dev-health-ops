@@ -18,17 +18,52 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
+      - name: Resolve governance context
+        id: governance-context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+        run: |
+          body="$PR_BODY"
+          if [[ "$EVENT_NAME" == "merge_group" ]]; then
+            if [[ "$MERGE_GROUP_HEAD_REF" =~ /pr-([0-9]+)- ]]; then
+              pr_number="${BASH_REMATCH[1]}"
+            else
+              echo "Unable to identify the queued pull request from $MERGE_GROUP_HEAD_REF" >&2
+              exit 2
+            fi
+            # shellcheck disable=SC2016
+            body="$(
+              gh api graphql --paginate --slurp \
+                -f query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){mergeQueueEntry{position mergeQueue{entries(first:100,after:$endCursor){nodes{position pullRequest{body}} pageInfo{hasNextPage endCursor}}}}}}}' \
+                -f owner="$GITHUB_REPOSITORY_OWNER" \
+                -f name="$REPOSITORY_NAME" \
+                -F number="$pr_number" \
+                --jq '.[0].data.repository.pullRequest.mergeQueueEntry as $current | [.[].data.repository.pullRequest.mergeQueueEntry.mergeQueue.entries.nodes[] | select(.position <= $current.position) | (.pullRequest.body // "")] | join("\n")'
+            )"
+          fi
+          delimiter="pr_body_$(uuidgen)"
+          {
+            echo "pr_body<<$delimiter"
+            echo "$body"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Enforce governance policy
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          PR_BODY: ${{ steps.governance-context.outputs.pr_body }}
         run: |
           python3 ci/check_governance_gate.py \
             --base-sha "$BASE_SHA" \

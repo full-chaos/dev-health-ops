@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/jobs/v1/registry.schema.json",
+  "title": "Dev Health bounded job registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract_family", "envelope_schema", "version_policy", "jobs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "contract_family": {"const": "dev-health.jobs"},
+    "envelope_schema": {"const": "envelope.schema.json"},
+    "version_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compatibility", "minimum_consumer_window", "same_version_rollout"],
+      "properties": {
+        "compatibility": {"const": "additive_optional_only"},
+        "minimum_consumer_window": {"const": 2},
+        "same_version_rollout": {"const": "schema_digest_all_live_profiles"}
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/job"}
+    }
+  },
+  "$defs": {
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "current_version", "supported_versions", "profile", "queue",
+        "handler_owner", "execution_mode", "priority", "timeout_seconds",
+        "max_attempts", "retry_policy", "cancellation", "delivery",
+        "idempotency", "concurrency", "sensitive_fields", "domain_link",
+        "organization_scope", "schema_versions", "fixtures"
+      ],
+      "properties": {
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "maxLength": 96},
+        "current_version": {"type": "integer", "minimum": 1},
+        "supported_versions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "maxLength": 32},
+        "queue": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "maxLength": 96},
+        "handler_owner": {"type": "string", "pattern": "^internal/jobs/[a-z0-9_/]+$", "maxLength": 128},
+        "execution_mode": {"enum": ["command", "coordinator"]},
+        "priority": {"type": "integer", "minimum": 1, "maximum": 4},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 25},
+        "retry_policy": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64},
+        "cancellation": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64},
+        "delivery": {"enum": ["replay_safe_at_least_once", "guarded_at_least_once", "at_most_once", "non_retryable"]},
+        "idempotency": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 96},
+        "concurrency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "limit"],
+          "properties": {
+            "scope": {"enum": ["process", "fleet", "organization"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 10000}
+          }
+        },
+        "sensitive_fields": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}},
+        "domain_link": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64},
+        "organization_scope": {"enum": ["global", "tenant"]},
+        "schema_versions": {"type": "object", "minProperties": 1, "patternProperties": {"^[1-9][0-9]*$": {"type": "string"}}, "additionalProperties": false},
+        "fixtures": {"type": "object", "minProperties": 1, "patternProperties": {"^[1-9][0-9]*$": {"type": "array", "minItems": 1, "items": {"type": "string"}}}, "additionalProperties": false}
+      }
+    }
+  }
+}

@@ -11,7 +11,11 @@ from sqlalchemy import select
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.internal_service_credential import InternalServiceCredential
 
-_ALLOWED_SCOPES = frozenset({"entitlements:read"})
+_SERVICE_SCOPES = {
+    "acr": frozenset({"entitlements:read"}),
+    "worker-operator": frozenset({"workers:read", "workers:operate"}),
+}
+_SERVICE_CHOICES = tuple(sorted(_SERVICE_SCOPES))
 _MAX_OVERLAP_SECONDS = 3600
 
 
@@ -26,7 +30,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     listing = commands.add_parser(
         "list", help="List credential metadata without secrets."
     )
-    listing.add_argument("--service", default="acr", choices=["acr"])
+    listing.add_argument("--service", default="acr", choices=_SERVICE_CHOICES)
     listing.set_defaults(func=run_list)
     rotate = commands.add_parser("rotate", help="Rotate a service credential.")
     rotate.add_argument("credential_id")
@@ -39,7 +43,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_credential_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--service", default="acr", choices=["acr"])
+    parser.add_argument("--service", default="acr", choices=_SERVICE_CHOICES)
     parser.add_argument("--scope", action="append", required=True)
     parser.add_argument("--expires-at")
     parser.add_argument("--created-by-user-id")
@@ -61,9 +65,10 @@ def _parse_creator(raw: str | None) -> uuid.UUID | None:
     return uuid.UUID(raw) if raw else None
 
 
-def _scopes(raw_scopes: list[str]) -> list[str]:
+def _scopes(service: str, raw_scopes: list[str]) -> list[str]:
     scopes = sorted(set(raw_scopes))
-    if not scopes or not set(scopes).issubset(_ALLOWED_SCOPES):
+    allowed = _SERVICE_SCOPES.get(service, frozenset())
+    if not scopes or not set(scopes).issubset(allowed):
         raise ValueError("unsupported internal service credential scope")
     return scopes
 
@@ -71,7 +76,7 @@ def _scopes(raw_scopes: list[str]) -> list[str]:
 async def run_create(ns: argparse.Namespace) -> int:
     credential, token = InternalServiceCredential.issue(
         service_name=ns.service,
-        scopes=_scopes(ns.scope),
+        scopes=_scopes(ns.service, ns.scope),
         created_by_user_id=_parse_creator(ns.created_by_user_id),
         expires_at=_parse_expiry(ns.expires_at),
     )
@@ -100,7 +105,7 @@ async def run_rotate(ns: argparse.Namespace) -> int:
     if ns.overlap_seconds < 0 or ns.overlap_seconds > _MAX_OVERLAP_SECONDS:
         raise ValueError("--overlap-seconds must be between 0 and 3600")
     credential_id = uuid.UUID(ns.credential_id)
-    scopes = _scopes(ns.scope)
+    scopes = _scopes(ns.service, ns.scope)
     created_by_user_id = _parse_creator(ns.created_by_user_id)
     expires_at = _parse_expiry(ns.expires_at)
     async with get_postgres_session() as session:

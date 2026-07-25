@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.scoring.dimensions import (
     ClickHouseClient,
     DimensionScorer,
@@ -54,7 +55,7 @@ class DeliveryScorer(DimensionScorer):
                 SELECT
                     avgState(success_rate) AS success_rate,
                     maxState(p95_duration_seconds) AS p95_duration_seconds
-                FROM {_PIPELINE_TABLE}
+                FROM {dedup_from(_PIPELINE_TABLE)}
                 WHERE org_id = {{org_id:String}}
                   AND day = {{day:Date}}
                   {team_clause}
@@ -84,7 +85,7 @@ class DeliveryScorer(DimensionScorer):
             SELECT
                 avg(median_pr_cycle_hours) AS avg_pr_cycle,
                 sum(prs_merged)            AS total_prs_merged
-            FROM {_REPO_TABLE}
+            FROM {dedup_from(_REPO_TABLE)}
             WHERE org_id = {{org_id:String}}
               AND day = {{day:Date}}
         """

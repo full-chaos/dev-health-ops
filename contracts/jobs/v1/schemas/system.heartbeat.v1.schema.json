@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/jobs/v1/schemas/system.heartbeat.v1.schema.json",
+  "title": "system.heartbeat payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scheduled_for"],
+  "properties": {
+    "scheduled_for": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  }
+}

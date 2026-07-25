@@ -20,7 +20,6 @@ from dev_health_ops.models.git import (
     GitCommitStat,
     GitPullRequest,
     GitPullRequestReview,
-    Incident,
     Repo,
 )
 from dev_health_ops.processors.base_git import (
@@ -33,7 +32,6 @@ from dev_health_ops.processors.base_git import (
     check_backfill_needs,
     historical_backfill_day,
     resolve_commit_stats_limit,
-    resolve_incident_labels,
     select_unblamed_paths,
     write_historical_complexity,
 )
@@ -52,11 +50,6 @@ from dev_health_ops.processors.testops_ingest import (
     ingest_report_members,
 )
 from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
-from dev_health_ops.providers.operational_migration import (
-    IssueIncidentSource,
-    map_issue_incidents,
-    operational_dual_write_enabled,
-)
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.providers.usage import drain_provider_usage
 from dev_health_ops.utils import (
@@ -442,117 +435,6 @@ async def _fetch_github_deployments_async(
                 repo_name,
             )
         await client.close()
-
-
-async def _fetch_github_incidents_async(
-    connector,
-    owner: str,
-    repo_name: str,
-    repo_id,
-    max_issues: int,
-    since: datetime | None,
-    usage_sink: list[dict[str, Any]] | None = None,
-    canonical_sources: list[IssueIncidentSource] | None = None,
-    canonical_org_id: str | None = None,
-    canonical_provider_instance_id: str | None = None,
-) -> list[Incident]:
-    incidents: list[Incident] = []
-    labels = resolve_incident_labels()
-    raw_issues = []
-    seen_issue_ids: set = set()
-    client = _github_code_client_from_connector(connector)
-    try:
-        for label in labels:
-            try:
-                label_issues = await client.iter_issues(
-                    owner,
-                    repo_name,
-                    state="all",
-                    labels=[label],
-                    max_issues=max_issues,
-                )
-            except (RateLimitException, RateLimitExceededException):
-                raise
-            except Exception as exc:
-                logging.debug(
-                    "Failed to fetch incident issues for label %r: %s", label, exc
-                )
-                continue
-            for issue in label_issues:
-                issue_id = getattr(issue, "issue_id", None)
-                if issue_id in seen_issue_ids:
-                    continue
-                seen_issue_ids.add(issue_id)
-                raw_issues.append(issue)
-        logging.info(
-            "Fetched %d incident issue(s) (labels searched: %s)",
-            len(raw_issues),
-            ", ".join(labels),
-        )
-
-        for issue in raw_issues:
-            created_at = getattr(issue, "created_at", None)
-            if not isinstance(created_at, datetime):
-                continue
-            if since is not None and created_at.astimezone(timezone.utc) < since:
-                continue
-            issue_id = str(getattr(issue, "issue_id", ""))
-            incidents.append(
-                Incident(
-                    repo_id=repo_id,
-                    incident_id=issue_id,
-                    status=getattr(issue, "state", None),
-                    started_at=created_at,
-                    resolved_at=getattr(issue, "closed_at", None),
-                )
-            )
-            if (
-                canonical_sources is not None
-                and canonical_org_id
-                and canonical_provider_instance_id
-                and issue_id
-            ):
-                labels_value = getattr(issue, "labels", ())
-                canonical_labels = (
-                    tuple(str(label) for label in labels_value)
-                    if isinstance(labels_value, (list, tuple))
-                    else ()
-                )
-                updated_at = getattr(issue, "updated_at", None)
-                canonical_sources.append(
-                    IssueIncidentSource(
-                        org_id=canonical_org_id,
-                        provider="github",
-                        provider_instance_id=canonical_provider_instance_id,
-                        repo_id=repo_id,
-                        repo_full_name=f"{owner}/{repo_name}",
-                        external_id=issue_id,
-                        issue_number=str(getattr(issue, "number", "")) or None,
-                        source_url=getattr(issue, "source_url", None),
-                        labels=canonical_labels,
-                        raw_status=getattr(issue, "state", None),
-                        title=getattr(issue, "title", None) or "",
-                        description=getattr(issue, "description", None),
-                        created_at=created_at,
-                        resolved_at=getattr(issue, "closed_at", None),
-                        source_version_at=(
-                            updated_at
-                            if isinstance(updated_at, datetime)
-                            else created_at
-                        ),
-                    )
-                )
-        return incidents
-    finally:
-        observations = client.drain_usage_observations()
-        await client.close()
-        if usage_sink is not None:
-            usage_sink.extend(observations)
-        elif observations:
-            logging.debug(
-                "_fetch_github_incidents_async: drained %d incidents usage observations",
-                len(observations),
-            )
 
 
 def _github_code_client_from_connector(connector) -> "GitHubCodeClient":
@@ -1888,7 +1770,7 @@ async def process_github_repo(
     sync_prs: bool = True,
     sync_cicd: bool = True,
     sync_deployments: bool = True,
-    sync_incidents: bool = True,
+    sync_incidents: bool = False,
     sync_security: bool = True,
     sync_tests: bool = False,
     backfill_missing: bool = True,
@@ -1913,6 +1795,10 @@ async def process_github_repo(
     """
     if not CONNECTORS_AVAILABLE:
         raise RuntimeError("Connectors unavailable. Install required dependencies.")
+    if sync_incidents:
+        raise ValueError(
+            "GitHub does not expose a native incident source; sync work items instead"
+        )
 
     logging.info(f"Processing GitHub repository: {owner}/{repo_name}")
     loop = asyncio.get_running_loop()
@@ -2078,34 +1964,6 @@ async def process_github_repo(
                     await ingestion_sink.insert_deployments(deployments)
                     logging.info("Stored %d deployments", len(deployments))
 
-            if sync_incidents:
-                logging.info("Fetching incident issues from GitHub...")
-                canonical_sources: list[IssueIncidentSource] | None = (
-                    [] if operational_dual_write_enabled() else None
-                )
-                incidents = await _fetch_github_incidents_async(
-                    connector,
-                    owner,
-                    repo_name,
-                    db_repo.id,
-                    BATCH_SIZE,
-                    since,
-                    usage_sink=usage_sink,
-                    canonical_sources=canonical_sources,
-                    canonical_org_id=getattr(store, "org_id", "") or None,
-                    canonical_provider_instance_id=_github_provider_instance_id(
-                        connector
-                    ),
-                )
-                incidents = _filter_after(incidents, until, "started_at")
-                if incidents:
-                    await ingestion_sink.insert_incidents(incidents)
-                    if canonical_sources:
-                        await ingestion_sink.insert_operational_batch(
-                            map_issue_incidents(canonical_sources)
-                        )
-                    logging.info("Stored %d incidents", len(incidents))
-
             if sync_security:
                 logging.info("Fetching security alerts from GitHub...")
                 security_alerts = await _fetch_github_security_alerts_async(
@@ -2197,7 +2055,7 @@ async def process_github_repos_batch(
     sync_prs: bool = True,
     sync_cicd: bool = True,
     sync_deployments: bool = True,
-    sync_incidents: bool = True,
+    sync_incidents: bool = False,
     sync_security: bool = True,
     sync_tests: bool = False,
     blame_only: bool = False,
@@ -2211,6 +2069,10 @@ async def process_github_repos_batch(
     """
     if not CONNECTORS_AVAILABLE:
         raise RuntimeError("Connectors unavailable. Install required dependencies.")
+    if sync_incidents:
+        raise ValueError(
+            "GitHub does not expose a native incident source; sync work items instead"
+        )
 
     logging.info("=== GitHub Batch Repository Processing ===")
     connector = (
@@ -2436,41 +2298,6 @@ async def process_github_repos_batch(
             except Exception as e:
                 logging.warning(
                     "Failed to fetch deployments for GitHub repo %s: %s",
-                    repo_info.full_name,
-                    e,
-                )
-
-        if sync_incidents:
-            try:
-                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
-                canonical_sources: list[IssueIncidentSource] | None = (
-                    [] if operational_dual_write_enabled() else None
-                )
-                incidents = await _fetch_github_incidents_async(
-                    connector,
-                    batch_owner,
-                    batch_repo,
-                    db_repo.id,
-                    BATCH_SIZE,
-                    since,
-                    usage_sink=usage_sink,
-                    canonical_sources=canonical_sources,
-                    canonical_org_id=getattr(store, "org_id", "") or None,
-                    canonical_provider_instance_id=_github_provider_instance_id(
-                        connector
-                    ),
-                )
-                if incidents:
-                    await ingestion_sink.insert_incidents(incidents)
-                    if canonical_sources:
-                        await ingestion_sink.insert_operational_batch(
-                            map_issue_incidents(canonical_sources)
-                        )
-            except (RateLimitException, RateLimitExceededException):
-                raise
-            except Exception as e:
-                logging.warning(
-                    "Failed to fetch incidents for GitHub repo %s: %s",
                     repo_info.full_name,
                     e,
                 )

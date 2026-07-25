@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.scoring.dimensions import (
     ClickHouseClient,
     DimensionScorer,
@@ -49,7 +50,7 @@ class WellbeingScorer(DimensionScorer):
             SELECT
                 avg(avg_queue_seconds) AS avg_queue,
                 avg(rerun_rate)        AS avg_rerun
-            FROM {_PIPELINE_TABLE}
+            FROM {dedup_from(_PIPELINE_TABLE)}
             WHERE org_id = {{org_id:String}}
               AND day = {{day:Date}}
               {team_clause}
@@ -78,10 +79,20 @@ class WellbeingScorer(DimensionScorer):
             SELECT
                 avg(after_hours_commit_ratio) AS avg_after_hours,
                 avg(weekend_commit_ratio)     AS avg_weekend
-            FROM {_TEAM_TABLE}
-            WHERE org_id = {{org_id:String}}
-              AND day = {{day:Date}}
-              {team_filter}
+            FROM (
+                SELECT
+                    day,
+                    team_id,
+                    argMax(after_hours_commit_ratio, computed_at)
+                        AS after_hours_commit_ratio,
+                    argMax(weekend_commit_ratio, computed_at)
+                        AS weekend_commit_ratio
+                FROM {_TEAM_TABLE}
+                WHERE org_id = {{org_id:String}}
+                  AND day = {{day:Date}}
+                  {team_filter}
+                GROUP BY day, team_id
+            )
         """
         team_params: dict[str, object] = {"org_id": org_id, "day": str(day)}
         if team_id:

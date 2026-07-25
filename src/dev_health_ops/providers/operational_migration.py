@@ -6,7 +6,6 @@ canonical ClickHouse operational contract during the reversible migration.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,6 +47,8 @@ class IssueIncidentSource:
     created_at: datetime
     resolved_at: datetime | None
     source_version_at: datetime
+    source_entity_type: str = "issue"
+    raw_severity: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,16 +91,6 @@ class OperationalWriteStore(Protocol):
     async def insert_operational_service_repository_mappings(
         self, mappings: list[ServiceRepositoryMapping]
     ) -> None: ...
-
-
-def operational_dual_write_enabled() -> bool:
-    """Return whether additive canonical operational writes are enabled."""
-    return os.getenv("OPERATIONAL_INCIDENT_DUAL_WRITE", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 def _normalized_status(raw_status: str | None) -> str | None:
@@ -222,13 +213,15 @@ def map_issue_incidents(sources: Sequence[IssueIncidentSource]) -> OperationalBa
             org_id=source.org_id,
             provider=incident_coordinates.provider,
             provider_instance_id=incident_coordinates.provider_instance_id,
-            source_entity_type="issue",
+            source_entity_type=source.source_entity_type,
             external_id=incident_coordinates.external_id,
             source_version_at=source.source_version_at,
             source_url=source.source_url,
             source_event_id=source.issue_number,
             raw_status=source.raw_status,
+            raw_severity=source.raw_severity,
             normalized_status=_normalized_status(source.raw_status),
+            normalized_severity=_normalized_severity(source.raw_severity),
             service_id=service.id,
             service_external_id=source.repo_full_name,
             title=source.title,

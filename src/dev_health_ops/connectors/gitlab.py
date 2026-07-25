@@ -58,7 +58,7 @@ class GitLabConnector:
                 ) from e
 
         # REST client for operations never migrated off the connector — still
-        # used by live processor paths (incident label issues at
+        # used by live processor paths (native incident issues at
         # processors/gitlab.py:1111 and the CI adapter base_url at :1985).
         # Rides the retained connectors/utils/rest.py (CHAOS-2819).
         api_url = f"{url}/api/v4"

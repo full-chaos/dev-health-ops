@@ -4,25 +4,29 @@ This directory is the reviewed Phase 1 inventory for the **User Guides & Develop
 
 It covers the current `dev-health-ops` documentation system, the isolated v2 prototype, internal remediation artifacts, relevant `dev-health-web` documentation/help/publication sources, and the live Workers preview as an explicit runtime baseline.
 
-## Source snapshots
+## Reviewed Phase 1 source snapshots
 
 - `full-chaos/dev-health-ops` main: `dde247972ea9d798b4a56809b7efb172861203f4`
 - `full-chaos/dev-health-web` main: `a2ffbcb9afea26bbf7e4f2b2b93220deb259bb2a`
 
 The web snapshot was exported through now-closed review PR [full-chaos/dev-health-web#794](https://github.com/full-chaos/dev-health-web/pull/794). No temporary export workflow is retained.
 
-## Inventory result
+## Current factual inventory
+
+- `dev-health-ops` rows: **510**
+- Current-site Markdown pages: **226**
+- Prototype pages: **169**
+- Current pages classified as public today: **174**
+- Unclassified current sources: **0**
+
+## Frozen Phase 1 reviewed disposition
 
 - Total reviewed rows: **449**
 - `dev-health-ops` rows: **313**
 - `dev-health-web` rows: **136**
-- Current-site Markdown pages: **216**
-- Prototype pages: **12**
 - Web documentation pages: **38**
 - Visual/static assets reviewed: **90**
-- Current pages classified as public today: **165**
 - Rows assigned to duplicate groups: **72**
-- Unclassified current sources: **0**
 
 ## Validation
 

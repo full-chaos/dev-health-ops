@@ -1,0 +1,115 @@
+site_name: Dev Health documentation
+site_description: An evidence-led manual for understanding, using, and operating Dev Health.
+site_url: https://docs.fullchaos.dev
+
+repo_name: Full Chaos / Dev Health
+repo_url: https://github.com/full-chaos/dev-health-ops
+edit_uri: ""
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+
+nav:
+  - Start here:
+      - Welcome: index.md
+      - Your first 10 minutes: user-guide/first-10-minutes.md
+      - How to read Dev Health: user-guide/how-to-read-dev-health.md
+      - Glossary: user-guide/glossary.md
+      - Understand Dev Health: product/concepts.md
+      - Find the right view: user-guide/views-index.md
+      - Follow the Investment journey: user-guide/journeys/investment-view.md
+  - Use Dev Health:
+      - Explore views and charts: user-guide/views-index.md
+      - Read metrics with care: user-guide/metrics-interpretation.md
+      - Investigate investment: user-guide/journeys/investment-view.md
+      - Follow work relationships: user-guide/views/work-graph.md
+      - AI workflow views:
+          - AI Impact: user-guide/views/ai-impact.md
+          - AI Review Load: user-guide/views/ai-review-load.md
+          - AI Risk: user-guide/views/ai-risk.md
+          - AI Attribution: user-guide/views/ai-attribution.md
+      - Review reports: user-guide/reports.md
+  - Administer & integrate:
+      - Configure a workspace: configuration.md
+      - Manage teams: team-configuration.md
+      - Connect GitHub: user-guide/github-app-setup.md
+      - Connect PagerDuty: user-guide/pagerduty-oauth-app-setup.md
+      - Ingest your data: customer-push-ingestion/overview.md
+      - Set up webhooks: webhooks.md
+  - Deploy & operate:
+      - Self-host Dev Health: self-hosted-quickstart.md
+      - Deploy in production: ops/deployment-guide.md
+      - Run background work: ops/workers.md
+      - Monitor the platform: ops/observability-tooling.md
+      - Diagnose ingestion: ops/runbook-ingestion-failures.md
+  - Develop & extend:
+      - Set up a contributor environment: getting-started.md
+      - Use the GraphQL API: api/graphql-overview.md
+      - Build an ingestion integration: customer-push-ingestion/api-reference.md
+      - Understand provider limits: providers/rate-limit-policy.md
+  - Reference & history:
+      - Architecture overview: architecture.md
+      - Canonical operational model: architecture/canonical-operational-model.md
+      - Jira Service Management provider contract: providers/jira-service-management.md
+      - API field mapping: api/view-mapping.md
+      - Canonical metrics: canonical-metrics.md
+      - Investment taxonomy: product/investment-taxonomy.md
+      - Documentation primitives: reference/primitive-showcase.md
+
+# Kept in lockstep with the excluded_internal patterns in docs/publication.yml
+# (tests/docs/test_publication_manifest.py::test_exclude_docs_matches_publication_manifest
+# fails the build if they drift). Gitignore-pattern format per MkDocs docs.
+exclude_docs: |
+  superpowers/
+  plans/
+  implementation/
+  screenshots/
+  product/ai-assisted/
+  decisions/chaos-105-fixture-validation-revisit.md
+  security/credential-encryption-audit-*.md
+  architecture/chaos-2600-implementation-plan.md
+  architecture/team-realignment.md
+  product/dev-health-product-market-simplification.md
+  ops/testops-demo-pack.md
+  ops/testops-rollout-plan.md
+  roadmap.md
+  project.md
+  contributing/workspace-AGENTS.golden.md
+
+plugins:
+  - search
+
+extra_css:
+  - overrides/extra.css
+  - overrides/audience.css
+
+extra_javascript:
+  - overrides/table-scroll-accessibility.js
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path:
+        - src/dev_health_ops/api/external_ingest/examples
+        - docs/examples/customer-push
+      check_paths: true

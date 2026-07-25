@@ -75,9 +75,8 @@ def operational_source_coordinates(
 ) -> OperationalSourceCoordinates:
     """Return the only allowed source coordinates for an operational entity.
 
-    Provider-global issue ids are recoverable from legacy incidents, native
-    producers, and external push. The entity family always comes from the
-    canonical dataclass.
+    Provider-global issue ids come from native producers and external push. The
+    entity family always comes from the canonical dataclass.
     """
     normalized_provider = provider.strip().casefold()
     normalized_external_id = external_id.strip()

@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.core.encryption import decrypt_value
 from dev_health_ops.db import get_clickhouse_uri
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.models.audit import AuditLog
@@ -35,6 +36,7 @@ from dev_health_ops.models.invoices import Invoice, InvoiceLineItem
 from dev_health_ops.models.ip_allowlist import OrgIPAllowlist
 from dev_health_ops.models.licensing import OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.org_invite import OrgInvite
+from dev_health_ops.models.pagerduty_webhook_binding import PagerDutyWebhookBinding
 from dev_health_ops.models.refresh_token import RefreshToken
 from dev_health_ops.models.refunds import Refund
 from dev_health_ops.models.reports import ReportRun, SavedReport
@@ -44,6 +46,9 @@ from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
     JobStatus,
+    PagerDutyOAuthAuthorizationRequest,
+    ProviderOAuthCredential,
+    ProviderOAuthRevocation,
     ScheduledJob,
     Setting,
     SyncConfiguration,
@@ -52,6 +57,11 @@ from dev_health_ops.models.settings import (
 from dev_health_ops.models.sso import SSOProvider
 from dev_health_ops.models.subscriptions import Subscription, SubscriptionEvent
 from dev_health_ops.models.users import Membership, Organization
+from dev_health_ops.providers.pagerduty.oauth import (
+    OAuthTokens,
+    PagerDutyOAuthConfig,
+    revoke_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +268,28 @@ def _postgres_targets() -> list[PostgresDeletionTarget]:
             lambda _org_uuid, org_id: SyncRun.org_id == org_id,
         ),
         PostgresDeletionTarget(
+            "pagerduty_webhook_bindings",
+            PagerDutyWebhookBinding,
+            lambda org_uuid, _org_id: PagerDutyWebhookBinding.org_id == org_uuid,
+        ),
+        PostgresDeletionTarget(
+            "pagerduty_oauth_authorization_requests",
+            PagerDutyOAuthAuthorizationRequest,
+            lambda _org_uuid, org_id: (
+                PagerDutyOAuthAuthorizationRequest.org_id == org_id
+            ),
+        ),
+        PostgresDeletionTarget(
+            "provider_oauth_credentials",
+            ProviderOAuthCredential,
+            lambda _org_uuid, org_id: ProviderOAuthCredential.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
+            "provider_oauth_revocations",
+            ProviderOAuthRevocation,
+            lambda _org_uuid, org_id: ProviderOAuthRevocation.org_id == org_id,
+        ),
+        PostgresDeletionTarget(
             "integration_datasets",
             IntegrationDataset,
             lambda _org_uuid, org_id: IntegrationDataset.org_id == org_id,
@@ -367,6 +399,9 @@ class OrganizationDeletionService:
         )
         result.credentials_deleted = await self._credential_count(org_uuid, org_id_str)
 
+        if not dry_run:
+            await self._revoke_pagerduty_oauth_before_delete(org_id_str)
+
         for target in _postgres_targets():
             predicate = target.predicate(org_uuid, org_id_str)
             count = await self._count_where(target.model, predicate)
@@ -416,6 +451,48 @@ class OrganizationDeletionService:
             & (SSOProvider.encrypted_secrets.is_not(None)),
         )
         return credential_rows + encrypted_settings + sso_secret_rows
+
+    async def _revoke_pagerduty_oauth_before_delete(self, org_id: str) -> None:
+        """Revoke remote PagerDuty grants before their encrypted local copies are deleted."""
+        credentials = list(
+            (
+                await self.session.execute(
+                    select(ProviderOAuthCredential).where(
+                        ProviderOAuthCredential.org_id == org_id,
+                        ProviderOAuthCredential.provider == "pagerduty",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pending_revocations = list(
+            (
+                await self.session.execute(
+                    select(ProviderOAuthRevocation).where(
+                        ProviderOAuthRevocation.org_id == org_id,
+                        ProviderOAuthRevocation.provider == "pagerduty",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not credentials and not pending_revocations:
+            return
+        config = PagerDutyOAuthConfig.from_env()
+        if config is None:
+            raise RuntimeError(
+                "PagerDuty OAuth configuration is unavailable for deletion"
+            )
+        for credential in credentials:
+            tokens = OAuthTokens.model_validate_json(
+                decrypt_value(credential.token_encrypted)
+            )
+            await revoke_token(config, tokens.refresh_token or tokens.access_token)
+        for pending in pending_revocations:
+            await revoke_token(config, decrypt_value(pending.token_encrypted))
+            await self.session.delete(pending)
 
     async def _disable_scheduled_jobs(self, org_id: str) -> None:
         await self.session.execute(

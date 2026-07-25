@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000009",
+  "correlation_id": "daily-partition-2026-07-23",
+  "idempotency_key": "daily:partition:00000000-0000-4000-8000-000000000002",
+  "domain": {
+    "type": "daily_metrics_partition",
+    "id": "00000000-0000-4000-8000-000000000002"
+  },
+  "payload": {
+    "partition_id": "00000000-0000-4000-8000-000000000002"
+  }
+}

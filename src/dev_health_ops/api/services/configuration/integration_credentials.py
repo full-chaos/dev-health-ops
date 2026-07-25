@@ -43,10 +43,21 @@ _PAGERDUTY_DESCRIPTOR_KEYS: Final = {
 }
 _PAGERDUTY_CONFIG_KEYS: Final = {
     "oauth": frozenset(
-        {"auth_mode", "region", "subdomain", "account_id", "granted_scopes"}
+        {
+            "auth_mode",
+            "region",
+            "subdomain",
+            "account_id",
+            "account_display",
+            "granted_scopes",
+        }
     ),
-    "client_credentials": frozenset({"auth_mode", "region", "subdomain"}),
-    "api_token": frozenset({"auth_mode", "region", "subdomain"}),
+    "client_credentials": frozenset(
+        {"auth_mode", "region", "subdomain", "account_id", "account_display"}
+    ),
+    "api_token": frozenset(
+        {"auth_mode", "region", "subdomain", "account_id", "account_display"}
+    ),
 }
 _PAGERDUTY_FORBIDDEN_CONFIG_KEYS: Final = _PAGERDUTY_FORBIDDEN_TOKEN_KEYS.union(
     {"client_secret", "client_id", "api_token"}
@@ -297,8 +308,10 @@ class IntegrationCredentialsService:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def delete(self, provider: str, name: str = "default") -> bool:
+    async def delete(self, provider: str, name: str = "default") -> bool | None:
         """Delete a credential. Returns True if deleted."""
+        if provider == "pagerduty":
+            return await self.disconnect_pagerduty(name)
         cred = await self.get(provider, name)
         if cred is None:
             return False
@@ -306,3 +319,63 @@ class IntegrationCredentialsService:
         await self.session.delete(cred)
         await self.session.flush()
         return True
+
+    async def disconnect_pagerduty(
+        self,
+        name: str = "default",
+    ) -> bool | None:
+        """Disconnect locally and retain remote revoke failures for retry."""
+
+        from dev_health_ops.providers.pagerduty.oauth import (
+            PagerDutyOAuthConfig,
+        )
+        from dev_health_ops.providers.pagerduty.oauth_revocations import (
+            PagerDutyOAuthRevocationRepository,
+        )
+        from dev_health_ops.providers.pagerduty.oauth_storage import (
+            PagerDutyOAuthCredentialRepository,
+        )
+        from dev_health_ops.providers.pagerduty.webhook_bindings import (
+            PagerDutyWebhookBindingService,
+        )
+
+        credential = await self.get("pagerduty", name)
+        repository = PagerDutyOAuthCredentialRepository(self.session, self.org_id, name)
+        revocations = PagerDutyOAuthRevocationRepository(
+            self.session, self.org_id, name
+        )
+        config = PagerDutyOAuthConfig.from_env()
+        # Lock and revoke/detach webhook binding rows for this credential FIRST,
+        # before touching the OAuth token row or the credential row itself.
+        # This fixes the binding->source->integration->credential lock order:
+        # cleanup paths must never lock the credential/OAuth row ahead of the
+        # binding row, or a concurrent binding mutation could deadlock or
+        # observe a half-torn-down credential.
+        if credential is not None:
+            await PagerDutyWebhookBindingService(
+                self.session
+            ).revoke_and_detach_for_credential(credential.id)
+        revoke_candidate: str | None = None
+        try:
+            versioned = await repository.get()
+            if versioned is not None:
+                revoke_candidate = (
+                    versioned.tokens.refresh_token or versioned.tokens.access_token
+                )
+        except ValueError:
+            revoke_candidate = None
+        if config is not None and revoke_candidate is not None:
+            await revocations.enqueue(revoke_candidate, purpose="disconnect")
+        await repository.delete()
+        if credential is None:
+            await self.session.commit()
+            return None
+        credential.is_active = False
+        credential.credentials_encrypted = None
+        await self.session.flush()
+        await self.session.commit()
+        if config is None:
+            return revoke_candidate is None
+        is_revoked = await revocations.retry_pending(config)
+        await self.session.commit()
+        return is_revoked

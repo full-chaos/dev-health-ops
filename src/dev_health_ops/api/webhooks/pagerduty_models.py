@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 
 class PagerDutyEventType(StrEnum):
@@ -29,8 +30,8 @@ class PagerDutyEventType(StrEnum):
 class PagerDutyEvent(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    id: str
-    event_type: PagerDutyEventType
+    id: str = Field(max_length=512)
+    event_type: PagerDutyEventType | Literal["pagey.ping"]
     occurred_at: datetime
     data: dict[str, JsonValue]
 
@@ -46,19 +47,3 @@ class PagerDutyV3Webhook(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     event: PagerDutyEvent
-
-
-class PagerDutyWebhookResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    status: str
-    event_id: str | None = None
-    message: str
-
-
-class PagerDutyWebhookConfiguration(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    configured: bool
-    org_id: str | None
-    provider_instance_id: str | None

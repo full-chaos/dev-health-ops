@@ -7,7 +7,9 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -407,6 +409,15 @@ class SyncDispatchOutbox(Base):
     claim_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    claim_transport: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claim_route_generation: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    dispatched_transport: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dispatched_route_generation: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    transport_job_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -425,6 +436,89 @@ class SyncDispatchOutbox(Base):
         UniqueConstraint(
             "sync_run_id", "kind", name="uq_sync_dispatch_outbox_run_kind"
         ),
+        CheckConstraint(
+            "("
+            "claim_token IS NULL AND claim_expires_at IS NULL "
+            "AND claim_transport IS NULL AND claim_route_generation IS NULL"
+            ") OR ("
+            "claim_token IS NOT NULL AND claim_expires_at IS NOT NULL "
+            "AND claim_transport IS NOT NULL "
+            "AND claim_route_generation IS NOT NULL"
+            ")",
+            name="ck_sync_dispatch_outbox_claim_route_coherence",
+        ),
+        CheckConstraint(
+            "("
+            "status = 'dispatched' AND ("
+            "("
+            "last_error = 'feature_disabled' "
+            "AND dispatched_transport IS NULL "
+            "AND dispatched_route_generation IS NULL "
+            "AND transport_job_id IS NULL"
+            ") OR ("
+            "(last_error IS NULL OR last_error <> 'feature_disabled') "
+            "AND "
+            "dispatched_transport IS NOT NULL "
+            "AND dispatched_route_generation IS NOT NULL"
+            ")"
+            ")"
+            ") OR ("
+            "status <> 'dispatched' AND dispatched_transport IS NULL "
+            "AND dispatched_route_generation IS NULL "
+            "AND transport_job_id IS NULL"
+            ")",
+            name="ck_sync_dispatch_outbox_dispatched_route_coherence",
+        ),
         Index("ix_sync_dispatch_outbox_due", "status", "available_at"),
         Index("ix_sync_dispatch_outbox_org", "org_id"),
+    )
+
+
+class SyncDispatchTransportRoute(Base):
+    __tablename__ = "sync_dispatch_transport_routes"
+
+    kind: Mapped[str] = mapped_column(String, primary_key=True)
+    transport: Mapped[str] = mapped_column(String, nullable=False)
+    generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rollback_transport: Mapped[str] = mapped_column(
+        String, nullable=False, default="celery"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('dispatch_sync_run', 'finalize_sync_run', "
+            "'post_sync', 'reference_discovery')",
+            name="ck_sync_dispatch_transport_routes_kind",
+        ),
+        CheckConstraint(
+            "transport IN ('celery', 'river')",
+            name="ck_sync_dispatch_transport_routes_transport",
+        ),
+        CheckConstraint(
+            "rollback_transport = 'celery'",
+            name="ck_sync_dispatch_transport_routes_rollback",
+        ),
+        CheckConstraint(
+            "generation >= 1",
+            name="ck_sync_dispatch_transport_routes_generation",
+        ),
+        CheckConstraint(
+            "(paused AND paused_at IS NOT NULL) OR (NOT paused AND paused_at IS NULL)",
+            name="ck_sync_dispatch_transport_routes_pause_timestamp",
+        ),
     )

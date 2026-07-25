@@ -23,6 +23,7 @@ from dev_health_ops.models.git import (
 )
 from dev_health_ops.processors import github as _github_processor
 from dev_health_ops.processors import gitlab as _gitlab_processor
+from dev_health_ops.providers.operational_migration import IssueIncidentSource
 
 # Create namespace to match existing code references
 processors = SimpleNamespace(github=_github_processor, gitlab=_gitlab_processor)
@@ -377,6 +378,115 @@ async def test_process_gitlab_projects_batch_persists_instance_discriminator(
     # The per-project url (BatchResult.repository.url) stays untouched.
     assert inserted_repos[0].settings["url"] == "https://example.com/group/proj"
     assert inserted_repos[0].settings["project_id"] == 456
+
+
+@pytest.mark.asyncio
+async def test_process_gitlab_projects_batch_writes_only_canonical_incidents(
+    monkeypatch,
+):
+    _enable_connector_stubs(monkeypatch)
+
+    project = SimpleNamespace(
+        id=456,
+        full_name="group/proj",
+        url="https://gitlab.com/group/proj",
+        default_branch="main",
+    )
+    _stub_gitlab_project_discovery(monkeypatch, [project])
+
+    class DummyConnector:
+        def __init__(self, url: str, private_token: str):
+            self.url = url
+            self.private_token = private_token
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(processors.gitlab, "GitLabConnector", DummyConnector)
+
+    started_at = datetime(2026, 7, 17, tzinfo=timezone.utc)
+
+    def fetch_incidents(
+        _connector,
+        _project_id,
+        repo_id,
+        _max_issues,
+        _since,
+        _until,
+        canonical_sources,
+        canonical_org_id,
+        canonical_provider_instance_id,
+        repo_full_name,
+    ):
+        canonical_sources.append(
+            IssueIncidentSource(
+                org_id=canonical_org_id,
+                provider="gitlab",
+                provider_instance_id=canonical_provider_instance_id,
+                repo_id=repo_id,
+                repo_full_name=repo_full_name,
+                external_id="incident-1",
+                issue_number="1",
+                source_url="https://gitlab.com/group/proj/-/issues/1",
+                labels=(),
+                raw_status="closed",
+                title="Incident",
+                description=None,
+                created_at=started_at,
+                resolved_at=started_at,
+                source_version_at=started_at,
+                source_entity_type="incident",
+                raw_severity="critical",
+            )
+        )
+        return []
+
+    monkeypatch.setattr(
+        processors.gitlab, "_fetch_gitlab_incidents_sync", fetch_incidents
+    )
+
+    class DummyStore:
+        org_id = "org-a"
+
+        def __init__(self):
+            self.operational_incidents = []
+
+        async def insert_repo(self, _repo):
+            return None
+
+        async def insert_incidents(self, _incidents):
+            raise AssertionError("legacy incidents must not be written")
+
+        async def insert_operational_services(self, _services):
+            return None
+
+        async def insert_operational_service_repository_mappings(self, _mappings):
+            return None
+
+        async def insert_operational_incidents(self, incidents):
+            self.operational_incidents.extend(incidents)
+
+    store = DummyStore()
+    await processors.gitlab.process_gitlab_projects_batch(
+        store=store,
+        token="test_token",
+        gitlab_url="https://gitlab.com",
+        group_name="group",
+        pattern="group/*",
+        max_concurrent=1,
+        sync_git=False,
+        sync_prs=False,
+        sync_cicd=False,
+        sync_deployments=False,
+        sync_incidents=True,
+        sync_security=False,
+        sync_tests=False,
+        backfill_missing=False,
+    )
+
+    assert len(store.operational_incidents) == 1
+    assert store.operational_incidents[0].source_entity_type == "incident"
+    assert store.operational_incidents[0].normalized_severity == "critical"
 
 
 @pytest.mark.asyncio
@@ -1479,81 +1589,15 @@ async def test_process_github_repos_batch_commit_detail_rate_limit_propagates(
 
 
 @pytest.mark.asyncio
-async def test_process_github_repos_batch_incident_rate_limit_propagates(
+async def test_process_github_repos_batch_rejects_removed_incident_proxy(
     monkeypatch,
 ):
     _enable_connector_stubs(monkeypatch)
-
-    class DummyStore:
-        async def insert_repo(self, repo):
-            return
-
-        async def insert_git_commit_data(self, commit_data):
-            return
-
-        async def insert_incidents(self, incidents):
-            raise AssertionError("incidents must not persist after a rate limit")
-
-    repo = Mock()
-    repo.id = 1003
-    repo.full_name = "org/incident-rate-limited"
-    repo.url = "https://example.com/org/incident-rate-limited"
-    repo.default_branch = "main"
-    repo.language = "Python"
-    result = BatchResult(repository=repo, stats=None, success=True)
-
-    class DummyGithub:
-        def get_repo(self, full_name: str):
-            raise AssertionError("legacy repo object must not be fetched")
-
-    class DummyConnector:
-        def __init__(self, token: str):
-            self.github = DummyGithub()
-
-        async def get_repos_with_stats_async(self, **kwargs):
-            on_repo_complete = kwargs.get("on_repo_complete")
-            if on_repo_complete:
-                on_repo_complete(result)
-            return [result]
-
-        def get_rate_limit(self):
-            return {"remaining": 0, "limit": 0}
-
-        def close(self):
-            return
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.close()
-
-    async def fake_fetch_incidents(*args, **kwargs):
-        raise RateLimitException("limited", retry_after_seconds=44.0)
-
-    async def fake_fetch_commits(*args, **kwargs):
-        return [], [], False
-
-    monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
-    monkeypatch.setattr(
-        processors.github,
-        "_github_code_client_from_connector",
-        lambda _connector: _repo_client_for(repo),
-    )
-    monkeypatch.setattr(
-        processors.github,
-        "_fetch_github_commits_async",
-        fake_fetch_commits,
-    )
-    monkeypatch.setattr(
-        processors.github,
-        "_fetch_github_incidents_async",
-        fake_fetch_incidents,
-    )
-
-    with pytest.raises(RateLimitException) as exc_info:
+    with pytest.raises(
+        ValueError, match="GitHub does not expose a native incident source"
+    ):
         await processors.github.process_github_repos_batch(
-            store=DummyStore(),
+            store=Mock(),
             token="test_token",
             org_name="org",
             pattern="org/*",
@@ -1569,8 +1613,6 @@ async def test_process_github_repos_batch_incident_rate_limit_propagates(
             sync_tests=False,
             backfill_missing=False,
         )
-
-    assert exc_info.value.retry_after_seconds == 44.0
 
 
 @pytest.mark.asyncio

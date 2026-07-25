@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from dev_health_ops.processors.dataset_adapters import run_dataset_unit
+from dev_health_ops.providers.usage import PROVIDER_USAGE_OBSERVATION_KEY
 from dev_health_ops.workers.sync_bootstrap import ProviderRuntime, SyncTaskContext
 
 WINDOW_START = datetime(2026, 1, 10, tzinfo=timezone.utc)
@@ -464,6 +466,247 @@ def test_pagerduty_dataset_passes_persisted_resume_cursor_and_returns_source_wat
     client.close.assert_awaited_once()
 
 
+def test_jira_incidents_use_frozen_credentials_and_persist_only_canonical_batch() -> (
+    None
+):
+    from dev_health_ops.models.operational import OperationalBatch
+
+    ctx = _context(
+        provider="jira",
+        dataset_key="incidents",
+        source_external_id="JSM",
+        credentials={
+            "email": "ops@example.com",
+            "api_token": "secret-token",
+            "base_url": "https://chaos.atlassian.net",
+            "cloud_id": "cloud-1",
+        },
+    )
+    client = Mock()
+    client.close = Mock()
+    client.drain_usage_observations.return_value = [
+        {"route_family": "jira_jsm_incidents"}
+    ]
+    batch = Mock(spec=OperationalBatch)
+    batch.incidents = (Mock(),)
+    producer = Mock()
+    producer.collect = AsyncMock(return_value=batch)
+    sink = Mock()
+    sink.insert_operational_batch = AsyncMock()
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._jira_client",
+            return_value=(client, "cloud-1", "https://chaos.atlassian.net"),
+        ),
+        patch(
+            "dev_health_ops.providers.jira.jsm_incidents.JsmIncidentProducer",
+            return_value=producer,
+        ) as producer_type,
+        patch(
+            "dev_health_ops.processors.dataset_adapters.IngestionSink",
+            return_value=sink,
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._require_jira_incident_entitlement"
+        ) as require_entitlement,
+    ):
+        result = run_dataset_unit(ctx, _runtime())
+
+    producer_type.assert_called_once_with(
+        client=client,
+        org_id="org-1",
+        provider_instance_id="cloud-1",
+        base_url="https://chaos.atlassian.net",
+        window_start=WINDOW_START,
+        window_end=WINDOW_END,
+        observed_at=WINDOW_END,
+        allowed_project_keys=("JSM",),
+    )
+    producer.collect.assert_awaited_once_with()
+    assert require_entitlement.call_count == 2
+    sink.insert_operational_batch.assert_awaited_once_with(batch)
+    client.close.assert_called_once_with()
+    client.drain_usage_observations.assert_called_once_with()
+    assert result["provider"] == "jira"
+    assert result["dataset"] == "incidents"
+    assert result["persisted"] == 1
+    assert result["observations"] == {
+        PROVIDER_USAGE_OBSERVATION_KEY: [{"route_family": "jira_jsm_incidents"}]
+    }
+    assert "alerts" not in result
+
+
+def test_jira_incidents_do_not_construct_http_client_when_feature_is_disabled() -> None:
+    ctx = _context(provider="jira", dataset_key="incidents")
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._require_jira_incident_entitlement",
+            side_effect=RuntimeError("feature disabled"),
+        ),
+        patch("dev_health_ops.processors.dataset_adapters._jira_client") as jira_client,
+        pytest.raises(RuntimeError, match="feature disabled"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    jira_client.assert_not_called()
+
+
+def test_jira_incidents_require_bounded_window_before_constructing_http_client() -> (
+    None
+):
+    ctx = replace(
+        _context(provider="jira", dataset_key="incidents"),
+        window_start=None,
+    )
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._require_jira_incident_entitlement"
+        ),
+        patch("dev_health_ops.processors.dataset_adapters._jira_client") as jira_client,
+        pytest.raises(ValueError, match="bounded window"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    jira_client.assert_not_called()
+
+
+def test_jira_incident_native_admission_error_prevents_persistence() -> None:
+    ctx = _context(provider="jira", dataset_key="incidents")
+    client = Mock()
+    client.close = Mock()
+    client.drain_usage_observations.return_value = []
+    producer = Mock()
+    producer.collect = AsyncMock(side_effect=RuntimeError("native admission failed"))
+    sink = Mock()
+    sink.insert_operational_batch = AsyncMock()
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._require_jira_incident_entitlement"
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._jira_client",
+            return_value=(client, "cloud-1", "https://chaos.atlassian.net"),
+        ),
+        patch(
+            "dev_health_ops.providers.jira.jsm_incidents.JsmIncidentProducer",
+            return_value=producer,
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters.IngestionSink",
+            return_value=sink,
+        ),
+        pytest.raises(RuntimeError, match="native admission failed"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    sink.insert_operational_batch.assert_not_awaited()
+    client.close.assert_called_once_with()
+
+
+def test_jira_incidents_recheck_entitlement_before_persisting_fetched_batch() -> None:
+    from dev_health_ops.models.operational import OperationalBatch
+
+    ctx = _context(provider="jira", dataset_key="incidents")
+    client = Mock()
+    client.close = Mock()
+    client.drain_usage_observations.return_value = []
+    batch = Mock(spec=OperationalBatch)
+    batch.incidents = (Mock(),)
+    producer = Mock()
+    producer.collect = AsyncMock(return_value=batch)
+    sink = Mock()
+    sink.insert_operational_batch = AsyncMock()
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._require_jira_incident_entitlement",
+            side_effect=(None, RuntimeError("feature disabled")),
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._jira_client",
+            return_value=(client, "cloud-1", "https://chaos.atlassian.net"),
+        ),
+        patch(
+            "dev_health_ops.providers.jira.jsm_incidents.JsmIncidentProducer",
+            return_value=producer,
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters.IngestionSink",
+            return_value=sink,
+        ),
+        pytest.raises(RuntimeError, match="feature disabled"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    sink.insert_operational_batch.assert_not_awaited()
+    client.close.assert_called_once_with()
+
+
+def test_jira_incidents_close_client_when_canonical_store_setup_fails() -> None:
+    ctx = _context(
+        provider="jira",
+        dataset_key="incidents",
+        credentials={
+            "email": "ops@example.com",
+            "api_token": "secret-token",
+            "base_url": "https://chaos.atlassian.net",
+            "cloud_id": "cloud-1",
+        },
+    )
+    client = Mock()
+    client.close = Mock()
+    client.drain_usage_observations.return_value = []
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._jira_client",
+            return_value=(client, "cloud-1", "https://chaos.atlassian.net"),
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._run_with_reused_or_new_store",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("store setup failed"),
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._require_jira_incident_entitlement"
+        ),
+        pytest.raises(RuntimeError, match="store setup failed"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    client.close.assert_called_once_with()
+
+
+def test_jira_incidents_close_client_when_usage_drain_fails() -> None:
+    ctx = _context(provider="jira", dataset_key="incidents")
+    client = Mock()
+    client.close = Mock()
+    client.drain_usage_observations.side_effect = RuntimeError("drain failed")
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._jira_client",
+            return_value=(client, "cloud-1", "https://chaos.atlassian.net"),
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._run_with_reused_or_new_store",
+            new_callable=AsyncMock,
+            return_value=1,
+        ),
+        patch(
+            "dev_health_ops.processors.dataset_adapters._require_jira_incident_entitlement"
+        ),
+        pytest.raises(RuntimeError, match="drain failed"),
+    ):
+        run_dataset_unit(ctx, _runtime())
+
+    client.close.assert_called_once_with()
+
+
 def test_pagerduty_dataset_applies_persisted_enrichment_options() -> None:
     from dev_health_ops.providers.pagerduty.sync import PagerDutySyncResult
 
@@ -530,6 +773,49 @@ def test_pagerduty_dataset_closes_client_when_store_setup_fails() -> None:
         run_dataset_unit(ctx, _runtime())
 
     client.close.assert_awaited_once()
+
+
+def test_pagerduty_dataset_closes_client_on_request_event_loop() -> None:
+    from dev_health_ops.providers.pagerduty.sync import PagerDutySyncResult
+
+    ctx = _context(
+        provider="pagerduty",
+        dataset_key="services",
+        source_external_id="acme",
+    )
+    loop_ids: list[int] = []
+    client = Mock()
+    client.drain_usage_observations.return_value = []
+
+    async def run_sync(*_: object, **__: object) -> PagerDutySyncResult:
+        loop_ids.append(id(asyncio.get_running_loop()))
+        return PagerDutySyncResult(
+            dataset_key="services",
+            persisted=1,
+            watermark_at=WINDOW_END,
+            degraded=False,
+            observations=(),
+        )
+
+    async def close_client() -> None:
+        loop_ids.append(id(asyncio.get_running_loop()))
+
+    client.close = AsyncMock(side_effect=close_client)
+
+    with (
+        patch(
+            "dev_health_ops.processors.dataset_adapters._pagerduty_client",
+            return_value=(client, "acme"),
+        ),
+        patch(
+            "dev_health_ops.providers.pagerduty.sync.PagerDutyOperationalSync"
+        ) as sync,
+    ):
+        sync.return_value.run = AsyncMock(side_effect=run_sync)
+        run_dataset_unit(ctx, _runtime())
+
+    assert len(loop_ids) == 2
+    assert loop_ids[0] == loop_ids[1]
 
 
 def test_pagerduty_dataset_rejects_source_id_without_verified_account_identity() -> (

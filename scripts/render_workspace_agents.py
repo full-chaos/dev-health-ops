@@ -3,7 +3,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_PATH = ROOT / "docs" / "contributing" / "platform-contract.md"
+CONTRACT_PATH = (
+    ROOT / ".github" / "docs-legacy" / "contributing" / "platform-contract.md"
+)
 
 
 def workspace_root(arguments: list[str]) -> Path | None:

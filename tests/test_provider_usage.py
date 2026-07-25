@@ -149,6 +149,14 @@ def test_jira_resolver_maps_rest_paths_to_estimator_families() -> None:
         ),
         "GET /rest/api/3/project/search": ("jira_metadata", BudgetDimension.REST_CORE),
         "GET /rest/agile/1.0/board": ("jira_metadata", BudgetDimension.REST_CORE),
+        "GET /rest/servicedeskapi/servicedesk": (
+            "jira_metadata",
+            BudgetDimension.REST_CORE,
+        ),
+        "jira_jsm_incident_admission:GET https://api.atlassian.com/jsm/incidents/cloud-id/v1/incident/123": (
+            "jira_jsm_incident_admission",
+            BudgetDimension.REST_CORE,
+        ),
     }
     for operation, expected in cases.items():
         assert JIRA_USAGE_RESOLVER.resolve(transport="rest", operation=operation) == (

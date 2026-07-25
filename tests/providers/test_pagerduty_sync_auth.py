@@ -13,11 +13,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
 from dev_health_ops.credentials.fingerprint import credential_fingerprint
+from dev_health_ops.models.integrations import Integration
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     ProviderOAuthCredential,
 )
-from dev_health_ops.providers.pagerduty.oauth import OAuthTokens, PagerDutyOAuthConfig
+from dev_health_ops.providers.pagerduty.oauth import (
+    READ_SCOPES,
+    OAuthTokens,
+    PagerDutyOAuthConfig,
+)
 from dev_health_ops.providers.pagerduty.oauth_lifecycle import (
     ClientCredentialsTokenCacheRegistry,
 )
@@ -46,12 +51,13 @@ def tokens(
     *,
     refresh_token: str | None = "refresh-token",
     expires_at: datetime | None = None,
+    granted_scopes: frozenset[str] = READ_SCOPES,
 ) -> OAuthTokens:
     return OAuthTokens(
         access_token=access_token,
         refresh_token=refresh_token,
         expires_at=expires_at or datetime.now(UTC) + timedelta(hours=1),
-        granted_scopes=frozenset({"Users.read"}),
+        granted_scopes=granted_scopes,
     )
 
 
@@ -113,7 +119,11 @@ def test_hydrate_oauth_uses_stored_non_expired_token_without_mutating_mapping(
 
     hydrated = hydrate_pagerduty_credentials(mapping, org_id="oauth-org")
 
-    assert hydrated == {**mapping, "access_token": "stored-token"}
+    assert hydrated == {
+        **mapping,
+        "access_token": "stored-token",
+        "granted_scopes": sorted(READ_SCOPES),
+    }
     assert hydrated is not mapping
     assert mapping == {
         "auth_mode": "oauth",
@@ -179,6 +189,32 @@ def test_hydrate_oauth_rejects_a_reconnected_credential_binding(
         hydrate_pagerduty_credentials(mapping, org_id="oauth-org")
 
 
+def test_hydrate_oauth_rejects_a_token_missing_operational_scopes(
+    monkeypatch: pytest.MonkeyPatch, session: Session
+) -> None:
+    # Given: a persisted OAuth token that lacks one required operational scope.
+    seed_credential(
+        session, tokens("stored-token", granted_scopes=frozenset({"users.read"}))
+    )
+    patch_sync_session(monkeypatch, session)
+    monkeypatch.setenv("PAGER_DUTY_CLIENT_ID", "client-id")
+
+    # When: a sync worker hydrates its OAuth descriptor.
+    with pytest.raises(ValueError, match="missing required read scopes"):
+        hydrate_pagerduty_credentials(
+            {
+                "auth_mode": "oauth",
+                "oauth_credential_name": "primary",
+                "oauth_binding_id": "binding-id",
+                "subdomain": "acme",
+                "region": "us",
+            },
+            org_id="oauth-org",
+        )
+
+    # Then: the worker fails before any provider import can begin.
+
+
 def test_hydrate_client_credentials_mints_machine_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -215,8 +251,59 @@ def test_hydrate_client_credentials_mints_machine_token(
 
     hydrated = hydrate_pagerduty_credentials(mapping, org_id="client-org")
 
-    assert hydrated == {**mapping, "access_token": "machine-token"}
+    assert hydrated == {
+        **mapping,
+        "access_token": "machine-token",
+        "granted_scopes": sorted(READ_SCOPES),
+    }
     assert hydrated is not mapping
+
+
+def test_hydrate_client_credentials_rejects_a_partial_scope_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: PagerDuty grants a machine token without the requested operational scopes.
+    async def client_credentials(
+        _: PagerDutyOAuthConfig,
+        *,
+        scopes: set[str],
+        subdomain: str,
+        region: str,
+    ) -> OAuthTokens:
+        assert scopes == set(READ_SCOPES)
+        assert subdomain == "acme"
+        assert region == "us"
+        return tokens(
+            "partial-machine-token",
+            refresh_token=None,
+            granted_scopes=frozenset({"users.read"}),
+        )
+
+    monkeypatch.setattr(
+        "dev_health_ops.providers.pagerduty.oauth_lifecycle.client_credentials",
+        client_credentials,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.providers.pagerduty.sync_auth._REGISTRY",
+        ClientCredentialsTokenCacheRegistry(),
+    )
+
+    # When: worker hydration asks for a client-credentials token.
+    with pytest.raises(
+        OAuthRotationConflictError, match="missing required read scopes"
+    ):
+        hydrate_pagerduty_credentials(
+            {
+                "auth_mode": "client_credentials",
+                "client_id": "self-hosted-id",
+                "client_secret": "self-hosted-secret",
+                "subdomain": "acme",
+                "region": "us",
+            },
+            org_id="client-org",
+        )
+
+    # Then: a partial grant cannot hydrate a worker credential.
 
 
 def test_hydrate_api_token_returns_a_copied_mapping_without_database_access(
@@ -342,6 +429,97 @@ def test_resolve_run_auth_keeps_non_pagerduty_credentials_unhydrated(
 
     assert credential_id == credential.id
     assert resolved == descriptor
+
+
+def test_resolve_run_auth_rejects_pagerduty_environment_fallback(
+    monkeypatch: pytest.MonkeyPatch, session: Session
+) -> None:
+    # Given: a PagerDuty integration that has no persisted credential.
+    integration = SimpleNamespace(
+        id=uuid4(), org_id="pagerduty-org", credential_id=None
+    )
+    run = SimpleNamespace(auth_source=None)
+    monkeypatch.setattr(
+        "dev_health_ops.workers.task_utils._resolve_env_credentials",
+        lambda _: (_ for _ in ()).throw(
+            AssertionError("must not read deployment auth")
+        ),
+    )
+
+    # When: the worker resolves the legacy mutable auth path.
+    with pytest.raises(ValueError, match="active organization-scoped credential"):
+        resolve_run_auth(
+            session,
+            run=run,
+            integration=integration,
+            provider="pagerduty",
+            error_label="PagerDuty missing credential",
+        )
+
+    # Then: deployment environment credentials cannot supply tenant sync auth.
+
+
+def test_resolve_run_auth_rejects_an_inactive_pagerduty_credential(
+    session: Session,
+) -> None:
+    # Given: an integration references an inactive credential from its own org.
+    credential = IntegrationCredential(
+        provider="pagerduty",
+        name="inactive",
+        org_id="pagerduty-org",
+        credentials_encrypted=encrypt_value(
+            json.dumps(
+                {
+                    "auth_mode": "api_token",
+                    "api_token": "inactive-token",
+                    "subdomain": "acme",
+                    "region": "us",
+                }
+            )
+        ),
+        config={},
+        is_active=False,
+    )
+    session.add(credential)
+    session.flush()
+    integration = SimpleNamespace(
+        id=uuid4(), org_id="pagerduty-org", credential_id=credential.id
+    )
+    run = SimpleNamespace(auth_source=None)
+
+    # When: the worker resolves credentials for the PagerDuty unit.
+    with pytest.raises(ValueError, match="active organization-scoped credential"):
+        resolve_run_auth(
+            session,
+            run=run,
+            integration=integration,
+            provider="pagerduty",
+            error_label="PagerDuty inactive credential",
+        )
+
+    # Then: no inactive credential can hydrate a sync unit.
+
+
+def test_planner_rejects_pagerduty_sync_without_a_persisted_credential(
+    session: Session,
+) -> None:
+    # Given: a PagerDuty integration whose target configuration is malformed.
+    integration = Integration(
+        org_id="pagerduty-org",
+        provider="pagerduty",
+        name="PagerDuty operational",
+        config={},
+        credential_id=None,
+    )
+    session.add(integration)
+    session.flush()
+    from dev_health_ops.sync.planner import _resolve_credential_stamp
+
+    # When: the planner tries to freeze the run credential.
+    with pytest.raises(ValueError, match="active organization-scoped credential"):
+        _resolve_credential_stamp(session, integration)
+
+    # Then: a legacy config is disabled instead of silently using deployment auth.
 
 
 def test_hydrate_client_credentials_isolates_cache_by_secret(

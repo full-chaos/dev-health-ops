@@ -62,6 +62,18 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
+          {{- if .Values.web.localDevelopment.enabled }}
+          {{- with .Values.web.localDevelopment.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- end }}
+      {{- if .Values.web.localDevelopment.enabled }}
+      {{- with .Values.web.localDevelopment.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
       {{- with .Values.web.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

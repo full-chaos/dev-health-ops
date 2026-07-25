@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000009",
+  "correlation_id": "investment-finalize-2026-07-23",
+  "idempotency_key": "investment:finalize:00000000-0000-4000-8000-000000000105",
+  "domain": {
+    "type": "investment_run",
+    "id": "00000000-0000-4000-8000-000000000105"
+  },
+  "payload": {
+    "run_id": "00000000-0000-4000-8000-000000000105"
+  }
+}

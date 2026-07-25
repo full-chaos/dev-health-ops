@@ -1,0 +1,4 @@
+# Explicit opt-in: renders the zero-replica Go topology beside the unchanged
+# Celery fleet. Scale only a reviewed profile after it is healthy and observed.
+goWorkers:
+  enabled: true

@@ -41,6 +41,7 @@ from .integrations import (
     IntegrationDataset,
     IntegrationSource,
     SyncDispatchOutbox,
+    SyncDispatchTransportRoute,
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
@@ -65,7 +66,9 @@ from .licensing import (
     OrgFeatureOverride,
     OrgLicense,
 )
+from .operational_deliveries import BillingNotification, WebhookDelivery
 from .org_invite import OrgInvite
+from .pagerduty_webhook_binding import PagerDutyWebhookBinding
 from .rate_limit_observations import ProviderRateLimitObservation
 from .refresh_token import RefreshToken
 from .refunds import Refund, RefundStatus
@@ -73,6 +76,7 @@ from .reports import (
     ReportRun,
     ReportRunStatus,
     SavedReport,
+    ScheduledReportOccurrence,
 )
 from .retention import (
     OrgRetentionPolicy,
@@ -86,6 +90,7 @@ from .settings import (
     JobRunStatus,
     JobStatus,
     ScheduledJob,
+    ScheduledSyncOccurrence,
     Setting,
     SettingCategory,
     SyncConfiguration,
@@ -114,6 +119,9 @@ from .work_items import (
     WorkItemReopenEvent,
     WorkItemStatusTransition,
 )
+from .worker_job_outbox import WorkerJobOutbox
+from .worker_job_route import WorkerJobRoute
+from .worker_job_run import WorkerJobRun
 
 __all__ = [
     "AuditAction",
@@ -135,6 +143,7 @@ __all__ = [
     "FeatureFlag",
     "Base",
     "BillingAuditLog",
+    "BillingNotification",
     "GitBlame",
     "GitBlameMixin",
     "GitCommit",
@@ -171,18 +180,21 @@ __all__ = [
     "OrgIPAllowlist",
     "OrgLicense",
     "OrgRetentionPolicy",
+    "PagerDutyWebhookBinding",
     "ProviderRateLimitObservation",
     "Refund",
     "RefundStatus",
     "RefreshToken",
     "ReportRun",
     "ReportRunStatus",
+    "ScheduledReportOccurrence",
     "Repo",
     "RetentionResourceType",
     "Subscription",
     "SubscriptionEvent",
     "SavedReport",
     "ScheduledJob",
+    "ScheduledSyncOccurrence",
     "Setting",
     "SettingCategory",
     "Sprint",
@@ -195,6 +207,7 @@ __all__ = [
     "SyncComputeCheckpointStatus",
     "SyncComputeType",
     "SyncDispatchOutbox",
+    "SyncDispatchTransportRoute",
     "SyncRun",
     "SyncRunMode",
     "SyncRunPostDispatch",
@@ -215,4 +228,8 @@ __all__ = [
     "WorkItemInteractionEvent",
     "WorkItemReopenEvent",
     "WorkItemStatusTransition",
+    "WorkerJobOutbox",
+    "WorkerJobRoute",
+    "WorkerJobRun",
+    "WebhookDelivery",
 ]

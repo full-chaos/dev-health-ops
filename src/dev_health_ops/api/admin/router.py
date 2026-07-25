@@ -16,7 +16,9 @@ from .routers import (
     identities_router,
     integrations_router,
     orgs_router,
+    pagerduty_bindings_router,
     pagerduty_router,
+    pagerduty_services_router,
     platform_router,
     settings_router,
     setup_router,
@@ -51,6 +53,8 @@ router.include_router(platform_router)
 router.include_router(features_router)
 router.include_router(github_app_router)
 router.include_router(pagerduty_router)
+router.include_router(pagerduty_bindings_router)
+router.include_router(pagerduty_services_router)
 router.include_router(governance_router)
 router.include_router(integrations_router)
 

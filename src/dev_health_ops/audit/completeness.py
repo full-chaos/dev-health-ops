@@ -11,6 +11,7 @@ from dev_health_ops.metrics.sinks.clickhouse.idempotency import (
     WORK_ITEM_TRANSITIONS_DEDUPED,
     WORK_ITEMS_DEDUPED,
 )
+from dev_health_ops.storage.operational_current import current_operational_rows_sql
 
 REQUIRED_PROVIDERS = ("jira", "github", "gitlab")
 AUDIT_PROVIDERS = ("jira", "github", "gitlab", "synthetic")
@@ -96,13 +97,32 @@ def build_deployments_query() -> str:
 
 
 def build_incidents_query() -> str:
-    return """
+    current_incidents = current_operational_rows_sql(
+        "operational_incidents", ("is_deleted = 0",)
+    )
+    current_mappings = current_operational_rows_sql(
+        "operational_service_repository_mappings",
+        (
+            "is_deleted = 0",
+            "is_active = 1",
+            "repo_id IS NOT NULL",
+            "valid_from <= {as_of:DateTime64(6, 'UTC')}",
+            "(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
+        ),
+    )
+    return f"""
     SELECT
-      repo_id,
-      countIf(started_at >= {start:DateTime} AND started_at < {end:DateTime}) AS count,
-      max(last_synced) AS last_synced
-    FROM incidents
-    GROUP BY repo_id
+      mapping.repo_id,
+      countIf(
+        incident.started_at >= {{start:DateTime}}
+        AND incident.started_at < {{end:DateTime}}
+      ) AS count,
+      max(incident.last_synced) AS last_synced
+    FROM {current_incidents} AS incident
+    INNER JOIN {current_mappings} AS mapping
+      ON incident.org_id = mapping.org_id
+     AND incident.service_id = mapping.service_id
+    GROUP BY mapping.repo_id
     """
 
 
@@ -373,22 +393,44 @@ def _fetch_table_presence(client: Any, tables: Iterable[str]) -> dict[str, bool]
 def run_completeness_audit(
     *, db_url: str, days: int, org_id: str | None
 ) -> dict[str, Any]:
+    if not org_id:
+        raise ValueError("canonical incident completeness audit requires org_id")
     window_start, window_end = build_window(days)
     params = {
         "start": _naive_utc(window_start),
         "end": _naive_utc(window_end),
+        "as_of": _naive_utc(window_end),
+        "org_id": org_id,
     }
 
     sink = ClickHouseMetricsSink(db_url)
     client = sink.client
     try:
-        tables = {
+        physical_tables = {
             "repos",
             "work_items",
             "work_item_transitions",
-            *ALL_GIT_TABLES,
+            "git_commits",
+            "git_pull_requests",
+            "deployments",
+            "ci_pipeline_runs",
+            "operational_incidents",
+            "operational_service_repository_mappings",
         }
-        present_tables = _fetch_table_presence(client, tables)
+        physical_presence = _fetch_table_presence(client, physical_tables)
+        present_tables = {
+            "repos": physical_presence.get("repos", False),
+            "work_items": physical_presence.get("work_items", False),
+            "work_item_transitions": physical_presence.get(
+                "work_item_transitions", False
+            ),
+            "git_commits": physical_presence.get("git_commits", False),
+            "git_pull_requests": physical_presence.get("git_pull_requests", False),
+            "deployments": physical_presence.get("deployments", False),
+            "incidents": physical_presence.get("operational_incidents", False)
+            and physical_presence.get("operational_service_repository_mappings", False),
+            "ci_pipeline_runs": physical_presence.get("ci_pipeline_runs", False),
+        }
 
         repo_rows: list[dict[str, Any]] = []
         if present_tables.get("repos", False):

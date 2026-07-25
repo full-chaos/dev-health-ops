@@ -16,7 +16,18 @@ __all__ = [
     "strip_line_comments",
     "split_sql_statements",
     "all_migrations_applied",
+    "MigrationDeferred",
 ]
+
+
+class MigrationDeferred(RuntimeError):
+    def __init__(self, migration: str, reason: str) -> None:
+        self.migration = migration
+        self.reason = reason
+        super().__init__(migration, reason)
+
+    def __str__(self) -> str:
+        return f"migration {self.migration} deferred: {self.reason}"
 
 
 def all_migrations_applied(

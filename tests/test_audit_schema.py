@@ -13,6 +13,7 @@ def test_clickhouse_schema_includes_added_columns():
     )
 
     assert "work_items" in expected
+    assert "incidents" not in expected
     assert "priority_raw" in expected["work_items"]
     hints = migrations["columns"].get(("work_items", "priority_raw"))
     assert hints and "011_work_item_extras.sql" in hints

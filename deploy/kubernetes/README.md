@@ -57,11 +57,37 @@ until `dev-hops migrate clickhouse status --check` reports the schema current.
 
 Notes:
 
-- `CLICKHOUSE_URI` (in `dev-health-secrets`) is the DSN that
-  `dev-hops migrate clickhouse` and `status --check` resolve — keep it in sync
-  with `DATABASE_URI` (the app connection string).
-- `POSTGRES_URI` (in `dev-health-secrets`) must point **directly** at Postgres
-  (port 5432), never at a transaction-mode pooler (PgBouncer/RDS Proxy) —
-  migrations run raw DDL. See `docs/ops/database-connection-pooling.md`.
-- The Alembic step is skipped automatically when `POSTGRES_URI` is unset;
-  ClickHouse migrations always run.
+- `CLICKHOUSE_URI` is intentionally duplicated: the migration Job reads it
+  from the database-only `dev-health-migration-secrets`, while application and
+  read-only wait containers read it from `dev-health-secrets`. Keep both in
+  sync with `DATABASE_URI` (the app connection string). This prevents the
+  elevated one-shot pod from receiving provider credentials.
+- For the unified Alembic + River path, populate `MIGRATION_DATABASE_URI` in
+  the dedicated `dev-health-migration-secrets` Secret. It must point
+  **directly** at Postgres (port 5432) and use the migration role; the checked-in
+  Secret intentionally contains no placeholder value.
+- Existing Alembic-only installations may continue to use the direct
+  `POSTGRES_URI` in `dev-health-migration-secrets`. Without the elevated
+  migration DSN, the River step is skipped. ClickHouse migrations always run.
+  See
+  `docs/operate/configure/databases-and-storage.md`.
+
+## Additive Go/River topology (CHAOS-3052)
+
+`go-workers.yaml` is intentionally not listed in `kustomization.yaml`; apply
+it only for a reviewed coexistence canary after the migration Job has completed:
+
+```bash
+kubectl -n dev-health apply -f deploy/kubernetes/go-workers.yaml
+kubectl -n dev-health scale deployment/dev-health-go-worker-heavy --replicas=1
+kubectl -n dev-health rollout status deployment/dev-health-go-worker-heavy
+```
+
+The workloads are non-root, read-only, start-first rolling Deployments with
+zero replicas by default. Their HPA requires a Prometheus Adapter for
+`worker_jobs_available`, `worker_job_oldest_age_seconds`, and
+`worker_execution_saturation_ratio`; scrape the shared
+`dev-health-go-workers` Service before enabling a profile. Do not apply
+`go-workers-only.yaml` until the route-owner gates in
+`../go-workers/README.md` are complete; it scales the retained Celery/Beat
+Deployments to zero and is not an activation mechanism by itself.

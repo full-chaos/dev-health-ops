@@ -18,7 +18,6 @@ from dev_health_ops.models.git import (
     GitFile,
     GitPullRequest,
     GitPullRequestReview,
-    Incident,
     Repo,
     SecurityAlert,
 )
@@ -91,9 +90,6 @@ class IngestionSink:
 
     async def insert_deployments(self, deployments: list[Deployment]) -> None:
         await self._store.insert_deployments(deployments)
-
-    async def insert_incidents(self, incidents: list[Incident]) -> None:
-        await self._store.insert_incidents(incidents)
 
     async def insert_operational_batch(self, batch: OperationalBatch) -> None:
         await write_operational_batch(self._store, batch)

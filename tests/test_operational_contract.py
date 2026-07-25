@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import re
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,15 @@ _MIGRATION = (
     Path(__file__).parents[1]
     / "src/dev_health_ops/migrations/clickhouse/066_operational_canonical.sql"
 )
+_ORDERING_MIGRATION = (
+    Path(__file__).parents[1]
+    / "src/dev_health_ops/migrations/clickhouse/067_operational_ordering_contract.py"
+)
+
+
+def _current_store() -> ClickHouseStore:
+    with patch.dict("os.environ", {"OPERATIONAL_ORDERING_CONTRACT": "2"}):
+        return ClickHouseStore("clickhouse://unused")
 
 
 def _table_columns(statement: str) -> tuple[str, ...]:
@@ -38,22 +48,35 @@ def _table_columns(statement: str) -> tuple[str, ...]:
         elif character == ")":
             depth -= 1
         if character == "," and depth == 0:
-            columns.append(definition.strip().split(maxsplit=1)[0])
+            name = definition.strip().split(maxsplit=1)[0]
+            if name != "CONSTRAINT":
+                columns.append(name)
             definition = ""
         else:
             definition += character
-    columns.append(definition.strip().split(maxsplit=1)[0])
+    name = definition.strip().split(maxsplit=1)[0]
+    if name != "CONSTRAINT":
+        columns.append(name)
     return tuple(columns)
 
 
 def _create_statements() -> dict[str, str]:
-    """Load every canonical operational table statement from migration 066."""
+    """Load every canonical operational table after the ordering rewrite."""
     statements = split_sql_statements(_MIGRATION.read_text(encoding="utf-8"))
+    spec = importlib.util.spec_from_file_location(
+        "operational_ordering_migration", _ORDERING_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
     result: dict[str, str] = {}
     for statement in statements:
         match = re.search(r"CREATE TABLE IF NOT EXISTS (\w+)", statement)
         if match is not None:
-            result[match.group(1)] = statement
+            table = match.group(1)
+            result[table] = migration._rewrite_ddl(
+                statement, table, f"{table}__ordering_v2"
+            )
     return result
 
 
@@ -110,7 +133,7 @@ def test_clean_install_migration_creates_each_canonical_operational_table() -> N
 def test_clean_install_runner_applies_migration_066() -> None:
     # Given: a fresh non-default ClickHouse database with no recorded migrations.
     client = MagicMock()
-    client.query.return_value.result_rows = []
+    client.query.return_value.result_rows = [("067_operational_ordering_contract.py",)]
     store = ClickHouseStore("clickhouse://localhost:8123/operational_contract_test")
 
     # When: the standard migration runner initializes the store.
@@ -155,8 +178,9 @@ def test_operational_sorting_keys_are_org_scoped_and_versioned() -> None:
 
     # When: each entity table engine and sorting key are inspected.
     compliant = [
-        "ENGINE = ReplacingMergeTree(source_version_at)" in statement
-        and "ORDER BY (org_id, id)" in statement
+        "ENGINE = ReplacingMergeTree(ingest_revision)" in statement
+        and "PRIMARY KEY (org_id, id)" in statement
+        and "ORDER BY (org_id, id, source_revision, source_conflict_key)" in statement
         for statement in statements.values()
     ]
 
@@ -191,7 +215,7 @@ def test_store_inserts_a_canonical_service_with_org_id_parity() -> None:
         last_synced=datetime(2026, 7, 17, tzinfo=timezone.utc),
         name="Payments API",
     )
-    store = ClickHouseStore("clickhouse://unused")
+    store = _current_store()
     store.client = RecordingClient()
     store.org_id = "org-example"
 
@@ -206,10 +230,37 @@ def test_store_inserts_a_canonical_service_with_org_id_parity() -> None:
     assert row[columns.index("org_id")] == "org-example"
 
 
+def test_store_hydrates_clickhouse_datetimes_as_canonical_utc() -> None:
+    canonical = OperationalService(
+        org_id="org-example",
+        provider="pagerduty",
+        provider_instance_id="pd-example",
+        source_entity_type="service",
+        external_id="payments-api",
+        source_version_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
+        observed_at=datetime(2026, 7, 17, 1, tzinfo=timezone.utc),
+        last_synced=datetime(2026, 7, 17, 2, tzinfo=timezone.utc),
+        name="Payments API",
+    )
+    columns = tuple(field.name for field in fields(OperationalService))
+    row = tuple(
+        value.replace(tzinfo=None) if isinstance(value, datetime) else value
+        for value in (getattr(canonical, column) for column in columns)
+    )
+
+    hydrated = _current_store()._hydrate_operational_entity(
+        OperationalService, columns, row
+    )
+
+    assert hydrated == canonical
+    assert hydrated.source_version_at.tzinfo is timezone.utc
+    assert hydrated.source_version_at.fold == 0
+
+
 def test_store_rejects_mixed_canonical_entity_batches() -> None:
     # Given: two distinct entity types from the same canonical lifecycle.
     lifecycle = equivalent_operational_lifecycles()[0]
-    store = ClickHouseStore("clickhouse://unused")
+    store = _current_store()
 
     # When: an internal batch mixes table schemas.
     with pytest.raises(ValueError, match="one entity type"):
@@ -239,7 +290,7 @@ def test_store_loads_latest_non_deleted_operational_incidents_for_a_window() -> 
             self.query_call = (query, parameters)
             return QueryResult()
 
-    store = ClickHouseStore("clickhouse://unused")
+    store = _current_store()
     store.client = RecordingClient()
     start = incident.observed_at - timedelta(hours=1)
     end = incident.observed_at + timedelta(hours=1)
@@ -247,10 +298,14 @@ def test_store_loads_latest_non_deleted_operational_incidents_for_a_window() -> 
     # When: the compatibility reader loads the tenant and time window.
     actual = asyncio.run(store.load_operational_incidents("org-example", start, end))
 
-    # Then: the reader uses FINAL and returns the canonical incident contract.
+    # Then: the reader uses total-tuple selection and returns the canonical incident contract.
     assert store.client.query_call is not None
     query, parameters = store.client.query_call
-    assert "operational_incidents FINAL" in query
+    assert "operational_incidents FINAL" not in query
+    assert (
+        "source_revision DESC, source_conflict_key DESC, ingest_revision DESC" in query
+    )
+    assert query.index("LIMIT 1 BY org_id, id") < query.index("is_deleted = 0")
     assert "is_deleted = 0" in query
     assert parameters["org_id"] == "org-example"
     assert actual == [incident]
@@ -265,12 +320,13 @@ def test_store_hides_the_latest_incident_tombstone() -> None:
         def query(
             self, query: str, parameters: dict[str, datetime | str]
         ) -> QueryResult:
-            assert "FINAL" in query
+            assert "FINAL" not in query
+            assert "LIMIT 1 BY org_id, id" in query
             assert "is_deleted = 0" in query
             return QueryResult()
 
     incident = equivalent_operational_lifecycles()[0].incident
-    store = ClickHouseStore("clickhouse://unused")
+    store = _current_store()
     store.client = TombstoneClient()
 
     # When: the compatibility reader loads the tombstoned incident window.
@@ -315,11 +371,12 @@ def test_store_loads_active_mapping_by_org_service_and_repository() -> None:
             self.parameters: dict[str, str] | None = None
 
         def query(self, query: str, parameters: dict[str, str]) -> QueryResult:
-            assert "operational_service_repository_mappings FINAL" in query
+            assert "operational_service_repository_mappings FINAL" not in query
+            assert "LIMIT 1 BY org_id, id" in query
             self.parameters = parameters
             return QueryResult()
 
-    store = ClickHouseStore("clickhouse://unused")
+    store = _current_store()
     store.client = RecordingClient()
 
     actual = asyncio.run(
@@ -366,7 +423,7 @@ def test_store_load_active_mappings_filters_by_is_active_not_is_deleted() -> Non
             self.query_text = query
             return QueryResult()
 
-    store = ClickHouseStore("clickhouse://unused")
+    store = _current_store()
     store.client = RecordingClient()
 
     # When: reconciliation loads active mapping evidence via the generic reader.

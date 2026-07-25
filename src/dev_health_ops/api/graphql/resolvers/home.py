@@ -77,10 +77,18 @@ async def resolve_home(
             'PR Rework Ratio' as label,
             SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0) * 100.0 as value,
             '%%' as unit
-        FROM repo_metrics_daily
-        WHERE day >= today() - 30
-        AND day < today()
-        AND org_id = %(org_id)s
+        FROM (
+            SELECT
+                day,
+                repo_id,
+                argMax(pr_rework_ratio, computed_at) AS pr_rework_ratio,
+                argMax(prs_merged, computed_at) AS prs_merged
+            FROM repo_metrics_daily
+            WHERE day >= today() - 30
+              AND day < today()
+              AND org_id = %(org_id)s
+            GROUP BY day, repo_id
+        )
     """
     await record_stale_investment_membership_scope(client, org_id=context.org_id)
     delta_rows = await query_dicts(client, deltas_sql, {"org_id": context.org_id})

@@ -45,10 +45,12 @@ docker service update --force dev-health_migrate
 
 Notes:
 
-- `POSTGRES_URI` must point **directly** at Postgres (port 5432), never at a
-  transaction-mode pooler (PgBouncer/RDS Proxy) — migrations run raw DDL. See
-  `docs/ops/database-connection-pooling.md`. The Alembic step is skipped when
-  `POSTGRES_URI` is unset (ClickHouse-only stacks).
+- Set `MIGRATION_DATABASE_URI` to a dedicated migration-role DSN pointing
+  **directly** at Postgres (port 5432) to run Alembic plus the pinned River
+  migration. Existing Alembic-only stacks may keep a direct `POSTGRES_URI`;
+  without the dedicated DSN the additive River step is skipped. Never send
+  migration DDL through transaction-mode PgBouncer. See
+  `docs/operate/configure/databases-and-storage.md`.
 
 ## Scaling Services
 
@@ -69,6 +71,24 @@ docker service logs -f dev-health_worker
 ```bash
 docker stack deploy -c stack.yml dev-health
 ```
+
+## Additive Go/River topology (CHAOS-3052)
+
+The Go topology is a separate, zero-replica overlay. It preserves the Celery,
+Beat, and Valkey DB 0 services in `stack.yml` and must be deployed explicitly:
+
+```bash
+docker stack deploy -c stack.yml -c stack.go-workers.yml dev-health
+docker service scale dev-health_go-worker-heavy=1
+docker service ps dev-health_go-worker-heavy
+```
+
+The overlay uses non-root/read-only tasks, explicit resource budgets, and
+start-first/rollback rolling updates. Swarm does not have an HPA: use
+`worker_jobs_available`, `worker_job_oldest_age_seconds`, and
+`worker_execution_saturation_ratio` from the Go `/metrics` endpoint as the
+manual scale signals. Do not scale Celery/Beat to zero until the Go-only gate
+in `../go-workers/README.md` is satisfied.
 
 ## Removing the Stack
 

@@ -38,7 +38,6 @@ from dev_health_ops.processors.base_git import (
     check_backfill_needs,
     historical_backfill_day,
     resolve_commit_stats_limit,
-    resolve_incident_labels,
     select_unblamed_paths,
     write_historical_complexity,
 )
@@ -58,7 +57,6 @@ from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.operational_migration import (
     IssueIncidentSource,
     map_issue_incidents,
-    operational_dual_write_enabled,
 )
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
@@ -1113,42 +1111,68 @@ def _fetch_gitlab_incidents_sync(
     repo_id,
     max_issues,
     since,
+    until: datetime | None = None,
     canonical_sources: list[IssueIncidentSource] | None = None,
     canonical_org_id: str | None = None,
     canonical_provider_instance_id: str | None = None,
     repo_full_name: str | None = None,
 ):
-    """Sync helper to fetch GitLab incidents (configurable incident labels)."""
+    """Fetch GitLab's native incident issue type across REST result pages."""
     incidents: list[Incident] = []
-    labels = resolve_incident_labels()
+    if max_issues <= 0:
+        return incidents
+
     raw_issues: list = []
     seen_issue_ids: set = set()
-    for label in labels:
-        try:
-            label_issues = connector.rest_client.get_issues(
-                project_id=project_id,
-                labels=label,
-                per_page=min(max_issues, 100),
-                order_by="updated_at",
-                sort="desc",
-            )
-        except Exception as exc:
-            logging.debug(
-                "Failed to fetch incident issues for label %r: %s", label, exc
-            )
-            continue
-        for issue in label_issues or []:
+    page = 1
+    per_page = min(max_issues, 100)
+    updated_after = None
+    if since is not None:
+        updated_after = (
+            since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+    updated_before = None
+    if until is not None:
+        updated_before = (
+            until.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+
+    while len(raw_issues) < max_issues:
+        page_issues = connector.rest_client.get_issues(
+            project_id=project_id,
+            issue_type="incident",
+            updated_after=updated_after,
+            updated_before=updated_before,
+            state="all",
+            page=page,
+            per_page=per_page,
+            order_by="updated_at",
+            sort="desc",
+        )
+        if not page_issues:
+            break
+        for issue in page_issues:
+            if str(issue.get("issue_type") or "").casefold() != "incident":
+                logging.warning(
+                    "Ignoring non-incident row returned by GitLab incident filter: %s",
+                    issue.get("id"),
+                )
+                continue
             issue_id = issue.get("id")
             if issue_id in seen_issue_ids:
                 continue
             seen_issue_ids.add(issue_id)
             raw_issues.append(issue)
+            if len(raw_issues) >= max_issues:
+                break
+        if len(page_issues) < per_page:
+            break
+        page += 1
     logging.info(
-        "Fetched %d GitLab incident issue(s) (labels searched: %s)",
+        "Fetched %d native GitLab incident issue(s)",
         len(raw_issues),
-        ", ".join(labels),
     )
-    for issue in raw_issues[:max_issues]:
+    for issue in raw_issues:
         created_at_str = issue.get("created_at")
         if not created_at_str:
             continue
@@ -1156,9 +1180,6 @@ def _fetch_gitlab_incidents_sync(
         created_at = safe_parse_datetime(created_at_str)
         if created_at is None:
             continue
-
-        if since is not None and created_at.astimezone(timezone.utc) < since:
-            break
 
         resolved_at = None
         closed_at_str = issue.get("closed_at")
@@ -1206,6 +1227,8 @@ def _fetch_gitlab_incidents_sync(
                     created_at=created_at,
                     resolved_at=resolved_at,
                     source_version_at=updated_at or created_at,
+                    source_entity_type=str(issue.get("issue_type") or "incident"),
+                    raw_severity=issue.get("severity"),
                 )
             )
 
@@ -2424,9 +2447,7 @@ async def process_gitlab_project(
 
         if sync_incidents:
             logging.info("Fetching incidents from GitLab...")
-            canonical_sources: list[IssueIncidentSource] | None = (
-                [] if operational_dual_write_enabled() else None
-            )
+            canonical_sources: list[IssueIncidentSource] = []
             incidents = await loop.run_in_executor(
                 None,
                 _fetch_gitlab_incidents_sync,
@@ -2435,19 +2456,26 @@ async def process_gitlab_project(
                 db_repo.id,
                 BATCH_SIZE,
                 since,
+                until,
                 canonical_sources,
                 getattr(store, "org_id", "") or None,
                 normalize_gitlab_instance(gitlab_url) or "https://gitlab.com",
                 full_name,
             )
-            incidents = _filter_after(incidents, until, "started_at")
-            if incidents:
-                await ingestion_sink.insert_incidents(incidents)
-                if canonical_sources:
-                    await ingestion_sink.insert_operational_batch(
-                        map_issue_incidents(canonical_sources)
-                    )
-                logging.info(f"Stored {len(incidents)} incidents from GitLab")
+            included_ids = {incident.incident_id for incident in incidents}
+            canonical_sources = [
+                source
+                for source in canonical_sources
+                if source.external_id in included_ids
+            ]
+            if canonical_sources:
+                await ingestion_sink.insert_operational_batch(
+                    map_issue_incidents(canonical_sources)
+                )
+                logging.info(
+                    "Stored %d canonical incidents from GitLab",
+                    len(canonical_sources),
+                )
 
         if sync_security:
             logging.info("Fetching security alerts from GitLab...")
@@ -2816,10 +2844,8 @@ async def process_gitlab_projects_batch(
 
         if sync_incidents:
             try:
-                canonical_sources: list[IssueIncidentSource] | None = (
-                    [] if operational_dual_write_enabled() else None
-                )
-                incidents = await loop.run_in_executor(
+                canonical_sources: list[IssueIncidentSource] = []
+                await loop.run_in_executor(
                     None,
                     _fetch_gitlab_incidents_sync,
                     connector,
@@ -2827,17 +2853,21 @@ async def process_gitlab_projects_batch(
                     db_repo.id,
                     BATCH_SIZE,
                     since,
+                    None,
                     canonical_sources,
                     getattr(store, "org_id", "") or None,
                     normalize_gitlab_instance(gitlab_url) or "https://gitlab.com",
                     project_info.full_name,
                 )
-                if incidents:
-                    await ingestion_sink.insert_incidents(incidents)
-                    if canonical_sources:
-                        await ingestion_sink.insert_operational_batch(
-                            map_issue_incidents(canonical_sources)
-                        )
+                if canonical_sources:
+                    await ingestion_sink.insert_operational_batch(
+                        map_issue_incidents(canonical_sources)
+                    )
+                    logging.info(
+                        "Stored %d canonical incidents from GitLab project %s",
+                        len(canonical_sources),
+                        project_info.full_name,
+                    )
             except Exception as e:
                 logging.warning(
                     "Failed to fetch incidents for GitLab project %s: %s",

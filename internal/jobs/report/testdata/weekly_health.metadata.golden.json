@@ -1,0 +1,30 @@
+{
+  "fingerprint": "sha256:990b8eca64608c34bbedfba0a671c7ac09b7f0321a594e303a472e9ce7e94468",
+  "provenance": [
+    {
+      "provenance_id": "4f33bc90-8968-5415-b446-1f1b71d0505e",
+      "artifact_type": "chart",
+      "artifact_id": "chart-1"
+    },
+    {
+      "provenance_id": "1a96b6c9-cfb6-5d06-b737-cfcd0d7a103a",
+      "artifact_type": "narrative",
+      "artifact_id": "summary"
+    },
+    {
+      "provenance_id": "cedad712-370b-569b-9e96-0eb9505adf88",
+      "artifact_type": "narrative",
+      "artifact_id": "quality"
+    },
+    {
+      "provenance_id": "f2ec8a1a-9600-54fb-9d7e-dc63f524cf9c",
+      "artifact_type": "narrative",
+      "artifact_id": "testops"
+    },
+    {
+      "provenance_id": "9b673fa0-3c1b-5831-b7a8-8b3fea1dc3ca",
+      "artifact_type": "report",
+      "artifact_id": "plan-1"
+    }
+  ]
+}

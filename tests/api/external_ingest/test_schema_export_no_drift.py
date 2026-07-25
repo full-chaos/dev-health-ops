@@ -12,7 +12,9 @@ from pathlib import Path
 from dev_health_ops.api.external_ingest.export_schemas import render_schema_json
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_COMMITTED_PATH = _REPO_ROOT / "docs" / "api" / "external-ingest" / "v1" / "schema.json"
+_COMMITTED_PATH = (
+    _REPO_ROOT / "src" / "dev_health_ops" / "api" / "external_ingest" / "schema.json"
+)
 
 
 def test_static_export_matches_committed_artifact():
@@ -22,5 +24,5 @@ def test_static_export_matches_committed_artifact():
     assert generated == committed, (
         f"{_COMMITTED_PATH} is stale — run `python3 -m "
         "dev_health_ops.api.external_ingest.export_schemas --out "
-        "docs/api/external-ingest/v1/schema.json` and commit the diff"
+        "src/dev_health_ops/api/external_ingest/schema.json` and commit the diff"
     )

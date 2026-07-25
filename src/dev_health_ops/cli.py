@@ -477,6 +477,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("sync", "teams"): frozenset({_REQ_CLICKHOUSE}),
     ("teams", "reconcile"): frozenset({_REQ_CLICKHOUSE, _REQ_POSTGRES, _REQ_ORG}),
     # --- audit (read ClickHouse analytics store) ---
+    ("audit", "completeness"): frozenset({_REQ_ORG}),
     ("audit", "perf"): frozenset({_REQ_CLICKHOUSE}),
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
     ("audit", "planner-configs"): frozenset({_REQ_POSTGRES}),

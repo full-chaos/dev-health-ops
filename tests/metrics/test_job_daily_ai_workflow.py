@@ -90,7 +90,7 @@ class _Sink:
                     "last_synced": START,
                 }
             ]
-        if "FROM incidents" in query:
+        if "operational_incidents" in query:
             return [
                 {
                     "repo_id": REPO_ID,
@@ -156,8 +156,8 @@ def test_mapped_canonical_incident_is_deduplicated_before_ai_linkage() -> None:
         ) -> list[dict[str, Any]]:
             if "operational_incidents" in query:
                 assert parameters["org_id"] == ORG_ID
-                assert "mapping.repo_id IS NOT NULL" in query
-                assert "mapping.org_id = {org_id:String}" in query
+                assert "repo_id IS NOT NULL" in query
+                assert query.count("WHERE org_id = {org_id:String}") >= 2
                 canonical_row = {
                     "repo_id": REPO_ID,
                     "incident_id": "pd-1",
@@ -255,7 +255,7 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
                     {"repo_id": "not-a-uuid", "deployment_id": "d-bad"},
                     {"repo_id": REPO_ID, "deployment_id": ""},
                 ]
-            if "FROM incidents" in query:
+            if "operational_incidents" in query:
                 rows = rows + [{"repo_id": REPO_ID, "incident_id": None}]
             return rows
 

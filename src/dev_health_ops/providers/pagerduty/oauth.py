@@ -14,24 +14,37 @@ from pydantic import BaseModel, ConfigDict
 
 READ_SCOPES = frozenset(
     {
-        "Incidents.read",
-        "Services.read",
-        "Escalation_policies.read",
-        "Schedules.read",
-        "Oncalls.read",
-        "Users.read",
-        "Teams.read",
+        "incidents.read",
+        "services.read",
+        "escalation_policies.read",
+        "schedules.read",
+        "oncalls.read",
+        "users.read",
+        "teams.read",
     }
 )
 DATASET_SCOPES = {
-    "incidents": frozenset({"Incidents.read"}),
-    "services": frozenset({"Services.read"}),
-    "business_services": frozenset({"Services.read"}),
-    "escalation_policies": frozenset({"Escalation_policies.read"}),
-    "schedules": frozenset({"Schedules.read"}),
-    "oncalls": frozenset({"Oncalls.read"}),
-    "users": frozenset({"Users.read"}),
-    "teams": frozenset({"Teams.read"}),
+    "incidents": frozenset({"incidents.read"}),
+    "services": frozenset({"services.read"}),
+    "business_services": frozenset({"services.read"}),
+    "escalation_policies": frozenset({"escalation_policies.read"}),
+    "schedules": frozenset({"schedules.read"}),
+    "oncalls": frozenset({"oncalls.read"}),
+    "users": frozenset({"users.read"}),
+    "teams": frozenset({"teams.read"}),
+}
+DATASET_OAUTH_FAMILIES = {
+    "incidents": "incidents",
+    "services": "services",
+    "business-services": "business_services",
+    "escalation-policies": "escalation_policies",
+    "schedules": "schedules",
+    "on-calls": "oncalls",
+    "users": "users",
+    "teams": "teams",
+    "incident-alerts": "incidents",
+    "incident-log-entries": "incidents",
+    "incident-notes": "incidents",
 }
 DEFAULT_RENEWAL_WINDOW: Final = timedelta(minutes=5)
 
@@ -85,9 +98,17 @@ class OAuthCallbackValidationError(ValueError):
     """Raised when an OAuth callback cannot be tied to its authorization request."""
 
 
+def pagerduty_oauth_family(dataset_key: str) -> str:
+    """Normalize a sync-registry dataset key to its PagerDuty OAuth family."""
+    return DATASET_OAUTH_FAMILIES.get(dataset_key, dataset_key)
+
+
 def required_read_scopes(enabled_datasets: set[str]) -> frozenset[str]:
     return frozenset().union(
-        *(DATASET_SCOPES.get(dataset, frozenset()) for dataset in enabled_datasets)
+        *(
+            DATASET_SCOPES.get(pagerduty_oauth_family(dataset), frozenset())
+            for dataset in enabled_datasets
+        )
     )
 
 
@@ -97,9 +118,7 @@ def missing_read_scopes(
     return required_read_scopes(enabled_datasets).difference(granted_scopes)
 
 
-def build_authorization_request(
-    config: PagerDutyOAuthConfig, enabled_datasets: set[str]
-) -> AuthorizationRequest:
+def build_authorization_request(config: PagerDutyOAuthConfig) -> AuthorizationRequest:
     verifier = secrets.token_urlsafe(64)
     challenge = (
         base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
@@ -111,7 +130,7 @@ def build_authorization_request(
         "response_type": "code",
         "client_id": config.client_id,
         "redirect_uri": config.redirect_uri,
-        "scope": " ".join(sorted(required_read_scopes(enabled_datasets))),
+        "scope": " ".join(sorted(READ_SCOPES)),
         "state": state,
         "nonce": nonce,
         "code_challenge": challenge,

@@ -21,6 +21,11 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
 from dev_health_ops.models.teams import Team
+from dev_health_ops.providers.operational_migration import (
+    IssueIncidentSource,
+    map_issue_incidents,
+    write_operational_batch,
+)
 from dev_health_ops.providers.teams import load_team_resolver
 from dev_health_ops.storage import (
     ClickHouseStore,
@@ -1037,9 +1042,36 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 deployments,
                 allow_parallel=allow_parallel_inserts,
             )
-            await _insert_batches(
-                store.insert_incidents, incidents, allow_parallel=allow_parallel_inserts
-            )
+            if isinstance(store, ClickHouseStore) and incidents:
+                incident_sources = [
+                    IssueIncidentSource(
+                        org_id=org_id,
+                        provider="synthetic",
+                        provider_instance_id="fixtures",
+                        repo_id=generator.repo_id,
+                        repo_full_name=r_name,
+                        external_id=incident.incident_id,
+                        issue_number=None,
+                        source_url=None,
+                        labels=(),
+                        raw_status=incident.status,
+                        title=incident.incident_id,
+                        description=None,
+                        created_at=incident.started_at,
+                        resolved_at=incident.resolved_at,
+                        source_version_at=incident.resolved_at or incident.started_at,
+                    )
+                    for incident in incidents
+                ]
+                await write_operational_batch(
+                    store, map_issue_incidents(incident_sources)
+                )
+            else:
+                await _insert_batches(
+                    store.insert_incidents,
+                    incidents,
+                    allow_parallel=allow_parallel_inserts,
+                )
 
             fixture_data["feature_flag_contexts"].append(
                 {

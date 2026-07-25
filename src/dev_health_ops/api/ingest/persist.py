@@ -5,9 +5,15 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from dev_health_ops.processors.release_ref import get_release_ref_enrichment
+from dev_health_ops.providers.operational_migration import (
+    IssueIncidentSource,
+    map_issue_incidents,
+    write_operational_batch,
+)
 from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 logger = logging.getLogger(__name__)
@@ -124,12 +130,41 @@ async def _persist_deployments(
 async def _persist_incidents(
     store: ClickHouseStore, items: list[dict[str, Any]]
 ) -> None:
-    rows: list[dict[str, Any]] = []
+    sources: list[IssueIncidentSource] = []
     for item in items:
         repo_url = item.pop("_repo_url", "")
-        item.pop("_org_id", None)
+        org_id = str(item.pop("_org_id", "") or "").strip()
         item.pop("_ingestion_id", None)
-        item["repo_id"] = _repo_id_from_url(repo_url)
-        rows.append(item)
-    if rows:
-        await store.insert_incidents(rows)
+        started_at = item.get("started_at")
+        if not isinstance(started_at, datetime):
+            raise ValueError("incident ingest requires started_at")
+        resolved_at = item.get("resolved_at")
+        if resolved_at is not None and not isinstance(resolved_at, datetime):
+            raise ValueError("incident ingest resolved_at must be a datetime")
+        if not org_id or not repo_url:
+            raise ValueError("incident ingest requires org_id and repo_url")
+        repo_id = _repo_id_from_url(repo_url)
+        source_version_at = resolved_at or started_at
+        if source_version_at.tzinfo is None:
+            source_version_at = source_version_at.replace(tzinfo=timezone.utc)
+        sources.append(
+            IssueIncidentSource(
+                org_id=org_id,
+                provider="external",
+                provider_instance_id="legacy-repository-ingest",
+                repo_id=repo_id,
+                repo_full_name=repo_url,
+                external_id=str(item.get("incident_id") or ""),
+                issue_number=None,
+                source_url=None,
+                labels=(),
+                raw_status=str(item.get("status") or "") or None,
+                title=str(item.get("incident_id") or ""),
+                description=None,
+                created_at=started_at,
+                resolved_at=resolved_at,
+                source_version_at=source_version_at,
+            )
+        )
+    if sources:
+        await write_operational_batch(store, map_issue_incidents(sources))

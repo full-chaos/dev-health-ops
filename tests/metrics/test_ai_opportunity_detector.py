@@ -315,7 +315,10 @@ async def test_detector_emits_doc_drift(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_detector_emits_flaky_test_triage(monkeypatch: pytest.MonkeyPatch):
+    queries: list[str] = []
+
     async def fake_query_dicts(_client, query, _params):
+        queries.append(query)
         if "testops_test_metrics_daily" not in query:
             return []
         return [
@@ -338,6 +341,10 @@ async def test_detector_emits_flaky_test_triage(monkeypatch: pytest.MonkeyPatch)
     assert result[0].evidence_refs == [
         f"testops_test_metrics_daily:flake_rate:{REPO_ID}"
     ]
+    query = next(query for query in queries if "testops_test_metrics_daily" in query)
+    assert "ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day" in " ".join(
+        query.split()
+    )
 
 
 @pytest.mark.asyncio

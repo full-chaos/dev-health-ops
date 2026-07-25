@@ -1,8 +1,8 @@
 """Provider-agnostic DORA metric computation from synced ClickHouse rows.
 
-The four DORA metrics are derived from data both the GitHub and GitLab
-processors already write to ClickHouse (``deployments`` and ``incidents``) —
-no live provider API fetch is required (CHAOS-2382). Output rows match the
+The four DORA metrics are derived from provider-neutral deployments and canonical
+operational incidents already synced to ClickHouse, so no live provider API fetch is
+required (CHAOS-2382). Output rows match the
 ``dora_metrics_daily`` contract: one row per ``(repo, metric_name, day)``.
 
 Units mirror the GitLab DORA API so values stay comparable across providers:

@@ -7,7 +7,7 @@ decorator. They take IDs ONLY (no credentials, no DTOs) in their payloads.
 Pipeline:
     plan_sync_run (CHAOS-2511)        -> persists SyncRun + units (status=planned)
     dispatch_sync_run(run_id)         -> DispatchGuard.authorize_run, then routes
-                                         + queues each unit (group/chord)
+                                         + queues each unit independently
     run_sync_unit(unit_id)            -> SyncTaskBootstrap.load + ProviderRuntime,
                                          executes ONE dataset, persists unit status,
                                          updates watermark ONLY if mode==incremental
@@ -26,10 +26,10 @@ Idempotency and Durability rules:
   * Metrics are never dispatched from individual units. Post-sync durability
     flows through the sync_dispatch_outbox table and the reconciler relay,
     rather than only the SyncRunPostDispatch ledger. The post_sync kind is
-    relayed at-most-once by the reconciler. It marks the outbox row dispatched
-    before publishing and never re-arms on publish failure. This prevents
-    downstream metrics readers from double-counting duplicate computed_at
-    generations. Durable exactly-once post-sync is deferred to CHAOS-2596.
+    relayed guarded at-least-once: the reconciler terminally marks it only
+    after scheduling succeeds, and a failure releases the claim with bounded
+    backoff. CHAOS-2596 made supported downstream readers generation-safe, so
+    a duplicate compute generation cannot inflate their results.
 Observability (CHAOS-2519):
   Every structured log line emitted by the three tasks carries the full unit
   context: sync_run_id, unit_id, source_id, dataset_key, provider, cost_class.
@@ -51,9 +51,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
 from billiard.exceptions import SoftTimeLimitExceeded
-from celery import chord, group
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session, SessionTransactionOrigin
 
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models import (
@@ -68,6 +68,7 @@ from dev_health_ops.models import (
     SyncRun,
     SyncRunMode,
     SyncRunPostDispatch,
+    SyncRunReferenceDiscovery,
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
@@ -75,23 +76,43 @@ from dev_health_ops.models import (
 from dev_health_ops.providers.usage import PROVIDER_USAGE_OBSERVATION_KEY
 from dev_health_ops.sync.budget import estimate_provider_budget
 from dev_health_ops.sync.budget_guard import BudgetGuard
+from dev_health_ops.sync.canonical_incident_gate import (
+    FEATURE_DISABLED_ERROR_CATEGORY,
+    CanonicalIncidentFeatureDisabledError,
+    require_canonical_incident_feature_for_update_sync,
+    sync_dataset_requires_canonical_incident_feature,
+    sync_run_requires_canonical_incident_feature,
+)
 from dev_health_ops.sync.datasets import DatasetKey
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISPATCH,
     OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
+    OUTBOX_STATUS_DISPATCHED,
     OUTBOX_STATUS_PENDING,
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.dispatch_policy import route
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
+from dev_health_ops.sync.feature_denial import (
+    FeatureDisabledRunTransition,
+    terminalize_feature_disabled_run,
+)
 from dev_health_ops.sync.guard import DispatchGuard
 from dev_health_ops.sync.trigger_routing import (
     stamp_sync_run_canonical_config,
 )
 from dev_health_ops.sync.watermarks import set_watermark
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.job_contracts import ProviderUnitPayload
+from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_routes import (
+    RIVER_CANARY_ROUTE,
+    WorkerJobRouteError,
+    resolve_worker_job_route,
+)
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
+from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
 from dev_health_ops.workers.rate_limit_defer import (
     RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS,
@@ -230,6 +251,8 @@ def _classify_error(exc: BaseException) -> str:
     Categories: rate_limit, timeout, network, auth, not_found,
     provider_error, adapter_error.
     """
+    if isinstance(exc, CanonicalIncidentFeatureDisabledError):
+        return FEATURE_DISABLED_ERROR_CATEGORY
     msg = str(exc).lower()
     for pattern, category in _PROVIDER_ERROR_PATTERNS:
         if pattern in msg:
@@ -732,7 +755,25 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         reference_discovery_succeeded,
     )
 
+    river_queued = 0
     with get_postgres_session_sync() as session:
+        # The provider-unit outbox row and DISPATCHING claim must share one
+        # explicit transaction. A process death therefore commits both or
+        # neither, closing the producer kill window without serializing
+        # credentials, callables, or route configuration into River.
+        transaction = session.get_transaction()
+        if (
+            transaction is not None
+            and transaction.origin is SessionTransactionOrigin.AUTOBEGIN
+        ):
+            # A task-owned fresh session begins implicitly when it first reads
+            # its run. Persist that read/fixture transaction rather than
+            # rolling it back: rollback can erase a just-planned run before
+            # dispatch sees it. The explicit producer transaction below then
+            # fences the unit claim and outbox row together.
+            session.commit()
+        if not session.in_transaction():
+            session.begin()
         run_uuid = uuid.UUID(str(sync_run_id))
         run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
         if run is None:
@@ -741,6 +782,43 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 extra={"sync_run_id": sync_run_id},
             )
             return {"status": "missing", "sync_run_id": sync_run_id}
+        requires_canonical_feature = sync_run_requires_canonical_incident_feature(
+            session, run
+        )
+        if requires_canonical_feature:
+            try:
+                require_canonical_incident_feature_for_update_sync(session, run.org_id)
+            except CanonicalIncidentFeatureDisabledError as exc:
+                transition = terminalize_feature_disabled_run(session, run, exc)
+                if transition.run_terminal:
+                    _terminalize_feature_disabled_graph(
+                        session,
+                        run,
+                        exc,
+                    )
+                else:
+                    _arm_feature_disabled_finalize(
+                        session,
+                        run,
+                        datetime.now(timezone.utc),
+                    )
+                session.flush()
+                session.commit()
+                logger.warning(
+                    "dispatch_sync_run.feature_disabled",
+                    extra={
+                        "sync_run_id": str(run.id),
+                        "org_id": str(run.org_id),
+                        "error_category": FEATURE_DISABLED_ERROR_CATEGORY,
+                        "running_units": transition.running_units,
+                    },
+                )
+                return {
+                    "status": FEATURE_DISABLED_ERROR_CATEGORY,
+                    "sync_run_id": sync_run_id,
+                    "dispatched": 0,
+                    "failed_units": transition.failed_units,
+                }
         if not reference_discovery_succeeded(session, run_uuid):
             now = datetime.now(timezone.utc)
             ensure_reference_discovery_wakeup(session, run_uuid, now=now)
@@ -869,9 +947,46 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         ):
             next_deferred_at = reconfirm_result.next_deferred_at
 
+        # The durable route row, not a process-local capability flag, owns the
+        # transport decision. This FOR SHARE lock remains held through the
+        # unit claim and outbox commit, serializing an operator FOR UPDATE
+        # transition with every producer, including a non-canary batch during
+        # a paused or drifted control-plane state.
+        provider_unit_route = resolve_worker_job_route(session, "sync.provider_unit")
+        provider_unit_routes = (
+            ProviderUnitRouteSwitches.from_environment()
+            if provider_unit_route == RIVER_CANARY_ROUTE
+            else None
+        )
         units = _claim_units(session, run_uuid, capped_ids=capped_ids)
         signatures = []
         for unit in units:
+            in_canary_scope = ProviderUnitRouteSwitches.is_canary_scope(
+                str(unit.provider), str(unit.dataset_key)
+            )
+            if in_canary_scope and provider_unit_route == RIVER_CANARY_ROUTE:
+                if (
+                    provider_unit_routes is None
+                    or not provider_unit_routes.routes_to_river(
+                        str(unit.provider), str(unit.dataset_key)
+                    )
+                ):
+                    # A checked-in canary route without its complete runtime
+                    # capability is an ownership fault, never a reason to
+                    # silently publish legacy Celery work.
+                    raise WorkerJobRouteError(
+                        "sync provider canary capability is unavailable"
+                    )
+                enqueue_worker_job(
+                    session,
+                    ProviderUnitPayload(unit_id=str(unit.id)),
+                    correlation_id=f"sync-run:{run.id}",
+                    idempotency_key=f"sync.provider_unit:{unit.id}",
+                    domain_id=str(unit.id),
+                    organization_id=str(unit.org_id),
+                )
+                river_queued += 1
+                continue
             dispatch_route = route(
                 org_id=str(unit.org_id),
                 provider=str(unit.provider),
@@ -884,7 +999,7 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 )
             )
 
-        if signatures:
+        if signatures or river_queued:
             now = datetime.now(timezone.utc)
             run.status = SyncRunStatus.DISPATCHING.value
             run.started_at = run.started_at or now
@@ -897,13 +1012,18 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             "dispatch_sync_run.dispatched",
             extra={
                 "sync_run_id": sync_run_id,
-                "queued_units": len(signatures),
+                "queued_units": len(signatures) + river_queued,
+                "celery_units": len(signatures),
+                "river_units": river_queued,
             },
         )
-        callback = getattr(finalize_sync_run, "si")(sync_run_id)
-        callback.set(queue="sync")
         try:
-            chord(group(signatures), callback).apply_async()
+            # Unit terminal writes materialize the durable finalize wakeup.
+            # Do not use a Celery chord/result backend as a coordinator: a
+            # retry or partial publish remains recoverable through the same
+            # SyncDispatchOutbox materializer that covers worker loss.
+            for signature in signatures:
+                getattr(signature, "apply_async")()
             if next_deferred_at is not None:
                 _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
             elif capped_ids:
@@ -914,7 +1034,26 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 extra={"sync_run_id": sync_run_id, "error": str(exc)},
             )
             raise
-        return {"status": "dispatched", "queued_units": len(signatures)}
+        return {
+            "status": "dispatched",
+            "queued_units": len(signatures) + river_queued,
+        }
+
+    if river_queued:
+        if next_deferred_at is not None:
+            _schedule_redispatch(sync_run_id, available_at=next_deferred_at)
+        elif capped_ids:
+            _schedule_redispatch(sync_run_id)
+        logger.info(
+            "dispatch_sync_run.dispatched",
+            extra={
+                "sync_run_id": sync_run_id,
+                "queued_units": river_queued,
+                "celery_units": 0,
+                "river_units": river_queued,
+            },
+        )
+        return {"status": "dispatched", "queued_units": river_queued}
 
     # Fix 2: no units were claimable this pass.  Distinguish two cases:
     #   a) Deferred work remains (PLANNED units exist, not all terminal) →
@@ -1017,6 +1156,8 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
     # Unit context fields for structured logging — populated once ctx is loaded.
     _log_ctx: dict[str, Any] = {"unit_id": unit_id}
     unit: SyncRunUnit | None = None
+    ctx: SyncTaskContext | None = None
+    budget_audit: list[dict[str, Any]] | None = None
     try:
         with get_postgres_session_sync() as session:
             unit = _load_unit(session, unit_id)
@@ -1107,9 +1248,14 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                     "unit_id": unit_id,
                     "reason": "lease_lost",
                 }
-
         budget_audit = _budget_estimate_audit(ctx, _log_ctx)
         budget_audit_computed_at = datetime.now(timezone.utc)
+        if sync_dataset_requires_canonical_incident_feature(
+            str(ctx.provider),
+            str(ctx.dataset_key),
+        ):
+            with get_postgres_session_sync() as session:
+                require_canonical_incident_feature_for_update_sync(session, ctx.org_id)
         started_extra = dict(_log_ctx)
         if budget_audit is not None:
             started_extra["budget_estimate"] = budget_audit
@@ -1126,6 +1272,12 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
                 "unit_id": unit_id,
                 "reason": "lease_lost",
             }
+        if sync_dataset_requires_canonical_incident_feature(
+            str(ctx.provider),
+            str(ctx.dataset_key),
+        ):
+            with get_postgres_session_sync() as session:
+                require_canonical_incident_feature_for_update_sync(session, ctx.org_id)
         from dev_health_ops.metrics.job_work_items import (
             WorkItemsSyncLeaseLost,
             work_items_sync_lease_check,
@@ -1255,6 +1407,17 @@ def run_sync_unit(self, unit_id: str) -> dict[str, Any]:
         if terminal_txn_started:
             raise
         if unit is None:
+            terminal_txn_started = True
+            failure_result, should_finalize = _stamp_sync_unit_failed(
+                unit_id=unit_id,
+                sync_run_id=sync_run_id,
+                lease_owner=lease_owner,
+                started_at=started_at,
+                exc=exc,
+                log_ctx=_log_ctx,
+            )
+            return failure_result
+        if ctx is None:
             terminal_txn_started = True
             failure_result, should_finalize = _stamp_sync_unit_failed(
                 unit_id=unit_id,
@@ -1730,6 +1893,7 @@ def _stamp_sync_unit_failed(
             )
             .values(
                 status=SyncRunUnitStatus.FAILED.value,
+                available_at=None,
                 duration_seconds=duration_seconds,
                 error=sanitize_error_text(exc),
                 result=failed_result_payload,
@@ -1758,14 +1922,24 @@ def _stamp_sync_unit_failed(
                 now=completed_at,
             )
         session.flush()
-    logger.exception(
-        "run_sync_unit.failed",
-        extra={
-            **log_ctx,
-            "duration_seconds": duration_seconds,
-            "error_category": error_category,
-        },
-    )
+    if error_category == FEATURE_DISABLED_ERROR_CATEGORY:
+        logger.warning(
+            "run_sync_unit.feature_disabled",
+            extra={
+                **log_ctx,
+                "duration_seconds": duration_seconds,
+                "error_category": error_category,
+            },
+        )
+    else:
+        logger.exception(
+            "run_sync_unit.failed",
+            extra={
+                **log_ctx,
+                "duration_seconds": duration_seconds,
+                "error_category": error_category,
+            },
+        )
     return (
         {
             "status": "failed",
@@ -1783,11 +1957,9 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
 
     No-op until all units are terminal; once-only via the SyncRunPostDispatch
     ledger. The reconciler relay is the sole post-sync publisher. post_sync is
-    at-most-once: the relay marks dispatched before publishing and never re-arms
-    on publish failure because downstream raw-aggregation readers can
-    double-count duplicate computed_at generations. Durable exactly-once
-    post-sync re-drive is deferred to CHAOS-2596; dispatch/finalize wakeups
-    remain at-least-once because their consumers are idempotent.
+    at-least-once: a publish failure releases its guarded outbox claim for a
+    bounded re-drive. Downstream readers select the newest compute generation
+    per logical key, so duplicate deliveries cannot inflate supported metrics.
     """
 
     from dev_health_ops.db import get_postgres_session_sync
@@ -1825,6 +1997,16 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
         failed_count = sum(
             1 for unit in units if unit.status == SyncRunUnitStatus.FAILED.value
         )
+        error_category = next(
+            (
+                unit.result.get("error_category")
+                for unit in units
+                if unit.status == SyncRunUnitStatus.FAILED.value
+                and isinstance(unit.result, dict)
+                and unit.result.get("error_category")
+            ),
+            None,
+        )
         total_count = len(units)
         completed_at = datetime.now(timezone.utc)
         run.completed_units = success_count
@@ -1835,6 +2017,17 @@ def finalize_sync_run(sync_run_id: str) -> dict[str, Any]:
             "completed_units": success_count,
             "failed_units": failed_count,
         }
+        if error_category is not None:
+            result_payload["error_category"] = error_category
+        if error_category == FEATURE_DISABLED_ERROR_CATEGORY and run.error is None:
+            run.error = next(
+                (
+                    unit.error
+                    for unit in units
+                    if unit.status == SyncRunUnitStatus.FAILED.value and unit.error
+                ),
+                None,
+            )
         if total_count == 0:
             run.error = "No sync units planned"
             result_payload["reason"] = "no_sync_units_planned"
@@ -2106,6 +2299,10 @@ def sync_observers_for_terminal_sync_run(session, run: SyncRun) -> None:
         "completed_units": int(run.completed_units or 0),
         "failed_units": int(run.failed_units or 0),
     }
+    run_result = run.result if isinstance(run.result, dict) else {}
+    error_category = run_result.get("error_category")
+    if error_category is not None:
+        result_patch["error_category"] = error_category
 
     marker = f"sync_run:{run.id}"
     backfill_jobs = (
@@ -2207,6 +2404,135 @@ def _enqueue_denied_active_finalize(sync_run_id: str) -> None:
             extra={"sync_run_id": sync_run_id},
         )
         raise
+
+
+def terminalize_feature_disabled_plan(
+    session: Session,
+    sync_run_id: str,
+    error: CanonicalIncidentFeatureDisabledError,
+) -> FeatureDisabledRunTransition:
+    run_uuid = uuid.UUID(str(sync_run_id))
+    run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one()
+    transition = terminalize_feature_disabled_run(session, run, error)
+    if not transition.run_terminal:
+        raise RuntimeError(
+            f"feature-disabled planned run retained nonterminal units: {sync_run_id}"
+        )
+
+    _terminalize_feature_disabled_graph(session, run, error)
+    return transition
+
+
+def _terminalize_feature_disabled_graph(
+    session: Session,
+    run: SyncRun,
+    error: CanonicalIncidentFeatureDisabledError,
+) -> None:
+    run_uuid = run.id
+
+    now = run.completed_at or datetime.now(timezone.utc)
+    error_text = sanitize_error_text(error)
+    result_payload = {"error_category": FEATURE_DISABLED_ERROR_CATEGORY}
+    session.execute(
+        update(SyncRunReferenceDiscovery)
+        .where(
+            SyncRunReferenceDiscovery.sync_run_id == run_uuid,
+            SyncRunReferenceDiscovery.status.in_({"planned", "retrying", "running"}),
+        )
+        .values(
+            status="failed",
+            lease_owner=None,
+            lease_expires_at=None,
+            last_heartbeat_at=now,
+            completed_at=now,
+            error=error_text,
+            result=result_payload,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    session.execute(
+        update(SyncDispatchOutbox)
+        .where(
+            SyncDispatchOutbox.sync_run_id == run_uuid,
+            SyncDispatchOutbox.status == OUTBOX_STATUS_PENDING,
+        )
+        .values(
+            status=OUTBOX_STATUS_DISPATCHED,
+            dispatched_at=now,
+            last_error=FEATURE_DISABLED_ERROR_CATEGORY,
+            claim_token=None,
+            claim_expires_at=None,
+            claim_transport=None,
+            claim_route_generation=None,
+            dispatched_transport=None,
+            dispatched_route_generation=None,
+            transport_job_id=None,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    finalize_row = (
+        session.query(SyncDispatchOutbox)
+        .filter(
+            SyncDispatchOutbox.sync_run_id == run_uuid,
+            SyncDispatchOutbox.kind == OUTBOX_KIND_FINALIZE,
+        )
+        .one_or_none()
+    )
+    if finalize_row is None:
+        session.add(
+            SyncDispatchOutbox(
+                org_id=str(run.org_id),
+                sync_run_id=run_uuid,
+                kind=OUTBOX_KIND_FINALIZE,
+                status=OUTBOX_STATUS_DISPATCHED,
+                available_at=now,
+                attempts=0,
+                dispatched_at=now,
+                last_error=FEATURE_DISABLED_ERROR_CATEGORY,
+            )
+        )
+    else:
+        finalize_row.status = OUTBOX_STATUS_DISPATCHED
+        finalize_row.last_error = FEATURE_DISABLED_ERROR_CATEGORY
+        finalize_row.dispatched_at = now
+        finalize_row.claim_token = None
+        finalize_row.claim_expires_at = None
+        finalize_row.claim_transport = None
+        finalize_row.claim_route_generation = None
+        finalize_row.dispatched_transport = None
+        finalize_row.dispatched_route_generation = None
+        finalize_row.transport_job_id = None
+        finalize_row.updated_at = now
+
+    sync_observers_for_terminal_sync_run(session, run)
+    session.flush()
+
+
+def _arm_feature_disabled_finalize(
+    session: Session,
+    run: SyncRun,
+    available_at: datetime,
+) -> bool:
+    nested = session.begin_nested()
+    try:
+        session.add(
+            SyncDispatchOutbox(
+                org_id=str(run.org_id),
+                sync_run_id=run.id,
+                kind=OUTBOX_KIND_FINALIZE,
+                status=OUTBOX_STATUS_PENDING,
+                available_at=available_at,
+                attempts=0,
+            )
+        )
+        session.flush()
+    except IntegrityError:
+        nested.rollback()
+        return False
+    nested.commit()
+    return True
 
 
 def _claim_units(

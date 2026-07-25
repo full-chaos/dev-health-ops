@@ -28,7 +28,6 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
     OUTBOX_STATUS_PENDING,
 )
-from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
 
 
 @pytest.fixture
@@ -455,7 +454,9 @@ def test_reference_discovery_failure_exhaustion_fails_units_and_run(
 
 
 def test_reference_discovery_failure_sanitizes_credential_material(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Mirrors CHAOS-2758's live-verify case B for the reference-discovery
     ledger's error text (CHAOS-2766): a provider exception whose message
@@ -472,15 +473,25 @@ def test_reference_discovery_failure_sanitizes_credential_material(
     _patch_db_session(monkeypatch, db_session)
     monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example/test")
     monkeypatch.setenv("SYNC_REFERENCE_DISCOVERY_MAX_ATTEMPTS", "1")
-    # Built via concatenation, not a single literal: Gitleaks scans literal
-    # file bytes, and a contiguous "ghp_..." shape in the SOURCE reads as a
-    # real leaked credential to a byte scanner (CHAOS-2766 PR #1123 CI).
     fixture_value = "ghp_" + "FAKE1234567890abcdefghijklmnopqrst"
+    malicious_fragments = (
+        "MaliciousReferenceDiscoveryError",
+        "internal-db.example",
+        "/srv/private/config.json",
+        "SELECT token FROM credentials",
+        "https://admin:password@internal.example/discover",
+        fixture_value,
+        'payload={"access_token":"private"}',
+    )
+
+    class MaliciousReferenceDiscoveryError(ValueError):
+        pass
+
     monkeypatch.setattr(
         reference_discovery,
         "run_team_autoimport_strict",
         lambda **_: (_ for _ in ()).throw(
-            ValueError(f"403 rate limited -- Authorization: Bearer {fixture_value}")
+            MaliciousReferenceDiscoveryError(" | ".join(malicious_fragments[1:]))
         ),
     )
 
@@ -493,22 +504,18 @@ def test_reference_discovery_failure_sanitizes_credential_material(
         db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
     )
 
-    for persisted_text in (
+    persisted_texts = (
         ledger.error,
         unit.error,
         run.error,
         result.get("error"),
-    ):
-        assert persisted_text is not None
-        assert fixture_value not in persisted_text
-        assert "Bearer" not in persisted_text
-        assert REDACTION_MARKER in persisted_text
-
-    # Diagnostic value survives: the class name and non-secret context
-    # remain readable for operators debugging the failure.
-    assert ledger.error is not None
-    assert "ValueError" in ledger.error
-    assert "403 rate limited" in ledger.error
+    )
+    assert persisted_texts == ("Reference discovery failed",) * 4
+    captured = f"{persisted_texts!r} {caplog.text} " + " ".join(
+        str(record.__dict__) for record in caplog.records
+    )
+    for fragment in malicious_fragments:
+        assert fragment not in captured
 
 
 def test_reference_discovery_transient_failure_retries(

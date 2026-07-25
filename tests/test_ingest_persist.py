@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +13,9 @@ from dev_health_ops.api.ingest.persist import (
     persist_items,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from dev_health_ops.storage.operational_ordering_guard import (
+    OperationalOrderingContract,
+)
 
 
 class TestRepoIdFromUrl:
@@ -53,7 +58,9 @@ def _mock_store():
     store.insert_git_pull_requests = AsyncMock()
     store.insert_work_items = AsyncMock()
     store.insert_deployments = AsyncMock()
-    store.insert_incidents = AsyncMock()
+    store.insert_operational_services = AsyncMock()
+    store.insert_operational_incidents = AsyncMock()
+    store.insert_operational_service_repository_mappings = AsyncMock()
     store.__aenter__ = AsyncMock(return_value=store)
     store.__aexit__ = AsyncMock(return_value=False)
     return store
@@ -183,6 +190,8 @@ class TestPersistIncidents:
                 {
                     "incident_id": "inc-1",
                     "status": "resolved",
+                    "started_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+                    "resolved_at": datetime(2026, 7, 1, 1, tzinfo=timezone.utc),
                     "_repo_url": "https://github.com/org/repo",
                     "_org_id": "default",
                     "_ingestion_id": "ing-1",
@@ -191,9 +200,14 @@ class TestPersistIncidents:
             count = await persist_items("incidents", items)
 
         assert count == 1
-        store.insert_incidents.assert_awaited_once()
-        call_args = store.insert_incidents.call_args[0][0]
-        assert "repo_id" in call_args[0]
+        store.insert_operational_services.assert_awaited_once()
+        store.insert_operational_service_repository_mappings.assert_awaited_once()
+        store.insert_operational_incidents.assert_awaited_once()
+        incident = store.insert_operational_incidents.await_args.args[0][0]
+        assert incident.provider == "external"
+        assert incident.provider_instance_id == "legacy-repository-ingest"
+        assert incident.external_id == "inc-1"
+        assert incident.normalized_status == "resolved"
 
 
 @pytest.mark.asyncio
@@ -226,6 +240,23 @@ class TestClickHouseStoreSettings:
     def test_default_settings_empty(self):
         store = ClickHouseStore("clickhouse://localhost")
         assert store._settings == {}
+
+    def test_explicit_operational_ordering_contract(self):
+        store = ClickHouseStore(
+            "clickhouse://localhost",
+            operational_ordering_contract=OperationalOrderingContract.CURRENT,
+        )
+        assert (
+            store._operational_ordering_contract is OperationalOrderingContract.CURRENT
+        )
+        assert store._operational_ordering_contract_is_explicit
+
+    def test_rejects_raw_operational_ordering_contract(self):
+        with pytest.raises(TypeError, match="must be an OperationalOrderingContract"):
+            ClickHouseStore(
+                "clickhouse://localhost",
+                operational_ordering_contract=cast(OperationalOrderingContract, 2),
+            )
 
     @pytest.mark.asyncio
     async def test_insert_rows_passes_settings(self):

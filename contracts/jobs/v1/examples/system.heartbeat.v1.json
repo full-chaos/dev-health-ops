@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "correlation_id": "job-heartbeat-0001",
+  "idempotency_key": "heartbeat:2026-07-21T12:00:00Z",
+  "domain": {
+    "type": "schedule_occurrence",
+    "id": "00000000-0000-4000-8000-000000000001"
+  },
+  "payload": {
+    "scheduled_for": "2026-07-21T12:00:00Z"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/jobs/v1/schemas/workgraph.build.v1.schema.json",
+  "title": "workgraph.build payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id"],
+  "properties": {"request_id": {"type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}}
+}

@@ -36,6 +36,11 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_ingest_token_key,
     limiter,
 )
+from dev_health_ops.external_ingest.feature_gate import (
+    ExternalIngestFeatureAvailability,
+    canonical_incident_ingestion_allowed,
+    external_ingest_feature_availability,
+)
 from dev_health_ops.external_ingest.ownership import (
     OWNERSHIP_RESOLUTION_UNAVAILABLE_MESSAGE,
     EffectiveMode,
@@ -58,6 +63,7 @@ from .schema_registry import compute_etag, get_bundle, list_versions
 from .schemas import (
     MAX_BODY_BYTES_DEFAULT,
     MAX_RECORDS_DEFAULT,
+    OPERATIONAL_RECORD_KINDS,
     RECORD_KIND_MODELS,
     SCHEMA_VERSION,
     BatchAcceptedResponse,
@@ -85,6 +91,10 @@ router = APIRouter(prefix="/api/v1/external-ingest", tags=["external-ingest"])
 # closures, since FastAPI matches overrides by the specific callable passed
 # to Depends().
 _require_schema_read = require_ingest_scope("schema:read")
+_require_schema_availability = require_ingest_scope(
+    "schema:read",
+    require_customer_push_feature=False,
+)
 _require_ingest_write = require_ingest_scope("ingest:write")
 
 
@@ -201,6 +211,40 @@ def _check_all_kinds_known_or_400(envelope: BatchEnvelope) -> None:
             )
 
 
+def _requires_canonical_incident_ingestion(envelope: BatchEnvelope) -> bool:
+    return any(record.kind in OPERATIONAL_RECORD_KINDS for record in envelope.records)
+
+
+async def _canonical_incident_ingestion_allowed(
+    session: AsyncSession,
+    org_id: str,
+) -> bool:
+    return await canonical_incident_ingestion_allowed(session, org_id)
+
+
+async def _external_ingest_feature_availability(
+    session: AsyncSession,
+    org_id: str,
+) -> ExternalIngestFeatureAvailability:
+    return await external_ingest_feature_availability(session, org_id)
+
+
+async def _require_canonical_incident_ingestion(
+    session: AsyncSession,
+    org_id: str,
+    envelope: BatchEnvelope,
+) -> None:
+    if not _requires_canonical_incident_ingestion(envelope):
+        return
+    if await _canonical_incident_ingestion_allowed(session, org_id):
+        return
+    raise ExternalIngestError(
+        403,
+        "feature_not_enabled",
+        "Canonical incident ingestion is not enabled for this organization",
+    )
+
+
 # Force schema generation (models_json_schema + example loading) to run at
 # import time, not lazily on a customer's first request — a bad example
 # fixture or a models_json_schema regression should fail app startup, not a
@@ -264,23 +308,52 @@ async def get_schema(
     return body
 
 
+@router.get("/availability")
+async def get_availability(
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    ctx: IngestAuthContext = Depends(_require_schema_availability),
+) -> dict[str, object]:
+    availability = await _external_ingest_feature_availability(session, ctx.org_id)
+    available_kinds = set(RECORD_KIND_MODELS)
+    unavailable_kinds: set[str] = set()
+    if not availability.customer_push_ingest:
+        available_kinds.clear()
+        unavailable_kinds = set(RECORD_KIND_MODELS)
+    elif not availability.canonical_incident_ingestion:
+        available_kinds -= OPERATIONAL_RECORD_KINDS
+        unavailable_kinds = set(OPERATIONAL_RECORD_KINDS)
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "features": {
+            "customerPushIngest": availability.customer_push_ingest,
+            "canonicalIncidentIngestion": availability.canonical_incident_ingestion,
+        },
+        "availableRecordKinds": sorted(available_kinds),
+        "unavailableRecordKinds": sorted(unavailable_kinds),
+    }
+
+
 @router.post("/validate", response_model=ValidationResponse)
 @limiter.limit(INGEST_VALIDATE_LIMIT, key_func=get_ingest_token_key)
 async def validate_batch(
     request: Request,
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     ctx: IngestAuthContext = Depends(_require_schema_read),
 ) -> ValidationResponse:
     raw = await _read_body_enforcing_size_limit(request)
     envelope = _parse_envelope_or_400(raw)
     _check_schema_version_or_400(envelope)
     _check_batch_size_or_400(envelope)
+    await _require_canonical_incident_ingestion(session, ctx.org_id, envelope)
     errors = validate_records(envelope.records)
     rejected_indices = {item.index for item in errors}
-    return ValidationResponse(
-        valid=not errors,
-        items_accepted=len(envelope.records) - len(rejected_indices),
-        items_rejected=len(rejected_indices),
-        errors=errors,
+    return ValidationResponse.model_validate(
+        {
+            "valid": not errors,
+            "itemsAccepted": len(envelope.records) - len(rejected_indices),
+            "itemsRejected": len(rejected_indices),
+            "errors": errors,
+        }
     )
 
 
@@ -352,8 +425,9 @@ async def accept_batch(
     _check_idempotency_header_matches_body(envelope, idempotency_key_header)
     _check_schema_version_or_400(envelope)
     _check_all_kinds_known_or_400(envelope)
-    _check_entity_family_or_400(envelope)
     _check_batch_size_or_400(envelope)
+    await _require_canonical_incident_ingestion(session, ctx.org_id, envelope)
+    _check_entity_family_or_400(envelope)
     # Adversarial-review fix: require_ingest_scope resolves before the body
     # is parsed, so it can't check payload source vs. token-bound source
     # itself -- a source-bound ingest:write token must not be able to push
@@ -502,10 +576,12 @@ async def accept_batch(
 
     return JSONResponse(
         status_code=202,
-        content=BatchAcceptedResponse(
-            ingestion_id=ingestion_id,
-            items_received=len(envelope.records),
-            stream=stream,
+        content=BatchAcceptedResponse.model_validate(
+            {
+                "ingestionId": ingestion_id,
+                "itemsReceived": len(envelope.records),
+                "stream": stream,
+            }
         ).model_dump(by_alias=True),
     )
 

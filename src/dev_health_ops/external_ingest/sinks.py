@@ -48,6 +48,10 @@ from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.work_items import WorkItemDependency
 from dev_health_ops.storage import create_store
 
+from .feature_gate import (
+    CanonicalIncidentIngestionDisabledError,
+    external_operational_ingestion_allowed_for_org,
+)
 from .ids import derive_repo_uuid, derive_work_item_id
 from .types import AffectedScope, NormalizedBatch, SinkWriteError, SinkWriteResult
 
@@ -63,6 +67,27 @@ _GIT_SYSTEMS = {"github", "gitlab"}
 
 # WorkItemV1.type -> derive_work_item_id's work_item_type disambiguator.
 _WORK_ITEM_TYPE_FOR_ID = {"pr": "pr", "merge_request": "merge_request"}
+
+
+async def _operational_ingestion_allowed(org_id: str) -> bool:
+    return await external_operational_ingestion_allowed_for_org(org_id)
+
+
+def _has_operational_records(batch: NormalizedBatch) -> bool:
+    return bool(
+        batch.operational_services
+        or batch.operational_incidents
+        or batch.operational_alerts
+        or batch.incident_timeline_events
+        or batch.incident_notes
+        or batch.incident_responders
+        or batch.escalation_policies
+        or batch.on_call_schedules
+        or batch.on_call_assignments
+        or batch.operational_teams
+        or batch.operational_users
+        or batch.service_repository_mappings
+    )
 
 
 def _getter(record: Any):
@@ -636,6 +661,10 @@ def _open_metrics_sink(clickhouse_dsn: str, org_id: str) -> ClickHouseMetricsSin
 async def write_batch(
     batch: NormalizedBatch, *, clickhouse_dsn: str
 ) -> SinkWriteResult:
+    if _has_operational_records(batch) and not await _operational_ingestion_allowed(
+        batch.org_id
+    ):
+        raise CanonicalIncidentIngestionDisabledError()
     errors: list[SinkWriteError] = []
     warnings: list[SinkWriteError] = []
     counts: dict[str, int] = {}

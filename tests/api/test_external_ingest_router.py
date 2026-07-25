@@ -18,6 +18,7 @@ import json
 import sys
 import uuid as uuid_mod
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -33,6 +34,9 @@ from dev_health_ops.api.external_ingest.schemas import (
 from dev_health_ops.api.external_ingest.streams import StreamUnavailableError
 from dev_health_ops.api.main import app
 from dev_health_ops.core.encryption import encrypt_value
+from dev_health_ops.external_ingest.feature_gate import (
+    ExternalIngestFeatureAvailability,
+)
 from dev_health_ops.external_ingest.payload_store import payload_exists
 from dev_health_ops.models.external_ingest import (
     ExternalIngestBatch,
@@ -133,8 +137,26 @@ async def client(session_maker, monkeypatch):
             yield session
 
     app.dependency_overrides[router_mod._require_schema_read] = lambda: TEST_CTX
+    app.dependency_overrides[router_mod._require_schema_availability] = lambda: TEST_CTX
     app.dependency_overrides[router_mod._require_ingest_write] = lambda: TEST_CTX
     app.dependency_overrides[router_mod.get_postgres_session_dep] = _session_override
+    monkeypatch.setattr(
+        router_mod,
+        "_canonical_incident_ingestion_allowed",
+        AsyncMock(return_value=True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        router_mod,
+        "_external_ingest_feature_availability",
+        AsyncMock(
+            return_value=ExternalIngestFeatureAvailability(
+                customer_push_ingest=True,
+                canonical_incident_ingestion=True,
+            )
+        ),
+        raising=False,
+    )
     # Only the Valkey stream boundary is faked; individual tests override
     # enqueue_batch again for their own success/failure scenarios.
     monkeypatch.setattr(router_mod, "enqueue_batch", _default_fake_enqueue)
@@ -148,6 +170,7 @@ async def client(session_maker, monkeypatch):
             yield c
     finally:
         app.dependency_overrides.pop(router_mod._require_schema_read, None)
+        app.dependency_overrides.pop(router_mod._require_schema_availability, None)
         app.dependency_overrides.pop(router_mod._require_ingest_write, None)
         app.dependency_overrides.pop(router_mod.get_postgres_session_dep, None)
 

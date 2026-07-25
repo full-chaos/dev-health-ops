@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    environment:
+      POSTGRES_DB: river_compat
+      POSTGRES_PASSWORD: river_compat
+      POSTGRES_USER: river_compat
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U river_compat -d river_compat"]
+      interval: 30s
+      start_interval: 1s
+      start_period: 30s
+      timeout: 3s
+      retries: 3
+    ports:
+      - "127.0.0.1::5432"
+    tmpfs:
+      # PostgreSQL 18 moved PGDATA below /var/lib/postgresql. Keep the entire
+      # declared data volume ephemeral so a failed harness cannot leave state.
+      - /var/lib/postgresql
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMIN_USERS: river_compat
+      AUTH_TYPE: scram-sha-256
+      DB_HOST: postgres
+      DB_NAME: river_compat
+      DB_PASSWORD: river_compat
+      DB_PORT: 5432
+      DB_USER: river_compat
+      DEFAULT_POOL_SIZE: 5
+      LISTEN_PORT: 6432
+      MAX_CLIENT_CONN: 50
+      MIN_POOL_SIZE: 1
+      POOL_MODE: transaction
+      RESERVE_POOL_SIZE: 1
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          PGPASSWORD=$$DB_PASSWORD pg_isready -h 127.0.0.1 -p 6432
+          -U $$DB_USER -d $$DB_NAME
+      interval: 30s
+      start_interval: 1s
+      start_period: 30s
+      timeout: 3s
+      retries: 3
+    ports:
+      - "127.0.0.1::6432"

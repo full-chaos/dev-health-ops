@@ -84,6 +84,15 @@ def _load_credential(session: Session, credential_id: Any, org_id: str) -> Any:
     )
 
 
+def _require_active_pagerduty_credential(credential: Any) -> None:
+    if str(getattr(credential, "provider", "")).lower() != "pagerduty" or not bool(
+        getattr(credential, "is_active", False)
+    ):
+        raise ValueError(
+            "PagerDuty sync requires an active organization-scoped credential"
+        )
+
+
 def _resolve_integration_auth(
     session: Session, integration: Any, provider: str, error_label: str
 ) -> tuple[Any, Any]:
@@ -98,10 +107,16 @@ def _resolve_integration_auth(
 
     credential_id = integration.credential_id
     if credential_id is None:
+        if provider == "pagerduty":
+            raise ValueError(
+                "PagerDuty sync requires an active organization-scoped credential"
+            )
         return None, _resolve_env_credentials(provider)
     credential = _load_credential(session, credential_id, integration.org_id)
     if credential is None:
         raise ValueError(f"Credential not found for {error_label}")
+    if provider == "pagerduty":
+        _require_active_pagerduty_credential(credential)
     return credential_id, _credential_mapping(credential)
 
 
@@ -174,6 +189,10 @@ def resolve_run_auth(
     else:
         stamped_credential_id = getattr(run, "credential_id", None)
         if stamped_credential_id is None:
+            if provider == "pagerduty":
+                raise ValueError(
+                    "PagerDuty sync requires an active organization-scoped credential"
+                )
             decrypted_credentials = dict(_resolve_env_credentials(provider))
             credential_id = None
         else:
@@ -184,6 +203,8 @@ def resolve_run_auth(
                 # Stamped credential deleted mid-run: the intended, honest failure
                 # surface (the run was frozen against a now-absent credential).
                 raise ValueError(f"Credential not found for {error_label}")
+            if provider == "pagerduty":
+                _require_active_pagerduty_credential(credential)
             decrypted_credentials = _credential_mapping(credential)
             credential_id = stamped_credential_id
         _verify_stamped_fingerprint(

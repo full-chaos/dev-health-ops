@@ -38,6 +38,9 @@ jobs:
               - 'alembic.ini'
               - 'Makefile'
               - 'scripts/**'
+              - 'alerts/**'
+              - 'compose.yml'
+              - 'deploy/**'
 
   # Fast, pytest-xdist-parallelized unit suite across the supported Python
   # versions. This is the per-PR signal that the required `test` gate (below)

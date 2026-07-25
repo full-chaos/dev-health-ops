@@ -103,6 +103,9 @@ dev = [
   "pip-audit>=2.7.0",
   "mako>=1.3.12",
   "pandas-stubs>=3.0.3.260530",
+  # CHAOS-3034 compatibility probe only. Production Python code must enqueue
+  # through the worker_job_outbox fallback unless a compatible client ships.
+  "riverqueue==0.7.0",
 ]
 enterprise-sso = ["signxml>=3.0.0"]
 
@@ -158,6 +161,11 @@ exclude = [
   "venv",
   "__pycache__",
   "docs",
+  # Non-source documentation trees. Ruff 0.16 formats Python code fences in
+  # Markdown; the preserved legacy corpus is frozen reference material that must
+  # not be reformatted, and .planning holds internal planning notes.
+  ".github/docs-legacy",
+  ".planning",
   "build",
   "dist",
   "migrations",
@@ -209,6 +217,8 @@ module = [
   "celery.*",
   "billiard",
   "billiard.*",
+  "kombu",
+  "kombu.*",
   "atlassian",
   "atlassian.*",
   "radon",
@@ -227,6 +237,8 @@ module = [
   "tabulate.*",
   "clickhouse_connect",
   "clickhouse_connect.*",
+  "riverqueue",
+  "riverqueue.*",
   "motor",
   "motor.*",
 ]

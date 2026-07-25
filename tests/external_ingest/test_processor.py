@@ -53,6 +53,7 @@ from tests._helpers import tables_of
 ORG = "org-2697"
 SYSTEM = "github"
 INSTANCE = "acme/api"
+OPERATIONAL_INSTANCE = "github.com"
 REPO_UUID = uuid.uuid4()
 
 _TABLES = tables_of(
@@ -74,6 +75,15 @@ VALID_COMMIT = {
         "repositoryExternalId": INSTANCE,
         "hash": "abc1234",
         "authorWhen": "2026-07-01T00:00:00Z",
+    },
+}
+VALID_OPERATIONAL_INCIDENT = {
+    "kind": "operational_incident.v1",
+    "externalId": "incident-1",
+    "payload": {
+        "externalId": "incident-1",
+        "sourceVersionAt": "2026-07-17T00:00:00Z",
+        "title": "Database unavailable",
     },
 }
 INVALID_WORK_ITEM = {"kind": "work_item.v1", "externalId": "wi-bad", "payload": {}}
@@ -110,6 +120,22 @@ async def source_id(session_maker) -> uuid.UUID:
         org_id=ORG,
         system=SYSTEM,
         instance=INSTANCE,
+        mode=IngestSourceMode.CUSTOMER_PUSH.value,
+        enabled=True,
+    )
+    async with session_maker() as session:
+        session.add(source)
+        await session.commit()
+        return source.id
+
+
+@pytest_asyncio.fixture
+async def operational_source_id(session_maker) -> uuid.UUID:
+    source = IngestSource(
+        org_id=ORG,
+        system=SYSTEM,
+        instance=OPERATIONAL_INSTANCE,
+        entity_family="operational",
         mode=IngestSourceMode.CUSTOMER_PUSH.value,
         enabled=True,
     )
@@ -181,6 +207,7 @@ async def _seed_batch(
     items_received: int | None = None,
     envelope_instance: str = INSTANCE,
     source_instance: str = INSTANCE,
+    entity_family: str = "legacy",
     with_payload: bool = True,
 ) -> str:
     envelope = {
@@ -190,6 +217,7 @@ async def _seed_batch(
             "type": "customer_push",
             "system": SYSTEM,
             "instance": envelope_instance,
+            "entityFamily": entity_family,
         },
         "records": records,
     }
@@ -637,3 +665,91 @@ class TestMarkBatchFailed:
             await mark_batch_failed(
                 ingestion_id=str(uuid.uuid4()), org_id=ORG, reason="r"
             )
+
+
+@pytest.mark.asyncio
+class TestCanonicalIncidentFeatureGate:
+    async def test_queued_disable_is_terminal_before_sink_write(
+        self,
+        session_maker,
+        operational_source_id,
+        fake_sink,
+        monkeypatch,
+    ) -> None:
+        canonical_allowed = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            processor_mod,
+            "_operational_ingestion_allowed",
+            canonical_allowed,
+            raising=False,
+        )
+        ingestion_id = await _seed_batch(
+            session_maker,
+            records=[VALID_OPERATIONAL_INCIDENT],
+            envelope_instance=OPERATIONAL_INSTANCE,
+            source_instance=OPERATIONAL_INSTANCE,
+            entity_family="operational",
+        )
+
+        with pytest.raises(PermanentProcessingError, match="feature_disabled"):
+            await _process(ingestion_id, source_instance=OPERATIONAL_INSTANCE)
+
+        fake_sink.assert_not_awaited()
+        row = await _get_row(session_maker, ingestion_id)
+        assert row is not None and row.status == "failed"
+        async with session_maker() as session:
+            assert not await payload_exists(
+                session, ingestion_id=ingestion_id, org_id=ORG
+            )
+
+    async def test_operational_batch_writes_when_feature_enabled(
+        self,
+        session_maker,
+        operational_source_id,
+        fake_sink,
+        fake_recompute,
+        monkeypatch,
+    ) -> None:
+        canonical_allowed = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            processor_mod,
+            "_operational_ingestion_allowed",
+            canonical_allowed,
+            raising=False,
+        )
+        ingestion_id = await _seed_batch(
+            session_maker,
+            records=[VALID_OPERATIONAL_INCIDENT],
+            envelope_instance=OPERATIONAL_INSTANCE,
+            source_instance=OPERATIONAL_INSTANCE,
+            entity_family="operational",
+        )
+
+        accepted = await _process(ingestion_id, source_instance=OPERATIONAL_INSTANCE)
+
+        assert accepted == 1
+        fake_sink.assert_awaited_once()
+        canonical_allowed.assert_awaited_once()
+
+    async def test_legacy_batch_never_checks_canonical_feature(
+        self,
+        session_maker,
+        source_id,
+        fake_sink,
+        fake_recompute,
+        monkeypatch,
+    ) -> None:
+        canonical_allowed = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            processor_mod,
+            "_operational_ingestion_allowed",
+            canonical_allowed,
+            raising=False,
+        )
+        ingestion_id = await _seed_batch(session_maker, records=[VALID_REPO])
+
+        accepted = await _process(ingestion_id)
+
+        assert accepted == 1
+        fake_sink.assert_awaited_once()
+        canonical_allowed.assert_not_awaited()

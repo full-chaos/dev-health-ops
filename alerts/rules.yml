@@ -133,6 +133,125 @@ groups:
             {{ $labels.task_name }} P95 duration is {{ $value | humanizeDuration }}.
 
   # ---------------------------------------------------------------------------
+  # Go worker runtime (CHAOS-3038)
+  # ---------------------------------------------------------------------------
+  # These rules are additive during coexistence. Celery rules stay active until
+  # every kind has completed its explicit ownership cutover.
+  - name: go_workers
+    interval: 30s
+    rules:
+      - alert: GoWorkerOldestAvailableJobHigh
+        expr: |
+          max by (profile, queue) (worker_job_oldest_age_seconds) > 300
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Go worker queue {{ $labels.queue }} is delayed"
+          description: |
+            The oldest available job for profile {{ $labels.profile }} and queue
+            {{ $labels.queue }} is {{ $value | humanizeDuration }} old.
+
+      - alert: GoWorkerExecutionSaturated
+        expr: |
+          max by (profile) (worker_execution_saturation_ratio) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Go worker profile {{ $labels.profile }} is saturated"
+          description: |
+            Active work has consumed more than 90% of the declared concurrency
+            budget for profile {{ $labels.profile }}.
+
+      - alert: GoWorkerAttemptFailureRateHigh
+        expr: |
+          (
+            sum by (kind) (rate(worker_job_attempts_total{result=~"retry|discard|cancel"}[15m]))
+            /
+            clamp_min(sum by (kind) (rate(worker_job_attempts_total[15m])), 0.001)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Go worker job {{ $labels.kind }} failure rate is high"
+          description: |
+            More than 10% of attempts for {{ $labels.kind }} are retrying,
+            discarded, or canceled.
+
+      - alert: GoWorkerDomainStateMismatch
+        expr: |
+          sum by (domain_type) (increase(worker_domain_state_mismatch_total[5m])) > 0
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Go worker domain-state mismatch"
+          description: |
+            A job was rejected because its {{ $labels.domain_type }} domain state
+            did not permit execution. Inspect the sanitized operator audit trail.
+
+      - alert: GoWorkerStreamLagHigh
+        expr: |
+          max by (stream, consumer_group) (worker_stream_lag) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Worker stream consumer lag is high"
+          description: |
+            Stream {{ $labels.stream }} consumer group {{ $labels.consumer_group }}
+            is {{ $value }} messages behind.
+
+      - alert: GoWorkerStreamPendingTooOld
+        expr: |
+          max by (stream, consumer_group) (worker_stream_oldest_pending_seconds) > 300
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Worker stream pending entry is stale"
+          description: |
+            The oldest pending entry for {{ $labels.stream }} / 
+            {{ $labels.consumer_group }} is {{ $value | humanizeDuration }} old.
+
+      - alert: GoWorkerQueueControlPoolPressure
+        expr: |
+          max by (pool) (
+            worker_database_pool_saturation_ratio{pool="queue_control"}
+          ) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Go worker {{ $labels.pool }} pool pressure is high"
+          description: |
+            The {{ $labels.pool }} PostgreSQL pool is using more than 85% of
+            its configured connection budget.
+
+      - alert: GoWorkerTelemetryTargetDown
+        expr: |
+          max by (job, instance) (
+            up{job=~"dev-health-go-(worker|scheduler|reconciler|stream-runner).*"}
+          ) == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Go worker telemetry target is unavailable"
+          description: |
+            Configured scrape target {{ $labels.job }} / {{ $labels.instance }}
+            has been unavailable for five minutes.
+
+  # ---------------------------------------------------------------------------
   # LLM API
   # ---------------------------------------------------------------------------
   - name: llm

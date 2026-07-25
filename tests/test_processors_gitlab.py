@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
+from uuid import UUID
 
 import pytest
 
@@ -24,6 +25,10 @@ from dev_health_ops.providers.gitlab.code_client import (
     GitLabDeploymentData,
     GitLabPipelineData,
     GitLabProjectData,
+)
+from dev_health_ops.providers.operational_migration import (
+    IssueIncidentSource,
+    map_issue_incidents,
 )
 
 
@@ -146,6 +151,7 @@ async def test_process_gitlab_project_sync_flags(monkeypatch):
 
     # Mock storage
     mock_store = AsyncMock()
+    mock_store.org_id = "org-a"
 
     # Mock project info
     mock_gl_project = Mock()
@@ -173,6 +179,41 @@ async def test_process_gitlab_project_sync_flags(monkeypatch):
             started_at=datetime.now(timezone.utc),
         )
     ]
+
+    def fetch_incidents(
+        _connector,
+        _project_id,
+        repo_id,
+        _max_issues,
+        _since,
+        _until,
+        canonical_sources,
+        canonical_org_id,
+        canonical_provider_instance_id,
+        repo_full_name,
+    ):
+        canonical_sources.append(
+            IssueIncidentSource(
+                org_id=canonical_org_id,
+                provider="gitlab",
+                provider_instance_id=canonical_provider_instance_id,
+                repo_id=repo_id,
+                repo_full_name=repo_full_name,
+                external_id="1",
+                issue_number="1",
+                source_url="https://gitlab.com/group/test-project/-/issues/1",
+                labels=(),
+                raw_status="opened",
+                title="Incident",
+                description=None,
+                created_at=mock_incidents[0].started_at,
+                resolved_at=None,
+                source_version_at=mock_incidents[0].started_at,
+                source_entity_type="incident",
+                raw_severity="high",
+            )
+        )
+        return mock_incidents
 
     # Patch the helper functions and connector
     with (
@@ -202,7 +243,7 @@ async def test_process_gitlab_project_sync_flags(monkeypatch):
         ) as mock_fetch_deployments,
         patch(
             "dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync",
-            return_value=mock_incidents,
+            side_effect=fetch_incidents,
         ) as mock_fetch_incidents,
         patch(
             "dev_health_ops.processors.gitlab._fetch_gitlab_blame_sync", return_value=[]
@@ -234,7 +275,11 @@ async def test_process_gitlab_project_sync_flags(monkeypatch):
         # Verify store methods were called
         mock_store.insert_ci_pipeline_runs.assert_called_once_with(mock_pipelines)
         mock_store.insert_deployments.assert_called_once_with(mock_deployments)
-        mock_store.insert_incidents.assert_called_once_with(mock_incidents)
+        mock_store.insert_incidents.assert_not_called()
+        mock_store.insert_operational_incidents.assert_awaited_once()
+        written_incident = mock_store.insert_operational_incidents.await_args.args[0][0]
+        assert written_incident.source_entity_type == "incident"
+        assert written_incident.normalized_severity == "high"
 
 
 @pytest.mark.asyncio
@@ -778,14 +823,27 @@ def test_fetch_gitlab_incidents_sync():
     mock_connector.rest_client.get_issues.return_value = [
         {
             "id": 505,
+            "iid": 17,
+            "issue_type": "incident",
+            "severity": "HIGH",
             "state": "opened",
             "created_at": "2023-01-03T12:00:00Z",
             "closed_at": None,
         }
     ]
+    sources: list[IssueIncidentSource] = []
+    repo_id = UUID("00000000-0000-0000-0000-000000000101")
 
     incidents = _fetch_gitlab_incidents_sync(
-        mock_connector, project_id=1, repo_id=None, max_issues=10, since=None
+        mock_connector,
+        project_id=1,
+        repo_id=repo_id,
+        max_issues=10,
+        since=None,
+        canonical_sources=sources,
+        canonical_org_id="org-a",
+        canonical_provider_instance_id="https://gitlab.com",
+        repo_full_name="group/project",
     )
 
     assert len(incidents) == 1
@@ -794,3 +852,87 @@ def test_fetch_gitlab_incidents_sync():
     assert incidents[0].started_at == datetime(
         2023, 1, 3, 12, 0, 0, tzinfo=timezone.utc
     )
+    call = mock_connector.rest_client.get_issues.call_args
+    assert call.kwargs["issue_type"] == "incident"
+    assert "labels" not in call.kwargs
+    mapped = map_issue_incidents(sources).incidents[0]
+    assert mapped.source_entity_type == "incident"
+    assert mapped.raw_severity == "HIGH"
+    assert mapped.normalized_severity == "high"
+
+
+def test_fetch_gitlab_incidents_sync_paginates_to_requested_limit():
+    mock_connector = Mock()
+    first_page = [
+        {
+            "id": issue_id,
+            "issue_type": "incident",
+            "state": "opened",
+            "created_at": "2026-07-17T00:00:00Z",
+        }
+        for issue_id in range(100)
+    ]
+    mock_connector.rest_client.get_issues.side_effect = [
+        first_page,
+        [
+            {
+                "id": 100,
+                "issue_type": "incident",
+                "state": "opened",
+                "created_at": "2026-07-17T00:00:00Z",
+            }
+        ],
+    ]
+
+    incidents = _fetch_gitlab_incidents_sync(
+        mock_connector,
+        project_id=1,
+        repo_id=None,
+        max_issues=101,
+        since=None,
+    )
+
+    assert len(incidents) == 101
+    assert [
+        call.kwargs["page"]
+        for call in mock_connector.rest_client.get_issues.call_args_list
+    ] == [1, 2]
+
+
+def test_fetch_gitlab_incidents_sync_uses_update_window_and_rejects_non_incidents():
+    mock_connector = Mock()
+    mock_connector.rest_client.get_issues.return_value = [
+        {
+            "id": 505,
+            "issue_type": "incident",
+            "state": "closed",
+            "created_at": "2025-01-03T12:00:00Z",
+            "closed_at": "2026-07-17T12:00:00Z",
+            "updated_at": "2026-07-17T12:00:00Z",
+        },
+        {
+            "id": 506,
+            "issue_type": "issue",
+            "state": "opened",
+            "created_at": "2026-07-17T12:00:00Z",
+            "updated_at": "2026-07-17T12:00:00Z",
+        },
+    ]
+    since = datetime(2026, 7, 17, tzinfo=timezone.utc)
+    until = datetime(2026, 7, 18, tzinfo=timezone.utc)
+
+    incidents = _fetch_gitlab_incidents_sync(
+        mock_connector,
+        project_id=1,
+        repo_id=None,
+        max_issues=10,
+        since=since,
+        until=until,
+    )
+
+    assert [incident.incident_id for incident in incidents] == ["505"]
+    call = mock_connector.rest_client.get_issues.call_args
+    assert call.kwargs["issue_type"] == "incident"
+    assert call.kwargs["state"] == "all"
+    assert call.kwargs["updated_after"] == "2026-07-17T00:00:00Z"
+    assert call.kwargs["updated_before"] == "2026-07-18T00:00:00Z"

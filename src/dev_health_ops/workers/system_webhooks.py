@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import NoReturn
 
@@ -20,6 +21,33 @@ logger = logging.getLogger(__name__)
 # well within an hour.
 _MAX_RETRY_COUNTDOWN_SECONDS = 3600
 _PAGERDUTY_WEBHOOK_DLQ_MAXLEN = 100_000
+_PAGERDUTY_WEBHOOK_RECEIPT_TTL_SECONDS = 604_800
+
+
+class CanonicalIncidentIngestionDisabledError(RuntimeError):
+    __slots__ = ()
+
+
+def _canonical_incident_ingestion_allowed(org_id: str) -> bool:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.licensing import is_org_feature_enabled_sync
+    from dev_health_ops.licensing.registry import CANONICAL_INCIDENT_INGESTION_FEATURE
+
+    try:
+        parsed_org_id = uuid.UUID(org_id)
+    except ValueError:
+        return False
+    try:
+        with get_postgres_session_sync() as session:
+            return is_org_feature_enabled_sync(
+                session,
+                parsed_org_id,
+                CANONICAL_INCIDENT_INGESTION_FEATURE,
+            )
+    except SQLAlchemyError:
+        return False
 
 
 @celery_app.task(
@@ -30,12 +58,13 @@ _PAGERDUTY_WEBHOOK_DLQ_MAXLEN = 100_000
 )
 def process_webhook_event(
     self,
-    provider: str,
-    event_type: str,
+    provider: str = "",
+    event_type: str = "",
     delivery_id: str | None = None,
     payload: dict | None = None,
     org_id: str | None = None,
     repo_name: str | None = None,
+    durable_delivery_id: str | None = None,
 ) -> dict:
     """
     Process a webhook event asynchronously.
@@ -54,6 +83,16 @@ def process_webhook_event(
     Returns:
         dict with processing status and summary
     """
+
+    if durable_delivery_id:
+        durable = _load_webhook_delivery(durable_delivery_id)
+        if durable is None:
+            return {
+                "status": "error",
+                "reason": "missing_durable_delivery",
+                "durable_delivery_id": durable_delivery_id,
+            }
+        provider, event_type, delivery_id, payload, org_id, repo_name = durable
 
     logger.info(
         "Processing webhook event: provider=%s type=%s delivery=%s repo=%s",
@@ -135,6 +174,46 @@ def process_webhook_event(
         raise self.retry(exc=exc, countdown=countdown)
 
 
+def _load_webhook_delivery(
+    durable_delivery_id: str,
+) -> tuple[str, str, str | None, dict, str | None, str | None] | None:
+    """Load a verified payload from durable state for the legacy Celery owner.
+
+    This compatibility path deliberately keeps Python/Celery as the executor;
+    its queue message contains a UUID reference only, so a broker replay cannot
+    become the payload source of truth.
+    """
+    try:
+        delivery_uuid = uuid.UUID(durable_delivery_id)
+    except ValueError:
+        return None
+    try:
+        from sqlalchemy import select
+
+        from dev_health_ops.db import get_postgres_session_sync
+        from dev_health_ops.models.operational_deliveries import WebhookDelivery
+
+        with get_postgres_session_sync() as session:
+            delivery = session.scalar(
+                select(WebhookDelivery).where(WebhookDelivery.id == delivery_uuid)
+            )
+            if delivery is None:
+                return None
+            return (
+                delivery.provider,
+                delivery.event_type,
+                delivery.delivery_key,
+                dict(delivery.payload),
+                delivery.org_ref,
+                delivery.repo_name,
+            )
+    except Exception:
+        logger.exception(
+            "Unable to load durable webhook delivery id=%s", durable_delivery_id
+        )
+        raise
+
+
 def _is_duplicate_delivery(provider: str, delivery_id: str) -> bool:
     """Check if we've already processed this delivery.
 
@@ -179,27 +258,26 @@ def _record_delivery(provider: str, delivery_id: str) -> None:
 def process_pagerduty_webhook_event(
     self,
     *,
-    org_id: str,
-    provider_instance_id: str,
+    binding_id: str,
     stream_entry_id: str,
 ) -> dict:
+    import hashlib
     import json
     from datetime import datetime
 
     from dev_health_ops.api.ingest.streams import get_redis_client
     from dev_health_ops.api.webhooks.pagerduty_models import PagerDutyV3Webhook
-    from dev_health_ops.providers.pagerduty.auth import ApiTokenAuth
-    from dev_health_ops.providers.pagerduty.client import PagerDutyClient
-    from dev_health_ops.providers.pagerduty.webhooks import reconcile_pagerduty_webhook
-    from dev_health_ops.storage import run_with_store
+    from dev_health_ops.providers.pagerduty.webhook_worker import (
+        reconcile_pagerduty_webhook_with_locked_graph,
+        resolve_pagerduty_webhook_binding,
+    )
 
     redis_client = get_redis_client()
-    stream_name = f"pagerduty-webhooks:{org_id}:{provider_instance_id}"
+    stream_name = f"pagerduty-webhooks:{binding_id}"
     if redis_client is None:
         raise self.retry(
             exc=RuntimeError("pagerduty webhook stream unavailable"), countdown=30
         )
-    token = os.getenv("PAGERDUTY_API_TOKEN")
     clickhouse_url = os.getenv("CLICKHOUSE_URI")
     # Reading and parsing the pending entry is a pre-persistence failure
     # surface: a Redis error, a trimmed/missing entry, or a malformed payload.
@@ -212,53 +290,56 @@ def process_pagerduty_webhook_event(
         )
         if not entries:
             raise RuntimeError("pagerduty webhook stream entry missing")
-        _, fields = entries[0]
-        parsed = PagerDutyV3Webhook.model_validate(json.loads(fields["payload"]))
-        processed_at = datetime.fromisoformat(fields["received_at"])
-    except Exception as exc:
-        _retry_or_dead_letter_pagerduty_webhook(
-            task=self,
-            redis_client=redis_client,
-            stream_name=stream_name,
-            stream_entry_id=stream_entry_id,
-            fields=fields,
-            error=exc,
+        _, entry_fields = entries[0]
+        fields = dict(entry_fields)
+        parsed = PagerDutyV3Webhook.model_validate(json.loads(entry_fields["payload"]))
+        processed_at = datetime.fromisoformat(entry_fields["received_at"])
+        receipt_key = _pagerduty_webhook_receipt_key(
+            stream_name,
+            parsed.event.id,
+            entry_fields.get("raw_body_sha256")
+            or hashlib.sha256(entry_fields["payload"].encode()).hexdigest(),
         )
+        if _pagerduty_webhook_receipt_completed(redis_client, receipt_key):
+            redis_client.xdel(stream_name, stream_entry_id)
+            return {
+                "processed": False,
+                "receipt": "completed",
+                "event_id": parsed.event.id,
+                "stream_entry_id": stream_entry_id,
+            }
+        context = run_async(resolve_pagerduty_webhook_binding(binding_id))
+        if not _canonical_incident_ingestion_allowed(context.org_id):
+            raise CanonicalIncidentIngestionDisabledError()
+        if not clickhouse_url:
+            raise RuntimeError("pagerduty webhook persistence is unconfigured")
 
-    if not token or not clickhouse_url:
-        _retry_or_dead_letter_pagerduty_webhook(
-            task=self,
-            redis_client=redis_client,
-            stream_name=stream_name,
-            stream_entry_id=stream_entry_id,
-            fields=fields,
-            error=RuntimeError("pagerduty webhook persistence is unconfigured"),
-        )
-
-    async def _process(store):
-        client = PagerDutyClient(ApiTokenAuth(token))
-        try:
-            return await reconcile_pagerduty_webhook(
-                webhook=parsed,
-                org_id=org_id,
-                provider_instance_id=provider_instance_id,
-                received_at=processed_at,
-                store=store,
-                client=client,
-            )
-        finally:
-            await client.close()
-
-    try:
         processed = run_async(
-            run_with_store(clickhouse_url, "clickhouse", _process, org_id=org_id)
+            reconcile_pagerduty_webhook_with_locked_graph(
+                binding_id=binding_id,
+                expected_context=context,
+                clickhouse_url=clickhouse_url,
+                webhook=parsed,
+                received_at=processed_at,
+            )
         )
+        _record_pagerduty_webhook_receipt(redis_client, receipt_key)
         redis_client.xdel(stream_name, stream_entry_id)
         return {
             "processed": processed,
             "event_id": parsed.event.id,
             "stream_entry_id": stream_entry_id,
         }
+    except CanonicalIncidentIngestionDisabledError as exc:
+        _retry_or_dead_letter_pagerduty_webhook(
+            task=self,
+            redis_client=redis_client,
+            stream_name=stream_name,
+            stream_entry_id=stream_entry_id,
+            fields=fields,
+            error=exc,
+            retryable=False,
+        )
     except Exception as exc:
         _retry_or_dead_letter_pagerduty_webhook(
             task=self,
@@ -267,6 +348,29 @@ def process_pagerduty_webhook_event(
             stream_entry_id=stream_entry_id,
             fields=fields,
             error=exc,
+        )
+
+
+def _pagerduty_webhook_receipt_key(
+    stream_name: str, event_id: str, raw_body_sha256: str
+) -> str:
+    receipt_identity = event_id if event_id.strip() else raw_body_sha256
+    return f"{stream_name}:receipts:{receipt_identity}"
+
+
+def _pagerduty_webhook_receipt_completed(redis_client, receipt_key: str) -> bool:
+    get = getattr(redis_client, "get", None)
+    return bool(get(receipt_key)) if callable(get) else False
+
+
+def _record_pagerduty_webhook_receipt(redis_client, receipt_key: str) -> None:
+    set_receipt = getattr(redis_client, "set", None)
+    if callable(set_receipt):
+        set_receipt(
+            receipt_key,
+            "completed",
+            ex=_PAGERDUTY_WEBHOOK_RECEIPT_TTL_SECONDS,
+            nx=True,
         )
 
 
@@ -278,8 +382,9 @@ def _retry_or_dead_letter_pagerduty_webhook(
     stream_entry_id: str,
     fields: dict[str, str] | None,
     error: Exception,
+    retryable: bool = True,
 ) -> NoReturn:
-    if task.request.retries < task.max_retries:
+    if retryable and task.request.retries < task.max_retries:
         raise task.retry(
             exc=error,
             countdown=30 * (2**task.request.retries),
@@ -302,12 +407,19 @@ def _retry_or_dead_letter_pagerduty_webhook(
         approximate=True,
     )
     redis_client.xdel(stream_name, stream_entry_id)
-    logger.error(
-        "pagerduty_webhook.persistence_failed event_id=%s stream_entry_id=%s retries=%s",
-        event_id,
-        stream_entry_id,
-        task.request.retries,
-    )
+    if retryable:
+        logger.error(
+            "pagerduty_webhook.persistence_failed event_id=%s stream_entry_id=%s retries=%s",
+            event_id,
+            stream_entry_id,
+            task.request.retries,
+        )
+    else:
+        logger.warning(
+            "pagerduty_webhook.feature_disabled event_id=%s stream_entry_id=%s",
+            event_id,
+            stream_entry_id,
+        )
     raise RuntimeError("pagerduty webhook persistence exhausted") from error
 
 

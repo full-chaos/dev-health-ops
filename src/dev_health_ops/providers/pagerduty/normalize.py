@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TypedDict
+from typing import TypedDict, overload
 
 from dev_health_ops.models.operational import (
     CanonicalOperationalEntity,
@@ -23,6 +23,7 @@ from dev_health_ops.models.operational import (
     EscalationPolicy as CanonicalEscalationPolicy,
 )
 from dev_health_ops.models.operational_identity import operational_source_coordinates
+from dev_health_ops.providers.normalize_common import to_utc
 from dev_health_ops.providers.pagerduty.models import (
     Alert,
     BusinessService,
@@ -104,8 +105,8 @@ class PagerDutyNormalizer:
                 CanonicalEscalationPolicy, row.escalation_policy
             ),
             escalation_level=row.escalation_level,
-            starts_at=row.start,
-            ends_at=row.end,
+            starts_at=_utc(row.start),
+            ends_at=_utc(row.end),
         )
 
     def user(self, row: User) -> OperationalUser:
@@ -125,7 +126,7 @@ class PagerDutyNormalizer:
     def incident(self, row: Incident) -> OperationalIncident:
         return OperationalIncident(
             **self._common(OperationalIncident, row, "incident"),
-            source_event_at=row.created_at,
+            source_event_at=_utc(row.created_at),
             source_event_id=str(row.incident_number) if row.incident_number else None,
             raw_status=row.status,
             raw_severity=row.urgency,
@@ -136,7 +137,7 @@ class PagerDutyNormalizer:
             service_id=self._reference_id(OperationalService, row.service),
             service_external_id=row.service.id if row.service else None,
             title=row.title or row.summary or row.id,
-            started_at=row.created_at,
+            started_at=_utc(row.created_at),
             resolved_at=self._incident_resolution_time(row)
             if row.status == "resolved"
             else None,
@@ -151,7 +152,7 @@ class PagerDutyNormalizer:
             normalized_severity=_severity(row.severity),
             incident_id=incident_id,
             title=row.summary or row.id,
-            triggered_at=row.created_at,
+            triggered_at=_utc(row.created_at),
             resolved_at=self._source_time(row) if row.status == "resolved" else None,
         )
 
@@ -162,7 +163,7 @@ class PagerDutyNormalizer:
             event_type=row.type or "pagerduty_log_entry",
             body=row.summary or row.message,
             actor_type="pagerduty",
-            occurred_at=row.created_at,
+            occurred_at=_utc(row.created_at),
         )
 
     def note(self, row: Note, incident_id: str) -> IncidentNote:
@@ -171,7 +172,7 @@ class PagerDutyNormalizer:
             incident_id=incident_id,
             body=row.content or "",
             author_user_id=self._reference_id(OperationalUser, row.user),
-            created_at=row.created_at,
+            created_at=_utc(row.created_at),
         )
 
     def _common(
@@ -196,8 +197,8 @@ class PagerDutyNormalizer:
             "external_id": coordinates.external_id,
             "source_version_at": self._source_time(row),
             "source_url": row.html_url or row.self_url,
-            "observed_at": self.observed_at,
-            "last_synced": self.observed_at,
+            "observed_at": _utc(self.observed_at),
+            "last_synced": _utc(self.observed_at),
         }
 
     def _reference_id(
@@ -227,34 +228,54 @@ class PagerDutyNormalizer:
         )
 
     def _oncall_external_id(self, row: Oncall) -> str:
+        if row.id:
+            return row.id
         if (
             row.escalation_policy is None
-            or row.schedule is None
             or row.user is None
             or not row.escalation_policy.id
-            or not row.schedule.id
             or not row.user.id
             or row.escalation_level is None
-            or row.start is None
-            or row.end is None
         ):
             raise ValueError("PagerDuty on-call assignment requires stable dimensions")
+        schedule_id = (
+            row.schedule.id if row.schedule and row.schedule.id else "<permanent>"
+        )
+        start_at = (
+            _utc(row.start).isoformat() if row.start is not None else "<permanent>"
+        )
+        end_at = _utc(row.end).isoformat() if row.end is not None else "<permanent>"
         return "|".join(
             (
                 row.escalation_policy.id,
-                row.schedule.id,
+                schedule_id,
                 row.user.id,
                 str(row.escalation_level),
-                row.start.isoformat(),
-                row.end.isoformat(),
+                start_at,
+                end_at,
             )
         )
 
     def _incident_resolution_time(self, row: Incident) -> datetime | None:
-        return row.resolved_at or row.last_status_change_at
+        return _utc(row.resolved_at or row.last_status_change_at)
 
     def _source_time(self, row: PagerDutyModel) -> datetime:
-        return row.updated_at or row.created_at or self.observed_at
+        source_time = _utc(row.updated_at or row.created_at or self.observed_at)
+        assert source_time is not None
+        return source_time
+
+
+@overload
+def _utc(value: None) -> None: ...
+
+
+@overload
+def _utc(value: datetime) -> datetime: ...
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    normalized = to_utc(value)
+    return normalized.replace(fold=0) if normalized is not None else None
 
 
 def _incident_status(raw_status: str | None) -> str | None:

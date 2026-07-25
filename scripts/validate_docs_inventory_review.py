@@ -2,9 +2,9 @@
 """Validate the committed documentation inventory and reviewed disposition.
 
 This checker keeps the Phase 1 evidence reproducible without granting CI write
-access. It regenerates review formats from the factual JSON inventory, checks
-that committed snapshots are current, and verifies that every reviewed source
-has a complete disposition consistent with the locked IA.
+access. It regenerates review formats from the current factual JSON inventory,
+checks that committed snapshots are current, and verifies that the frozen
+Phase 1 review has complete dispositions consistent with the locked IA.
 """
 
 from __future__ import annotations
@@ -66,6 +66,9 @@ EXPLICIT_NONPUBLIC = {
     "retain-internal",
     "archive-or-recapture",
 }
+REVIEWED_DISPOSITION_ROWS = 449
+REVIEWED_OPS_ROWS = 313
+REVIEWED_WEB_ROWS = 136
 
 
 def _load_tsv(path: Path) -> list[dict[str, str]]:
@@ -163,9 +166,18 @@ def validate(
 ) -> None:
     factual = json.loads(generated_json.read_text(encoding="utf-8"))
     factual_rows = factual["rows"]
-    if factual["row_count"] != 313 or len(factual_rows) != 313:
+    committed_json = inventory_dir / "documentation-inventory.json"
+    committed = json.loads(committed_json.read_text(encoding="utf-8"))
+    expected_factual_rows = committed["row_count"]
+    if len(committed["rows"]) != expected_factual_rows:
+        raise ValueError("Committed factual inventory row_count is inconsistent")
+    if (
+        factual["row_count"] != expected_factual_rows
+        or len(factual_rows) != expected_factual_rows
+    ):
         raise ValueError(
-            f"Expected 313 dev-health-ops rows, found {factual['row_count']}"
+            f"Expected {expected_factual_rows} dev-health-ops rows, "
+            f"found {factual['row_count']}"
         )
 
     generated_tsv = generated_json.with_suffix(".tsv")
@@ -175,7 +187,7 @@ def validate(
 
     _assert_equal_file(
         generated_json,
-        inventory_dir / "documentation-inventory.json",
+        committed_json,
     )
     _assert_equal_file(
         generated_tsv,
@@ -187,8 +199,11 @@ def validate(
     )
 
     disposition = _load_tsv(inventory_dir / "disposition-matrix.tsv")
-    if len(disposition) != 449:
-        raise ValueError(f"Expected 449 disposition rows, found {len(disposition)}")
+    if len(disposition) != REVIEWED_DISPOSITION_ROWS:
+        raise ValueError(
+            f"Expected {REVIEWED_DISPOSITION_ROWS} disposition rows, "
+            f"found {len(disposition)}"
+        )
 
     ops_rows = [
         row for row in disposition if row["source_repo"] == "full-chaos/dev-health-ops"
@@ -196,20 +211,26 @@ def validate(
     web_rows = [
         row for row in disposition if row["source_repo"] == "full-chaos/dev-health-web"
     ]
-    if len(ops_rows) != 313:
-        raise ValueError(f"Expected 313 ops disposition rows, found {len(ops_rows)}")
-    if len(web_rows) != 136:
-        raise ValueError(f"Expected 136 web disposition rows, found {len(web_rows)}")
-
-    factual_paths = {row["source_path"] for row in factual_rows}
-    disposition_paths = {row["source_path"] for row in ops_rows}
-    if factual_paths != disposition_paths:
-        missing = sorted(factual_paths - disposition_paths)
-        stale = sorted(disposition_paths - factual_paths)
+    if len(ops_rows) != REVIEWED_OPS_ROWS:
         raise ValueError(
-            "Factual inventory and reviewed ops disposition differ. "
-            f"Missing review rows={missing[:20]}; stale review rows={stale[:20]}"
+            f"Expected {REVIEWED_OPS_ROWS} ops disposition rows, found {len(ops_rows)}"
         )
+    if len(web_rows) != REVIEWED_WEB_ROWS:
+        raise ValueError(
+            f"Expected {REVIEWED_WEB_ROWS} web disposition rows, found {len(web_rows)}"
+        )
+
+    reviewed_ops_rows = [
+        row
+        for path in sorted(inventory_dir.glob("ops-*.tsv"))
+        for row in _load_tsv(path)
+    ]
+    ops_by_path = {row["source_path"]: row for row in ops_rows}
+    reviewed_ops_by_path = {row["source_path"]: row for row in reviewed_ops_rows}
+    if len(reviewed_ops_by_path) != REVIEWED_OPS_ROWS or (
+        reviewed_ops_by_path != ops_by_path
+    ):
+        raise ValueError("Ops disposition matrix differs from its reviewed split files")
 
     web_snapshot = _load_tsv(inventory_dir / "dev-health-web-snapshot.tsv")
     if web_snapshot != web_rows:
@@ -250,7 +271,8 @@ def validate(
         raise ValueError("Inventory review failed:\n" + "\n".join(errors[:50]))
 
     print(
-        "Validated 313 factual ops rows and 449 reviewed dispositions "
+        f"Validated {expected_factual_rows} factual ops rows and "
+        f"{REVIEWED_DISPOSITION_ROWS} reviewed dispositions "
         "against the locked IA."
     )
 

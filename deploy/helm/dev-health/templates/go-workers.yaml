@@ -1,0 +1,76 @@
+{{- /* Additive Go/River topology. `goWorkers.enabled` is false by default. */ -}}
+{{- if .Values.goWorkers.enabled }}
+{{- range $profile := .Values.goWorkers.profiles }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-go-{{ $profile.name }}
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-worker" "context" $) | nindent 4 }}
+    dev-health.io/profile: {{ $profile.name }}
+    {{- with $profile.queue }}
+    dev-health.io/queue: {{ . }}
+    {{- end }}
+spec:
+  replicas: {{ $profile.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 6 }}
+      dev-health.io/profile: {{ $profile.name }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 8 }}
+        dev-health.io/profile: {{ $profile.name }}
+        {{- with $profile.queue }}
+        dev-health.io/queue: {{ . }}
+        {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ $profile.terminationGracePeriodSeconds }}
+      {{- include "dev-health.imagePullSecrets" $ | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" $ }}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: {{ $profile.name }}
+          image: {{ $profile.image }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- if $profile.runtimeProfile }}
+          env: [{name: DEV_HEALTH_PROFILE, value: {{ $profile.runtimeProfile | quote }}}, {name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          {{- else }}
+          env: [{name: DEV_HEALTH_HTTP_ADDR, value: ":8080"}]
+          {{- end }}
+          envFrom:
+            - configMapRef: {name: {{ include "dev-health.configMapName" $ }}}
+            - secretRef: {name: {{ include "dev-health.secretName" $ }}}
+          ports: [{name: metrics, containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources:
+            {{- toYaml $profile.resources | nindent 12 }}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+{{- if $profile.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-go-{{ $profile.name }}
+  namespace: {{ include "dev-health.namespace" $ }}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "dev-health.fullname" $ }}-go-{{ $profile.name }}}
+  minReplicas: {{ $profile.autoscaling.minReplicas }}
+  maxReplicas: {{ $profile.autoscaling.maxReplicas }}
+  metrics:
+    - type: External
+      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {profile: {{ $profile.runtimeProfile }}}}}, target: {type: AverageValue, averageValue: {{ $profile.autoscaling.queueDepth | quote }}}}
+    - type: External
+      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {profile: {{ $profile.runtimeProfile }}}}}, target: {type: AverageValue, averageValue: {{ $profile.autoscaling.oldestAgeSeconds | quote }}}}
+    - type: External
+      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {profile: {{ $profile.runtimeProfile }}}}}, target: {type: AverageValue, averageValue: {{ $profile.autoscaling.saturationMilli | quote }}}}
+{{- end }}
+{{- end }}
+{{- end }}

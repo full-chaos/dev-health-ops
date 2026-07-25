@@ -5,11 +5,14 @@ from typing import Final
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PALETTE_PATH = ROOT / "docs-prototype" / "stylesheets" / "logo-palette.css"
-EXTRA_CSS_PATH = ROOT / "docs-prototype" / "stylesheets" / "extra.css"
-HOME_CSS_PATH = ROOT / "docs-prototype" / "stylesheets" / "home.css"
-DESIGN_DIRECTIONS_PATH = ROOT / "docs-prototype" / "design-directions.md"
-LEGACY_SHOWCASE_PATH = ROOT / "docs" / "reference" / "primitive-showcase.md"
+STYLESHEETS = ROOT / "docs" / "stylesheets"
+PALETTE_PATH = STYLESHEETS / "logo-palette.css"
+EXTRA_CSS_PATH = STYLESHEETS / "extra.css"
+HOME_CSS_PATH = STYLESHEETS / "home.css"
+# Review-only primitive/showcase and design-QA material must never be publicly
+# navigated or built. These paths must NOT exist in the canonical public tree.
+PUBLIC_DESIGN_DIRECTIONS_PATH = ROOT / "docs" / "design-directions.md"
+PUBLIC_SHOWCASE_PATH = ROOT / "docs" / "reference" / "primitive-showcase.md"
 DOCS_QA_PACKAGE_PATH = ROOT / "docs-qa" / "package.json"
 DOCS_QA_CONFIG_PATH = ROOT / "docs-qa" / "playwright.config.ts"
 RAW_CSS_VALUE_PATTERN: Final = re.compile(r"#[0-9a-fA-F]{3,8}\b")
@@ -53,17 +56,17 @@ def _assert_no_undeclared_raw_css_value(source_path: Path) -> None:
             )
 
 
-def test_candidate_uses_the_supplied_full_chaos_palette() -> None:
-    assert PALETTE_PATH.is_file(), f"missing candidate palette: {PALETTE_PATH}"
+def test_canonical_uses_the_supplied_full_chaos_palette() -> None:
+    assert PALETTE_PATH.is_file(), f"missing canonical palette: {PALETTE_PATH}"
     tokens = _tokens(PALETTE_PATH)
 
     for token, value in REQUIRED_PALETTE.items():
         assert tokens[token] == value
 
 
-def test_candidate_css_imports_palette_and_protects_accessibility_states() -> None:
-    assert EXTRA_CSS_PATH.is_file(), f"missing candidate CSS: {EXTRA_CSS_PATH}"
-    assert HOME_CSS_PATH.is_file(), f"missing candidate home CSS: {HOME_CSS_PATH}"
+def test_canonical_css_imports_palette_and_protects_accessibility_states() -> None:
+    assert EXTRA_CSS_PATH.is_file(), f"missing canonical CSS: {EXTRA_CSS_PATH}"
+    assert HOME_CSS_PATH.is_file(), f"missing canonical home CSS: {HOME_CSS_PATH}"
 
     extra_css = EXTRA_CSS_PATH.read_text(encoding="utf-8")
     home_css = HOME_CSS_PATH.read_text(encoding="utf-8")
@@ -75,9 +78,12 @@ def test_candidate_css_imports_palette_and_protects_accessibility_states() -> No
     assert "fc-home-card" in home_css
 
 
-def test_review_only_design_pages_are_not_in_the_public_candidate() -> None:
-    assert not DESIGN_DIRECTIONS_PATH.exists()
-    assert LEGACY_SHOWCASE_PATH.is_file()
+def test_review_only_design_pages_are_not_publicly_built() -> None:
+    # Design directions, the primitive showcase, and the design-QA harness are
+    # review-only material. They must not be promoted into the public tree, and a
+    # public docs/reference/primitive-showcase.md must not be required to exist.
+    assert not PUBLIC_DESIGN_DIRECTIONS_PATH.exists()
+    assert not PUBLIC_SHOWCASE_PATH.exists()
     assert not DOCS_QA_PACKAGE_PATH.exists()
     assert not DOCS_QA_CONFIG_PATH.exists()
 

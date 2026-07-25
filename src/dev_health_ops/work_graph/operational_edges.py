@@ -6,6 +6,7 @@ import re
 import uuid
 from datetime import datetime, timedelta
 
+from dev_health_ops.storage.operational_current import current_operational_rows_sql
 from dev_health_ops.work_graph.ids import generate_edge_id, generate_pr_id
 from dev_health_ops.work_graph.models import (
     EdgeType,
@@ -40,44 +41,50 @@ def build_operational_incident_edges(
     repository_scope = " AND repo_id = {repo_id:UUID}" if repo_id else ""
     incident_window = _timestamp_window("started_at", from_date, to_date)
     deployment_window = _timestamp_window("deployed_at", from_date, to_date)
+    mapping_filters = (
+        "is_active = 1",
+        "valid_from <= {now:DateTime}",
+        "(valid_to IS NULL OR valid_to > {now:DateTime})",
+        *(("repo_id = {repo_id:UUID}",) if repo_id else ()),
+    )
+    incident_filters = (
+        "is_deleted = 0",
+        *((incident_window.removeprefix(" AND "),) if incident_window else ()),
+    )
     mappings = query_dicts(
         "SELECT service_id, repo_id, provider, relationship_provenance, relationship_confidence, "
-        "mapping_kind, rule_id, source_url FROM operational_service_repository_mappings FINAL "
-        "WHERE org_id = {org_id:String} AND is_active = 1 "
-        "AND valid_from <= {now:DateTime} "
-        "AND (valid_to IS NULL OR valid_to > {now:DateTime})"
-        f"{repository_scope}",
+        "mapping_kind, rule_id, source_url FROM "
+        f"{current_operational_rows_sql('operational_service_repository_mappings', mapping_filters)}",
         params,
     )
     incidents = query_dicts(
-        "SELECT id, service_id, escalation_policy_id, started_at, source_url FROM operational_incidents FINAL "
-        "WHERE org_id = {org_id:String} AND is_deleted = 0"
-        f"{incident_window}",
+        "SELECT id, service_id, escalation_policy_id, started_at, source_url FROM "
+        f"{current_operational_rows_sql('operational_incidents', incident_filters)}",
         params,
     )
     services = query_dicts(
-        "SELECT id, owning_team_id, escalation_policy_id FROM operational_services FINAL "
-        "WHERE org_id = {org_id:String} AND is_deleted = 0",
+        "SELECT id, owning_team_id, escalation_policy_id FROM "
+        f"{current_operational_rows_sql('operational_services', ('is_deleted = 0',))}",
         params,
     )
     alerts = query_dicts(
-        "SELECT id, incident_id, source_url, triggered_at FROM operational_alerts FINAL "
-        "WHERE org_id = {org_id:String} AND is_deleted = 0",
+        "SELECT id, incident_id, source_url, triggered_at FROM "
+        f"{current_operational_rows_sql('operational_alerts', ('is_deleted = 0',))}",
         params,
     )
     timeline = query_dicts(
-        "SELECT id, incident_id, actor_id, body, source_url, occurred_at FROM operational_incident_timeline_events FINAL "
-        "WHERE org_id = {org_id:String}",
+        "SELECT id, incident_id, actor_id, body, source_url, occurred_at FROM "
+        f"{current_operational_rows_sql('operational_incident_timeline_events')}",
         params,
     )
     notes = query_dicts(
-        "SELECT id, incident_id, body, author_user_id, source_url, created_at FROM operational_incident_notes FINAL "
-        "WHERE org_id = {org_id:String}",
+        "SELECT id, incident_id, body, author_user_id, source_url, created_at FROM "
+        f"{current_operational_rows_sql('operational_incident_notes')}",
         params,
     )
     responders = query_dicts(
-        "SELECT id, incident_id, user_id, source_url, assigned_at FROM operational_incident_responders FINAL "
-        "WHERE org_id = {org_id:String}",
+        "SELECT id, incident_id, user_id, source_url, assigned_at FROM "
+        f"{current_operational_rows_sql('operational_incident_responders')}",
         params,
     )
     work_items = query_dicts(

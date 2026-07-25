@@ -16,6 +16,12 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
       PG_DATA: /var/lib/postgresql/
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      # Local development credentials only. Production roles are provisioned
+      # through the database provider/secret manager before migration.
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
     ports:
       - "5555:5432"
     volumes:
@@ -107,10 +113,19 @@ services:
       - sh
       - -c
       - >-
-        if [ -n "$$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+        if [ -z "$${MIGRATION_DATABASE_URI:-}" ];
+        then unset MIGRATION_DATABASE_URI; fi;
+        if [ -n "$$POSTGRES_URI" ]
+        || [ "$${MIGRATION_DATABASE_URI+x}" = x ]
+        || [ "$${MIGRATION_DATABASE_URI_FILE+x}" = x ];
+        then dev-hops migrate postgres; fi
         && dev-hops migrate clickhouse
     environment:
       POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
+      MIGRATION_DATABASE_URI: ${MIGRATION_DATABASE_URI:-}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:

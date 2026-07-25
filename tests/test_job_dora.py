@@ -39,7 +39,7 @@ class _FakeClickHouseSink:
     def query_dicts(self, query, parameters):
         if "FROM deployments" in query:
             return self._deployments
-        if "FROM incidents" in query:
+        if "operational_incidents" in query:
             return self._incidents
         raise AssertionError(f"Unexpected query: {query}")
 
@@ -152,7 +152,7 @@ def test_run_dora_metrics_job_uses_mapped_pagerduty_projection_once(monkeypatch)
     by_metric = {row.metric_name: row.value for row in sink.written}
     assert by_metric["time_to_restore_service"] == pytest.approx(3600.0)
     incident_query = next(
-        query for query, _params in sink.queries if "FROM incidents" in query
+        query for query, _params in sink.queries if "operational_incidents" in query
     )
     assert "operational_incidents" in incident_query
     assert "operational_service_repository_mappings" in incident_query
@@ -234,7 +234,7 @@ def test_run_dora_metrics_job_repo_name_scopes_both_queries(monkeypatch):
     )
 
     dep_q = next((q, p) for q, p in sink.queries if "FROM deployments" in q)
-    inc_q = next((q, p) for q, p in sink.queries if "FROM incidents" in q)
+    inc_q = next((q, p) for q, p in sink.queries if "operational_incidents" in q)
     for query, params in (dep_q, inc_q):
         # The repo-name subquery filter must be present and org-scoped so a
         # cross-tenant name collision cannot leak another org's repo.

@@ -1,0 +1,14 @@
+{
+  "contract_version": 1,
+  "correlation_id": "job-retention-0001",
+  "idempotency_key": "retention:worker_job_terminal:2026-07-14",
+  "domain": {
+    "type": "maintenance_run",
+    "id": "00000000-0000-4000-8000-000000000002"
+  },
+  "payload": {
+    "batch_size": 250,
+    "delete_before": "2026-07-14T12:00:00Z",
+    "retention_policy": "worker_job_terminal"
+  }
+}

@@ -441,6 +441,61 @@ async def test_valid_token_rejected_when_customer_push_feature_disabled(
 
 
 @pytest.mark.asyncio
+async def test_valid_token_can_read_availability_when_customer_push_feature_disabled(
+    session_maker, org_id
+):
+    async with session_maker() as session:
+        result = await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == _CUSTOMER_PUSH_FEATURE)
+        )
+        feature = result.scalar_one()
+        feature.is_enabled = False
+        await session.commit()
+
+    plaintext, token = await _create_token(
+        session_maker, org_id, scopes=["schema:read"]
+    )
+    dep = auth_module.require_ingest_scope(
+        "schema:read",
+        require_customer_push_feature=False,
+    )
+    request = _make_request(authorization=f"Bearer {plaintext}")
+    async with session_maker() as db:
+        agen = dep(request=request, db=db)
+        ctx = await agen.__anext__()
+        await agen.aclose()
+
+    assert ctx.org_id == org_id
+    assert ctx.token_id == str(token.id)
+
+
+@pytest.mark.asyncio
+async def test_availability_route_reports_disabled_customer_push_for_valid_token(
+    session_maker, org_id, http_client
+):
+    async with session_maker() as session:
+        result = await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == _CUSTOMER_PUSH_FEATURE)
+        )
+        feature = result.scalar_one()
+        feature.is_enabled = False
+        await session.commit()
+
+    plaintext, _token = await _create_token(
+        session_maker, org_id, scopes=["schema:read"]
+    )
+
+    response = await http_client.get(
+        f"{BASE}/availability",
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["features"]["customerPushIngest"] is False
+    assert response.json()["availableRecordKinds"] == []
+
+
+@pytest.mark.asyncio
 async def test_valid_token_rejected_when_org_below_customer_push_tier(
     session_maker, org_id
 ):

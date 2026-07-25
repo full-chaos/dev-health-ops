@@ -2,36 +2,36 @@
 
 Generated deterministically by `scripts/docs_inventory_review.py`.
 
-- Inventory rows: **313**
-- Current-site Markdown pages: **216**
-- Prototype pages: **12**
-- Pages treated as public today: **165**
+- Inventory rows: **541**
+- Current-site Markdown pages: **171**
+- Prototype pages: **0**
+- Pages treated as public today: **171**
 - Unclassified pages: **0**
 - Explicit external/runtime gaps: **1**
 
 ## Publication classifications
 
-- `excluded-internal`: 69
+- `archived-source`: 270
+- `excluded-internal`: 50
 - `external-entry-point`: 2
 - `gap-unverified`: 1
-- `prototype-wip`: 18
-- `public-nav`: 33
-- `public-reference`: 132
-- `supporting-artifact`: 58
+- `public-nav`: 171
+- `supporting-artifact`: 47
 
 ## Artifact types
 
-- `browser-qa`: 21
-- `configuration`: 7
+- `browser-qa`: 16
+- `configuration`: 3
 - `external-gap`: 1
-- `internal-program`: 18
-- `markdown-page`: 216
-- `prototype-asset`: 5
-- `prototype-page`: 12
+- `internal-program`: 50
+- `legacy-asset`: 6
+- `legacy-page`: 228
+- `legacy-support`: 36
+- `markdown-page`: 171
+- `publication-configuration`: 1
 - `repository-entry-point`: 2
-- `theme-override`: 10
-- `tooling`: 14
-- `visual-asset`: 3
+- `tooling`: 22
+- `visual-asset`: 1
 - `workflow`: 4
 
 ## Explicit gaps

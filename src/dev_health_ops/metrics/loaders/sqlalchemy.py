@@ -260,22 +260,9 @@ class SqlAlchemyDataLoader(DataLoader):
         repo_id: uuid.UUID | None,
         repo_name: str | None = None,
     ) -> list[IncidentRow]:
-        params = {"start": start.isoformat(), "end": end.isoformat()}
-        repo_filter = ""
-        if repo_id:
-            params["repo_id"] = str(repo_id)
-            repo_filter = " AND repo_id = :repo_id"
-
-        query = f"SELECT * FROM incidents WHERE started_at >= :start AND started_at < :end {repo_filter}"
-        incidents: list[IncidentRow] = []
-        with self.engine.connect() as conn:
-            rows = conn.execute(text(query), params).mappings().all()
-            for r in rows:
-                rd = dict(r)
-                rd["started_at"] = _to_dt(rd.get("started_at"))
-                rd["resolved_at"] = _to_dt(rd.get("resolved_at"))
-                incidents.append(rd)  # type: ignore
-        return incidents
+        raise RuntimeError(
+            "Incident metrics require ClickHouse canonical operational storage"
+        )
 
     async def load_blame_concentration(
         self,

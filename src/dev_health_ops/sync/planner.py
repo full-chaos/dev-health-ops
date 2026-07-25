@@ -57,6 +57,10 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.sync.canonical_incident_gate import (
+    require_canonical_incident_feature_sync,
+    sync_datasets_require_canonical_incident_feature,
+)
 from dev_health_ops.sync.datasets import (
     DatasetKey,
     DatasetSpec,
@@ -68,6 +72,9 @@ from dev_health_ops.sync.dispatch_outbox import (
     upsert_outbox_wakeup,
 )
 from dev_health_ops.sync.guard import _resolve_total_unit_cap
+from dev_health_ops.sync.pagerduty_repair import (
+    repair_pagerduty_operational_integration,
+)
 from dev_health_ops.sync.watermarks import get_watermark_with_overlap
 
 if TYPE_CHECKING:
@@ -128,6 +135,8 @@ class SyncRunPlan:
     sync_run_id: str
     total_units: int
     unit_ids: tuple[str, ...]
+    dispatch_required: bool = True
+    terminal_reason: str = ""
 
 
 class SyncPlanUnitCapExceededError(ValueError):
@@ -159,13 +168,22 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     """
 
     integration = _load_integration(session, request.integration_id, request.org_id)
+    repair_outcome = repair_pagerduty_operational_integration(session, integration)
     mode = _validate_mode(request.mode)
-    # Freeze this run's auth at plan time (CHAOS-2755): resolve the credential
-    # ONCE here so every later phase reads the run-stamped credential and a
-    # mid-run credential edit can never produce a mixed-auth run.
-    credential_id, credential_fp, auth_source = _resolve_credential_stamp(
-        session, integration
-    )
+    if repair_outcome is not None:
+        return _terminalize_pagerduty_disabled_plan(
+            session=session,
+            integration=integration,
+            request=request,
+            mode=mode,
+            reason=repair_outcome,
+        )
+    gate_datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
+    if sync_datasets_require_canonical_incident_feature(
+        str(integration.provider),
+        (str(dataset.dataset_key) for dataset in gate_datasets),
+    ):
+        require_canonical_incident_feature_sync(session, integration.org_id)
     sources = _load_enabled_sources(session, integration, request.source_ids)
     dataset_keys = _ensure_security_dataset_for_scheduled_code_host_sync(
         session, integration, request
@@ -191,6 +209,16 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     if len(planned_units) > total_cap:
         raise SyncPlanUnitCapExceededError(
             planned_units=len(planned_units), total_cap=total_cap
+        )
+
+    credential_id: uuid.UUID | None = None
+    credential_fp: str | None = None
+    auth_source: str | None = None
+    if planned_units:
+        # Freeze auth only for executable work. A zero-unit plan has no later
+        # phase that can consume credentials, so it must not hydrate secrets.
+        credential_id, credential_fp, auth_source = _resolve_credential_stamp(
+            session, integration
         )
 
     sync_run = SyncRun(
@@ -254,6 +282,40 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     )
 
 
+def _terminalize_pagerduty_disabled_plan(
+    *,
+    session: Session,
+    integration: Integration,
+    request: SyncPlanRequest,
+    mode: str,
+    reason: str,
+) -> SyncRunPlan:
+    """Persist a terminal PagerDuty repair outcome without dispatch artifacts."""
+    completed_at = datetime.now(timezone.utc)
+    sync_run = SyncRun(
+        org_id=integration.org_id,
+        integration_id=integration.id,
+        triggered_by=request.triggered_by,
+        mode=mode,
+        status=SyncRunStatus.FAILED.value,
+        total_units=0,
+        completed_units=0,
+        failed_units=0,
+        completed_at=completed_at,
+        result={"error_category": "pagerduty_sync_disabled"},
+        error=reason,
+    )
+    session.add(sync_run)
+    session.flush()
+    return SyncRunPlan(
+        sync_run_id=str(sync_run.id),
+        total_units=0,
+        unit_ids=(),
+        dispatch_required=False,
+        terminal_reason=reason,
+    )
+
+
 def _load_integration(
     session: Session, integration_id: str, org_id: str
 ) -> Integration:
@@ -296,10 +358,14 @@ def _resolve_credential_stamp(
         _resolve_env_credentials,
     )
 
-    provider = str(integration.provider)
+    provider = str(integration.provider).lower()
     integration_id = str(integration.id)
 
     if integration.credential_id is None:
+        if provider == "pagerduty":
+            raise ValueError(
+                "PagerDuty sync requires an active organization-scoped credential"
+            )
         env_credentials = dict(_resolve_env_credentials(provider))
         fingerprint = credential_fingerprint(
             env_credentials, credential_id=None, integration_id=integration_id
@@ -311,6 +377,7 @@ def _resolve_credential_stamp(
         .filter(
             IntegrationCredential.id == integration.credential_id,
             IntegrationCredential.org_id == integration.org_id,
+            IntegrationCredential.provider == provider,
         )
         .one_or_none()
     )

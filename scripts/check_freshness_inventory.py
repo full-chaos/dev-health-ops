@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Validate docs/freshness-inventory.yml disposition rows.
+"""Validate the archived legacy freshness inventory.
 
 Every tracked page has an explicit disposition (``refresh`` or ``retire``),
 an owner, and a ``last-reviewed`` date. Retired pages must name a
-``replacement`` page that exists in the docs tree. Every tracked page must
-still exist on disk. Entries older than the review cadence fail the guard
-rather than silently aging out of review.
+``replacement`` page that exists in the archived documentation tree. Every
+tracked page must still exist on disk. Entries older than the review cadence
+fail the guard rather than silently aging out of review.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INVENTORY = ROOT / "docs" / "freshness-inventory.yml"
-DEFAULT_DOCS_ROOT = ROOT / "docs"
+DEFAULT_INVENTORY = ROOT / ".github" / "docs-legacy" / "freshness-inventory.yml"
+DEFAULT_DOCS_ROOT = ROOT / ".github" / "docs-legacy"
 REVIEW_CADENCE_DAYS = 180
 
 
@@ -115,7 +115,7 @@ def check_freshness_inventory(
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Validate docs/freshness-inventory.yml"
+        description="Validate the archived legacy freshness inventory"
     )
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--docs-root", type=Path, default=DEFAULT_DOCS_ROOT)
@@ -132,7 +132,7 @@ def main(argv: list[str]) -> int:
         for issue in errors:
             print(f"ERROR: {issue}")
         return 1
-    print("Freshness inventory check passed")
+    print("Archived legacy freshness inventory check passed")
     return 0
 
 

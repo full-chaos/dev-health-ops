@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dev_health_ops.audit.ai_governance.loaders import build_governance_rows_for_day
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.active_incidents import (
     IncidentWindow,
@@ -390,8 +391,8 @@ def _extract_ai_workflow_for_day(
 
     # Event time falls back to last_synced (non-nullable) so in-flight
     # deployments with no timestamps yet still land in a day bucket instead
-    # of silently never matching any window. FINAL: deployments/incidents
-    # are ReplacingMergeTree and may hold pre-merge duplicate rows during
+    # of silently never matching any window. FINAL: deployments may hold
+    # pre-merge duplicate rows during
     # active sync.
     wf_deployment_rows = primary_sink.query_dicts(
         "SELECT repo_id, deployment_id, pull_request_number,"
@@ -1508,7 +1509,9 @@ async def run_daily_metrics_finalize(
             f.name for f in _dc.fields(deps.work_item_user_metrics_daily_record)
         }
 
-        um_query = "SELECT * FROM user_metrics_daily WHERE day = {day:Date}"
+        um_query = (
+            f"SELECT * FROM {dedup_from('user_metrics_daily')} WHERE day = {{day:Date}}"
+        )
         um_params: dict[str, Any] = {"day": day}
         if org_id:
             um_query += " AND org_id = {org_id:String}"

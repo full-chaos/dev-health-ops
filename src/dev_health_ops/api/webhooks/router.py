@@ -12,12 +12,25 @@ This ensures webhooks don't timeout during heavy processing.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
+from dev_health_ops.db import get_postgres_session
+from dev_health_ops.models.operational_deliveries import WebhookDelivery
+from dev_health_ops.workers.job_contracts import WebhookDeliveryPayload
+from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_routes import (
+    resolve_worker_job_route,
+    route_requires_celery,
+    route_requires_outbox,
+)
 from dev_health_ops.workers.system_tasks import process_webhook_event
 
 from .auth import GitHubWebhookBody, GitLabWebhookBody, JiraWebhookBody
@@ -38,27 +51,61 @@ router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 router.include_router(pagerduty_router)
 
 
-def _dispatch_webhook_task(event: WebhookEvent) -> None:
-    """Dispatch webhook event to Celery for async processing.
+def _delivery_key(event: WebhookEvent) -> str:
+    if event.delivery_id:
+        return event.delivery_id
+    canonical = json.dumps(event.payload, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
 
-    This is a best-effort dispatch - if Celery is unavailable,
-    we log and continue (the event is lost, but the webhook
-    doesn't fail catastrophically).
-    """
-    try:
-        getattr(process_webhook_event, "delay")(
-            provider=event.provider,
-            event_type=event.event_type,
-            delivery_id=event.delivery_id,
-            payload=event.payload,
-            org_id=event.org_id,
+
+async def _persist_webhook_delivery(event: WebhookEvent) -> uuid.UUID:
+    """Persist verified data before queueing a payload-free work reference."""
+    key = _delivery_key(event)
+    raw_payload = json.dumps(event.payload, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(raw_payload.encode()).hexdigest()
+    async with get_postgres_session() as session:
+        delivery = WebhookDelivery(
+            id=uuid.uuid4(),
+            provider=str(event.provider),
+            delivery_key=key,
+            event_type=str(event.event_type),
+            raw_event_type=event.raw_event_type,
+            org_ref=event.org_id,
             repo_name=event.repo_name,
+            payload=event.payload,
+            payload_sha256=digest,
         )
+        session.add(delivery)
+        try:
+            await session.commit()
+            return delivery.id
+        except IntegrityError:
+            await session.rollback()
+            existing = await session.scalar(
+                select(WebhookDelivery.id).where(
+                    WebhookDelivery.provider == str(event.provider),
+                    WebhookDelivery.delivery_key == key,
+                )
+            )
+            if existing is None:
+                raise
+            return existing
+
+
+async def _dispatch_webhook_task(event: WebhookEvent) -> uuid.UUID:
+    """Persist first, then send Celery only the durable delivery reference."""
+    delivery_id = await _persist_webhook_delivery(event)
+    route = await _route_webhook_delivery(event, delivery_id)
+    try:
+        if route_requires_celery(route):
+            getattr(process_webhook_event, "delay")(
+                durable_delivery_id=str(delivery_id),
+            )
         logger.info(
             "Dispatched webhook event: provider=%s type=%s delivery=%s",
             event.provider,
             event.event_type,
-            event.delivery_id,
+            delivery_id,
         )
     except Exception as e:
         # Log but don't fail - webhook should still return 200
@@ -66,8 +113,34 @@ def _dispatch_webhook_task(event: WebhookEvent) -> None:
         logger.error(
             "Failed to dispatch webhook to Celery: %s (event_id=%s)",
             e,
-            event.id,
+            delivery_id,
         )
+    return delivery_id
+
+
+async def _route_webhook_delivery(event: WebhookEvent, delivery_id: uuid.UUID) -> str:
+    digest = hashlib.sha256(
+        f"{event.provider}:{_delivery_key(event)}".encode()
+    ).hexdigest()
+    async with get_postgres_session() as session:
+        async with session.begin():
+            route = await session.run_sync(
+                lambda sync_session: resolve_worker_job_route(
+                    sync_session, WebhookDeliveryPayload.KIND
+                )
+            )
+            if route_requires_outbox(route):
+                await session.run_sync(
+                    lambda sync_session: enqueue_worker_job(
+                        sync_session,
+                        WebhookDeliveryPayload(delivery_id=str(delivery_id)),
+                        correlation_id=f"webhook-delivery:{delivery_id}",
+                        idempotency_key=f"webhook:{digest}",
+                        domain_id=str(delivery_id),
+                        allow_deferred_route=True,
+                    )
+                )
+    return route
 
 
 @router.post("/github", response_model=WebhookResponse)
@@ -120,11 +193,11 @@ async def github_webhook(
             message=f"Event type '{x_github_event}' not processed",
         )
 
-    _dispatch_webhook_task(event)
+    durable_delivery_id = await _dispatch_webhook_task(event)
 
     return WebhookResponse(
         status="accepted",
-        event_id=event.id,
+        event_id=durable_delivery_id,
         message=f"Processing {event_type.value} event",
     )
 
@@ -189,11 +262,11 @@ async def gitlab_webhook(
             message=f"Event type '{safe_gitlab_event}' not processed",
         )
 
-    _dispatch_webhook_task(event)
+    durable_delivery_id = await _dispatch_webhook_task(event)
 
     return WebhookResponse(
         status="accepted",
-        event_id=event.id,
+        event_id=durable_delivery_id,
         message=f"Processing {event_type.value} event",
     )
 
@@ -254,11 +327,11 @@ async def jira_webhook(
             message=f"Event type '{safe_webhook_event}' not processed",
         )
 
-    _dispatch_webhook_task(event)
+    durable_delivery_id = await _dispatch_webhook_task(event)
 
     return WebhookResponse(
         status="accepted",
-        event_id=event.id,
+        event_id=durable_delivery_id,
         message=f"Processing {event_type.value} event",
     )
 

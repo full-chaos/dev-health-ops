@@ -1,0 +1,13 @@
+{
+  "schema_version": "v1",
+  "cases": [
+    {"id": "github-primary-limit", "provider": "github", "status": 403, "headers": {"x-ratelimit-remaining": "0"}, "classification": "rate_limited"},
+    {"id": "github-secondary-limit", "provider": "github", "status": 403, "headers": {}, "message": "secondary rate limit", "classification": "rate_limited"},
+    {"id": "github-permission", "provider": "github", "status": 403, "headers": {}, "classification": "authentication"},
+    {"id": "gitlab-auth", "provider": "gitlab", "status": 401, "headers": {}, "classification": "authentication"},
+    {"id": "jira-not-found", "provider": "jira", "status": 404, "headers": {}, "classification": "not_found"},
+    {"id": "linear-conflict", "provider": "linear", "status": 409, "headers": {}, "classification": "conflict"},
+    {"id": "gitlab-rate-limit", "provider": "gitlab", "status": 429, "headers": {"retry-after": "2"}, "classification": "rate_limited"},
+    {"id": "transient", "provider": "gitlab", "status": 503, "headers": {}, "classification": "transient"}
+  ]
+}

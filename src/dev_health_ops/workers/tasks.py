@@ -28,7 +28,10 @@ from dev_health_ops.workers.sync_reconciler import (
     prune_rate_limit_observations,
     reconcile_sync_dispatch,
 )
-from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
+from dev_health_ops.workers.sync_scheduler import (
+    consume_pending_scheduled_sync_occurrences,
+    dispatch_scheduled_syncs,
+)
 from dev_health_ops.workers.sync_units import (
     dispatch_sync_run,
     finalize_sync_run,
@@ -76,6 +79,7 @@ __all__ = [
     "dispatch_scheduled_metrics",
     "dispatch_scheduled_reports",
     "dispatch_scheduled_syncs",
+    "consume_pending_scheduled_sync_occurrences",
     "dispatch_sync_run",
     "execute_saved_report",
     "external_ingest_stream_health",

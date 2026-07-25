@@ -49,3 +49,6 @@ async def test_home_throughput_uses_scoped_latest_work_units(
     assert "membership_scoped_work_unit_ids AS" in deltas_sql
     assert "FROM latest_work_unit_investments AS work_unit_investments" in deltas_sql
     assert "FROM work_unit_investments" in deltas_sql
+    assert "argMax(pr_rework_ratio, computed_at) AS pr_rework_ratio" in deltas_sql
+    assert "argMax(prs_merged, computed_at) AS prs_merged" in deltas_sql
+    assert "GROUP BY day, repo_id" in deltas_sql

@@ -13,15 +13,51 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import subprocess
 from pathlib import Path
 
-from dev_health_ops.db import get_postgres_uri, resolve_sink_uri
+from dev_health_ops.db import (
+    get_postgres_uri,
+    normalize_async_postgres_uri,
+    resolve_sink_uri,
+)
 
 logger = logging.getLogger(__name__)
 
 # Resolve the alembic directory from the *installed* package tree,
 # not from a hard-coded source path.
 _ALEMBIC_DIR = Path(__file__).resolve().parent / "alembic"
+
+
+def _get_migration_database_uri() -> str | None:
+    """Resolve the elevated one-shot DSN without changing runtime aliases."""
+    direct = os.getenv("MIGRATION_DATABASE_URI")
+    file_name = os.getenv("MIGRATION_DATABASE_URI_FILE")
+    if direct is not None and file_name is not None:
+        raise ValueError(
+            "MIGRATION_DATABASE_URI and MIGRATION_DATABASE_URI_FILE are mutually exclusive"
+        )
+    if direct is not None:
+        if not direct.strip():
+            raise ValueError("MIGRATION_DATABASE_URI contains an empty value")
+        return normalize_async_postgres_uri(direct)
+    if file_name is None:
+        return None
+    if not file_name.strip():
+        raise ValueError("MIGRATION_DATABASE_URI_FILE must name a file")
+    try:
+        value = (
+            Path(file_name)
+            .read_text(encoding="utf-8")
+            .removesuffix("\n")
+            .removesuffix("\r")
+        )
+    except OSError as exc:
+        raise ValueError("could not read MIGRATION_DATABASE_URI_FILE") from exc
+    if not value:
+        raise ValueError("MIGRATION_DATABASE_URI_FILE contains an empty value")
+    return normalize_async_postgres_uri(value)
 
 
 def _make_alembic_config(db_url: str | None = None):
@@ -31,7 +67,11 @@ def _make_alembic_config(db_url: str | None = None):
     cfg = Config()
     cfg.set_main_option("script_location", str(_ALEMBIC_DIR))
 
-    url = db_url or get_postgres_uri()
+    # Explicit CLI configuration is valid for the Alembic-only compatibility
+    # path. The unified Alembic + River path uses one dedicated environment
+    # source for both steps; _run_upgrade rejects combining those sources.
+    # POSTGRES_URI and its documented aliases remain a compatibility fallback.
+    url = db_url or _get_migration_database_uri() or get_postgres_uri()
     if url:
         cfg.set_main_option("sqlalchemy.url", url)
 
@@ -44,8 +84,41 @@ def _make_alembic_config(db_url: str | None = None):
 def _run_upgrade(ns: argparse.Namespace) -> int:
     from alembic import command
 
-    cfg = _make_alembic_config(getattr(ns, "db", None))
+    explicit_db = getattr(ns, "db", None)
+    if explicit_db and (
+        os.getenv("MIGRATION_DATABASE_URI") is not None
+        or os.getenv("MIGRATION_DATABASE_URI_FILE") is not None
+    ):
+        raise ValueError(
+            "--db cannot be combined with MIGRATION_DATABASE_URI or "
+            "MIGRATION_DATABASE_URI_FILE for a unified upgrade"
+        )
+    cfg = _make_alembic_config(explicit_db)
     command.upgrade(cfg, ns.revision)
+    return _run_river_upgrade()
+
+
+def _run_river_upgrade() -> int:
+    """Run the pinned Go migrator as the second fail-closed one-shot step."""
+    # Existing local/CI Alembic callers remain additive until their migration
+    # image opts into River with the elevated DSN. Once opted in, every River
+    # prerequisite is mandatory and failures remain fail-closed.
+    if (
+        os.getenv("MIGRATION_DATABASE_URI") is None
+        and os.getenv("MIGRATION_DATABASE_URI_FILE") is None
+    ):
+        return 0
+    try:
+        result = subprocess.run(
+            ["dev-health-worker-migrate"],
+            check=False,
+        )
+    except OSError:
+        logger.error("River migration binary is unavailable")
+        return 1
+    if result.returncode != 0:
+        logger.error("River migration step failed")
+        return 1
     return 0
 
 

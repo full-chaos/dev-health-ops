@@ -568,6 +568,7 @@ func domainPosture() RolePosture {
 //     sync_run_reference_discoveries, sync_run_post_dispatches,
 //     worker_job_routes: coordinator-exclusive, verified confidence (workerctl
 //     and/or reconciler call sites, no domain-hot-path site for any of them).
+//
 //   - scheduled_jobs, scheduled_sync_occurrences, fixed_schedule_occurrences:
 //     coordinator-exclusive but manifest confidence is "unverified-shape" —
 //     the grant-deriver tool cannot trace reachability through a
@@ -580,25 +581,36 @@ func domainPosture() RolePosture {
 //     clause, matching the {false, true} already used pre-split) and
 //     internal/scheduler/fixed/*.go's genuine INSERT+UPDATE occurrence
 //     writers for the other two.
+//
 //   - sync_dispatch_outbox, sync_run_units, sync_runs,
 //     sync_dispatch_transport_routes, worker_job_runs, organizations: the
 //     coordinator side of the six dual-grant tables also declared in
 //     domainPosture — see that function's doc comment.
 //
-// NOT included, pending confirmation: sync_configurations. The manifest
-// attributes it to the domain role only (SELECT). While independently
-// deriving the scheduled_jobs shape above, internal/scheduler/sync/
-// transaction.go's schedulerHandoffCandidatesSQL was found to lock this
-// table too — `FOR UPDATE OF config, job SKIP LOCKED` where `config` is
-// public.sync_configurations, joined with scheduled_jobs — via the same
-// closure-typed-struct-field blind spot the manifest already documents for
-// scheduled_jobs itself. That would make sync_configurations a SEVENTH
-// dual-grant table (coordinator: SELECT, UPDATE), not the domain-only table
-// the manifest states. This is flagged, not applied: the manifest is
-// authoritative over this comment's own reasoning, and this specific
-// contradiction (a "verified"-confidence row, not an "unverified-shape" one)
-// needs sign-off before the row changes. See the implementation report for
-// full evidence.
+//   - sync_configurations (SEVENTH dual-grant, coordinator: SELECT, UPDATE):
+//     internal/scheduler/sync/transaction.go's schedulerHandoffCandidatesSQL
+//     locks it via `FOR UPDATE OF config, job SKIP LOCKED` (config =
+//     public.sync_configurations), which requires UPDATE. Found via the same
+//     closure-typed-struct-field blind spot the manifest documents for
+//     scheduled_jobs; confirmed and signed off, manifest updated to make it a
+//     dual-grant row (was domain-only SELECT). Domain side stays SELECT-only
+//     (native_post_sync.go:263, no lock).
+//
+//   - worker_job_outbox (coordinator: SELECT, UPDATE): internal/jobroute/
+//     control.go:197 runs `LOCK TABLE public.worker_job_outbox IN SHARE ROW
+//     EXCLUSIVE MODE` (needs UPDATE, confirmed empirically) inside
+//     ApplyCheckedIn/Rollback, reached by dev-health-workerctl (a coordinator
+//     binary once its jobroute pool repoints from domainPool to the
+//     coordinator pool — a deploy prerequisite). The table is a THREE-role
+//     table: domain SELECT+INSERT (outbox producer), queue SELECT+UPDATE+DELETE
+//     (dispatch drain), coordinator SELECT+UPDATE (this lock). Its coordinator
+//     grant is NOT in migrate.go (which emits only domain+queue); the
+//     coordinator role's grants are provisioned at deploy alongside its
+//     role/DSN/secret. This posture row is the readiness SPEC that enforcement
+//     will check once that provisioning lands. See the LOCK-aware coordinator
+//     sweep in .remember/chaos-3033-option-b-role-split.md; the pre-existing
+//     latent 42501 (domain-pool workerctl cannot hold this lock today) is
+//     tracked separately.
 func coordinatorPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
@@ -616,6 +628,8 @@ func coordinatorPosture() RolePosture {
 			{"sync_dispatch_transport_routes", false, true, false},
 			{"worker_job_runs", false, true, false},
 			{"organizations", false, false, false},
+			{"sync_configurations", false, true, false},
+			{"worker_job_outbox", false, true, false},
 		},
 	}
 }

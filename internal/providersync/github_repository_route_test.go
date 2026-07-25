@@ -71,6 +71,27 @@ func gitHubRepositoryClient(
 	return client
 }
 
+// TestGitHubRepositoryRouteEmitsOneBoundedReposEffect also carries the CHAOS-
+// 3123 parity evidence for RouteReady: the expected id/settings/tags below
+// were independently produced by running the real Python collector against
+// this exact fixture --
+//
+//	repo_info = _repo_from_item(fixture)  # code_client.py
+//	instance = normalized_operational_provider_instance("github", "https://api.github.com")
+//	settings = {"source": "github", "github_instance_url": instance,
+//	            "repo_id": repo_info.id, "url": repo_info.url,
+//	            "default_branch": repo_info.default_branch}
+//	tags = ["github", repo_info.language]  # repo_info.language == "Go"
+//	repo_id = get_repo_uuid_from_repo(repo_info.full_name)
+//
+// which printed repo_uuid=c7198fbc-1945-3717-05d8-eb78866b4e79,
+// settings={"source": "github", "github_instance_url": "github.com",
+// "repo_id": 4567, "url": "https://github.com/Acme/API",
+// "default_branch": "main"}, tags=["github", "Go"] -- field-for-field
+// identical to the assertions below (whitespace aside, which is not part of
+// the persisted semantics). This is fixture parity, not live parity: it
+// proves Go and Python agree on this input, not that either agrees with a
+// live GitHub API response.
 func TestGitHubRepositoryRouteEmitsOneBoundedReposEffect(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
@@ -117,6 +138,7 @@ func TestGitHubRepositoryRouteEmitsOneBoundedReposEffect(t *testing.T) {
 	}
 	if row.OrgID != claim.OrgID || row.Repo != "Acme/API" ||
 		row.Provider != "github" || row.Ref != nil ||
+		row.ID != "c7198fbc-1945-3717-05d8-eb78866b4e79" ||
 		!row.LastSynced.Equal(now) || !row.CreatedAt.Equal(now) {
 		t.Fatalf("row=%+v", row)
 	}
@@ -312,10 +334,16 @@ func TestNormalizedProviderInstanceMirrorsPython(t *testing.T) {
 	}
 }
 
-// TestGitHubRepositoryLiveParityHarness is the live-parity harness stub
-// required before (github, repo-metadata) may become RouteReady. It is skipped
-// until an operator points it at a real credentialed repository; a skipped run
-// is never parity evidence (plan §5 false-pass rules).
+// TestGitHubRepositoryLiveParityHarness is the live-parity harness stub.
+// CHAOS-3123 flipped (github, repo-metadata) to RouteReady on fixture-level
+// field parity against the production Python collector instead — canary
+// staging and live-traffic parity are waived for this program (no production
+// users). Live parity against a real credentialed repository is still not
+// captured and is NOT required for RouteReady under the waiver, but remains
+// valuable operational evidence before the GithubRepoMetadata switch is ever
+// turned on. It is skipped until an operator points it at a real credentialed
+// repository; a skipped run is never parity evidence (plan §5 false-pass
+// rules).
 func TestGitHubRepositoryLiveParityHarness(t *testing.T) {
 	repository := os.Getenv("PROVIDER_LIVE_PARITY_GITHUB_REPO")
 	token := os.Getenv("PROVIDER_LIVE_PARITY_GITHUB_TOKEN")

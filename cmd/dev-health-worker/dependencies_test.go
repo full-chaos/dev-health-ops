@@ -104,6 +104,24 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 			wantErr: true,
 		},
 		{
+			// (github, repo-metadata) is the second RouteReady pair added by
+			// CHAOS-3123; this case pins that the generalised runtimeConstructed
+			// check (any enabled route, not launchdarkly alone) actually covers
+			// it rather than only having been exercised for launchdarkly.
+			name: "github complete",
+			config: config.Config{
+				WorkerGithubRepoMetadataEnabled: true,
+			},
+			runtime: true,
+		},
+		{
+			name: "github missing runtime",
+			config: config.Config{
+				WorkerGithubRepoMetadataEnabled: true,
+			},
+			wantErr: true,
+		},
+		{
 			name:    "linear incomplete",
 			config:  config.Config{WorkerLinearWorkItemsEnabled: true},
 			wantErr: true,

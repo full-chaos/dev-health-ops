@@ -227,7 +227,7 @@
       "route_destinations": [
         "repos"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token",
         "github_app_installation"

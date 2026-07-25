@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,7 +49,8 @@ func TestBuildProviderSyncHandlerSharesOneMetricsInstance(t *testing.T) {
 	// unmodified BuildExecutor closure without a live ClickHouse, Valkey, or
 	// Postgres connection.
 	handler, providerMetrics := buildProviderSyncHandler(
-		nil, nil, nil, nil, nil, collector, slog.Default(),
+		nil, providersync.CompleteRouteSwitches{}, nil, nil, nil, nil,
+		collector, slog.Default(),
 	)
 	if handler == nil || handler.BuildExecutor == nil {
 		t.Fatal("buildProviderSyncHandler returned an incomplete handler")
@@ -57,7 +59,20 @@ func TestBuildProviderSyncHandlerSharesOneMetricsInstance(t *testing.T) {
 		t.Fatal("buildProviderSyncHandler returned a nil Metrics instance")
 	}
 
-	executor, err := handler.BuildExecutor(&providersync.LeaseSession{})
+	// BuildExecutor selects its CompleteRouteHandler/effect sink from
+	// session.Claim (CHAOS-3123: no more single hardcoded route), so a
+	// zero-value Claim no longer reaches the closure this test targets — it
+	// hits the closure's own fail-closed default case instead. Any one of the
+	// route-ready pairs proves the same metrics-identity seam; launchdarkly is
+	// arbitrary here.
+	session := &providersync.LeaseSession{
+		Claim: providersync.Claim{
+			Unit: providersync.Unit{
+				Provider: "launchdarkly", Dataset: "feature-flags",
+			},
+		},
+	}
+	executor, err := handler.BuildExecutor(session)
 	if err != nil {
 		t.Fatalf("BuildExecutor: %v", err)
 	}
@@ -195,4 +210,77 @@ func disjointHandlerSets(left, right map[string]struct{}) bool {
 		}
 	}
 	return true
+}
+
+// TestProviderSyncHandlerSwitchesFollowConfiguration pins the CHAOS-3123 fix
+// that the executing handler reads the same switches the readiness check does.
+//
+// The defect this replaces was a literal `LaunchDarklyFeatureFlags: true`
+// inside buildProviderSyncHandler. That is invisible to every behavioral test:
+// the handler serves LaunchDarkly whether or not the process was configured to,
+// and refuses (github, repo-metadata) even when it was — so a unit the Python
+// producer legitimately routed to River is answered with a route fault rather
+// than executed. Reintroducing any hardcoded field here must fail this test.
+func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]providersync.CompleteRouteSwitches{
+		"none":   {},
+		"github": {GithubRepoMetadata: true},
+		"both":   {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			handler, _ := buildProviderSyncHandler(
+				nil, want, nil, nil, nil, nil, nil, slog.Default(),
+			)
+			if handler == nil {
+				t.Fatal("buildProviderSyncHandler returned no handler")
+			}
+			if handler.Switches != want {
+				t.Fatalf("handler.Switches = %+v, want %+v", handler.Switches, want)
+			}
+		})
+	}
+}
+
+// TestWorkerRouteSwitchesMapsEveryConfiguredRoute proves the config->switches
+// translation carries each flag to its own field. A copy/paste that pointed two
+// fields at one config flag would still satisfy a single-flag test.
+func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
+	t.Parallel()
+	if got := workerRouteSwitches(config.Config{}); got != (providersync.CompleteRouteSwitches{}) {
+		t.Fatalf("zero config produced %+v", got)
+	}
+	for name, probe := range map[string]struct {
+		cfg  config.Config
+		want providersync.CompleteRouteSwitches
+	}{
+		"launchdarkly": {
+			cfg:  config.Config{WorkerLaunchDarklyFeatureFlagsEnabled: true},
+			want: providersync.CompleteRouteSwitches{LaunchDarklyFeatureFlags: true},
+		},
+		"github": {
+			cfg:  config.Config{WorkerGithubRepoMetadataEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubRepoMetadata: true},
+		},
+		"linear": {
+			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
+			want: providersync.CompleteRouteSwitches{LinearWorkItems: true},
+		},
+		"jira_work_items": {
+			cfg:  config.Config{WorkerJiraWorkItemsEnabled: true},
+			want: providersync.CompleteRouteSwitches{JiraWorkItems: true},
+		},
+		"jira_incidents": {
+			cfg:  config.Config{WorkerJiraIncidentsEnabled: true},
+			want: providersync.CompleteRouteSwitches{JiraIncidents: true},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := workerRouteSwitches(probe.cfg); got != probe.want {
+				t.Fatalf("workerRouteSwitches = %+v, want %+v", got, probe.want)
+			}
+		})
+	}
 }

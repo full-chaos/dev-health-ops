@@ -71,17 +71,32 @@ PROVIDER_MATRIX_UPDATE=1 go test ./internal/providersync \
 - `route_destinations` is empty for pairs with no known sink manifest yet.
   Recording a guessed manifest would be worse than recording none.
 
-## Activation preconditions for `(github, repo-metadata)`
+## Activation status for `(github, repo-metadata)`
 
-The pair is `native_go` with `route_ready: false`. Before it may be flipped:
+CHAOS-3123 flipped the pair to `native_go` / `route_ready: true` on
+fixture-level field parity evidence against the production Python collector.
+Routing still requires the separate `GithubRepoMetadata` switch
+(`WORKER_GITHUB_REPO_METADATA_ENABLED`), which every existing deployment
+leaves off by default — `route_ready: true` alone moves no live traffic; see
+`CompleteRouteSwitches.Descriptor`'s `github`/`repo-metadata` case.
 
-1. `TestGitHubRepositoryLiveParityHarness` must be implemented and pass against
-   non-empty real data.
+What this activation waived and satisfied:
+
+1. `TestGitHubRepositoryLiveParityHarness` remains an unimplemented stub and
+   is *not* a precondition: canary staging and live-traffic parity are waived
+   for this program (no production users yet). Fixture-level field parity is
+   the accepted bar. Live parity against a real credentialed repository is
+   still valuable operational evidence to capture before the switch is ever
+   turned on in an environment with real traffic.
 2. The binary that constructs `GitHubRepositoryRouteHandler` **must** also set
    `EffectCommitter.Readback` to `GitHubRepositoryClickHouseEffects`. The
    `repos` effect is `EffectReadbackRequired`, so a committer without a
    readback fails closed with `ErrEffectRecoveryAmbiguous` rather than
-   reinserting.
+   reinserting. `cmd/dev-health-worker/provider_sync.go`'s `BuildExecutor`
+   now selects `Handler`/`Sink`/`Readback` by `session.Claim.Provider` and
+   `session.Claim.Dataset` (CHAOS-3123) — a single hardcoded
+   `LaunchDarklyRouteHandler`/`LaunchDarklyClickHouseEffects` pair would fail
+   closed on every claimed github unit rather than serve it.
 
 ## Effect timestamp stabilization (applies to every complete route)
 

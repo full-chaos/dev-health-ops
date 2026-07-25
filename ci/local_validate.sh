@@ -28,17 +28,40 @@
 #
 # *** SAFETY CONTRACT ***
 #   The local container 'dev-health-clickhouse-1' db 'default' holds REAL dev data.
-#   This script NEVER creates/drops/alters tables in 'default'. The only statement it
-#   runs against the default-connected client is `CREATE DATABASE ci_local_validate`
-#   (clickhouse-connect will NOT auto-create it). All schema/migrations/tests are
-#   pointed at clickhouse://ch:ch@localhost:8123/ci_local_validate via CLICKHOUSE_URI,
-#   and the scratch db is dropped on EXIT. CLICKHOUSE_URI must never default to /default.
+#   This script NEVER creates/drops/alters tables in 'default'. The only DDL it runs
+#   against the default-connected client is CREATE/DROP DATABASE for a scratch db
+#   named `ci_local_validate_<12-hex-digest-of-worktree-path>` (clickhouse-connect
+#   will NOT auto-create it). All schema/migrations/tests are pointed at
+#   clickhouse://ch:ch@localhost:8123/<scratch db> via CLICKHOUSE_URI, and the
+#   scratch db is dropped on EXIT. CLICKHOUSE_URI must never default to /default.
+#
+# *** CONCURRENCY CONTRACT (CHAOS collision fix) ***
+#   Multiple agents run this gate concurrently from different git worktrees against
+#   the SAME shared ClickHouse container. Before this fix, SCRATCH_DB defaulted to
+#   the fixed literal `ci_local_validate` for every worktree, so two concurrent runs
+#   used the SAME scratch database: system.query_log showed interleaved
+#   `CREATE TABLE ... _new` statements from two migration runs racing inside what
+#   should have been a single sequential upgrade, and one run's `DROP DATABASE` on
+#   exit could yank the schema out from under a sibling run mid-suite — false reds
+#   AND false greens. The default is now derived deterministically from the
+#   worktree's absolute path (hashed + truncated to a legal ClickHouse identifier),
+#   so distinct worktrees get distinct scratch databases automatically, with no
+#   caller action required. Deterministic-per-worktree (not random-per-run) is
+#   intentional: a run that dies before its EXIT trap fires (kill -9, crash) is
+#   reclaimed by the NEXT run from the same worktree — same name, dropped and
+#   recreated clean — rather than leaking a fresh orphan database every time.
+#   An explicit `SCRATCH_DB=...` still overrides the default for callers that
+#   already pass one (e.g. to force a shared name, or to inspect a completed run's
+#   database before it's reclaimed).
 #
 # USAGE:
 #   Run from the worktree ROOT (the dir containing ci/run_tests.sh) using its .venv:
 #     bash ci/local_validate.sh
 #   Skip the live-ClickHouse stage (pure-Python gates only, e.g. no docker):
 #     SKIP_CLICKHOUSE=1 bash ci/local_validate.sh
+#   Force a specific scratch db name (rarely needed — the default is already
+#   unique per worktree):
+#     SCRATCH_DB=my_custom_scratch bash ci/local_validate.sh
 #
 set -uo pipefail
 
@@ -53,7 +76,29 @@ CH_USER="${CH_USER:-ch}"
 CH_PASS="${CH_PASS:-ch}"
 CH_HOST="${CH_HOST:-localhost}"
 CH_HTTP_PORT="${CH_HTTP_PORT:-8123}"
-SCRATCH_DB="${SCRATCH_DB:-ci_local_validate}"
+
+# Deterministic, per-worktree scratch db name (collision fix — see the
+# CONCURRENCY CONTRACT header above). Hash the absolute worktree ROOT (stable
+# for the life of the checkout, distinct across worktrees) down to 12 hex
+# chars and prefix with a letter so the result is always a legal ClickHouse
+# identifier. Tries sha256sum (Linux), then shasum (macOS), then openssl,
+# falling back to the POSIX-universal (non-cryptographic but still
+# deterministic) `cksum` so this never hard-fails preflight on a stripped-down
+# PATH.
+default_scratch_db() {
+  local path="$1" digest=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(printf '%s' "${path}" | sha256sum | cut -c1-12)"
+  elif command -v shasum >/dev/null 2>&1; then
+    digest="$(printf '%s' "${path}" | shasum -a 256 | cut -c1-12)"
+  elif command -v openssl >/dev/null 2>&1; then
+    digest="$(printf '%s' "${path}" | openssl dgst -sha256 | awk '{print $NF}' | cut -c1-12)"
+  else
+    digest="$(printf '%s' "${path}" | cksum | awk '{printf "%012d", $1}')"
+  fi
+  printf 'ci_local_validate_%s' "${digest}"
+}
+SCRATCH_DB="${SCRATCH_DB:-$(default_scratch_db "${ROOT}")}"
 SCRATCH_URI="clickhouse://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
 PYBIN="${ROOT}/.venv/bin/python"
 RUFF="${ROOT}/.venv/bin/ruff"
@@ -236,7 +281,15 @@ ch_create_scratch() {
   case "${SCRATCH_DB}" in
     default) die "refusing to run: SCRATCH_DB is 'default' (the real dev db)." ;;
   esac
-  ch_query "CREATE DATABASE IF NOT EXISTS ${SCRATCH_DB}" || return 1
+  # Reclaim: the default SCRATCH_DB name is deterministic per worktree (see the
+  # CONCURRENCY CONTRACT header), so a prior run from THIS SAME worktree that
+  # died before its EXIT trap could fire (kill -9, crash, host reboot) may have
+  # left this database behind with partial/stale schema. Drop it first so every
+  # run starts from a genuinely clean scratch db instead of silently inheriting
+  # another run's leftover tables — never touches anything but our own
+  # already-guarded, never-'default' SCRATCH_DB name.
+  ch_query "DROP DATABASE IF EXISTS ${SCRATCH_DB}" || true
+  ch_query "CREATE DATABASE ${SCRATCH_DB}" || return 1
   SCRATCH_CREATED=1
   trap cleanup_scratch EXIT
   return 0

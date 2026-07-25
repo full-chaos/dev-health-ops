@@ -38,7 +38,7 @@ type allowIntegrationDomainGuard struct{}
 func (allowIntegrationDomainGuard) Check(context.Context, Action, JobSummary) error { return nil }
 
 // operatorIntegrationPolicyRegistry changes only the fixture's insertion
-// policy. The operator backend continues to use the checked-in, Celery-routed
+// policy. The operator backend continues to use the checked-in, unmodified
 // registry so this test cannot weaken or misrepresent production routing.
 type operatorIntegrationPolicyRegistry struct {
 	registry *jobruntime.Registry
@@ -117,9 +117,14 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-3033 (PR #1292, ee2141eca) moved system.heartbeat (like every
+	// checked-in kind except sync.provider_unit) to state go_default / route
+	// river. This is a drift tripwire on the *current* checked-in policy, not
+	// the pre-cutover celery baseline: it still fails loudly if a future edit
+	// to migration-state.json silently changes heartbeat's routing.
 	heartbeat, ok := registry.Descriptor(jobcontract.KindHeartbeat)
-	if !ok || heartbeat.Executable() {
-		t.Fatalf("checked-in heartbeat policy = %#v, want non-executable", heartbeat)
+	if !ok || !heartbeat.Executable() || heartbeat.MigrationState != "go_default" || heartbeat.Route != "river" {
+		t.Fatalf("checked-in heartbeat policy = %#v, want go_default/river executable", heartbeat)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobID := insertOperatorIntegrationJob(

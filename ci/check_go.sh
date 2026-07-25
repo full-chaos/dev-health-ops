@@ -224,7 +224,7 @@ check_integration() {
 			./internal/joboutbox ./internal/joboperator ./internal/syncreconciler ./internal/syncroute \
 			./internal/scheduler/sync ./internal/scheduler/fixed ./internal/syncdispatchruntime \
 			./internal/jobs/report ./internal/jobs/system ./internal/jobs/pagerduty \
-			./internal/providersync
+			./internal/providersync ./internal/providerfoundation
 	)
 }
 

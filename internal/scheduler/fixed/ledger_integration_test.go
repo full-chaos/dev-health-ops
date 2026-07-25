@@ -61,7 +61,25 @@ func startLedgerPostgres(t *testing.T) *pgxpool.Pool {
 			t.Errorf("terminate PostgreSQL: %v", err)
 		}
 	})
-	pool, err := pgxpool.New(ctx, instance.URI)
+	// pgxpool.New leaves MaxConns at its default, max(4, runtime.NumCPU()).
+	// TestTwoReplicasClaimOneOccurrencePerDueTime deliberately opens
+	// `replicas` (6) concurrent transactions and holds every one of them
+	// open until all six have started, so the pool must be able to seat all
+	// six at once. Dev workstations commonly have >6 CPUs, so the default
+	// happens to be large enough there; GitHub-hosted ubuntu-latest runners
+	// have 4 vCPUs, so the default pins MaxConns at 4 and replicas 5 and 6
+	// deadlock forever waiting for a connection that can only free up once
+	// all six have already acquired one — a real deadlock, not a flake, that
+	// nothing releases until `go test`'s -timeout=20m panics the whole run.
+	// Pin MaxConns explicitly so pool sizing never depends on host CPU
+	// count, matching the convention already used in internal/joboutbox and
+	// internal/joboperator's integration suites.
+	config, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 8
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +142,13 @@ func TestTwoReplicasClaimOneOccurrencePerDueTime(t *testing.T) {
 	for index := 0; index < replicas; index++ {
 		go func(index int) {
 			defer finished.Done()
-			tx, err := pool.Begin(ctx)
+			// Bound the acquire step on its own so a pool-sizing regression
+			// (see startLedgerPostgres) fails in seconds with a clear
+			// "context deadline exceeded" instead of hanging every replica
+			// until go test's -timeout=20m panics the whole run.
+			beginCtx, beginCancel := context.WithTimeout(ctx, 15*time.Second)
+			tx, err := pool.Begin(beginCtx)
+			beginCancel()
 			if err != nil {
 				errs[index] = err
 				ready.Done()

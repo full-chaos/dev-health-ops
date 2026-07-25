@@ -50,7 +50,17 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # PR runs cancel their predecessor so fast-follow pushes don't queue behind
+  # a stale diff. push (main) and merge_group runs must not be cancelled:
+  # this workflow already triggers on push to main (see `on.push` above),
+  # but a burst of merges lands several pushes to main within the same
+  # `github.ref` group in quick succession, and with an unconditional
+  # cancel-in-progress every push but the last in that burst gets cancelled
+  # before go-storage-integration finishes — so most main commits never get
+  # a real pass/fail, only "cancelled". integration.yml (push-to-main
+  # integration suite) already sets cancel-in-progress: false for the same
+  # reason; docs-cloudflare.yml uses this same event-conditional pattern.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

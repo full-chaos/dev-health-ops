@@ -35,32 +35,25 @@ var oraclePullRequestGoOnlyFields = map[string]string{
 	"org_id":      "stamped from claim.OrgID by normalizeGitHubPullRequest, not part of the built row's own fields conceptually",
 }
 
-// buildPullRequestRowForOracle is the (correct, current, production)
-// Go-side row builder for the "github/prs/row" pair: unmarshal the case's
-// raw_pr payload the same way GitHubPullRequestRouteHandler.Collect does,
-// call the REAL, current normalizeGitHubPullRequest, and hand back the
-// fully-populated row for the generic comparator to diff field-by-field
-// against Python's build_git_pull_request output.
-func buildPullRequestRowForOracle(t *testing.T, input map[string]any) map[string]any {
-	t.Helper()
-	return jsonRoundTripToMap(t, mustNormalizeOraclePullRequest(
-		t, input, normalizePRState, gitHubPullUserLogin,
-	))
-}
+// oraclePullRequestClaim and oraclePullRequestNormalizedAt are the fixed
+// claim/timestamp both the production path and the buggy-substitute path
+// use, so the only thing that can differ between them is the function(s)
+// under test.
+var oraclePullRequestClaim = Claim{Unit: Unit{
+	OrgID: "org-oracle", Provider: "github", Dataset: "prs", SourceExternalID: "octo/widgets",
+}}
 
-// mustNormalizeOraclePullRequest decodes one oracle case's {"raw_pr":
-// ..., "repo_id": ...} input into the same gitHubPullDetailPayload shape
-// Collect feeds normalizeGitHubPullRequest, then calls it -- parameterized
-// on the state-normalizer and login-coercion functions so pre-fix (buggy)
-// variants can be substituted without duplicating the whole row-assembly
-// path (which would itself be a second place these bugs could accidentally
-// get fixed or re-broken out of step with the real function).
-func mustNormalizeOraclePullRequest(
-	t *testing.T,
-	input map[string]any,
-	normalizeState func(string, *time.Time) string,
-	userLogin func(json.RawMessage) string,
-) pullRequestRow {
+var oraclePullRequestNormalizedAt = time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
+
+// decodeOraclePullRequestInput decodes one oracle case's {"raw_pr": ...,
+// "repo_id": ...} input into the same (repoID, gitHubPullDetailPayload)
+// shape Collect feeds normalizeGitHubPullRequest. Pure decoding, no
+// business logic -- shared by both the production path and the
+// buggy-substitute path below so a decode bug cannot itself become a
+// divergence between what the two paths are actually testing.
+func decodeOraclePullRequestInput(
+	t *testing.T, input map[string]any,
+) (string, gitHubPullDetailPayload) {
 	t.Helper()
 	rawPR, ok := input["raw_pr"]
 	if !ok {
@@ -78,23 +71,57 @@ func mustNormalizeOraclePullRequest(
 	if err := json.Unmarshal(encoded, &detail); err != nil {
 		t.Fatalf("unmarshal oracle case raw_pr into gitHubPullDetailPayload: %v", err)
 	}
+	return repoID, detail
+}
 
-	claim := Claim{Unit: Unit{
-		OrgID: "org-oracle", Provider: "github", Dataset: "prs", SourceExternalID: "octo/widgets",
-	}}
-	normalizedAt := time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
+// buildPullRequestRowForOracle is the (correct, current, production)
+// Go-side row builder for the "github/prs/row" pair: decode the case the
+// same way GitHubPullRequestRouteHandler.Collect does, then call the REAL,
+// unmodified normalizeGitHubPullRequest directly -- not a copy of its body
+// (codex finding #3, CHAOS-3162 second adversarial review: a copy is a
+// second source of truth that can drift from the real thing while staying
+// green; this is exactly the discipline that caught the earlier
+// tab-indented-anchor mutation-plan bug, applied to this framework's own
+// baseline test). Returning the concrete pullRequestRow struct (not a
+// hand-picked map) is what makes this row's completeness a Go-compiler
+// guarantee rather than a runtime choice (codex finding #1) -- see
+// oracle_compare_test.go's typedEncode doc comment.
+func buildPullRequestRowForOracle(t *testing.T, input map[string]any) pullRequestRow {
+	t.Helper()
+	repoID, detail := decodeOraclePullRequestInput(t, input)
+	row, err := normalizeGitHubPullRequest(
+		oraclePullRequestClaim, repoID, detail, oraclePullRequestNormalizedAt,
+	)
+	if err != nil {
+		t.Fatalf("normalizeGitHubPullRequest: %v", err)
+	}
+	return row
+}
 
-	// Inline a copy of normalizeGitHubPullRequest's body rather than calling
-	// it directly: the whole point of this test is to prove the comparator
-	// is SENSITIVE to normalizeState/userLogin swaps, and the production
-	// function hardcodes normalizePRState/gitHubPullUserLogin as free
-	// function calls, not as injectable parameters (correctly -- production
-	// code should not carry test seams it doesn't need). See
-	// TestGenericOracleRediscoversRowConstructionDefects for why this
-	// specific inlined copy is safe: it is exercised, unmodified, by the
-	// "current" sub-test using the real functions passed in, so any drift
-	// between this copy and normalizeGitHubPullRequest's real body would
-	// itself surface as a false failure/false pass in that sub-test.
+// mustNormalizeOraclePullRequest is an INLINED COPY of
+// normalizeGitHubPullRequest's body, parameterized on the state-normalizer
+// and login-coercion functions so a pre-fix (buggy) variant can be
+// substituted for TestGenericOracleRediscoversRowConstructionDefects.
+// normalizeGitHubPullRequest itself hardcodes normalizePRState/
+// gitHubPullUserLogin as free function calls (correctly -- production code
+// should not carry injectable test seams it doesn't need), so there is no
+// way to substitute a buggy sub-function through the real function's own
+// signature; this copy exists ONLY to make that substitution possible.
+// Every rediscovery test using this path is proving "the comparator
+// catches a wrong VALUE that a buggy sub-function would have produced",
+// NOT "this copy matches production" -- that second, different claim is
+// what buildPullRequestRowForOracle's direct call proves instead, and
+// nothing in this file relies on this copy for that claim.
+func mustNormalizeOraclePullRequest(
+	t *testing.T,
+	input map[string]any,
+	normalizeState func(string, *time.Time) string,
+	userLogin func(json.RawMessage) string,
+) pullRequestRow {
+	t.Helper()
+	repoID, detail := decodeOraclePullRequestInput(t, input)
+	claim, normalizedAt := oraclePullRequestClaim, oraclePullRequestNormalizedAt
+
 	if detail.Number < 1 {
 		t.Fatalf("oracle case raw_pr.number must be >= 1")
 	}
@@ -238,11 +265,11 @@ func buggyGitHubPullUserLoginStringOnly(raw json.RawMessage) string {
 // contrived one -- to prove the GENERIC comparator (which compares every
 // field the row exposes, not a chosen subset) catches it where a narrower
 // oracle demonstrably did not, twice, in this pair's actual review history.
-func buildPullRequestRowForOracleWithCorruptedMergedAt(t *testing.T, input map[string]any) map[string]any {
+func buildPullRequestRowForOracleWithCorruptedMergedAt(t *testing.T, input map[string]any) pullRequestRow {
 	t.Helper()
 	row := mustNormalizeOraclePullRequest(t, input, normalizePRState, gitHubPullUserLogin)
 	row.MergedAt, row.ClosedAt = row.ClosedAt, row.MergedAt
-	return jsonRoundTripToMap(t, row)
+	return row
 }
 
 // requireOracleRediscovers calls oracleDivergences directly (NOT
@@ -255,18 +282,19 @@ func buildPullRequestRowForOracleWithCorruptedMergedAt(t *testing.T, input map[s
 // out -- so an empty list fails this test loudly. The found divergences are
 // logged (t.Log, not t.Error) purely for readability when running -v; they
 // are the proof, not a failure.
-func requireOracleRediscovers(
+func requireOracleRediscovers[T any](
 	t *testing.T,
 	name string,
 	pairID string,
 	cases []oracleCase,
-	buggyBuilder func(t *testing.T, input map[string]any) map[string]any,
+	buggyBuilder func(t *testing.T, input map[string]any) T,
 	goOnlyFields map[string]string,
 ) {
 	t.Helper()
+	wrapped := func(t *testing.T, input map[string]any) any { return buggyBuilder(t, input) }
 	t.Run(name, func(t *testing.T) {
 		t.Helper()
-		divergences := oracleDivergences(t, pairID, cases, buggyBuilder, goOnlyFields)
+		divergences := oracleDivergences(t, pairID, cases, wrapped, goOnlyFields)
 		if len(divergences) == 0 {
 			t.Fatalf("expected the generic oracle to rediscover the injected pre-fix defect, "+
 				"but it reported every case matching under pair %q -- the comparator did not "+
@@ -290,20 +318,20 @@ func requireOracleRediscovers(
 func TestGenericOracleRediscoversRowConstructionDefects(t *testing.T) {
 	cases := oraclePullRequestCases()
 
-	buggyStateBuilder := func(t *testing.T, input map[string]any) map[string]any {
-		return jsonRoundTripToMap(t, mustNormalizeOraclePullRequest(
+	buggyStateBuilder := func(t *testing.T, input map[string]any) pullRequestRow {
+		return mustNormalizeOraclePullRequest(
 			t, input, buggyNormalizePRStateStripsOnlySpaces, gitHubPullUserLogin,
-		))
+		)
 	}
 	requireOracleRediscovers(
 		t, "rediscovers pre-M7 state-normalization whitespace bug",
 		"github/prs/row", cases, buggyStateBuilder, oraclePullRequestGoOnlyFields,
 	)
 
-	buggyLoginBuilder := func(t *testing.T, input map[string]any) map[string]any {
-		return jsonRoundTripToMap(t, mustNormalizeOraclePullRequest(
+	buggyLoginBuilder := func(t *testing.T, input map[string]any) pullRequestRow {
+		return mustNormalizeOraclePullRequest(
 			t, input, normalizePRState, buggyGitHubPullUserLoginStringOnly,
-		))
+		)
 	}
 	requireOracleRediscovers(
 		t, "rediscovers pre-M8 non-string login coercion bug",

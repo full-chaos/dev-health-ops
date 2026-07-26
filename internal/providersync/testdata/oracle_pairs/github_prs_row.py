@@ -20,12 +20,26 @@ import pathlib
 from typing import Any
 
 from internal.providersync.testdata import oracle_registry
+from internal.providersync.testdata.field_reflection import dict_literal_keys
 from internal.providersync.testdata.python_oracle_loader import load_live_module
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _CODE_CLIENT_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/github/code_client.py"
 _BASE_GIT_SOURCE = REPO_ROOT / "src/dev_health_ops/processors/base_git.py"
 _PR_STATE_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/pr_state.py"
+
+
+def _reflected_fields() -> frozenset[str]:
+    """The complete field set build_git_pull_request (base_git.py) is
+    capable of emitting, derived by statically parsing its own `values` and
+    `optional_values` dict literals (codex finding #1, CHAOS-3162) -- not a
+    hand-maintained list that could drift from, or start narrower than, the
+    real function."""
+    return dict_literal_keys(
+        _BASE_GIT_SOURCE.read_text(),
+        "build_git_pull_request",
+        ("values", "optional_values"),
+    )
 
 
 def _load_pr_state() -> Any:
@@ -93,6 +107,7 @@ oracle_registry.register(
     oracle_registry.PairSpec(
         id="github/prs/row",
         build_row=_build_row,
+        reflected_fields=_reflected_fields,
         excluded_fields={
             "first_review_at": (
                 "owned by github/pr-reviews' review-enrichment phase "

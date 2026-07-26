@@ -22,6 +22,25 @@ file, or in python_generic_row_oracle.py, needs to change to add a pair --
 that is the whole point: the loader's old ALLOWED_MODULES dict required
 editing loader source for every new heavy-dependency target; this registry
 does not.
+
+CODEX FINDING #1 (first adversarial review of this framework, CHAOS-3162):
+a declarative comparator does not, by itself, stop a pair's OWN field set
+from being hand-picked. `PairSpec.build_row` could return any dict a pair
+author chose to construct; nothing forced it to be complete. A future pair
+could expose three fields on both the Python and Go sides, omit an entire
+phase on both, and the generic comparator would report a perfect match on
+that narrowed intersection -- reproducing the exact defect this framework
+exists to eliminate, one level up. `reflected_fields` closes that: it is a
+REQUIRED, zero-argument callable that returns the complete field set the
+underlying PRODUCTION function is capable of emitting, derived by
+statically parsing that function's own source (see field_reflection.py),
+never by hand-maintaining a second list that can drift from, or simply
+start incomplete relative to, the first. `register()` calls it eagerly and
+stores the result so python_generic_row_oracle.py can enforce, for every
+case: (row keys) | (excluded_fields keys) >= reflected_fields() -- any
+reflected field that is neither present in the row nor explicitly,
+individually excluded with a written reason is a hard failure, not a
+silent gap.
 """
 
 from __future__ import annotations
@@ -31,6 +50,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 RowBuilder = Callable[[dict[str, Any]], dict[str, Any]]
+FieldReflector = Callable[[], frozenset[str]]
 
 
 @dataclass(frozen=True)
@@ -43,10 +63,17 @@ class PairSpec:
         inclusion decision) -- these are not interchangeable and must not be
         collapsed into one id just to reduce bookkeeping.
     build_row: given one JSON-serializable case dict, calls the REAL,
-        live production function chain and returns the COMPLETE result as a
-        plain, JSON-serializable dict -- every field the underlying object
-        exposes, not a chosen subset. The generic comparator (Go side) diffs
-        every key this returns against every key the Go side produces.
+        live production function chain and returns the result as a plain,
+        JSON-serializable dict.
+    reflected_fields: zero-argument callable returning the complete,
+        non-empty frozenset of field names the underlying PRODUCTION
+        function is capable of emitting -- derived by inspecting that
+        function's own source (field_reflection.py's dict_literal_keys, for
+        a Python builder that assembles its result from named dict
+        literals), never hand-maintained separately from build_row. Called
+        once, eagerly, at register() time: a pair whose reflection is
+        broken fails at import time, not silently the first time someone
+        runs its comparison.
     excluded_fields: {field_name: reason}. A field listed here is skipped by
         the comparator on BOTH sides. A reason is required -- this mirrors
         `expected_survivor_reason` in scripts/mutation_harness.py: an
@@ -56,10 +83,17 @@ class PairSpec:
 
     id: str
     build_row: RowBuilder
+    reflected_fields: FieldReflector
     excluded_fields: dict[str, str] = field(default_factory=dict)
 
 
-_REGISTRY: dict[str, PairSpec] = {}
+@dataclass(frozen=True)
+class _Registered:
+    spec: PairSpec
+    reflected: frozenset[str]
+
+
+_REGISTRY: dict[str, _Registered] = {}
 
 
 def register(spec: PairSpec) -> None:
@@ -75,10 +109,45 @@ def register(spec: PairSpec) -> None:
                 f"pair {spec.id!r}: excluded_fields[{name!r}] needs a non-empty "
                 "written reason, not a bare exclusion"
             )
-    _REGISTRY[spec.id] = spec
+    reflected = spec.reflected_fields()
+    if not isinstance(reflected, frozenset) or not reflected:
+        raise ValueError(
+            f"pair {spec.id!r}: reflected_fields() must return a non-empty "
+            f"frozenset, got {reflected!r} -- a pair that cannot state its "
+            "own complete field set cannot prove a row is complete either"
+        )
+    _REGISTRY[spec.id] = _Registered(spec=spec, reflected=reflected)
 
 
 def get(pair_id: str) -> PairSpec:
+    return _get_entry(pair_id).spec
+
+
+def check_completeness(pair_id: str, case_id: str, row: dict[str, Any]) -> None:
+    """Raise if `row` (one case's build_row output) omits any field
+    reflected_fields() says the production function can emit, unless that
+    field is declared in excluded_fields.
+
+    This is the actual enforcement point for codex finding #1: called by
+    python_generic_row_oracle.py once per case (not once per pair), so a
+    pair cannot pass a completeness-blind case just because some OTHER case
+    happens to exercise the full field set.
+    """
+    entry = _get_entry(pair_id)
+    declared = set(row.keys()) | set(entry.spec.excluded_fields.keys())
+    missing = entry.reflected - declared
+    if missing:
+        raise ValueError(
+            f"pair {pair_id!r}, case {case_id!r}: build_row's output is "
+            f"missing field(s) {sorted(missing)!r} that the production "
+            "function can emit (per reflected_fields()) -- either the row "
+            "must include them, or each one needs its own excluded_fields "
+            "entry with a written reason. A silently incomplete row is "
+            "exactly the defect this framework exists to prevent."
+        )
+
+
+def _get_entry(pair_id: str) -> _Registered:
     if pair_id not in _REGISTRY:
         raise KeyError(
             f"pair {pair_id!r} is not registered. Registering a pair is a side "

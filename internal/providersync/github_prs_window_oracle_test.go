@@ -71,6 +71,18 @@ func windowDecisionOracleCases() []oracleCase {
 	}
 }
 
+// windowDecisionResult is the concrete, complete result type for the
+// "github/prs/window" pair: exactly the two fields _decide's own
+// `return {"excluded": ..., "stop": ...}` literal can emit (per
+// github_prs_window.py's reflected_fields). Returning this struct (not a
+// hand-built map[string]any) is what makes the Go side's completeness a
+// compiler guarantee rather than a runtime choice (codex finding #1) --
+// see oracle_compare_test.go's typedEncode doc comment.
+type windowDecisionResult struct {
+	Excluded bool `json:"excluded"`
+	Stop     bool `json:"stop"`
+}
+
 // buildWindowDecisionForOracle is the (correct, current, production)
 // Go-side decision builder: parses the case's inputs into exactly the
 // values Collect/filterGitHubPullWindow would have (a time.Time and a
@@ -81,7 +93,7 @@ func buildWindowDecisionForOracle(
 	input map[string]any,
 	outsideWindow func(time.Time, Claim) bool,
 	crossedBoundary func(json.RawMessage, Claim) bool,
-) map[string]any {
+) windowDecisionResult {
 	t.Helper()
 	updatedAtStr, _ := input["updated_at"].(string)
 	updatedAt := firstTime(updatedAtStr)
@@ -104,13 +116,13 @@ func buildWindowDecisionForOracle(
 	}
 	stop := crossedBoundary(rawItem, claim)
 
-	return map[string]any{"excluded": excluded, "stop": stop}
+	return windowDecisionResult{Excluded: excluded, Stop: stop}
 }
 
 // TestGenericOracleMatchesLivePythonForWindowDecision is the "current code
 // is clean" half for this boundary.
 func TestGenericOracleMatchesLivePythonForWindowDecision(t *testing.T) {
-	builder := func(t *testing.T, input map[string]any) map[string]any {
+	builder := func(t *testing.T, input map[string]any) windowDecisionResult {
 		return buildWindowDecisionForOracle(t, input, pullOutsideKnownWindow, pullCrossedSinceBoundary)
 	}
 	compareRowsAgainstPythonOracle(t, "github/prs/window", windowDecisionOracleCases(), builder, nil)
@@ -136,7 +148,7 @@ func buggyPullOutsideKnownWindowExcludesUnknown(updatedAt time.Time, claim Claim
 // substituted, must report a divergence on the null-updated_at case.
 func TestGenericOracleRediscoversWindowGuardDefect(t *testing.T) {
 	cases := windowDecisionOracleCases()
-	buggyBuilder := func(t *testing.T, input map[string]any) map[string]any {
+	buggyBuilder := func(t *testing.T, input map[string]any) windowDecisionResult {
 		return buildWindowDecisionForOracle(
 			t, input, buggyPullOutsideKnownWindowExcludesUnknown, pullCrossedSinceBoundary,
 		)

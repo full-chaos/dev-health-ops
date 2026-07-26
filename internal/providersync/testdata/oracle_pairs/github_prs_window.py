@@ -36,9 +36,27 @@ from datetime import datetime, timezone
 from typing import Any
 
 from internal.providersync.testdata import oracle_registry
+from internal.providersync.testdata.field_reflection import (
+    RETURN_LITERAL,
+    dict_literal_keys,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_FILE = REPO_ROOT / "src/dev_health_ops/processors/github.py"
+_THIS_FILE = pathlib.Path(__file__)
+
+
+def _reflected_fields() -> frozenset[str]:
+    """The complete field set _decide's own `return {...}` literal is
+    capable of emitting (codex finding #1, CHAOS-3162). Since this pair's
+    "production" function is itself a pinned copy (see module docstring),
+    this at least guarantees a caller cannot silently compare against a
+    narrower subset of _decide's OWN two fields than _decide actually
+    returns -- it cannot, by construction, validate the pin's fidelity to
+    the real processors/github.py function, which is exactly what
+    _assert_pin_still_matches_source is for."""
+    return dict_literal_keys(_THIS_FILE.read_text(), "_decide", (RETURN_LITERAL,))
+
 
 # Every one of these must appear, verbatim, inside _collect_github_pr_objects
 # in the current source. If a future edit to the real function changes any
@@ -129,6 +147,7 @@ oracle_registry.register(
     oracle_registry.PairSpec(
         id="github/prs/window",
         build_row=_decide,
+        reflected_fields=_reflected_fields,
         excluded_fields={},
     )
 )

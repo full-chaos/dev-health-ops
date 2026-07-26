@@ -4,7 +4,7 @@ package providersync
 
 import (
 	"context"
-	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -42,24 +42,16 @@ import (
 //     single physical version, because argMax skips NULL-argument rows when
 //     picking the max.
 
-// encodeOracleValue JSON round-trips one value through the same
-// marshal/unmarshal path jsonRoundTripToMap uses for a whole struct, so a
-// hand-built map (this file) and a struct-marshaled map
-// (github_prs_generic_oracle_test.go, oracle_compare_test.go) represent a
-// time.Time/*time.Time/*string identically -- there is exactly one encoding
-// rule in this package's tests, applied consistently, not two that must be
-// kept in sync by hand.
+// encodeOracleValue routes one hand-scanned readback column through the
+// SAME typedEncode reflection-based, type-tagged encoding
+// oracle_compare_test.go uses for a whole struct (codex finding #2: a
+// bare, untagged encoding is exactly what let an int and an integral float,
+// or two large integers, compare equal at float64 precision) -- there is
+// exactly one encoding rule in this package's tests, applied consistently
+// via one shared function, not two that must be kept in sync by hand.
 func encodeOracleValue(t *testing.T, value any) any {
 	t.Helper()
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("marshal oracle value: %v", err)
-	}
-	var decoded any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("unmarshal oracle value: %v", err)
-	}
-	return decoded
+	return typedEncode(t, reflect.ValueOf(value))
 }
 
 // pullRequestReadbackComparisonExclusions are the fields the readback
@@ -234,7 +226,10 @@ func scanPullRequestReadbackRow(t *testing.T, rows driver.Rows, includeState boo
 // map[string]any shape the readback queries above produce, for diffRows.
 func expectedPullRequestRowMap(t *testing.T, row pullRequestRow) map[string]any {
 	t.Helper()
-	full := jsonRoundTripToMap(t, row)
+	full, ok := typedEncode(t, reflect.ValueOf(row)).(map[string]any)
+	if !ok {
+		t.Fatalf("typedEncode(pullRequestRow) did not return a map")
+	}
 	for excluded := range pullRequestReadbackComparisonExclusions {
 		delete(full, excluded)
 	}

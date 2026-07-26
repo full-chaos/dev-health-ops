@@ -130,9 +130,30 @@ services:
   # Applies the pinned River schema and the per-table grants for the three
   # runtime roles. The elevated migration DSN is confined to this one-shot
   # process; the long-running Go services below only ever receive unprivileged
-  # runtime DSNs. It must complete before either of them starts, and it depends
-  # on the Python `migrate` service because the tables it grants against
-  # (worker_job_outbox, worker_job_completion_fences, ...) are created there.
+  # runtime DSNs. It must complete before either of them starts.
+  #
+  # It deliberately does NOT `depends_on: migrate`, even though the tables it
+  # grants against (worker_job_outbox, worker_job_completion_fences, ...) are
+  # created by the Python migrator. `depends_on` pulls a service in regardless
+  # of profile, so that edge made `--profile go up -d` run Alembic to *head* --
+  # which is 0066_activate_river_worker_job_routes, the cutover that retargets
+  # 23 job kinds from Celery to River. The Go services sit downstream of this
+  # one, so the graph guaranteed exactly the ordering 0066 forbids: routes flip
+  # to River before any River consumer can start, and work then accumulates in
+  # worker_job_outbox with nothing to execute it. Bringing up the Go path must
+  # never be able to move production traffic as a side effect.
+  #
+  # The Python schema is therefore an explicit, separately authorized
+  # prerequisite. Bring it to the last pre-cutover revision first:
+  #
+  #   docker compose run --rm --entrypoint sh migrate -c \
+  #     'python -m dev_health_ops.cli migrate postgres upgrade 0065'
+  #
+  # If it is behind that, the grants below silently no-op (they are
+  # to_regclass-guarded so a migration can never fail on a missing table) and
+  # go-reconciler stays unready -- but it now logs the precise missing
+  # table.privilege gaps via DiagnoseRolePosture, so the cause is legible
+  # instead of a bare "dependency unavailable". See CHAOS-3143.
   go-worker-migrate:
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}
@@ -153,8 +174,6 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       go-river-provision:
-        condition: service_completed_successfully
-      migrate:
         condition: service_completed_successfully
     networks:
       - dev-health

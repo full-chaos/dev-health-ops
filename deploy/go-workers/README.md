@@ -147,6 +147,46 @@ own compose file(s) for exactly which services exist and where.
 > `--format json` piped through `jq 'del(...)'` to strip the fields you
 > don't need before looking at it.
 
+### Bring-up order: the Python schema is a prerequisite, never a `depends_on`
+
+**`depends_on` ignores profiles.** A profiled service that declares
+`depends_on: migrate` pulls the *unprofiled* Python migrator into the plan, so
+`docker compose --profile go up -d` runs Alembic to **head** — and head is
+`0066_activate_river_worker_job_routes`, the cutover that retargets 23 of 24
+job kinds from Celery to River. Both Go runtimes sit downstream of
+`go-worker-migrate`, so that edge guaranteed precisely the ordering `0066`'s
+own docstring forbids: routes flip to River *before* any River consumer can
+start, and envelopes then accumulate in `worker_job_outbox` with nothing to
+execute them.
+
+`go-worker-migrate` therefore does **not** depend on `migrate`, and standing up
+the Go observation path cannot move real traffic as a side effect.
+`tests/test_compose_config.py::test_go_profile_overlay_never_depends_on_python_migrate`
+is the regression barrier.
+
+Bring the Python schema to the last pre-cutover revision yourself, first:
+
+```bash
+# Explicit, separately authorized, and stops one revision short of the cutover.
+# `revision` is a positional on `upgrade`; omitting it means head, i.e. 0066.
+docker compose run --rm --entrypoint sh migrate -c \
+  'python -m dev_health_ops.cli migrate postgres upgrade 0065'
+
+# Confirm where you actually landed before going further.
+docker compose run --rm --entrypoint sh migrate -c \
+  'python -m dev_health_ops.cli migrate postgres current'
+
+# Only then start the Go path.
+docker compose --profile go up -d go-worker go-reconciler
+```
+
+If the database is behind `0065`, nothing fails loudly at migration time — the
+River grants are `to_regclass`-guarded so a migration can never fail on a
+missing table, they simply no-op. What you get instead is `go-reconciler`
+staying unready. Since CHAOS-3142 that path logs the precise missing
+`table.privilege` gaps via `DiagnoseRolePosture`, so the cause is legible
+rather than a bare "dependency unavailable"; see the migrations section below.
+
 ### One compose project owns one Postgres cluster
 
 Docker Compose tracks container ownership by `(project name, service name)`.
@@ -162,6 +202,30 @@ local Postgres cluster rather than starting a fresh one, confirm which
 compose project actually owns that container (`docker inspect <container>
 --format '{{index .Config.Labels "com.docker.compose.project"}}'`) before
 running any compose command against it from a second file.
+
+**What the rename does and does not change.** `ops/compose.yml` is now project
+`dev-health-ops`. It never owned the long-running local data: those volumes are
+labelled `com.docker.compose.project=dev-health` and belong to the repo-root
+`compose.yml`, whose project name is deliberately unchanged. No
+`dev-health-ops_*` volume existed before this change, so nothing was stranded
+or orphaned — the rename removes `ops/compose.yml`'s ability to hijack the root
+project's containers, which is the whole point.
+
+Two consequences worth knowing:
+
+- Starting `ops/compose.yml` now creates **fresh, empty** `dev-health-ops_*`
+  volumes rather than reattaching the root project's data. That is intended —
+  it is an isolated stack now, not a second view of the shared one. If you
+  actually want the shared cluster, use the root `compose.yml`.
+- `ops/compose.yml` still sets fixed `container_name:` values, several of them
+  bare (`postgres`, `clickhouse`, `valkey`, `worker`, `beat`). Container names
+  are global to the Docker daemon, not scoped per project, so the two projects
+  cannot run *simultaneously*: the second `up` fails with a name conflict.
+  This is a strict improvement over the previous behaviour — the old failure
+  mode was a *silent* recreate of the running container with a foreign
+  definition, and a loud name conflict is a far better outcome than that — but
+  it does mean "rename the project" is not the same as "the two stacks now
+  coexist". Run one at a time, or drop the fixed names.
 
 ### The coordinator DSN must be direct Postgres, never PgBouncer
 
@@ -355,6 +419,13 @@ This is a general operational hazard of mounting a live checkout into a
 migration-running service, not specific to CHAOS-3142 or to this migration —
 it deserves review as its own item, independent of the Go execution path
 this document otherwise covers. Tracked as CHAOS-3143.
+
+What CHAOS-3142 *did* close is the narrower case where bringing up the Go path
+was itself the trigger: `go-worker-migrate` no longer declares
+`depends_on: migrate`, so `--profile go up` cannot pull the Python migrator
+into the plan (see "Bring-up order" above, and its regression test). The
+general hazard remains — any `up` that restarts `migrate` for any other reason
+still runs to head — which is why CHAOS-3143 stays open.
 
 ### `SETTINGS_ENCRYPTION_KEY` delivery: the `env_file` path must NOT be parameterized alongside the build context
 

@@ -171,6 +171,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
+_GO_PROFILE_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-profile.yml"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
 
@@ -997,3 +998,62 @@ def test_route_switches_default_off_for_producer_gate() -> None:
             assert env[switch] == f"${{{switch}:-false}}", (
                 f"{switch} must reach {name} through the shared env anchor"
             )
+
+
+def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
+    """CHAOS-3142/CHAOS-3143: no `go-*` service may `depends_on` the Python
+    `migrate` service.
+
+    `depends_on` pulls a service in regardless of profile, so such an edge makes
+    `docker compose --profile go up -d` run Alembic to *head* -- which is
+    0066_activate_river_worker_job_routes, the cutover that retargets 23 job
+    kinds from Celery to River. Both Go runtimes sit downstream of
+    go-worker-migrate, so the edge guaranteed precisely the ordering 0066's own
+    docstring forbids: routes flip to River before any River consumer can
+    start, and envelopes then pile up in worker_job_outbox with no executor.
+
+    Standing up the Go observation path must never be able to move real traffic
+    as a side effect, so the Python schema stays an explicitly authorized
+    prerequisite (`migrate postgres --revision 0065`) rather than a compose
+    dependency edge.
+
+    Mutation coverage (manually verified): re-adding
+    `migrate: {condition: service_completed_successfully}` to
+    go-worker-migrate's depends_on fails this test.
+    """
+    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    go_services = {
+        name: spec for name, spec in services.items() if name.startswith("go-")
+    }
+    assert go_services, "the overlay must define the go-* services it exists to carry"
+
+    for name, spec in go_services.items():
+        depends_on = spec.get("depends_on") or {}
+        # Normalise both the mapping (long) and list (short) syntaxes.
+        dependencies = (
+            set(depends_on) if isinstance(depends_on, dict) else set(depends_on)
+        )
+        assert "migrate" not in dependencies, (
+            f"{name} must not depend on the Python `migrate` service: that edge runs "
+            "Alembic to head (0066, the Celery->River cutover) on a plain "
+            "`--profile go up`, before any Go consumer can start"
+        )
+
+
+def test_go_profile_overlay_services_are_all_profile_gated() -> None:
+    """CHAOS-3142: every service the overlay adds must be gated behind the `go`
+    profile, so a default `docker compose up` brings up the unchanged Celery
+    stack and nothing else.
+
+    This is what makes the overlay safe to leave in place permanently -- the
+    developer opts in per-invocation (`--profile go`) or via COMPOSE_PROFILES in
+    the root `.env`, and forgetting to opt in costs nothing.
+
+    Mutation coverage (manually verified): deleting `profiles: ["go"]` from any
+    go-* service fails this test.
+    """
+    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    for name, spec in services.items():
+        assert spec.get("profiles") == ["go"], (
+            f'{name} must declare profiles: ["go"] so a default `up` never starts it'
+        )

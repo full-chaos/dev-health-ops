@@ -69,7 +69,7 @@ to prevent.
 | --- | --- |
 | `proof` | argv **arrays**, not shell strings — the plan is data, not an execution surface. Every command must pass on the clean tree and at least one must fail mutated. A mutation nothing observes is not a measurement. |
 | `rationale` | State the property under test. Without it a verdict is uninterpretable six weeks later. |
-| `build` | argv array, plan-level or per-mutation. Must exit 0 **after** the mutation is applied. Without it, a mutation that fails to compile records `KILLED` — a build break and a failing assertion are the same exit code, and a build break runs no test at all. For Go, `["go","build","./..."]`. Its absence is reported as a warning on every mutation. |
+| `build` | argv array, plan-level or per-mutation. Must exit 0 **after** the mutation is applied. Without it, a mutation that fails to compile records `KILLED` — a build break and a failing assertion are the same exit code, and a build break runs no test at all. Its absence is reported as a warning on every mutation. **Match the proof's build configuration exactly**: if the proofs run `-tags integration`, so must the build. A plain `go build` passed a mutation whose orphaned variable only broke the tagged configuration, so the check would have passed while the proof could not run — a narrower version of the false confidence it exists to prevent. |
 | `expect_occurrences` | Defaults to 1 and is enforced. One real mutation landed in a doc comment because the anchor appeared twice, and a mutation in prose reads exactly like a coverage gap. |
 | `expected_survivor_reason` | Declare a survivor you have judged acceptable — a genuinely unobservable change, or redundancy with no reachable state left to assert. Undeclared survivors fail `--assert-all-killed`. |
 | `allow_comment_anchor` | Comment lines are refused by default for the reason above. |
@@ -81,6 +81,13 @@ to prevent.
 (no-op, wrong target, or a test asserting the constant being mutated), or genuine
 redundancy where no reachable state remains. Only the first is a coverage gap; reporting
 redundancy as a gap invites deleting a real guard.
+
+**Check the kill site against the mutation's `rationale`.** A verdict says a test noticed; the
+site says *which* test noticed *what*. Real cases: one mutation died in a seeding helper with a
+count mismatch rather than at the invariant written for it, and one had a rationale claiming to
+pin tenant *isolation* while the mutation actually swallowed the error and pinned *detection* —
+both real properties, but only one of them covered, and a green tick could not tell them apart.
+The rationale is a claim; the kill site is what checks it.
 
 `BASELINE_FAILED` — the proof was already red, so the file was never touched. `INVALID` —
 the mutation measured nothing: the anchor was rejected before any write, or the mutated source

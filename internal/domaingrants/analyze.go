@@ -39,13 +39,14 @@ type TableSurface struct {
 	Table      string
 	Privileges PrivilegeSet
 	Evidence   []Evidence
-	// RequiresAnyWriteLock and its evidence: see
-	// StatementResult.RequiresAnyWriteLock's doc comment (sql.go). Checked
-	// separately from Privileges because Postgres's requirement here is
-	// "at least one of INSERT/UPDATE/DELETE", not a single specific
-	// privilege.
-	RequiresAnyWriteLock bool
-	WriteLockEvidence    []Evidence
+	// LockRequirement is the strictest explicit LOCK TABLE demand on this table,
+	// or nil if it is never LOCKed (or only in ACCESS SHARE mode, which SELECT
+	// alone satisfies). Checked separately from Privileges because Postgres's
+	// demand here is a DISJUNCTION -- any one of a mode-specific set -- not a
+	// single required privilege. See LockRequirement in sql.go for the measured
+	// mode-to-privilege mapping.
+	LockRequirement   *LockRequirement
+	WriteLockEvidence []Evidence
 }
 
 // DynamicSite is a SQL-shaped call (X.Exec/Query/QueryRow/... on a
@@ -86,27 +87,207 @@ type UnresolvedTxSite struct {
 	Function string
 }
 
-// DerivedSurface is the full result of statically deriving the domain-pool
-// query surface.
+// DerivedSurface is the full result of statically deriving one pool's query
+// surface. Which pool is recorded in Role -- the derivation is identical
+// modulo the syntactic seed roots (see PoolRole and roleSeeds).
 type DerivedSurface struct {
+	Role          PoolRole
 	Tables        map[string]*TableSurface
 	Dynamic       []DynamicSite
 	Unresolved    []UnresolvedCallSite
-	SeedSites     []Evidence // where a *.Domain/.domainPool/.DomainPool() root was found, for auditing tool scope
+	SeedSites     []Evidence // where a pool root for Role was found, for auditing tool scope
 	Devirtualized []DevirtualizedCallSite
-	UnresolvedTx  []UnresolvedTxSite
-	rootModule    string
+	// FuncValueResolved is every call resolved through a function-typed struct
+	// field (funcvalue.go), for the same auditability reason Devirtualized
+	// exists: both are deliberately narrow unique-target shortcuts.
+	FuncValueResolved []FuncValueResolvedCallSite
+	// FuncValueConflicts are tainted calls through a function-typed field this
+	// pass refused to resolve (two implementations, or an unresolvable value).
+	// Each is an unanalyzed hole reached by pool-tainted arguments.
+	FuncValueConflicts []FuncValueConflictSite
+	// UnparsedLocks are LOCK statements the parser could not fully understand.
+	// Each is a hole with a table-shaped consequence: an unparsed LOCK may demand
+	// a privilege on a table that never appears in this surface at all.
+	UnparsedLocks []UnparsedLockSite
+	// NameSeedOverrides are places a parameter named after THIS role's pool was
+	// NOT treated as a seed, because its call sites pass a different role's pool.
+	// Reported because it is a correction of a naming convention, and the reader
+	// should know the convention lied rather than assume the surface shrank.
+	NameSeedOverrides []NameSeedOverride
+	UnresolvedTx      []UnresolvedTxSite
+	rootModule        string
 }
 
+// PoolRole names one of the Postgres connection pools this module opens, and
+// therefore one of the least-privilege database roles whose grant surface has
+// to be derived. Option B of CHAOS-3033 split the single domain role into
+// domain + coordinator (see CoordinatorPosture in
+// internal/storage/postgres/domain_authorization.go); the queue-control pool
+// is a third, pre-existing role that River owns and this checker does not
+// model.
+type PoolRole string
+
+const (
+	// RoleDomain is the pool every always-on worker profile uses.
+	RoleDomain PoolRole = "domain"
+	// RoleCoordinator is the control-plane pool the reconciler, scheduler and
+	// workerctl binaries use (CHAOS-3114).
+	RoleCoordinator PoolRole = "coordinator"
+)
+
+// AllPoolRoles is every role this checker derives a surface for, in a stable
+// order. Anything iterating roles MUST use this rather than a literal list,
+// so adding a fourth pool cannot be half-wired.
+var AllPoolRoles = []PoolRole{RoleDomain, RoleCoordinator}
+
+// roleSeeds is the syntactic root set that identifies one pool. Both pools are
+// wired through the same three shapes in this codebase, so the whole
+// difference between deriving the domain surface and deriving the coordinator
+// surface is which names appear here -- which is why this is a
+// parameterization of one deriver and NOT a second copy of it. A copy would
+// drift; every hardening pass (interprocedural SQL constant folding, tx-origin
+// tracing, devirtualization, LOCK-implies-write) applies to both roles because
+// there is only one implementation of each.
+type roleSeeds struct {
+	// role is which pool this set identifies. Carried on the set itself so a
+	// check that consults call-site evidence can ask "was I derived for this
+	// role" without a second parameter threaded to every caller.
+	role PoolRole
+	// fields are SelectorExpr .Sel names of *pgxpool.Pool type, e.g.
+	// `pools.Domain`, `storage.domainPool`, `pools.Coordinator`.
+	fields map[string]bool
+	// getters are CallExpr selector names returning *pgxpool.Pool, e.g.
+	// `database.DomainPool()`, `database.CoordinatorPool()`.
+	getters map[string]bool
+	// idents are bare identifier names of *pgxpool.Pool type -- locals and
+	// parameters the wiring code names after the pool it received, e.g.
+	// `coordinatorPool, err := pools.CoordinatorPool()` and the
+	// `coordinatorPool *pgxpool.Pool` parameters it is then threaded through.
+	idents map[string]bool
+}
+
+// poolRoleSeeds is the whole role-specific part of the analysis. Every name
+// here is a real wiring site in this repo; see roleSeedEvidence in
+// grant_surface_test.go for the assertion that each one still matches at
+// least one live site, so a rename cannot silently empty a role's root set
+// and make its surface look trivially satisfied.
+var poolRoleSeeds = map[PoolRole]roleSeeds{
+	RoleDomain: {
+		role:    RoleDomain,
+		fields:  map[string]bool{"Domain": true, "domainPool": true},
+		getters: map[string]bool{"DomainPool": true},
+		idents:  map[string]bool{"domainPool": true},
+	},
+	RoleCoordinator: {
+		role:    RoleCoordinator,
+		fields:  map[string]bool{"Coordinator": true, "coordinatorPool": true},
+		getters: map[string]bool{"CoordinatorPool": true},
+		idents:  map[string]bool{"coordinatorPool": true},
+	},
+}
+
+// seedsFor returns the seed set for role, and the union of every OTHER role's
+// seed set as a taint BARRIER.
+//
+// The barrier is what makes a per-role derivation mean anything. Without it,
+// `exprTainted`'s deliberately-permissive fall-throughs (a SelectorExpr off an
+// already-tainted base is tainted; a receiver with any tainted field taints
+// the whole receiver) leak the other pool into this role's surface: in a
+// coordinator run, `pools.Coordinator = coordinatorPool` taints the
+// RuntimePools "Coordinator" field, the receiver-seeding heuristic then taints
+// the whole `p` receiver in every *RuntimePools method, and `p.Domain` inside
+// one of those methods comes back tainted purely because it is selected off a
+// tainted base. That over-approximation is harmless in a one-role world (it
+// only ever argues for a grant the single role already needs) but it is
+// actively wrong here: it would claim coordinator needs the domain surface,
+// which both licenses an over-grant and makes the bidirectional attribution
+// check report the entire shared surface as a leak.
+//
+// Barrier-first ordering matters: the other role's root is checked BEFORE the
+// permissive fall-throughs, so the partition is cut at exactly the syntactic
+// boundary the wiring code already maintains.
+func seedsFor(role PoolRole) (seeds roleSeeds, barrier roleSeeds) {
+	barrier = roleSeeds{
+		fields:  map[string]bool{},
+		getters: map[string]bool{},
+		idents:  map[string]bool{},
+	}
+	for other, otherSeeds := range poolRoleSeeds {
+		if other == role {
+			continue
+		}
+		for name := range otherSeeds.fields {
+			barrier.fields[name] = true
+		}
+		for name := range otherSeeds.getters {
+			barrier.getters[name] = true
+		}
+		for name := range otherSeeds.idents {
+			barrier.idents[name] = true
+		}
+	}
+	return poolRoleSeeds[role], barrier
+}
+
+// isBarrierExpr reports whether expr is another role's pool root, in which
+// case taint must stop here rather than fall through to the permissive
+// derived-from-a-tainted-base rules. See seedsFor's doc comment.
+func (a *analyzer) isBarrierExpr(expr ast.Expr, info *types.Info) bool {
+	switch e := expr.(type) {
+	case *ast.SelectorExpr:
+		return a.barrier.fields[e.Sel.Name] && isPgxPoolPtr(info.TypeOf(e))
+	case *ast.CallExpr:
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
+			return a.barrier.getters[sel.Sel.Name] && isPgxPoolPtr(info.TypeOf(e))
+		}
+	case *ast.Ident:
+		return a.barrier.idents[e.Name] && isPgxPoolPtr(info.TypeOf(e))
+	}
+	return false
+}
+
+// funcCtx is one analyzable function body. Exactly one of decl or lit is set:
+// decl for an ordinary declared function or method, lit for a function
+// LITERAL declared at package level (see analyzer.funcLits for why those need
+// their own entry). litName is the synthetic display name used for a lit's
+// TxGroup, since a lit has no declared name.
 type funcCtx struct {
-	decl *ast.FuncDecl
-	info *types.Info
-	pkg  *packages.Package
-	file string
+	decl    *ast.FuncDecl
+	lit     *ast.FuncLit
+	litName string
+	info    *types.Info
+	pkg     *packages.Package
+	file    string
+}
+
+// funcType is the signature AST of whichever form this context holds.
+func (c funcCtx) funcType() *ast.FuncType {
+	if c.decl != nil {
+		return c.decl.Type
+	}
+	if c.lit != nil {
+		return c.lit.Type
+	}
+	return nil
+}
+
+// body is the statement list of whichever form this context holds.
+func (c funcCtx) body() *ast.BlockStmt {
+	if c.decl != nil {
+		return c.decl.Body
+	}
+	if c.lit != nil {
+		return c.lit.Body
+	}
+	return nil
 }
 
 type analyzer struct {
-	fset         *token.FileSet
+	fset *token.FileSet
+	// seeds are this run's pool roots; barrier is every other role's roots,
+	// where taint must stop. See seedsFor.
+	seeds        roleSeeds
+	barrier      roleSeeds
 	rootModule   string
 	funcDecls    map[*types.Func]funcCtx
 	taintedParam map[*types.Func]map[int]bool
@@ -144,6 +325,43 @@ type analyzer struct {
 	// call sites), before the taint fixed-point loop.
 	sqlParamConstants map[*types.Func]map[int][]string
 
+	// funcLits holds function literals declared at PACKAGE level (in a var or
+	// const declaration, typically as a field of a DI composition struct).
+	// They need their own entry because they are not inside any FuncDecl body,
+	// so the main walk never visits them at all -- unlike a literal nested in
+	// a function, which its enclosing body's walk already covers. Registering
+	// only package-level literals is what keeps this from double-walking (and
+	// therefore double-recording evidence for) the nested ones.
+	funcLits map[*ast.FuncLit]funcCtx
+	// taintedLitParam is taintedParam for those literals, keyed by AST node
+	// since a literal has no *types.Func.
+	taintedLitParam map[*ast.FuncLit]map[int]bool
+
+	// funcValueTargets resolves a function-typed struct field to its single
+	// implementation; funcValueScopes are the files that pass scans; and
+	// funcValueResolved is the audit trail of calls it resolved. See
+	// funcvalue.go for the shape this closes and why.
+	funcValueTargets  map[funcValueKey]funcValueTarget
+	funcValueScopes   []funcValueScope
+	funcValueResolved []FuncValueResolvedCallSite
+	// funcValueConflicts records fields deliberately left unresolved, with the
+	// reason; funcValueConflictSites records the tainted CALL SITES that hit one.
+	// Both exist so an exclusion is reported rather than silent -- see
+	// buildFuncValueTargets.
+	funcValueConflicts     map[funcValueKey]string
+	funcValueConflictSites []FuncValueConflictSite
+
+	// poolParamRoles is role-agnostic call-site evidence for pool-typed
+	// parameters; nameSeedOverrides records where it overruled a name-based seed.
+	// See buildPoolParamRoles.
+	poolParamRoles map[*types.Func]map[int]map[PoolRole]bool
+	// poolParamIncomplete marks parameters whose call-site evidence is a LOWER
+	// BOUND (some argument could not be classified). Such evidence must never
+	// override a seed name -- see nameSeedContradicted.
+	poolParamIncomplete map[*types.Func]map[int]bool
+	nameSeedOverrides   []NameSeedOverride
+	unparsedLocks       []UnparsedLockSite
+
 	// txOriginParam[fn][paramIndex] holds the origin ID (a "file:line"
 	// string naming the specific `.Begin(ctx)` call site) of a pgx.Tx-typed
 	// parameter, when every path that reaches this parameter (across
@@ -159,6 +377,15 @@ type analyzer struct {
 	// they commit together). Built once, independent of taint state, same
 	// fixed-point shape as buildSQLParamConstants.
 	txOriginParam map[*types.Func]map[int]string
+}
+
+// UnparsedLockSite is one LOCK statement the parser refused. Reported, never
+// swallowed: a parser that silently ignores what it cannot recognise is the
+// worst possible shape for a tool whose job is to fail closed.
+type UnparsedLockSite struct {
+	File      string
+	Line      int
+	Statement string
 }
 
 // DevirtualizedCallSite records every place the analyzer resolved an
@@ -189,14 +416,73 @@ var isSQLMethod = map[string]bool{
 	"SendBatch": true,
 }
 
-// Derive loads the Go module rooted at moduleDir and statically derives the
-// per-table privilege surface reachable through the Postgres domain
-// connection pool, starting from every "*.Domain" / "*.domainPool" /
-// "*.DomainPool()" root found anywhere under moduleDir (not limited to a
-// fixed list of cmd/ directories -- see the handoff README for why that
-// matters: cmd/dev-health-reconciler and cmd/dev-health-scheduler also wire
-// the domain pool and are not optional).
+// Derive derives the DOMAIN pool's surface. It is DeriveForRole(moduleDir,
+// RoleDomain) and exists only so the original single-role call sites keep
+// working unchanged.
 func Derive(moduleDir string) (*DerivedSurface, error) {
+	return DeriveForRole(moduleDir, RoleDomain)
+}
+
+// DeriveForRole loads the Go module rooted at moduleDir and statically derives
+// the per-table privilege surface reachable through role's Postgres connection
+// pool, starting from every pool root for that role (see poolRoleSeeds) found
+// anywhere under moduleDir -- not limited to a fixed list of cmd/ directories.
+// That breadth is load-bearing for BOTH roles: cmd/dev-health-reconciler and
+// cmd/dev-health-scheduler wire the domain pool and are not optional, and the
+// coordinator pool is threaded through `coordinatorPool *pgxpool.Pool`
+// parameters in those same dependency-construction files rather than being
+// re-fetched from a getter at each use.
+//
+// Roles are derived in SEPARATE runs (separate analyzer instances, separate
+// taint state) rather than one run with role-labelled taint. Two reasons: the
+// taint lattice is a single boolean per (function, parameter) and per (type,
+// field), so labelling it would mean rewriting the fixed point rather than
+// parameterizing it; and separate runs make the two surfaces independently
+// auditable, which is what the bidirectional attribution check compares.
+//
+// # DECISION: reachability is STATIC WIRING, not runtime activation
+//
+// This walks every function that is wired, including code behind a checked-in
+// activation flag that is currently false -- cmd/dev-health-scheduler's
+// `activation.goOwnsMarkers` gate (main.go:126) returns before opening any
+// PostgreSQL client, yet this analyzer still derives the scheduler's coordinator
+// tables and the gate still demands them. That is DELIBERATE, and it is a
+// tradeoff rather than an oversight, so it is recorded here at the seam.
+//
+// Why static wiring wins:
+//
+//   - Grants that are ready BEFORE activation are the entire point. This epic
+//     exists because flipping a flag produced 42501s (CHAOS-3099/3100/3101). If
+//     derivation followed runtime reachability, the gate would read "green,
+//     nothing needed" right up until someone flips the flag and then produce a
+//     pile of CRITICALs at the worst possible moment. Deriving dormant surface is
+//     what lets a flip be a no-op.
+//   - Coverage must not depend on configuration. Otherwise the gate's STRENGTH
+//     varies with a boolean somewhere, a flag flip silently becomes a change to
+//     what CI verifies, and "the gate is green" stops having a fixed meaning.
+//     That is a worse trap than the one it would avoid.
+//   - The error direction is survivable. Deriving dormant code can only ask for
+//     privileges that code will need once activated, so the failure mode is an
+//     OVER-grant. An over-grant is a visible, reviewable row in a posture file;
+//     an under-grant is an outage found in production.
+//
+// The residual risk, stated rather than hidden: a seam that is wired but never
+// activated accretes grants permanently, and nothing here can distinguish "not
+// yet activated" from "abandoned". The mitigation is review pressure -- such rows
+// show up in the misattribution and no-derived-evidence advisories -- not a change
+// to the reachability model. If a seam is truly dead, delete the wiring; that is
+// the signal this analyzer reads.
+func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
+	seeds, ok := poolRoleSeeds[role]
+	if !ok {
+		return nil, fmt.Errorf("domaingrants: unknown pool role %q", role)
+	}
+	if len(seeds.fields) == 0 && len(seeds.getters) == 0 && len(seeds.idents) == 0 {
+		return nil, fmt.Errorf("domaingrants: pool role %q has an empty seed set, "+
+			"which would derive an empty surface and make every check on it vacuously pass", role)
+	}
+	_, barrier := seedsFor(role)
+
 	cfg := &packages.Config{
 		Dir: moduleDir,
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
@@ -220,13 +506,17 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 	}
 
 	a := &analyzer{
-		fset:         nil,
-		rootModule:   moduleDir,
-		funcDecls:    map[*types.Func]funcCtx{},
-		taintedParam: map[*types.Func]map[int]bool{},
-		taintedField: map[*types.Named]map[string]bool{},
-		tables:       map[string]*TableSurface{},
-		seedSeen:     map[string]bool{},
+		fset:            nil,
+		seeds:           seeds,
+		barrier:         barrier,
+		rootModule:      moduleDir,
+		funcDecls:       map[*types.Func]funcCtx{},
+		funcLits:        map[*ast.FuncLit]funcCtx{},
+		taintedParam:    map[*types.Func]map[int]bool{},
+		taintedLitParam: map[*ast.FuncLit]map[int]bool{},
+		taintedField:    map[*types.Named]map[string]bool{},
+		tables:          map[string]*TableSurface{},
+		seedSeen:        map[string]bool{},
 	}
 
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
@@ -243,7 +533,32 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 			if strings.HasSuffix(filename, "_test.go") {
 				continue
 			}
+			a.funcValueScopes = append(a.funcValueScopes,
+				funcValueScope{node: file, info: p.TypesInfo})
 			for _, decl := range file.Decls {
+				// Function literals in package-level declarations are inside no
+				// FuncDecl body, so nothing else ever walks them. Register only
+				// the OUTERMOST one in each declaration: a literal nested inside
+				// another is reached by the outer literal's own walk, and
+				// registering both would record its evidence twice.
+				if gen, ok := decl.(*ast.GenDecl); ok {
+					ast.Inspect(gen, func(n ast.Node) bool {
+						lit, ok := n.(*ast.FuncLit)
+						if !ok {
+							return true
+						}
+						pos := a.fset.Position(lit.Pos())
+						a.funcLits[lit] = funcCtx{
+							lit:     lit,
+							litName: fmt.Sprintf("funclit@%s:%d", a.relFile(pos), pos.Line),
+							info:    p.TypesInfo,
+							pkg:     p,
+							file:    filename,
+						}
+						return false
+					})
+					continue
+				}
 				fd, ok := decl.(*ast.FuncDecl)
 				if !ok || fd.Body == nil {
 					continue
@@ -266,6 +581,10 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 			"go/packages load likely failed silently", moduleDir)
 	}
 	a.buildImplementers(pkgs)
+	if err := a.buildPoolParamRoles(); err != nil {
+		return nil, err
+	}
+	a.buildFuncValueTargets()
 	a.buildSQLParamConstants()
 	a.buildTxOrigins()
 
@@ -283,8 +602,15 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 		a.seedSites = nil
 		a.seedSeen = map[string]bool{}
 		a.unresolvedTx = nil
+		a.funcValueResolved = nil
+		a.funcValueConflictSites = nil
+		a.nameSeedOverrides = nil
+		a.unparsedLocks = nil
 		for fn, ctx := range a.funcDecls {
 			a.walkFunc(fn, ctx)
+		}
+		for lit, ctx := range a.funcLits {
+			a.walkFuncLit(lit, ctx)
 		}
 		if debugConvergence {
 			totalParams, totalFields := 0, 0
@@ -306,13 +632,18 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 	}
 
 	return &DerivedSurface{
-		Tables:        a.tables,
-		Dynamic:       a.dynamic,
-		Unresolved:    a.unresolved,
-		SeedSites:     a.seedSites,
-		Devirtualized: a.devirt,
-		UnresolvedTx:  dedupUnresolvedTx(a.unresolvedTx),
-		rootModule:    moduleDir,
+		Role:               role,
+		Tables:             a.tables,
+		Dynamic:            a.dynamic,
+		Unresolved:         a.unresolved,
+		SeedSites:          a.seedSites,
+		Devirtualized:      a.devirt,
+		FuncValueResolved:  a.funcValueResolved,
+		FuncValueConflicts: a.funcValueConflictSites,
+		NameSeedOverrides:  a.nameSeedOverrides,
+		UnparsedLocks:      a.unparsedLocks,
+		UnresolvedTx:       dedupUnresolvedTx(a.unresolvedTx),
+		rootModule:         moduleDir,
 	}, nil
 }
 
@@ -509,7 +840,7 @@ func (a *analyzer) buildSQLParamConstants() {
 					if tv := ctx.info.Types[arg]; tv.Value != nil && tv.Value.Kind() == constant.String {
 						values = []string{constant.StringVal(tv.Value)}
 					} else if id, ok := arg.(*ast.Ident); ok && currentFn != nil {
-						if pIdx := paramIndex(ctx.decl, id.Name); pIdx >= 0 {
+						if pIdx := paramIndex(ctx.funcType(), id.Name); pIdx >= 0 {
 							values = a.sqlParamConstants[currentFn][pIdx] // nil if not yet resolved
 						}
 					}
@@ -566,14 +897,14 @@ func (a *analyzer) buildSQLParamConstants() {
 }
 
 // paramIndex returns the positional index of a parameter named name in
-// decl's parameter list, or -1 if not found. Accounts for grouped names
+// sig.s parameter list, or -1 if not found. Accounts for grouped names
 // (`a, b string`).
-func paramIndex(decl *ast.FuncDecl, name string) int {
-	if decl.Type.Params == nil {
+func paramIndex(sig *ast.FuncType, name string) int {
+	if sig == nil || sig.Params == nil {
 		return -1
 	}
 	idx := 0
-	for _, field := range decl.Type.Params.List {
+	for _, field := range sig.Params.List {
 		if len(field.Names) == 0 {
 			idx++
 			continue
@@ -589,14 +920,14 @@ func paramIndex(decl *ast.FuncDecl, name string) int {
 }
 
 // paramNameAt returns the name of the parameter at positional index idx in
-// decl's parameter list, or "" if idx is out of range or the parameter is
+// sig.s parameter list, or "" if idx is out of range or the parameter is
 // unnamed (`_` or bare type with no identifier).
-func paramNameAt(decl *ast.FuncDecl, idx int) string {
-	if decl.Type.Params == nil {
+func paramNameAt(sig *ast.FuncType, idx int) string {
+	if sig == nil || sig.Params == nil {
 		return ""
 	}
 	pos := 0
-	for _, field := range decl.Type.Params.List {
+	for _, field := range sig.Params.List {
 		if len(field.Names) == 0 {
 			if pos == idx {
 				return ""
@@ -679,7 +1010,7 @@ func (a *analyzer) buildTxOrigins() {
 			localOrigin := map[string]string{}
 			if currentFn != nil {
 				for idx, origin := range a.txOriginParam[currentFn] {
-					if name := paramNameAt(ctx.decl, idx); name != "" {
+					if name := paramNameAt(ctx.funcType(), idx); name != "" {
 						localOrigin[name] = origin
 					}
 				}
@@ -769,6 +1100,10 @@ func (a *analyzer) resolveParamConstantSQL(sqlArg ast.Expr, ctx funcCtx) ([]stri
 	if !ok {
 		return nil, false
 	}
+	if ctx.decl == nil {
+		// buildSQLParamConstants indexes declared functions only.
+		return nil, false
+	}
 	fnObj, ok := ctx.info.Defs[ctx.decl.Name]
 	if !ok {
 		return nil, false
@@ -777,7 +1112,7 @@ func (a *analyzer) resolveParamConstantSQL(sqlArg ast.Expr, ctx funcCtx) ([]stri
 	if !ok {
 		return nil, false
 	}
-	idx := paramIndex(ctx.decl, ident.Name)
+	idx := paramIndex(ctx.funcType(), ident.Name)
 	if idx < 0 {
 		return nil, false
 	}
@@ -852,13 +1187,36 @@ func isPgxPoolPtr(t types.Type) bool {
 	return named.Obj().Name() == "Pool" && strings.HasSuffix(named.Obj().Pkg().Path(), "pgxpool")
 }
 
-// exprTainted decides whether expr's value is derived from the domain pool,
-// given the current global taint facts (taintedField, and -- via the
-// caller's seed detection -- the "*.Domain"/"*.domainPool"/"*.DomainPool()"
-// syntactic roots) plus this function's local taint set (locals: params
-// already known tainted, and any local variable this same walk has already
-// assigned from a tainted expression).
+// exprTainted decides whether expr's value is derived from THIS run's pool
+// (a.seeds), given the current global taint facts (taintedField, and -- via
+// the caller's seed detection -- the syntactic roots) plus this function's
+// local taint set (locals: params already known tainted, and any local
+// variable this same walk has already assigned from a tainted expression).
+//
+// Another role's pool root short-circuits to false before any of the
+// permissive fall-throughs below: see seedsFor's doc comment for why that
+// barrier is what makes a per-role surface meaningful rather than a
+// union-of-all-pools surface wearing one role's name.
 func (a *analyzer) exprTainted(expr ast.Expr, info *types.Info, locals map[string]bool) bool {
+	// The barrier applies to STRUCTURAL roots -- a selector or getter that IS the
+	// other role's pool -- and deliberately NOT to bare identifiers.
+	//
+	// A local or parameter's taint is established by real propagation (an argument
+	// at a call site, an assignment from a tainted expression), and its NAME is
+	// incidental to that. Barring it by name reproduces the very defect the
+	// call-site pass was added to fix, in mirror image: `build(domainPool *Pool)`
+	// called only with the coordinator pool is genuinely coordinator-tainted, and
+	// a name-based barrier would delete that taint and lose the SQL from BOTH
+	// surfaces -- the domain run suppresses it by call-site evidence, the
+	// coordinator run by spelling. Caught by the control half of
+	// TestBuildPoolParamRolesOverridesOnCompleteContradictingEvidence, which
+	// asserts the SQL lands on the coordinator rather than merely leaving domain.
+	//
+	// Structural roots still need the barrier: `pools.Domain` inside a method whose
+	// receiver is tainted must not read as this role's pool.
+	if _, isIdent := expr.(*ast.Ident); !isIdent && a.isBarrierExpr(expr, info) {
+		return false
+	}
 	switch e := expr.(type) {
 	case nil:
 		return false
@@ -869,7 +1227,7 @@ func (a *analyzer) exprTainted(expr ast.Expr, info *types.Info, locals map[strin
 	case *ast.Ident:
 		return locals[e.Name]
 	case *ast.SelectorExpr:
-		if (e.Sel.Name == "Domain" || e.Sel.Name == "domainPool") && isPgxPoolPtr(info.TypeOf(e)) {
+		if a.seeds.fields[e.Sel.Name] && isPgxPoolPtr(info.TypeOf(e)) {
 			return true
 		}
 		if named := namedTypeOf(info.TypeOf(e.X)); named != nil {
@@ -885,7 +1243,7 @@ func (a *analyzer) exprTainted(expr ast.Expr, info *types.Info, locals map[strin
 		return a.exprTainted(e.X, info, locals)
 	case *ast.CallExpr:
 		if sel, ok := e.Fun.(*ast.SelectorExpr); ok &&
-			sel.Sel.Name == "DomainPool" && isPgxPoolPtr(info.TypeOf(e)) {
+			a.seeds.getters[sel.Sel.Name] && isPgxPoolPtr(info.TypeOf(e)) {
 			return true
 		}
 		// Calling an already-tainted function value (a method on a tainted
@@ -932,11 +1290,29 @@ func (a *analyzer) recordSeed(expr ast.Expr) {
 }
 
 func (a *analyzer) walkFunc(fn *types.Func, ctx funcCtx) {
+	a.walkBody(ctx, a.taintedParam[fn], fn)
+}
+
+// walkFuncLit walks a package-level function literal's body with the taint
+// facts recorded for ITS parameters. See analyzer.funcLits.
+func (a *analyzer) walkFuncLit(lit *ast.FuncLit, ctx funcCtx) {
+	// A literal has no *types.Func, so it has no call-site parameter evidence to
+	// consult; nil disables the name-override check for its body.
+	a.walkBody(ctx, a.taintedLitParam[lit], nil)
+}
+
+// walkBody is the shared walk for both forms. tainted is the caller's
+// already-known per-parameter-index taint for this body.
+func (a *analyzer) walkBody(ctx funcCtx, tainted map[int]bool, fn *types.Func) {
+	sig := ctx.funcType()
+	body := ctx.body()
+	if sig == nil || body == nil {
+		return
+	}
 	locals := map[string]bool{}
-	if ctx.decl.Type.Params != nil {
+	if sig.Params != nil {
 		idx := 0
-		tainted := a.taintedParam[fn]
-		for _, field := range ctx.decl.Type.Params.List {
+		for _, field := range sig.Params.List {
 			names := field.Names
 			if len(names) == 0 {
 				idx++
@@ -965,7 +1341,9 @@ func (a *analyzer) walkFunc(fn *types.Func, ctx funcCtx) {
 	// codebase's DI style. Slightly over-inclusive by design (a method that
 	// happens not to touch the tainted field on a tainted receiver is still
 	// treated as tainted) -- see the handoff README.
-	if ctx.decl.Recv != nil && len(ctx.decl.Recv.List) == 1 && len(ctx.decl.Recv.List[0].Names) == 1 {
+	// A function literal has no receiver, so this only applies to the decl form.
+	if ctx.decl != nil && ctx.decl.Recv != nil &&
+		len(ctx.decl.Recv.List) == 1 && len(ctx.decl.Recv.List[0].Names) == 1 {
 		recvName := ctx.decl.Recv.List[0].Names[0].Name
 		recvNamed := namedTypeOf(ctx.info.TypeOf(ctx.decl.Recv.List[0].Type))
 		if recvName != "_" && recvNamed != nil && len(a.taintedField[recvNamed]) > 0 {
@@ -975,13 +1353,21 @@ func (a *analyzer) walkFunc(fn *types.Func, ctx funcCtx) {
 
 	isTainted := func(expr ast.Expr) bool {
 		if a.isSeedExpr(expr, ctx.info) {
+			// Call-site evidence OUTRANKS the parameter's name. A parameter spelled
+			// like this role's pool but only ever passed another role's pool is not
+			// a seed here -- treating it as one inverts attribution, which is worse
+			// than missing it. See buildPoolParamRoles.
+			if a.nameSeedContradicted(expr, ctx, fn) {
+				a.recordNameSeedOverride(expr, ctx, fn)
+				return a.exprTainted(expr, ctx.info, locals)
+			}
 			a.recordSeed(expr)
 			return true
 		}
 		return a.exprTainted(expr, ctx.info, locals)
 	}
 
-	ast.Inspect(ctx.decl.Body, func(n ast.Node) bool {
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.AssignStmt:
 			a.handleAssign(node, ctx, locals, isTainted)
@@ -994,25 +1380,29 @@ func (a *analyzer) walkFunc(fn *types.Func, ctx funcCtx) {
 	})
 }
 
-// isSeedExpr is the syntactic domain-pool root: a "*.Domain" or
-// "*.domainPool" field of pgxpool.Pool type, or a "*.DomainPool()" call
-// returning one. See the handoff README for the wiring sites this matches
-// and why (cmd/dev-health-worker's postgresDatabase.pools.Domain,
+// isSeedExpr is the syntactic pool root for THIS run's role: a seed-named
+// field of pgxpool.Pool type, a seed-named getter call returning one, or a
+// seed-named bare identifier of that type. See poolRoleSeeds for the names and
+// the wiring sites they match -- for the domain role,
+// cmd/dev-health-worker's postgresDatabase.pools.Domain,
 // cmd/dev-health-workerctl's pools.Domain, cmd/dev-health-reconciler's and
-// cmd/dev-health-scheduler's DomainPool() getters, cmd/dev-health-stream-runner's
-// storage.domainPool).
+// cmd/dev-health-scheduler's DomainPool() getters, and
+// cmd/dev-health-stream-runner's storage.domainPool; for the coordinator role,
+// RuntimePools.Coordinator, the reconciler's and scheduler's CoordinatorPool()
+// getters, and the `coordinatorPool` locals/parameters those and
+// cmd/dev-health-workerctl thread the pool through.
 func (a *analyzer) isSeedExpr(expr ast.Expr, info *types.Info) bool {
 	switch e := expr.(type) {
 	case *ast.SelectorExpr:
-		if (e.Sel.Name == "Domain" || e.Sel.Name == "domainPool") && isPgxPoolPtr(info.TypeOf(e)) {
+		if a.seeds.fields[e.Sel.Name] && isPgxPoolPtr(info.TypeOf(e)) {
 			return true
 		}
 	case *ast.CallExpr:
-		if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "DomainPool" && isPgxPoolPtr(info.TypeOf(e)) {
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok && a.seeds.getters[sel.Sel.Name] && isPgxPoolPtr(info.TypeOf(e)) {
 			return true
 		}
 	case *ast.Ident:
-		if e.Name == "domainPool" && isPgxPoolPtr(info.TypeOf(e)) {
+		if a.seeds.idents[e.Name] && isPgxPoolPtr(info.TypeOf(e)) {
 			return true
 		}
 	}
@@ -1124,6 +1514,13 @@ func (a *analyzer) handleCall(call *ast.CallExpr, ctx funcCtx, locals map[string
 		return
 	}
 	if callee == nil {
+		// A call through a function-typed struct field lands here (the
+		// selection resolves to a *types.Var, not a *types.Func). Resolve it to
+		// the field's single implementation before giving up -- see
+		// funcvalue.go for why this hop is load-bearing.
+		if isSel && a.propagateIntoFuncValue(call, sel, ctx, isTainted) {
+			return
+		}
 		a.recordUnresolved(call, ctx, calleeDisplay, "callee could not be resolved to a function (dynamic call through a variable/field of function type)")
 		return
 	}
@@ -1230,10 +1627,12 @@ func (a *analyzer) recordSQLSite(call *ast.CallExpr, ctx funcCtx, recvExpr ast.E
 // buildTxOrigins couldn't resolve it unambiguously). See
 // Evidence.TxGroup's doc comment.
 func (a *analyzer) txGroupKey(ctx funcCtx, recvExpr ast.Expr) string {
-	if id, ok := recvExpr.(*ast.Ident); ok {
+	// buildTxOrigins only indexes declared functions, so a function literal
+	// falls straight through to the coarse grouping below.
+	if id, ok := recvExpr.(*ast.Ident); ok && ctx.decl != nil {
 		if fnObj, ok := ctx.info.Defs[ctx.decl.Name]; ok {
 			if fn, ok := fnObj.(*types.Func); ok {
-				if idx := paramIndex(ctx.decl, id.Name); idx >= 0 {
+				if idx := paramIndex(ctx.funcType(), id.Name); idx >= 0 {
 					if origin, ok := a.txOriginParam[fn][idx]; ok {
 						return "txorigin:" + origin
 					}
@@ -1260,6 +1659,9 @@ func (a *analyzer) txGroupKey(ctx funcCtx, recvExpr ast.Expr) string {
 // txGroupFallbackName returns the "[Receiver.]FuncName" the coarse,
 // same-function-body TxGroup fallback uses.
 func txGroupFallbackName(ctx funcCtx) string {
+	if ctx.decl == nil {
+		return ctx.litName
+	}
 	name := ctx.decl.Name.Name
 	if ctx.decl.Recv != nil && len(ctx.decl.Recv.List) == 1 {
 		if named := namedTypeOf(ctx.info.TypeOf(ctx.decl.Recv.List[0].Type)); named != nil {
@@ -1288,15 +1690,30 @@ func (a *analyzer) recordSQLText(sqlText string, pos token.Position, txGroup str
 			})
 		}
 	}
-	for table := range stmt.RequiresAnyWriteLock {
+	for table, requirement := range stmt.LockRequirements {
 		surface := a.tables[table]
 		if surface == nil {
 			surface = &TableSurface{Table: table}
 			a.tables[table] = surface
 		}
-		surface.RequiresAnyWriteLock = true
+		// Keep the STRICTEST demand across every LOCK site on this table: two
+		// call sites may lock the same table in different modes, and the weaker
+		// one must never mask the stronger one's requirement.
+		if surface.LockRequirement == nil || requirement.rank > surface.LockRequirement.rank {
+			held := requirement
+			surface.LockRequirement = &held
+		}
 		surface.WriteLockEvidence = append(surface.WriteLockEvidence, Evidence{
 			File: a.relFile(pos), Line: pos.Line, Statement: normalized,
+		})
+	}
+	for _, text := range stmt.UnparsedLocks {
+		// A LOCK the parser could not understand may demand a privilege on a
+		// table that never enters the derived surface at all, so this is recorded
+		// as a first-class fact and fails the gate. Swallowing it is the shape
+		// that let `LOCK a, b` derive nothing and pass CI.
+		a.unparsedLocks = append(a.unparsedLocks, UnparsedLockSite{
+			File: a.relFile(pos), Line: pos.Line, Statement: text,
 		})
 	}
 }
@@ -1310,6 +1727,10 @@ func (a *analyzer) recordSQLText(sqlText string, pos token.Position, txGroup str
 // resolution would be worse than none (it would silently under-report the
 // unresolved elements as if they didn't exist).
 func (a *analyzer) resolveLoopTableSQL(sqlArg ast.Expr, ctx funcCtx) ([]string, bool) {
+	body := ctx.body()
+	if body == nil {
+		return nil, false
+	}
 	sel, ok := sqlArg.(*ast.SelectorExpr)
 	if !ok {
 		return nil, false
@@ -1319,7 +1740,7 @@ func (a *analyzer) resolveLoopTableSQL(sqlArg ast.Expr, ctx funcCtx) ([]string, 
 		return nil, false
 	}
 	var lit *ast.CompositeLit
-	ast.Inspect(ctx.decl.Body, func(n ast.Node) bool {
+	ast.Inspect(body, func(n ast.Node) bool {
 		if lit != nil {
 			return false
 		}
@@ -1343,7 +1764,7 @@ func (a *analyzer) resolveLoopTableSQL(sqlArg ast.Expr, ctx funcCtx) ([]string, 
 		// assigned to `steps`. Resolve by finding the RangeStmt whose Value
 		// is rangeVar and whose X is this identifier.
 		found := false
-		ast.Inspect(ctx.decl.Body, func(rn ast.Node) bool {
+		ast.Inspect(body, func(rn ast.Node) bool {
 			if found {
 				return false
 			}

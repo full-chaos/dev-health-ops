@@ -84,17 +84,135 @@ type StatementResult struct {
 	// NOT to attribute to a public-schema table (e.g. the River schema) --
 	// kept for diagnostics, never compared against required_table_privileges.
 	NonPublicTables map[string]bool
-	// RequiresAnyWriteLock lists tables LOCK TABLE'd in a mode stricter than
-	// ROW EXCLUSIVE (e.g. SHARE ROW EXCLUSIVE), which per Postgres docs
-	// requires at least one of INSERT/UPDATE/DELETE/TRUNCATE -- NOT
-	// specifically UPDATE. This is intentionally NOT folded into
-	// PrivilegeSet.PrivUpdate: doing so produced a real false positive
-	// (internal/jobroute/control.go's `LOCK TABLE worker_job_outbox IN
-	// SHARE ROW EXCLUSIVE MODE` is already satisfied by the existing
-	// SELECT+INSERT grant; Postgres never requires UPDATE specifically
-	// here). The comparator checks this against the granted set directly
-	// (any of I/U/D satisfies it) instead of comparing a single privilege.
-	RequiresAnyWriteLock map[string]bool
+	// LockRequirements maps a table to the privilege demand its strictest
+	// explicit LOCK TABLE places on it. Absent means no LOCK, or only ACCESS
+	// SHARE (which SELECT alone satisfies). See LockRequirement.
+	LockRequirements map[string]LockRequirement
+	// UnparsedLocks is the verbatim text of every LOCK statement this parser
+	// could not fully understand, including any with an unrecognised mode. These
+	// are REPORTED and FAIL the gate: an unparsed LOCK may demand a privilege on
+	// a table that never appears in the derived surface at all, so swallowing it
+	// is a silent hole rather than a known limitation.
+	UnparsedLocks []string
+}
+
+// LockRequirement is the privilege demand one LOCK mode places on its target:
+// any ONE privilege in Satisfying permits the lock.
+//
+// It is a DISJUNCTION, and that is the whole shape. It is not "SELECT and a
+// write privilege", and it is not foldable into PrivilegeSet, where every member
+// is an independent requirement.
+type LockRequirement struct {
+	// Mode is the normalized lock mode, e.g. "SHARE ROW EXCLUSIVE".
+	Mode string
+	// Satisfying holds the privileges any one of which permits this mode.
+	Satisfying PrivilegeSet
+	// rank orders modes by strictness so the strictest LOCK on a table wins when
+	// a table is locked more than once.
+	rank int
+}
+
+// The lock model, DERIVED FROM THE BACKEND'S OWN ACL CHECK rather than
+// reconstructed from prose. Three previous attempts each got a different part
+// wrong (a substring test that failed open on bare SHARE; a boolean satisfied by
+// any write privilege, which passed SELECT+INSERT against SHARE ROW EXCLUSIVE;
+// and a conjunction with SELECT that over-granted every lock-only path), so this
+// stops paraphrasing the documentation and encodes the structure of
+// LockTableAclCheck (src/backend/commands/lockcmds.c) directly:
+//
+//	aclmask =  (mode == AccessShareLock)      ? ACL_SELECT
+//	        : ((mode <= RowExclusiveLock)     ? ACL_INSERT : 0)
+//	aclmask |= ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_MAINTAIN
+//	pg_class_aclcheck(rel, user, aclmask)     // ANY bit suffices
+//
+// One OR-mask per mode, tested with pg_class_aclcheck, which succeeds if the
+// role holds ANY bit in it. Measured on PostgreSQL 18.4 (server_version_num
+// 180004) with each privilege granted ALONE and the LOCK executed as the only
+// statement in its transaction:
+//
+//	MODE (lock only)        NONE    SELECT  INSERT  UPDATE  DELETE  TRUNCATE  MAINTAIN  REFERENCES  TRIGGER
+//	ACCESS SHARE            DENIED  ok      ok      ok      ok      ok        ok        DENIED      DENIED
+//	ROW SHARE               DENIED  DENIED  ok      ok      ok      ok        ok        DENIED      DENIED
+//	ROW EXCLUSIVE           DENIED  DENIED  ok      ok      ok      ok        ok        DENIED      DENIED
+//	SHARE UPDATE EXCLUSIVE  DENIED  DENIED  DENIED  ok      ok      ok        ok        DENIED      DENIED
+//	SHARE                   DENIED  DENIED  DENIED  ok      ok      ok        ok        DENIED      DENIED
+//	SHARE ROW EXCLUSIVE     DENIED  DENIED  DENIED  ok      ok      ok        ok        DENIED      DENIED
+//	EXCLUSIVE               DENIED  DENIED  DENIED  ok      ok      ok        ok        DENIED      DENIED
+//	ACCESS EXCLUSIVE        DENIED  DENIED  DENIED  ok      ok      ok        ok        DENIED      DENIED
+//	<mode omitted>          DENIED  DENIED  DENIED  ok      ok      ok        ok        DENIED      DENIED
+//
+// Two confounds in the PREVIOUS measurement, both of which made the model
+// unfalsifiable in exactly the direction it was wrong, and both avoided here:
+//
+//   - every grant set began with SELECT, so a conjunction and a disjunction
+//     containing SELECT are indistinguishable. The tiers came out right and the
+//     OPERATOR came out wrong: a lock-only path authorized by UPDATE alone was
+//     reported as also needing SELECT, which over-grants -- the exact failure the
+//     two-role split exists to prevent.
+//   - the probe appended a read after the LOCK, so no grant set without SELECT
+//     could ever reach the lock's own check.
+//
+// Correction to a claim previously recorded here: the PostgreSQL documentation is
+// NOT wrong about ROW SHARE. It says the INSERT-class applies to "ROW EXCLUSIVE or
+// a less-conflicting mode", which INCLUDES ROW SHARE, matching the measurement
+// above. The earlier note asserting otherwise was a misreading, and a wrong "the
+// docs are wrong" note is worse than the original confusion because it teaches the
+// next reader to distrust the correct source.
+//
+// TRUNCATE and MAINTAIN are in the real mask but omitted from Satisfying:
+// rolePostureQuery asserts both ABSENT for every runtime role, so neither can ever
+// be the privilege that satisfies a lock here. A role holding one would already
+// have failed its posture check for a louder reason.
+const (
+	lockRankSelectOrAny    = iota // ACCESS SHARE
+	lockRankInsertOrWrite         // ROW SHARE, ROW EXCLUSIVE
+	lockRankUpdateOrDelete        // everything stricter, and an omitted mode
+)
+
+// lockDefaultMode is what PostgreSQL uses when the mode is omitted entirely
+// (`LOCK TABLE t;`). Measured above: it behaves as ACCESS EXCLUSIVE.
+const lockDefaultMode = "ACCESS EXCLUSIVE"
+
+func lockSatisfyingSet(rank int) PrivilegeSet {
+	var set PrivilegeSet
+	// The UPDATE/DELETE bits are unconditional in the backend's mask.
+	set.add(PrivUpdate)
+	set.add(PrivDelete)
+	if rank <= lockRankInsertOrWrite {
+		set.add(PrivInsert)
+	}
+	if rank == lockRankSelectOrAny {
+		set.add(PrivSelect)
+	}
+	return set
+}
+
+// lockRequirementForMode maps a lock mode to its privilege disjunction. The
+// second result is FALSE for an unrecognized mode -- the caller must then record
+// the statement as unparsed and fail the gate rather than guess.
+//
+// An earlier version returned a guessed strict set for unknown modes and called
+// that fail-closed. It was not: the comparator only reported the mode when the
+// GUESSED set was unsatisfied, so a role already holding UPDATE passed silently
+// with no manual-verification finding. A guess that happens to be satisfied is
+// indistinguishable from knowledge. Unknown input is now a reported fact.
+func lockRequirementForMode(mode string) (LockRequirement, bool) {
+	normalized := normalizeLockMode(mode)
+	switch normalized {
+	case "ACCESS SHARE":
+		return LockRequirement{Mode: normalized, Satisfying: lockSatisfyingSet(lockRankSelectOrAny), rank: lockRankSelectOrAny}, true
+	case "ROW SHARE", "ROW EXCLUSIVE":
+		return LockRequirement{Mode: normalized, Satisfying: lockSatisfyingSet(lockRankInsertOrWrite), rank: lockRankInsertOrWrite}, true
+	case "SHARE UPDATE EXCLUSIVE", "SHARE", "SHARE ROW EXCLUSIVE", "EXCLUSIVE", "ACCESS EXCLUSIVE":
+		return LockRequirement{Mode: normalized, Satisfying: lockSatisfyingSet(lockRankUpdateOrDelete), rank: lockRankUpdateOrDelete}, true
+	default:
+		return LockRequirement{}, false
+	}
+}
+
+func normalizeLockMode(mode string) string {
+	normalized := strings.TrimSpace(strings.ToUpper(mode))
+	return lockModeWhitespaceRE.ReplaceAllString(normalized, " ")
 }
 
 var (
@@ -115,7 +233,6 @@ var (
 	updateSetRE  = regexp.MustCompile(`(?i)\bUPDATE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+(?:AS\s+[a-zA-Z_][a-zA-Z0-9_]*\s+)?SET\b`)
 	deleteFromRE = regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+(?:ONLY\s+)?((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)`)
 	fromJoinRE   = regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)`)
-	lockTableRE  = regexp.MustCompile(`(?i)\bLOCK\s+TABLE\s+(?:ONLY\s+)?((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+IN\s+([A-Z ]+?)\s+MODE\b`)
 	// lockModeWhitespaceRE normalizes the captured mode so "SHARE   ROW
 	// EXCLUSIVE" compares equal to "SHARE ROW EXCLUSIVE".
 	lockModeWhitespaceRE = regexp.MustCompile(`\s+`)
@@ -272,31 +389,6 @@ func findFromJoinWithAliases(sql string, ctes map[string]bool, nonPublic map[str
 // internal/providersync/repository_postgres.go's claimUnitSQL, which joins
 // integrations/integration_sources/integration_datasets read-only alongside
 // a `FOR UPDATE OF unit` lock on sync_run_units.
-// lockModeRequiresWritePrivilege reports whether an explicit LOCK TABLE in the
-// given mode needs a write privilege on the target, per the PostgreSQL LOCK
-// documentation: ACCESS SHARE requires only SELECT, ROW EXCLUSIVE requires
-// INSERT/UPDATE/DELETE/TRUNCATE, and every other mode requires
-// UPDATE/DELETE/TRUNCATE. So the predicate is simply "not ACCESS SHARE".
-//
-// This replaced a substring test for "EXCLUSIVE", which failed open on exactly
-// the modes hardest to reason about: bare SHARE MODE and ROW SHARE MODE both
-// require a write privilege and contain no "EXCLUSIVE", so a LOCK in either
-// mode passed the grant-surface gate unflagged. That is the under-attribution
-// this package exists to catch, and the FOR UPDATE branch above states the
-// standard — a false negative is worse than a false positive here.
-//
-// Known remaining imprecision, deliberately not modelled: ROW EXCLUSIVE is
-// satisfied by INSERT alone, while stricter modes are not. RequiresAnyWriteLock
-// is one boolean, so a table holding only INSERT and locked in a stricter mode
-// is not reported. Every LOCK TABLE in this repository is SHARE ROW EXCLUSIVE,
-// so distinguishing the two would add a second field for no present caller;
-// recording the gap here is better than implying precision that is absent.
-func lockModeRequiresWritePrivilege(mode string) bool {
-	normalized := strings.TrimSpace(strings.ToUpper(mode))
-	normalized = lockModeWhitespaceRE.ReplaceAllString(normalized, " ")
-	return normalized != "ACCESS SHARE"
-}
-
 func resolveForUpdateOf(clean string, selectTables []string, aliasToTable map[string]string, add func(string, Privilege)) {
 	m := forUpdateOfRE.FindStringSubmatch(clean)
 	if m == nil {
@@ -340,9 +432,9 @@ func ParseStatement(sql string) StatementResult {
 	clean := stripComments(sql)
 	ctes := cteNames(clean)
 	result := StatementResult{
-		Tables:               map[string]PrivilegeSet{},
-		NonPublicTables:      map[string]bool{},
-		RequiresAnyWriteLock: map[string]bool{},
+		Tables:           map[string]PrivilegeSet{},
+		NonPublicTables:  map[string]bool{},
+		LockRequirements: map[string]LockRequirement{},
 	}
 
 	add := func(table string, p Privilege) {
@@ -388,19 +480,36 @@ func ParseStatement(sql string) StatementResult {
 	// false positive here.
 	resolveForUpdateOf(clean, selectTables, aliasToTable, add)
 
-	// LOCK TABLE ... IN <mode> MODE: SELECT is always required; every mode
-	// except ACCESS SHARE additionally requires at least one of
-	// INSERT/UPDATE/DELETE/TRUNCATE (see RequiresAnyWriteLock's doc
-	// comment for why this is not simply added as PrivUpdate).
-	for _, m := range lockTableRE.FindAllStringSubmatch(clean, -1) {
-		table, inScope := splitSchemaQualified(m[1])
-		table = strings.ToLower(table)
-		if !inScope || ctes[table] {
+	// LOCK: a DISJUNCTION over a mode-specific set, and nothing else.
+	//
+	// Note what is NOT here: SELECT is not added. The backend's check is a single
+	// OR-mask (see the model above), so a lock-only path authorized by UPDATE
+	// alone does not need SELECT, and asserting one over-grants -- precisely the
+	// failure the two-role split exists to prevent. An earlier version added
+	// PrivSelect for every LOCK, which no mode test could catch because every
+	// fixture already granted SELECT.
+	//
+	// When a table is locked more than once, the STRICTEST mode wins.
+	statements, unparsed := parseLockStatements(clean)
+	result.UnparsedLocks = append(result.UnparsedLocks, unparsed...)
+	for _, statement := range statements {
+		requirement, known := lockRequirementForMode(statement.Mode)
+		if !known {
+			// Unrecognised mode: record the fact, never a guessed requirement.
+			result.UnparsedLocks = append(result.UnparsedLocks,
+				"unrecognised lock mode "+statement.Mode+" on "+strings.Join(statement.Targets, ", "))
 			continue
 		}
-		add(table, PrivSelect)
-		if lockModeRequiresWritePrivilege(m[2]) {
-			result.RequiresAnyWriteLock[table] = true
+		for _, target := range statement.Targets {
+			table, inScope := splitSchemaQualified(target)
+			table = strings.ToLower(table)
+			if !inScope || ctes[table] {
+				continue
+			}
+			if existing, ok := result.LockRequirements[table]; ok && existing.rank >= requirement.rank {
+				continue
+			}
+			result.LockRequirements[table] = requirement
 		}
 	}
 

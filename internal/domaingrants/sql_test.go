@@ -104,20 +104,46 @@ func TestParseStatement_NonPublicSchemaExcluded(t *testing.T) {
 	}
 }
 
-func TestParseStatement_LockTableExclusiveModeRequiresAnyWriteNotSpecificallyUpdate(t *testing.T) {
-	// Postgres requires SELECT plus at least one of INSERT/UPDATE/DELETE
-	// for a mode stricter than ROW EXCLUSIVE -- NOT specifically UPDATE.
-	// internal/jobroute/control.go's `LOCK TABLE worker_job_outbox IN SHARE
-	// ROW EXCLUSIVE MODE` is already satisfied by an existing INSERT grant;
-	// asserting PrivUpdate here would be a false positive (see
-	// RequiresAnyWriteLock's doc comment).
+func TestParseStatement_LockTableRecordsADisjunctionNotAPrivilege(t *testing.T) {
+	// A LOCK's demand is a DISJUNCTION over a mode-specific set, so it must not
+	// be recorded as a PrivilegeSet entry: asserting PrivUpdate directly would be
+	// a false positive for ROW EXCLUSIVE, which INSERT alone satisfies.
 	res := ParseStatement(`LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE`)
-	has(t, res, "sync_dispatch_outbox", PrivSelect)
-	if res.Tables["sync_dispatch_outbox"].Has(PrivUpdate) {
-		t.Errorf("LOCK TABLE must not directly assert PrivUpdate: %+v", res.Tables["sync_dispatch_outbox"])
+	// A lock-only statement asserts NO per-privilege requirement at all -- not
+	// UPDATE (the demand is a disjunction, not a specific privilege) and not
+	// SELECT (the backend's check is one OR-mask; requiring SELECT alongside it
+	// over-grants every lock-only path).
+	if !res.Tables["sync_dispatch_outbox"].Empty() {
+		t.Errorf("a lock-only statement must assert no standalone privilege: %+v",
+			res.Tables["sync_dispatch_outbox"])
 	}
-	if !res.RequiresAnyWriteLock["sync_dispatch_outbox"] {
-		t.Errorf("expected sync_dispatch_outbox in RequiresAnyWriteLock, got %+v", res.RequiresAnyWriteLock)
+	requirement, ok := res.LockRequirements["sync_dispatch_outbox"]
+	if !ok {
+		t.Fatalf("expected a LockRequirement for sync_dispatch_outbox, got %+v", res.LockRequirements)
+	}
+	if requirement.Mode != "SHARE ROW EXCLUSIVE" {
+		t.Errorf("Mode = %q, want SHARE ROW EXCLUSIVE", requirement.Mode)
+	}
+	// Measured on PostgreSQL 18.4: INSERT does NOT satisfy this mode.
+	if requirement.Satisfying.Has(PrivInsert) {
+		t.Errorf("SHARE ROW EXCLUSIVE must not accept INSERT: %+v", requirement.Satisfying)
+	}
+	if !requirement.Satisfying.Has(PrivUpdate) || !requirement.Satisfying.Has(PrivDelete) {
+		t.Errorf("SHARE ROW EXCLUSIVE must accept UPDATE or DELETE: %+v", requirement.Satisfying)
+	}
+}
+
+// TestParseStatement_LockTableStrictestModeWins covers a table locked twice: the
+// weaker mode must never mask the stronger one's requirement.
+func TestParseStatement_LockTableStrictestModeWins(t *testing.T) {
+	res := ParseStatement(`LOCK TABLE public.t IN ROW EXCLUSIVE MODE;
+		LOCK TABLE public.t IN ACCESS EXCLUSIVE MODE`)
+	requirement := res.LockRequirements["t"]
+	if requirement.Mode != "ACCESS EXCLUSIVE" {
+		t.Errorf("Mode = %q, want the strictest (ACCESS EXCLUSIVE)", requirement.Mode)
+	}
+	if requirement.Satisfying.Has(PrivInsert) {
+		t.Error("the weaker ROW EXCLUSIVE lock masked the stricter one's requirement")
 	}
 }
 
@@ -178,53 +204,192 @@ SELECT 1 /* JOIN public.also_fake */ FROM public.real_table`
 	has(t, res, "real_table", PrivSelect)
 }
 
-// TestLockModeRequiresWritePrivilege pins the PostgreSQL LOCK privilege rule
-// this detector previously got wrong. It matched a substring "EXCLUSIVE", which
-// silently missed SHARE and ROW SHARE — both of which require a write privilege
-// — so a LOCK in either mode passed the grant-surface gate unflagged.
-func TestLockModeRequiresWritePrivilege(t *testing.T) {
+// TestLockRequirementForMode pins the mode-to-privilege DISJUNCTION derived from
+// LockTableAclCheck's OR-mask and measured on PostgreSQL 18.4 -- see the table in
+// sql.go. Every privilege is tested ALONE, because the previous version of this
+// test granted SELECT in every fixture, which made a conjunction and a
+// disjunction indistinguishable and let a wrong OPERATOR ship with correct tiers.
+func TestLockRequirementForMode(t *testing.T) {
 	t.Parallel()
 
-	// Only ACCESS SHARE is satisfied by SELECT alone.
-	for _, mode := range []string{"ACCESS SHARE", "access share", "  ACCESS   SHARE  "} {
-		if lockModeRequiresWritePrivilege(mode) {
-			t.Errorf("lockModeRequiresWritePrivilege(%q) = true, want false", mode)
+	// mode -> the privileges that must EACH, on their own, satisfy it.
+	satisfiesAlone := map[string][]Privilege{
+		"ACCESS SHARE":           {PrivSelect, PrivInsert, PrivUpdate, PrivDelete},
+		"ROW SHARE":              {PrivInsert, PrivUpdate, PrivDelete},
+		"ROW EXCLUSIVE":          {PrivInsert, PrivUpdate, PrivDelete},
+		"SHARE UPDATE EXCLUSIVE": {PrivUpdate, PrivDelete},
+		"SHARE":                  {PrivUpdate, PrivDelete},
+		"SHARE ROW EXCLUSIVE":    {PrivUpdate, PrivDelete},
+		"EXCLUSIVE":              {PrivUpdate, PrivDelete},
+		"ACCESS EXCLUSIVE":       {PrivUpdate, PrivDelete},
+	}
+	for mode, expected := range satisfiesAlone {
+		requirement, known := lockRequirementForMode(mode)
+		if !known {
+			t.Fatalf("%s must be a recognized mode", mode)
+		}
+		want := map[Privilege]bool{}
+		for _, p := range expected {
+			want[p] = true
+			// Each one ALONE must satisfy: this is what distinguishes the
+			// disjunction from a conjunction with SELECT.
+			var alone PrivilegeSet
+			alone.add(p)
+			if !lockSatisfiedBy(requirement, alone) {
+				t.Errorf("%s: %s ALONE must satisfy the lock (measured ok on 18.4)", mode, p)
+			}
+		}
+		for p := Privilege(0); p < numPrivileges; p++ {
+			if !want[p] && lockSatisfiedBy(requirement, singleton(p)) {
+				t.Errorf("%s: %s ALONE must NOT satisfy the lock (measured DENIED on 18.4)", mode, p)
+			}
 		}
 	}
-	// Every other mode needs at least one write privilege. SHARE and ROW SHARE
-	// are the two the old substring test failed open on.
-	for _, mode := range []string{
-		"ROW SHARE",
-		"SHARE",
-		"ROW EXCLUSIVE",
-		"SHARE UPDATE EXCLUSIVE",
-		"SHARE ROW EXCLUSIVE",
-		"EXCLUSIVE",
-		"ACCESS EXCLUSIVE",
+
+	// The whole point of the correction: a lock-only path is NOT required to hold
+	// SELECT. If SELECT were a separate requirement, UPDATE alone would fail here.
+	strict, _ := lockRequirementForMode("SHARE ROW EXCLUSIVE")
+	if !lockSatisfiedBy(strict, singleton(PrivUpdate)) {
+		t.Error("UPDATE alone must satisfy SHARE ROW EXCLUSIVE: modelling the demand as " +
+			"'SELECT AND a write privilege' over-grants every lock-only path, which is the failure " +
+			"the two-role split exists to prevent")
+	}
+
+	// An unknown mode is NOT a guess. It is refused, so the caller records it as
+	// an unparsed statement and the gate fails. The previous version returned a
+	// guessed strict set and called that fail-closed; it was not, because a role
+	// already holding UPDATE satisfied the guess and nothing was ever reported.
+	if _, known := lockRequirementForMode("SOME FUTURE MODE"); known {
+		t.Error("an unrecognized mode must be REFUSED, not given a guessed privilege set: a guess " +
+			"that happens to be satisfied is indistinguishable from knowledge")
+	}
+}
+
+func singleton(p Privilege) PrivilegeSet {
+	var set PrivilegeSet
+	set.add(p)
+	return set
+}
+
+// TestParseLockStatementGrammar covers every shape PostgreSQL accepts, all nine
+// of which were verified against a live 18.4 server. The previous regex
+// recognised only the first, and silently derived NOTHING for the rest -- no
+// table, no privilege, no diagnostic.
+func TestParseLockStatementGrammar(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		sql     string
+		targets []string
+		mode    string
+	}{
+		{"LOCK TABLE public.t IN SHARE ROW EXCLUSIVE MODE", []string{"public.t"}, "SHARE ROW EXCLUSIVE"},
+		{"LOCK public.t IN SHARE ROW EXCLUSIVE MODE", []string{"public.t"}, "SHARE ROW EXCLUSIVE"},
+		{"LOCK TABLE public.t", []string{"public.t"}, "ACCESS EXCLUSIVE"},
+		{"LOCK public.t", []string{"public.t"}, "ACCESS EXCLUSIVE"},
+		{"LOCK TABLE public.a, public.b IN SHARE MODE", []string{"public.a", "public.b"}, "SHARE"},
+		{"LOCK TABLE ONLY public.t IN EXCLUSIVE MODE", []string{"public.t"}, "EXCLUSIVE"},
+		{"LOCK TABLE public.t * IN SHARE MODE", []string{"public.t"}, "SHARE"},
+		{"LOCK TABLE public.t IN SHARE MODE NOWAIT", []string{"public.t"}, "SHARE"},
+		{"LOCK   TABLE   public.t   IN   SHARE   ROW   EXCLUSIVE   MODE", []string{"public.t"}, "SHARE ROW EXCLUSIVE"},
 	} {
-		if !lockModeRequiresWritePrivilege(mode) {
-			t.Errorf("lockModeRequiresWritePrivilege(%q) = false, want true", mode)
+		statements, unparsed := parseLockStatements(tc.sql)
+		if len(unparsed) != 0 {
+			t.Errorf("%q reported unparsed: %v", tc.sql, unparsed)
+			continue
+		}
+		if len(statements) != 1 {
+			t.Errorf("%q produced %d statements, want 1", tc.sql, len(statements))
+			continue
+		}
+		if statements[0].Mode != tc.mode {
+			t.Errorf("%q mode = %q, want %q", tc.sql, statements[0].Mode, tc.mode)
+		}
+		if len(statements[0].Targets) != len(tc.targets) {
+			t.Errorf("%q targets = %v, want %v", tc.sql, statements[0].Targets, tc.targets)
+			continue
+		}
+		for i, want := range tc.targets {
+			if statements[0].Targets[i] != want {
+				t.Errorf("%q target %d = %q, want %q", tc.sql, i, statements[0].Targets[i], want)
+			}
 		}
 	}
 }
 
-// TestAnalyzeFlagsBareShareLockAsRequiringWrite exercises the same rule through
-// the real statement analyzer rather than the helper alone.
-func TestAnalyzeFlagsBareShareLockAsRequiringWrite(t *testing.T) {
+// TestParseLockStatementReportsWhatItCannotParse is the fail-closed half. A LOCK
+// the parser does not understand must be REPORTED, never dropped.
+func TestParseLockStatementReportsWhatItCannotParse(t *testing.T) {
+	t.Parallel()
+
+	for _, sql := range []string{
+		"LOCK TABLE public.t IN NONSENSE MODE",
+		"LOCK TABLE public.t IN SHARE",
+		"LOCK TABLE",
+	} {
+		statements, unparsed := parseLockStatements(sql)
+		if len(unparsed) == 0 {
+			t.Errorf("%q was silently ignored (%d statements parsed); an unparseable LOCK must be "+
+				"reported so the gate fails rather than treating it as an absence", sql, len(statements))
+		}
+	}
+
+	// And the word LOCK inside another statement must NOT be read as one, since a
+	// false positive here is now a false GATE FAILURE.
+	for _, sql := range []string{
+		"SELECT id FROM public.t FOR UPDATE SKIP LOCKED",
+		"SELECT lock_key FROM public.t",
+	} {
+		if _, unparsed := parseLockStatements(sql); len(unparsed) != 0 {
+			t.Errorf("%q must not be read as a LOCK statement: %v", sql, unparsed)
+		}
+	}
+}
+
+// TestAnalyzeRecordsLockRequirementPerMode exercises the rule through the real
+// statement analyzer, and pins that a LOCK does NOT add a SELECT requirement.
+func TestAnalyzeRecordsLockRequirementPerMode(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
-		name string
-		sql  string
-		want bool
+		name           string
+		sql            string
+		insertSuffices bool
+		selectSuffices bool
 	}{
-		{name: "bare share", sql: "LOCK TABLE public.worker_job_outbox IN SHARE MODE", want: true},
-		{name: "row share", sql: "LOCK TABLE public.worker_job_outbox IN ROW SHARE MODE", want: true},
-		{name: "access share", sql: "LOCK TABLE public.worker_job_outbox IN ACCESS SHARE MODE", want: false},
+		{name: "access share", sql: "LOCK TABLE public.worker_job_outbox IN ACCESS SHARE MODE",
+			insertSuffices: true, selectSuffices: true},
+		{name: "row share", sql: "LOCK TABLE public.worker_job_outbox IN ROW SHARE MODE",
+			insertSuffices: true, selectSuffices: false},
+		{name: "row exclusive", sql: "LOCK TABLE public.worker_job_outbox IN ROW EXCLUSIVE MODE",
+			insertSuffices: true, selectSuffices: false},
+		{name: "bare share", sql: "LOCK TABLE public.worker_job_outbox IN SHARE MODE",
+			insertSuffices: false, selectSuffices: false},
+		{name: "share row exclusive", sql: "LOCK TABLE public.worker_job_outbox IN SHARE ROW EXCLUSIVE MODE",
+			insertSuffices: false, selectSuffices: false},
+		{name: "mode omitted defaults to access exclusive", sql: "LOCK TABLE public.worker_job_outbox",
+			insertSuffices: false, selectSuffices: false},
 	} {
 		result := ParseStatement(testCase.sql)
-		if got := result.RequiresAnyWriteLock["worker_job_outbox"]; got != testCase.want {
-			t.Errorf("%s: RequiresAnyWriteLock = %v, want %v", testCase.name, got, testCase.want)
+		requirement, got := result.LockRequirements["worker_job_outbox"]
+		if !got {
+			t.Errorf("%s: no LockRequirement recorded", testCase.name)
+			continue
+		}
+		if requirement.Satisfying.Has(PrivInsert) != testCase.insertSuffices {
+			t.Errorf("%s: INSERT satisfies = %v, want %v", testCase.name,
+				requirement.Satisfying.Has(PrivInsert), testCase.insertSuffices)
+		}
+		if requirement.Satisfying.Has(PrivSelect) != testCase.selectSuffices {
+			t.Errorf("%s: SELECT satisfies = %v, want %v", testCase.name,
+				requirement.Satisfying.Has(PrivSelect), testCase.selectSuffices)
+		}
+		// A lock-only statement must NOT assert a standalone SELECT requirement.
+		// The backend's check is one OR-mask; requiring SELECT alongside it
+		// over-grants every lock-only path.
+		if result.Tables["worker_job_outbox"].Has(PrivSelect) {
+			t.Errorf("%s: a LOCK must not add a separate SELECT requirement -- the demand is a "+
+				"disjunction, so a path authorized by UPDATE alone needs no SELECT", testCase.name)
 		}
 	}
 }

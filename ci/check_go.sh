@@ -25,6 +25,12 @@ Usage: ci/check_go.sh [fmt|vet|test|race|build|contract|integration-vet|integrat
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
          set, reject breaking in-place changes against that directory.
+  grant-advisory
+         Publish the per-role grant-surface ADVISORY report into the log. Reports
+         only -- it never fails the build on findings, by design. Included in
+         `fast` and `all` because the report has no other delivery channel: the
+         test that produces it uses t.Log, and `go test` without -v discards a
+         passing package's output.
   integration-vet
          Compile-check every package under the integration build tag, across
          the WHOLE tree. No Docker required. This is what would have caught a
@@ -41,9 +47,10 @@ Usage: ci/check_go.sh [fmt|vet|test|race|build|contract|integration-vet|integrat
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
   fast   Run fmt, vet, test, build, contract, integration-vet, and
-         integration-coverage checks.
+         integration-coverage checks, then publish the grant advisory report.
   all    Run fmt, vet, test, race, build, contract, integration-vet, and
-         integration-coverage checks (default).
+         integration-coverage checks, then publish the grant advisory report
+         (default).
 EOF
 }
 
@@ -199,6 +206,26 @@ check_build() {
   printf 'go build: worktree unchanged\n'
   cleanup_go_build_output
   trap - EXIT
+}
+
+# check_grant_advisory publishes the per-role grant-surface ADVISORY report into
+# the CI log. It is NOT a gate and cannot fail the build on findings: the command
+# exits 0 even when it reports CRITICAL ones, deliberately (see
+# cmd/dev-health-grantcheck's doc comment and internal/domaingrants.AdvisoryReport).
+#
+# It exists because the report had NO delivery channel. Its content is produced by
+# TestReportCoordinatorGrantSurface through t.Log, and check_test below runs
+# `go test ./...` WITHOUT -v, which discards a passing package's logs entirely. So
+# CI showed a zero exit and a package-level "ok" and none of the report -- which is
+# exactly the "advisory output read as a pass" failure the advisory posture exists
+# to prevent. A report whose only channel is suppressed output is not a report.
+#
+# An EXECUTION failure (build break, analysis error) is still nonzero and still
+# fails, because that means the report was not produced at all -- which is a
+# different thing from the report having nothing to say.
+check_grant_advisory() {
+  printf '\n== grant-surface ADVISORY report (reports only; never fails on findings) ==\n'
+  ( cd "${ROOT}" && GOWORK=off go run -mod=readonly ./cmd/dev-health-grantcheck -roles )
 }
 
 check_contract() {
@@ -403,6 +430,9 @@ case "${1:-all}" in
   contract)
     check_contract
     ;;
+  grant-advisory)
+    check_grant_advisory
+    ;;
   integration-vet)
     check_integration_vet
     ;;
@@ -420,6 +450,7 @@ case "${1:-all}" in
     check_contract
     check_integration_vet
     check_integration_coverage
+    check_grant_advisory
     ;;
   all)
     check_format
@@ -430,6 +461,7 @@ case "${1:-all}" in
     check_contract
     check_integration_vet
     check_integration_coverage
+    check_grant_advisory
     ;;
   -h|--help|help)
     usage

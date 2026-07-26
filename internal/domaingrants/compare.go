@@ -30,7 +30,11 @@ func (s Severity) String() string {
 // Finding is one row of the comparison between the derived query surface and
 // the two hand-maintained artefacts.
 type Finding struct {
-	Severity  Severity
+	Severity Severity
+	// Role is which pool/database role this finding is about. Empty for the
+	// single-role Compare path; always set by CompareRoles, because "which role"
+	// is the whole point once there is more than one.
+	Role      PoolRole
 	Table     string
 	Privilege Privilege
 	Summary   string
@@ -168,19 +172,21 @@ func Compare(derived *DerivedSurface, gt *GroundTruth) *Report {
 				})
 			}
 		}
-		if surface.RequiresAnyWriteLock && !columnScoped {
-			// Postgres requires at least one of INSERT/UPDATE/DELETE for a
-			// LOCK TABLE mode stricter than ROW EXCLUSIVE -- ANY one, not a
-			// specific privilege (see TableSurface.RequiresAnyWriteLock's
-			// doc comment). Only flag if the granted set truly has none of
-			// the three; already-granted INSERT/UPDATE/DELETE for other
-			// reasons silently satisfies this.
-			if !granted.Has(PrivInsert) && !granted.Has(PrivUpdate) && !granted.Has(PrivDelete) {
+		if surface.LockRequirement != nil && !columnScoped {
+			// Postgres's LOCK demand is a DISJUNCTION over a MODE-SPECIFIC set,
+			// not "any write privilege": INSERT satisfies ROW SHARE and ROW
+			// EXCLUSIVE and nothing stricter. See LockRequirement in sql.go for
+			// the measured mapping. An earlier version of this check accepted any
+			// of INSERT/UPDATE/DELETE for every mode, which passed a SELECT+INSERT
+			// posture against a SHARE ROW EXCLUSIVE lock -- the CHAOS-3113 defect
+			// family exactly.
+			requirement := *surface.LockRequirement
+			if !lockSatisfiedBy(requirement, granted) {
 				report.Findings = append(report.Findings, Finding{
 					Severity: Critical, Table: table,
 					Summary: fmt.Sprintf(
-						"table %q: LOCK TABLE in an exclusive-ish mode requires at least one of INSERT/UPDATE/DELETE, but runtimeGrantStatements grants none of them",
-						table,
+						"table %q: LOCK IN %s MODE requires at least ONE of %s -- a disjunction, NOT a conjunction with SELECT -- but runtimeGrantStatements grants none of them",
+						table, requirement.Mode, privilegeSetNames(requirement.Satisfying),
 					),
 					Evidence: surface.WriteLockEvidence,
 				})
@@ -341,11 +347,23 @@ func isFullyCovered(surface *TableSurface, gt *GroundTruth) bool {
 			return false
 		}
 	}
-	if surface.RequiresAnyWriteLock &&
-		!granted.Has(PrivInsert) && !granted.Has(PrivUpdate) && !granted.Has(PrivDelete) {
+	if surface.LockRequirement != nil && !lockSatisfiedBy(*surface.LockRequirement, granted) {
 		return false
 	}
 	return true
+}
+
+// lockSatisfiedBy reports whether held contains ANY ONE privilege the lock mode
+// accepts. Single definition on purpose: three call sites checked this
+// disjunction, and an inlined copy is how one of them ends up still accepting
+// INSERT for a mode that does not.
+func lockSatisfiedBy(requirement LockRequirement, held PrivilegeSet) bool {
+	for p := Privilege(0); p < numPrivileges; p++ {
+		if requirement.Satisfying.Has(p) && held.Has(p) {
+			return true
+		}
+	}
+	return false
 }
 
 func pluralTables(tables []string) string {

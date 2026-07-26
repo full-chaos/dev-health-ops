@@ -127,3 +127,123 @@ route/rollback ownership, cross-process quiescence, scheduler policy parity,
 provider sync (`sync_provider`) contract support where applicable, and a
 successful coexistence canary. The current checked-in contract fails these
 conditions, so Go-only is not production-authorized.
+
+## Running a Go worker topology against local Postgres (CHAOS-3142)
+
+These are the wiring facts discovered while exercising the additive Go path
+(`go-worker-migrate` → `go-worker` → `go-reconciler`) end to end against a
+local Postgres/ClickHouse/Valkey stack. They apply to any compose project
+that starts these services, not to one specific file — see that project's
+own compose file(s) for exactly which services exist and where.
+
+### One compose project owns one Postgres cluster
+
+Docker Compose tracks container ownership by `(project name, service name)`.
+Two different compose files that both declare the same top-level `name:`
+believe they own the same containers — an `up` from either one can silently
+recreate the other's already-running `postgres` container in place, with
+whatever role/database/PGDATA layout *that* file happens to declare. This
+is not a hypothetical: it is the CHAOS-3142 incident (2026-07-25) that
+motivated hardening `ops/compose.yml`'s postgres service (digest-pinned
+image, `PGDATA` spelled correctly instead of the inert `PG_DATA`, its own
+project name). If you are pointing a Go worker topology at an *existing*
+local Postgres cluster rather than starting a fresh one, confirm which
+compose project actually owns that container (`docker inspect <container>
+--format '{{index .Config.Labels "com.docker.compose.project"}}'`) before
+running any compose command against it from a second file.
+
+### The coordinator DSN must be direct Postgres, never PgBouncer
+
+`COORDINATOR_DATABASE_URI` (read by `go-reconciler` and by
+`dev-health-worker-migrate`'s `MIGRATION_DATABASE_URI`, which is a distinct,
+more-privileged DSN — never reused as a coordinator runtime identity) must
+point at Postgres's own port (`5432` locally), never through PgBouncer's
+transaction-mode pool (`6432` locally). The coordinator holds
+cross-statement row and table locks (`FOR UPDATE`, `LOCK TABLE ... IN SHARE
+ROW EXCLUSIVE MODE`) that a transaction-mode pooler can hand to a different
+server session mid-transaction, silently breaking the lock. Startup rejects
+this explicitly: `internal/storage/postgres/runtime.go`'s
+`ErrCoordinatorTransactionMode` fires when the domain endpoint is
+PgBouncer-pooled and the coordinator DSN resolves to that same endpoint. The
+domain DSN (`POSTGRES_URI`) may continue through PgBouncer, as the Python
+API/Celery processes' `DATABASE_URI` already does; the queue-control DSN
+(`WORKER_DATABASE_URI`) must also be direct, for the same reason.
+
+### ClickHouse: the Go worker needs the native port, not the HTTP port
+
+Python's `CLICKHOUSE_URI` (via `clickhouse-connect`) speaks ClickHouse's
+HTTP interface, port `8123` locally. The Go worker's `CLICKHOUSE_URI` (via
+`internal/storage/clickhouse`, built on `ClickHouse/clickhouse-go/v2`)
+speaks the **native wire protocol**, port `9000` locally, and eagerly
+`Ping()`s at construction time. Pointing the Go worker's `CLICKHOUSE_URI` at
+the HTTP port fails immediately with `ClickHouse readiness check failed`
+(`internal/storage/clickhouse.ErrUnavailable`) — the two processes' env var
+has the same name but must resolve to a different port.
+
+### With both route switches off, `go-worker`'s `sync` profile fails closed at startup
+
+This is intentional, not a bug, and it is worth expecting before you hit it:
+with `POSTGRES_URI` and `WORKER_DATABASE_URI` both configured (as they must
+be to do anything useful) and `DEV_HEALTH_PROFILE=sync`,
+`cmd/dev-health-worker` unconditionally constructs the
+`sync.team_autoimport` handler the moment the domain DSN is present
+(`buildSyncCoordinatorWorker` gates only on `profile == "sync"`, not on
+either route switch). Startup then requires an **exact match** between what
+was actually constructed and the full job-kind/queue set the `sync`
+deployment profile declares
+(`cmd/dev-health-worker/dependencies.go`'s `profileReady` — the CUT-02
+"exact startup validation" gate) — which also declares
+`sync.provider_unit`. With `WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED` and
+`WORKER_GITHUB_REPO_METADATA_ENABLED` both at their secure default of
+`false`, `sync.provider_unit` is never constructed, the match fails, and the
+process exits non-zero — which crash-loops under `restart: unless-stopped`.
+The container never binds `:8080`, so `/readyz` never even becomes reachable
+to show *why*; the reason is in the container's own log line:
+`{"level":"ERROR","msg":"configure runtime dependencies","error_category":"dependency_configuration_failed"}`.
+
+This is fail-closed by design — a worker dispatching `github`/`repo-metadata`
+units into River while refusing to build the handler for them would strand
+every one of those units, which is worse than not starting at all. **To get
+`go-worker`'s `sync` profile to a ready state, set one of the two switches
+to `true`** (for example `WORKER_GITHUB_REPO_METADATA_ENABLED=true`) in
+whatever environment file feeds that compose project. The default stays
+`false` in every checked-in file; this is a per-environment operator choice,
+made alongside enabling the matching route in a reviewed release, never a
+default flip.
+
+### The `sync.team_autoimport` bridge needs `WORKER_OPERATIONAL_BRIDGE_*` even though `profiles.json` doesn't say so
+
+`deploy/go-workers/profiles.json`'s `sync` process entry does not list
+`WORKER_OPERATIONAL_BRIDGE_URL`/`WORKER_OPERATIONAL_BRIDGE_TOKEN` in its
+`secret_env`, but `buildSyncCoordinatorWorker` constructs an HTTP bridge
+(`syncdispatchruntime.NewHTTPBridge`) unconditionally for the `sync` profile
+once the domain DSN is configured, and that constructor fails closed on an
+empty `BaseURL` or `BearerToken`. Set `WORKER_OPERATIONAL_BRIDGE_URL` (an
+HTTP(S) origin reachable from the Go worker's container — typically the
+Python `api` service) and a non-empty `WORKER_OPERATIONAL_BRIDGE_TOKEN`; if
+the origin is plain HTTP rather than HTTPS, also set
+`WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`, matching the pattern
+`deploy/docker-compose/compose.go-workers.yml`'s `go-worker-heavy` service
+already uses.
+
+### Provider credentials the Go executor can decrypt
+
+`internal/providerfoundation.CredentialResolver` reads
+`integration_credentials.credentials_encrypted` and decrypts it with the
+same v1 Fernet-over-PBKDF2 scheme as
+`src/dev_health_ops/core/encryption.py` (`SETTINGS_ENCRYPTION_KEY`, 600,000
+PBKDF2-HMAC-SHA256 iterations, default salt
+`dev-health-ops-settings-encryption-v1`) — the two are wire-compatible, and
+`decrypt_value`/`encrypt_value` in that Python module are the reference
+implementation for constructing a test row by hand. The decrypted
+**plaintext must be a JSON object** (`{"token": "..."}` for a GitHub PAT;
+`ValidateCredentialShape` accepts exactly one of a PAT `token` or the three
+GitHub App fields `app_id`/`private_key`/`installation_id`), not a bare
+token string — decrypting a bare string fails
+`decodeCredential`'s `json.Unmarshal` and surfaces identically to a wrong
+key (`ErrCredentialInvalid`, "provider credential is invalid"). The claim
+row's `credential_id` comes from `COALESCE(sync_runs.credential_id,
+integrations.credential_id)`, so a credential row that exists but isn't
+linked from `integrations.credential_id` (or the sync run) is invisible to
+a claim even though `PostgresCredentialRepository.ResolveEncrypted` would
+find it directly by `(org_id, provider)`.

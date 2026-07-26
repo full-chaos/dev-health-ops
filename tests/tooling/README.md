@@ -1,5 +1,12 @@
 # Mutation-testing harness
 
+> **Scope of the mandate — CHAOS-3165.** Requiring a mutation plan for new work is scoped to the
+> **Go port (CHAOS-3033)** and will be **removed when the port finalises**; CHAOS-3165 tracks
+> retiring it, blocked by CHAOS-3033. This is a statement about scope, not about confidence: the
+> requirement is **load-bearing until the port closes** and applies in full until then. The tool
+> itself, `verify` in the gate, and this runbook outlive the mandate — only the obligation to
+> author a plan for every change goes away.
+
 **Use `scripts/mutation_harness.py`. Do not write your own.** Three ad-hoc per-lane
 harnesses produced false results on 2026-07-26 — one left a mutation on disk while
 reporting a restore, one reverted unrelated uncommitted edits with `git checkout`, one
@@ -16,14 +23,43 @@ python3 scripts/mutation_harness.py verify
 # Repair a mutation left applied by a killed run.
 python3 scripts/mutation_harness.py restore
 
+# Clear the record after undoing a mutation BY HAND, when restore cannot.
+python3 scripts/mutation_harness.py accept --digest $(shasum -a 256 <file> | cut -d' ' -f1)
+
 # Execute a plan; fail on any survivor that is not declared.
 python3 scripts/mutation_harness.py run --plan <plan.json> --assert-all-killed
 python3 scripts/mutation_harness.py run --plan <plan.json> --only M3,M4
 ```
 
-`verify` fails both when a mutation leaked from a dead run **and** while a run is live, but
-the two messages are different on purpose: one says repair, the other says wait. Confusing
-them cost real time.
+`verify` distinguishes three states, and the messages are different on purpose because the
+instructions are opposite: a mutation **leaked** from a dead run says repair; a **live** run
+holding the lock says wait; a lock with **no pid file** says neither — there is no pid to
+wait for and none to check, so it says break the stale lock. Confusing the first two cost
+real time; phrasing the third around a pid nobody has left the gate red behind advice no one
+could act on.
+
+### When `restore` refuses: `accept`
+
+Several of `restore`'s refusals are correct *and* terminal. The snapshot is gone because a
+proof command ran `git clean -fdX` (`.mutation-harness/` is gitignored). Or the file holds
+neither the original nor the mutation, because you reconciled a foreign edit by hand — and
+writing the snapshot would destroy it. In those states the right move is to fix the file
+yourself, and until `accept` existed there was then **no way to clear the record**: `verify`
+stayed red, the gate stayed red, and the only exit was deleting the record blind. A safe path
+that dead-ends is what teaches people to take the unsafe one.
+
+`accept` is that exit and it is **not** "ignore the record" — leak detection is the whole
+point of the record, so clearing it is earned, and every piece of evidence is checked rather
+than trusted:
+
+| it demands | because |
+| --- | --- |
+| the file still resolves to the recorded `device:inode` | otherwise the file actually holding the mutation stays broken *and* unrecorded |
+| `--digest` naming the file's **current** content | pins the decision to bytes. If anything writes the file between your inspection and the acceptance, it fails rather than clearing against content nobody approved |
+| the file is **not** the recorded mutation | that state is the leak itself, not a repair. Use `restore` |
+| the replacement text is **gone** and the anchor is **back** | this is what makes it a measurement. A file merely edited near the mutation, or reformatted while still mutated, fails it |
+
+It never writes to your source. The only thing it changes is the record.
 
 ### What `verify` does not prove
 
@@ -69,7 +105,7 @@ to prevent.
 | --- | --- |
 | `proof` | argv **arrays**, not shell strings — the plan is data, not an execution surface. Every command must pass on the clean tree and at least one must fail mutated. A mutation nothing observes is not a measurement. |
 | `rationale` | State the property under test. Without it a verdict is uninterpretable six weeks later. |
-| `build` | argv array, plan-level or per-mutation. Must exit 0 **after** the mutation is applied. Without it, a mutation that fails to compile records `KILLED` — a build break and a failing assertion are the same exit code, and a build break runs no test at all. Its absence is reported as a warning on every mutation. **Match the proof's build configuration exactly**: if the proofs run `-tags integration`, so must the build. A plain `go build` passed a mutation whose orphaned variable only broke the tagged configuration, so the check would have passed while the proof could not run — a narrower version of the false confidence it exists to prevent. |
+| `build` | argv array, plan-level or per-mutation. Must exit 0 **before** the mutation (or the run reports `BASELINE_FAILED`, because a build command that cannot pass on a clean tree would report every mutation `INVALID` and blame the mutations for its own defect — measured while writing this repo's self-check plan) and again **after** it. Without it, a mutation that fails to compile records `KILLED` — a build break and a failing assertion are the same exit code, and a build break runs no test at all. Its absence is reported as a warning on every mutation. **Match the proof's build configuration exactly**: if the proofs run `-tags integration`, so must the build. A plain `go build` passed a mutation whose orphaned variable only broke the tagged configuration, so the check would have passed while the proof could not run — a narrower version of the false confidence it exists to prevent. Interpreted languages have one too: for Python it is importing the mutated module, which catches a syntax error or an import-time `NameError`. |
 | `expect_occurrences` | Defaults to 1 and is enforced. One real mutation landed in a doc comment because the anchor appeared twice, and a mutation in prose reads exactly like a coverage gap. |
 | `expected_survivor_reason` | Declare a survivor you have judged acceptable — a genuinely unobservable change, or redundancy with no reachable state left to assert. Undeclared survivors fail `--assert-all-killed`. |
 | `allow_comment_anchor` | Comment lines are refused by default for the reason above. |
@@ -120,7 +156,22 @@ python3 scripts/mutation_harness.py run \
   --plan tests/tooling/mutation-plans/mutation_harness.json --assert-all-killed
 ```
 
-Eleven guards, eleven kills. The plan's `$limitation` field names what it does *not* cover — the
-record-before-apply ordering, the lock, and the schema validators are pinned by
-`test_mutation_harness.py` instead. A plan that looks complete is how a coverage gap
-survives, so the gaps are stated where the coverage is claimed.
+**Seventeen guards, seventeen kills, zero `INVALID`** — measured on 2026-07-26 against this tree, not
+claimed. Check the number against a real run rather than trusting this line: a previous version of
+this sentence said eleven while two of its anchors had drifted to match zero lines, so the run
+actually produced nine kills and two `INVALID`. A stale claim about mutation coverage is the same
+false confidence the tool exists to prevent, wearing the tool's own badge.
+
+The plan's `$limitation` field names what it does *not* cover — the record-before-apply ordering,
+the restored-byte digest comparison, the lock, the schema validators, the build/`INVALID` routing,
+`STALE_DECLARATION` routing, and kill-site extraction are pinned by `test_mutation_harness.py`
+instead, and the declared `build` catches syntax and import errors only. A plan that looks complete
+is how a coverage gap survives, so the gaps are stated where the coverage is claimed.
+
+**A mutation whose proof asserts a MESSAGE is not a kill.** H9 originally disabled `restore`'s
+specialised live-holder refusal — but a generic refusal further down still refused, so the tool
+still did the right thing and only the wording changed. It reported `KILLED` purely because its
+proof expected the specialised sentence. It now targets the `--force` guard, whose absence
+genuinely writes the source, clears the record and evicts a live run's lock, and its proof asserts
+that state. When a kill looks decorative, either give the proof a behaviour to assert or delete the
+mutation and say so.

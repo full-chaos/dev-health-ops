@@ -2,7 +2,13 @@
   "schema_version": 1,
   "name": "mutation harness self-check",
   "$comment": "The harness's own guards, mutated by the harness. Each entry disables one guard and names the test that must go red. A guard whose test has never been observed failing is the same class of false pass the harness exists to catch, so this plan is how the contract tests earn their keep. Safe to run against the harness itself: Python has already loaded the module by the time it mutates the file, and each proof command is a fresh pytest subprocess that imports the mutated copy. Run with: python3 scripts/mutation_harness.py run --plan tests/tooling/mutation-plans/mutation_harness.json --assert-all-killed",
-  "$limitation": "NOT covered by this plan, stated here rather than left as an assumed pass. (1) The record-before-apply ORDERING that makes a crash mid-apply detectable: an ordering property is not reachable by a single find/replace, so test_a_crash_while_applying_still_leaves_a_record_for_verify pins it. (2) The restored-byte digest comparison in the run's finally block \u2014 disabling it leaves every mutation here green, because none of them exercises a partial restore. Pinned only by contract test, and the weakest guard in the tool. (3) The lock itself, the plan-schema validators, and the atomic-write temp-and-rename: contract tests only.",
+  "$limitation": "NOT covered by this plan, stated here rather than left as an assumed pass, and rewritten to describe the plan as it now is rather than as it was. (1) The record-before-apply ORDERING that makes a crash mid-apply detectable: an ordering property is not reachable by a single find/replace, so test_a_crash_while_applying_still_leaves_a_record_for_verify pins it. (2) The restored-byte digest comparison in the run's finally block \u2014 disabling it leaves every mutation here green, because none of them exercises a partial restore. Pinned only by contract test, and the weakest guard in the tool. (3) The lock itself, the plan-schema validators, and the atomic-write temp-and-rename (including its symlink refusal): contract tests only. (4) The build/INVALID routing \u2014 that a mutation which does not build is INVALID and not KILLED, and that a build failing on the CLEAN tree is BASELINE_FAILED rather than a plan full of bad mutations: contract tests only, because mutating that routing changes the verdict of the very run doing the mutating. (5) Recovery's mutated-digest and file-identity refusals in `restore`: reachable only from a crashed run's leftover state, which a live run cannot synthesise for itself. (6) STALE_DECLARATION routing: H11 mutates the exit-code set but only removes INVALID from it, so the stale-declaration arm is contract-only. (7) Kill-site extraction (_kill_site): a formatting heuristic with no behavioural consequence to observe. (8) The DEPTH of the declared build. It executes the mutated module, so it catches a syntax error or an import-time NameError, and nothing beyond that: a mutation that is well-formed and imports cleanly but is semantically absurd still reaches the proofs, exactly as `go build` does for Go. It is not a type check.",
+  "build": [
+    ".venv/bin/python",
+    "-c",
+    "import sys; sys.dont_write_bytecode=True; import importlib.util as u; s=u.spec_from_file_location(\"mh_build_check\",\"scripts/mutation_harness.py\"); m=u.module_from_spec(s); sys.modules[\"mh_build_check\"]=m; s.loader.exec_module(m)"
+  ],
+  "$build_note": "Python's equivalent of `go build`: import the mutated file and let syntax errors and import-time NameErrors surface. Without it a self-mutation that breaks the module reports KILLED \u2014 every proof imports the harness, so a broken import fails them all with the same exit code a real assertion failure produces. `sys.modules` registration is required before exec_module or dataclasses cannot resolve the module, and dont_write_bytecode keeps the check from leaving a .pyc for mutated source behind.",
   "mutations": [
     {
       "id": "H1",
@@ -143,10 +149,10 @@
     {
       "id": "H9",
       "file": "scripts/mutation_harness.py",
-      "find": "        if live is not None and not force:",
+      "find": "        if live is not None and live != _LOCK_HELD_BY_UNKNOWN:",
       "replace": "        if False:",
       "expect_occurrences": 1,
-      "rationale": "restore must not race a live run: clearing the record before that run applies its mutation leaves a mutation nothing knows about, so verify would report clean. A hole reachable through this tool's own repair path.",
+      "rationale": "--force must not evict a LIVE run's lock. Force exists for a lock left by a dead run; used against a live one it clears the applied record and deletes the lock, after which that run applies its mutation and dies with nothing recording it — verify then reports clean with a mutation on disk, which is worse than the state force was invoked to repair and is reachable through this tool's own escape hatch. This anchor deliberately targets the FORCE guard and not the non-force refusal above it: disabling that one changes only which sentence is printed, because the generic 'if not force: raise' below still refuses, so a proof of it would be asserting a MESSAGE rather than a behaviour — the exact defect class this harness exists to catch, and a decorative kill inside the tool's own self-check. Its proof asserts state instead: the source stays mutated, the record stands, and the lock survives.",
       "proof": [
         [
           ".venv/bin/python",
@@ -177,8 +183,8 @@
     {
       "id": "H11",
       "file": "scripts/mutation_harness.py",
-      "find": "        result.verdict in {VERDICT_BASELINE_FAILED, VERDICT_INVALID}",
-      "replace": "        result.verdict in {VERDICT_BASELINE_FAILED}",
+      "find": "        in {VERDICT_BASELINE_FAILED, VERDICT_INVALID, VERDICT_STALE_DECLARATION}",
+      "replace": "        in {VERDICT_BASELINE_FAILED, VERDICT_STALE_DECLARATION}",
       "expect_occurrences": 1,
       "rationale": "An INVALID mutation measured nothing, so exiting 0 reports a plan as verified while part of it never ran. This exact false pass shipped in the first version.",
       "proof": [
@@ -187,6 +193,108 @@
           "-m",
           "pytest",
           "tests/tooling/test_mutation_harness.py::test_an_invalid_mutation_fails_the_run",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H12",
+      "file": "scripts/mutation_harness.py",
+      "find": "    except OSError as exc:\n        raise HarnessError(",
+      "replace": "    except OSError:\n        return None\n    except TypeError as exc:\n        raise HarnessError(",
+      "expect_occurrences": 1,
+      "rationale": "A state file that cannot be READ is not an absent state file. Treating an I/O error as 'no mutation recorded' makes the gate report a mutated tree clean, which is the tool's central failure mode arriving through its own reader. The replacement models the defect exactly rather than removing the branch: the OSError returns None as if nothing were recorded, and the refusal is re-homed under an exception read_bytes never raises.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_state_that_raises_a_real_oserror_is_not_treated_as_absent",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H13",
+      "file": "scripts/mutation_harness.py",
+      "find": "        if replace not in find and replace in text:",
+      "replace": "        if False:",
+      "expect_occurrences": 1,
+      "rationale": "The check that keeps `accept` from becoming a blanket override. Its proof presents a file whose digest matches neither record and whose anchor IS back, so every other guard passes — only looking for the replacement text sees that a second site is still mutated. Disabling it therefore does not change a message: it clears the applied record over a file that still holds the mutation, which is the leak the record exists to report.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_accept_refuses_when_the_replacement_text_is_still_present",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H14",
+      "file": "scripts/mutation_harness.py",
+      "find": "        if find not in replace and found_sites < expected_sites:",
+      "replace": "        if False:",
+      "expect_occurrences": 1,
+      "rationale": "The mirror clause of H13, mutated independently because a compound acceptance condition proves nothing about its clauses when mutated as a unit. Absence of the mutation is not presence of the original: a file replaced by something else entirely holds neither, and accepting it clears the record on evidence the tool never had.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_accept_refuses_when_the_anchor_never_came_back",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H17",
+      "file": "scripts/mutation_harness.py",
+      "find": "        if find not in replace and found_sites < expected_sites:",
+      "replace": "        if find not in replace and found_sites < 1:",
+      "expect_occurrences": 1,
+      "rationale": "Clause-level mutation of H14's condition: the anchor must be counted, not merely found. A mutation rewrites EVERY occurrence, so a partial by-hand repair leaves the anchor present at one site and the mutation live at another — and in the deleted-clause shape, where the replacement is a substring of the anchor, the replacement check is correctly skipped and this count is the only guard left. Mutating H14 as a unit cannot measure this, which is the rule the runbook states and this pair is the instance of.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_accept_refuses_a_partial_repair_of_a_multi_site_mutation",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H15",
+      "file": "scripts/mutation_harness.py",
+      "find": "\n    if live == _LOCK_HELD_BY_UNKNOWN:\n",
+      "replace": "\n    if False:\n",
+      "expect_occurrences": 1,
+      "rationale": "A pid-less lock has no pid to wait for and none to check, so it needs its own branch. Falling into the pid-shaped one interpolates the not-a-pid sentinel and tells the reader to wait for pid -1 — and since verify runs FIRST in ci/local_validate.sh, that leaves the gate red forever behind advice nobody can act on. The output IS the deliverable of a diagnostic command, and disabling this branch removes the only actionable instruction (break the stale lock) from it; the proof asserts that instruction is present and the sentinel is not, rather than matching a phrase.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_lock_without_a_pid_file_is_treated_as_held",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H16",
+      "file": "scripts/mutation_harness.py",
+      "find": "        if expected and current == expected:",
+      "replace": "        if False:",
+      "expect_occurrences": 1,
+      "rationale": "Recovery must look at the file's CONTENT before it requires a snapshot. A proof command running `git clean -fdX` deletes the snapshots because .mutation-harness/ is gitignored; with this check ordered after the snapshot requirement, an operator who has already undone the mutation cannot clear the record at all — a refusal to write bytes that are no longer needed, leaving the gate red with nothing left to do. A safe path that dead-ends is what teaches people to delete the record blind.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_hand_undone_mutation_clears_even_with_the_snapshot_deleted",
           "-q"
         ]
       ]

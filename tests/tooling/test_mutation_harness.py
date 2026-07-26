@@ -22,12 +22,14 @@ from pathlib import Path
 import pytest
 
 from scripts.mutation_harness import (
+    _LOCK_HELD_BY_UNKNOWN,
     VERDICT_BASELINE_FAILED,
     VERDICT_INVALID,
     VERDICT_KILLED,
     VERDICT_SURVIVED,
     VERDICT_SURVIVED_DECLARED,
     HarnessError,
+    accept_manual_repair,
     acquire_lock,
     main,
     restore,
@@ -557,7 +559,7 @@ def test_a_crash_while_applying_still_leaves_a_record_for_verify(
     # any write, so restore has nothing to put back -- it must say so and still
     # clear the record rather than reporting a write it did not perform.
     message = restore(tree)
-    assert "already matches the snapshot" in message
+    assert "already matches" in message
     assert (tree / SOURCE_NAME).read_text(encoding="utf-8") == _source(GUARD)
     assert verify(tree) == []
 
@@ -719,11 +721,347 @@ def test_restore_refuses_while_a_live_run_holds_the_lock(tree: Path) -> None:
     # lock lets it apply its mutation and die with nothing recording it.
     with pytest.raises(HarnessError, match="--force refused"):
         restore(tree, force=True)
+    # Asserted as STATE, not as wording. Without the live-holder guard, --force
+    # falls through and does three things it must not: writes the source, clears
+    # the record, and deletes the live run's lock. A test that only matched the
+    # message would report a kill for the specialised phrasing while every one of
+    # those effects still happened.
+    assert DISABLED_GUARD in (tree / SOURCE_NAME).read_text(encoding="utf-8")
+    assert verify(tree) != []
+    assert lock.is_dir(), "--force must not evict a live run's lock"
 
     # Once the holder is provably gone, --force is the documented escape.
     (lock / "pid").write_text("2147483646\n", encoding="utf-8")
     assert restore(tree, force=True).startswith("restored")
     assert (tree / SOURCE_NAME).read_bytes() == original
+
+
+def _stranded_record(tree: Path, *, snapshot: bool = False) -> Path:
+    """A record whose snapshot is gone -- the `git clean -fdX` case.
+
+    `restore` cannot help here by design: there are no original bytes to write.
+    That is the state finding #4 named, where every safe path refused and none
+    of them left the operator anywhere to go.
+    """
+
+    original = _source(GUARD)
+    mutated = _source(DISABLED_GUARD)
+    state = tree / ".mutation-harness"
+    (state / "snapshots").mkdir(parents=True)
+    if snapshot:
+        (state / "snapshots" / "M1-x.snapshot").write_bytes(original.encode())
+    (state / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "applied": {
+                    "mutation_id": "M1",
+                    "file": SOURCE_NAME,
+                    "snapshot": "M1-x.snapshot",
+                    "original_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                    "mutated_sha256": hashlib.sha256(mutated.encode()).hexdigest(),
+                    "find": GUARD,
+                    "replace": DISABLED_GUARD,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tree / SOURCE_NAME).write_text(mutated, encoding="utf-8")
+    return state
+
+
+def _digest_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_a_by_hand_repair_can_be_accepted_and_clears_the_record(tree: Path) -> None:
+    """The exit from a terminal-but-safe refusal.
+
+    The operator has undone the mutation themselves and kept an unrelated local
+    edit, so the file matches NEITHER recorded digest and `restore` refuses --
+    correctly, because writing the snapshot would destroy that edit. Before this,
+    the record could then only be cleared by a successful restore that can never
+    happen: the gate stayed red with nothing left to do, and the only way out was
+    deleting the record blind. A safe path that dead-ends teaches people to take
+    the unsafe one.
+    """
+
+    _stranded_record(tree, snapshot=True)
+    repaired = _source(GUARD).replace("doThing()", "doThing() // unrelated local work")
+    (tree / SOURCE_NAME).write_text(repaired, encoding="utf-8")
+
+    # Every existing path is a dead end, and says so with the way out.
+    with pytest.raises(HarnessError, match="does not hold the mutation") as refusal:
+        restore(tree)
+    assert "accept --digest" in str(refusal.value)
+    assert verify(tree) != []
+
+    message = accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    assert "accepted a by-hand repair" in message
+    # The record is gone, the gate is green, and the operator's edit survived:
+    # acceptance clears a record, it never writes source.
+    assert verify(tree) == []
+    assert (tree / SOURCE_NAME).read_text(encoding="utf-8") == repaired
+
+
+def test_accept_refuses_while_the_mutation_is_still_on_disk(tree: Path) -> None:
+    """The leak itself is not a repair to acknowledge."""
+
+    _stranded_record(tree)
+    with pytest.raises(HarnessError, match="still holds the recorded mutation"):
+        accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    assert verify(tree) != []
+
+
+def test_accept_refuses_when_the_replacement_text_is_still_present(tree: Path) -> None:
+    """The check that stops this becoming a blanket override.
+
+    A digest-only acceptance would clear this record: the file no longer matches
+    the recorded mutated digest. Checking the mutation's own text is what tells
+    the two apart, and it is why the record carries `find` and `replace`.
+
+    The tree is deliberately built so that NO OTHER check can catch it. The
+    anchor is back at one site, so the "did the original text return" test is
+    satisfied; a second site is still mutated. Only looking for the replacement
+    text finds it -- which is what makes disabling that check a change in what
+    the tool DOES (it clears the record over a mutated file) rather than a change
+    in which sentence it prints.
+    """
+
+    _stranded_record(tree)
+    half_repaired = (
+        _source(GUARD)
+        + f"\nfunc Other() {{\n\t{DISABLED_GUARD}\n\t\tdoThing()\n\t}}\n}}\n"
+    )
+    (tree / SOURCE_NAME).write_text(half_repaired, encoding="utf-8")
+    assert GUARD in half_repaired, "the anchor check must be satisfied"
+    assert (
+        _digest_of(tree / SOURCE_NAME)
+        != hashlib.sha256(_source(DISABLED_GUARD).encode()).hexdigest()
+    ), "the mutated-digest check must be satisfied"
+
+    with pytest.raises(HarnessError, match="replacement text is still in the file"):
+        accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    # The state that matters: a file still holding the mutation kept its record.
+    assert verify(tree) != []
+    assert DISABLED_GUARD in (tree / SOURCE_NAME).read_text(encoding="utf-8")
+
+
+def test_accept_refuses_when_the_anchor_never_came_back(tree: Path) -> None:
+    """Absence of the mutation is not presence of the original.
+
+    The file was replaced with something else entirely. It holds neither text, so
+    nothing here can show the mutation was undone -- and an acceptance the tool
+    cannot justify is worth nothing.
+    """
+
+    _stranded_record(tree)
+    (tree / SOURCE_NAME).write_text("package widget\n", encoding="utf-8")
+    with pytest.raises(HarnessError, match="back at 0 site"):
+        accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    assert verify(tree) != []
+
+
+def test_accept_refuses_a_partial_repair_of_a_multi_site_mutation(tree: Path) -> None:
+    """The anchor is COUNTED, and here counting is the only thing that can work.
+
+    This is the shape the replacement check cannot see: a DELETED clause, where
+    `replace` is a substring of `find`, so the replacement is present whether or
+    not the mutation was undone and that check is correctly skipped. It is also
+    the commonest shape in the scheduled-reports plan. `str.replace` rewrote both
+    sites; the operator restored one. A presence test for the anchor passes --
+    the text is genuinely back, at one of two sites -- and the record would be
+    cleared over a file that is still mutated.
+    """
+
+    # `checkB()` is a substring of `checkA();checkB()`, so the replacement check
+    # cannot discriminate and is skipped by design.
+    find = "checkA();checkB()"
+    replace = "checkB()"
+    assert replace in find
+
+    original = f"package widget\nfunc One() {{ {find} }}\nfunc Two() {{ {find} }}\n"
+    mutated = original.replace(find, replace)
+    partial = mutated.replace(replace, find, 1)
+
+    state = tree / ".mutation-harness"
+    (state / "snapshots").mkdir(parents=True)
+    (state / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "applied": {
+                    "mutation_id": "M1",
+                    "file": SOURCE_NAME,
+                    "snapshot": "M1-x.snapshot",
+                    "original_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                    "mutated_sha256": hashlib.sha256(mutated.encode()).hexdigest(),
+                    "find": find,
+                    "replace": replace,
+                    "expect_occurrences": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    (tree / SOURCE_NAME).write_text(partial, encoding="utf-8")
+    assert find in partial, "a presence test for the anchor would pass here"
+    with pytest.raises(HarnessError, match="back at 1 site"):
+        accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    assert verify(tree) != []
+
+    # And the count is a discriminator, not a blanket refusal: repair the second
+    # site and the same command accepts.
+    (tree / SOURCE_NAME).write_text(original, encoding="utf-8")
+    assert "accepted a by-hand repair" in accept_manual_repair(
+        tree, _digest_of(tree / SOURCE_NAME)
+    )
+    assert verify(tree) == []
+
+
+def test_accept_refuses_a_digest_that_does_not_name_the_current_content(
+    tree: Path,
+) -> None:
+    """The digest pins the decision to content, not to a moment.
+
+    Without it, a file written between the operator looking and the record being
+    cleared would be accepted on the strength of an inspection of different bytes.
+    """
+
+    _stranded_record(tree)
+    repaired = _source(GUARD)
+    (tree / SOURCE_NAME).write_text(repaired, encoding="utf-8")
+    inspected = _digest_of(tree / SOURCE_NAME)
+    # Something writes the file after the operator looked at it.
+    (tree / SOURCE_NAME).write_text(repaired + "// written since\n", encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="but the file hashes to"):
+        accept_manual_repair(tree, inspected)
+    assert verify(tree) != []
+
+
+def test_accept_refuses_a_record_that_carries_no_mutation_text(tree: Path) -> None:
+    """No text to check means no evidence, and no evidence means no acceptance."""
+
+    original = (tree / SOURCE_NAME).read_bytes()
+    state = tree / ".mutation-harness"
+    state.mkdir()
+    (state / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "applied": {
+                    "mutation_id": "M1",
+                    "file": SOURCE_NAME,
+                    "mutated_sha256": hashlib.sha256(
+                        _source(DISABLED_GUARD).encode()
+                    ).hexdigest(),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(HarnessError, match="does not carry the mutation's text"):
+        accept_manual_repair(tree, hashlib.sha256(original).hexdigest())
+    assert verify(tree) != []
+
+
+def test_accept_refuses_while_a_live_run_holds_the_lock(tree: Path) -> None:
+    """Acceptance is a record write, so it serialises like every other one."""
+
+    state = _stranded_record(tree)
+    (tree / SOURCE_NAME).write_text(_source(GUARD), encoding="utf-8")
+    lock = state / "lock"
+    lock.mkdir()
+    (lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="holds"):
+        accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    assert verify(tree) != []
+    assert lock.is_dir()
+
+
+def test_a_hand_undone_mutation_clears_even_with_the_snapshot_deleted(
+    tree: Path,
+) -> None:
+    """Content is examined before the snapshot is required.
+
+    A proof command running `git clean -fdX` deletes the snapshots, because
+    `.mutation-harness/` is gitignored. `restore` used to reject the missing
+    snapshot BEFORE looking at the file, so an operator who had already undone
+    the mutation could not clear the record at all -- a refusal to write bytes
+    that are no longer needed.
+    """
+
+    _stranded_record(tree)
+    (tree / SOURCE_NAME).write_text(_source(GUARD), encoding="utf-8")
+    assert "already matches" in restore(tree)
+    assert verify(tree) == []
+
+
+def test_restore_names_the_acceptance_path_when_the_snapshot_is_gone(
+    tree: Path,
+) -> None:
+    """A refusal without an exit is what sends people to `rm` the record."""
+
+    _stranded_record(tree)
+    (tree / SOURCE_NAME).write_text(
+        _source(GUARD).replace("doThing()", "doThing() // local"), encoding="utf-8"
+    )
+    with pytest.raises(HarnessError, match="is missing") as refusal:
+        restore(tree)
+    assert "accept --digest" in str(refusal.value)
+
+
+def test_the_cli_accepts_a_by_hand_repair(tree: Path) -> None:
+    _stranded_record(tree)
+    repaired = _source(GUARD).replace("doThing()", "doThing() // local")
+    (tree / SOURCE_NAME).write_text(repaired, encoding="utf-8")
+
+    assert main(["--root", str(tree), "verify"]) == 1
+    assert main(["--root", str(tree), "restore"]) == 2
+    assert (
+        main(
+            [
+                "--root",
+                str(tree),
+                "accept",
+                "--digest",
+                _digest_of(tree / SOURCE_NAME),
+            ]
+        )
+        == 0
+    )
+    assert main(["--root", str(tree), "verify"]) == 0
+
+
+def test_a_run_records_the_mutation_text_for_the_acceptance_path(
+    tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The acceptance checks are only as real as the record behind them.
+
+    Crash mid-apply so a record survives, then read it: without `find` and
+    `replace` on it, `accept` has nothing to check and degrades to the blanket
+    override it must never be.
+    """
+
+    import scripts.mutation_harness as harness
+
+    def _explode(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt("simulated kill mid-apply")
+
+    monkeypatch.setattr(harness, "_apply", _explode)
+    plan = _plan(tree, [_mutation()])
+    with pytest.raises(KeyboardInterrupt):
+        run_plan(tree, plan, None, assert_all_killed=False)
+
+    record = json.loads(
+        (tree / ".mutation-harness" / "state.json").read_text(encoding="utf-8")
+    )["applied"]
+    assert record["find"] == GUARD
+    assert record["replace"] == DISABLED_GUARD
 
 
 def test_restore_refuses_a_recorded_path_outside_the_repository(tree: Path) -> None:
@@ -749,17 +1087,41 @@ def test_restore_refuses_a_recorded_path_outside_the_repository(tree: Path) -> N
         restore(tree)
 
 
-def test_unreadable_state_is_not_treated_as_absent(tree: Path) -> None:
-    """`is_file()` answers False for "cannot stat" as well as "absent".
-
-    A recorded mutation behind a directory that lost search permission would
-    otherwise read as no mutation, and the gate would report clean.
-    """
+def test_unparseable_state_is_not_treated_as_absent(tree: Path) -> None:
+    """A state file that exists but is corrupt may still record a mutation."""
 
     state = tree / ".mutation-harness"
     state.mkdir()
     (state / "state.json").write_text("{ not json", encoding="utf-8")
     with pytest.raises(HarnessError, match="could not be parsed"):
+        verify(tree)
+
+
+def test_state_that_raises_a_real_oserror_is_not_treated_as_absent(
+    tree: Path,
+) -> None:
+    """`is_file()` answers False for "cannot stat" as well as "absent".
+
+    A recorded mutation behind an I/O error would otherwise read as no mutation
+    and the gate would report clean. Malformed JSON does NOT exercise this: that
+    path raises after a successful read. This makes `read_bytes()` itself fail
+    with a non-ENOENT OSError -- a directory where the file should be, which
+    raises IsADirectoryError (EISDIR) on macOS and Linux alike, with none of the
+    root-or-not variability a permission arrangement would carry.
+    """
+
+    state = tree / ".mutation-harness"
+    state.mkdir()
+    (state / "state.json").mkdir()
+
+    # The mechanism itself, asserted rather than assumed: if a future Python
+    # made this ENOENT or succeeded, the test below would pass while proving
+    # nothing about the OSError branch.
+    with pytest.raises(OSError) as raised:
+        (state / "state.json").read_bytes()
+    assert not isinstance(raised.value, FileNotFoundError)
+
+    with pytest.raises(HarnessError, match="could not be read"):
         verify(tree)
 
 
@@ -836,13 +1198,36 @@ def test_a_lock_without_a_pid_file_is_treated_as_held(tree: Path) -> None:
     Treating "no pid file" as "no live run" lets the gate report clean while a run
     is starting. Unknown is reported as held: a false wait costs patience, a false
     clean costs a trusted-but-void test result.
+
+    The assertions are on the ACTIONABLE part, not on the diagnosis. An earlier
+    version asserted only that the message said "pid unknown", which it did --
+    while the surrounding sentence interpolated the sentinel and told the reader
+    to "wait for pid -1". Since `verify` is the first stage of
+    ci/local_validate.sh, that left the gate red forever behind advice nobody
+    could act on: a message with no action in it is a failure of this check, so
+    the test has to be able to see one.
     """
 
     state = tree / ".mutation-harness"
-    (state / "lock").mkdir(parents=True)
+    lock = state / "lock"
+    lock.mkdir(parents=True)
+
     blockers = verify(tree)
     assert len(blockers) == 1
-    assert "pid unknown" in blockers[0]
+    assert f"pid {_LOCK_HELD_BY_UNKNOWN}" not in blockers[0], "the sentinel leaked"
+    assert "Wait for" not in blockers[0]
+    assert f"rm -rf {lock}" in blockers[0]
+    assert "STALE" in blockers[0]
+
+    # The same lock with a mutation recorded is a DIFFERENT instruction: break
+    # the lock, then repair the file. Falling into the pid-shaped branch here
+    # would name a pid that does not exist for a tree that needs repairing.
+    _write_applied_record(tree)
+    with_mutation = verify(tree)
+    assert len(with_mutation) == 1
+    assert f"pid {_LOCK_HELD_BY_UNKNOWN}" not in with_mutation[0], "the sentinel leaked"
+    assert f"rm -rf {lock}" in with_mutation[0]
+    assert "mutation_harness.py restore" in with_mutation[0]
 
 
 def test_atomic_write_preserves_mode_and_leaves_no_temporary(tree: Path) -> None:
@@ -945,6 +1330,31 @@ def test_a_mutation_that_does_not_build_is_invalid_not_killed(tree: Path) -> Non
     assert exit_code == 1
     # And the source must be back, because the early return still restores.
     assert (tree / SOURCE_NAME).read_text(encoding="utf-8") == _source(GUARD)
+    assert verify(tree) == []
+
+
+def test_a_build_that_fails_on_the_clean_tree_is_a_baseline_failure(
+    tree: Path,
+) -> None:
+    """A wrong build command must not read as a plan full of bad mutations.
+
+    Without this the build runs only after mutating, so a build command that
+    cannot pass on the unmutated tree reports every mutation INVALID -- "the
+    mutated source does not build" -- blaming the mutations for a defect in the
+    plan's own build command. Measured while authoring this repository's
+    self-check plan: the first build command failed on the clean file.
+    """
+
+    before = (tree / SOURCE_NAME).read_bytes()
+    always_fails = [sys.executable, "-c", "raise SystemExit(3)"]
+    plan = _plan(tree, [_mutation(build=always_fails)])
+    results, exit_code = run_plan(tree, plan, None, assert_all_killed=False)
+
+    assert results[0].verdict == VERDICT_BASELINE_FAILED
+    assert "fails on the CLEAN tree" in results[0].detail
+    assert exit_code == 1
+    # Nothing was mutated, and no record was left behind.
+    assert (tree / SOURCE_NAME).read_bytes() == before
     assert verify(tree) == []
 
 

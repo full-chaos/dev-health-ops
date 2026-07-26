@@ -211,6 +211,13 @@ gate_lint_check()  { "${RUFF}" check .; }
 gate_typecheck()   { "${MYPY}" --install-types --non-interactive .; }
 gate_go_fast()     { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
+# SCOPE (CHAOS-3165): the requirement to author a mutation plan for new work is
+# scoped to the Go port (CHAOS-3033) and is removed when the port finalises —
+# CHAOS-3165 tracks that removal and is blocked by CHAOS-3033. THIS STAGE is not
+# what goes away: `verify` costs milliseconds and answers "did an interrupted run
+# leave a mutation on disk", which stays worth asking for as long as the tool
+# exists. The requirement is load-bearing until the port closes.
+#
 # Runs FIRST, and deliberately so: a mutation left applied by an interrupted
 # mutation-testing run makes every result below it meaningless, and it is
 # invisible to the tools that would otherwise be trusted to notice. `go build`

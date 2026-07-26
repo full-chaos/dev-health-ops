@@ -30,7 +30,11 @@ func (s Severity) String() string {
 // Finding is one row of the comparison between the derived query surface and
 // the two hand-maintained artefacts.
 type Finding struct {
-	Severity  Severity
+	Severity Severity
+	// Role is which pool/database role this finding is about. Empty for the
+	// single-role Compare path; always set by CompareRoles, because "which role"
+	// is the whole point once there is more than one.
+	Role      PoolRole
 	Table     string
 	Privilege Privilege
 	Summary   string

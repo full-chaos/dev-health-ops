@@ -45,6 +45,69 @@ var grantStatementTableRE = regexp.MustCompile(
 // B role split it genuinely IS data — the readiness query binds it through
 // unnest rather than embedding VALUES rows, so there is no SQL text left to
 // parse there.
+// LoadGroundTruthForRole reads one role's declared posture, and -- for the
+// domain role only -- also the independent GRANT statement list, so the two can
+// be cross-checked against each other.
+//
+// The asymmetry is real and load-bearing, not an omission. The DOMAIN role has
+// TWO hand-maintained artefacts (runtimeGrantStatements in migrate.go and
+// DomainPosture in domain_authorization.go), which is precisely why they
+// repeatedly drifted from the code while agreeing with each other. The
+// COORDINATOR role has ONE: migrate.go's coordinatorGrantStatements is
+// parameterized on options.CoordinatorGrants, and the only production caller
+// (cmd/dev-health-worker-migrate's coordinatorGrants(), main.go:198) builds that
+// by mechanically projecting CoordinatorPosture() field-for-field. So there is
+// no second coordinator list to disagree with, and a list-vs-list finding is
+// structurally impossible for it. Grants is left nil for such a role rather than
+// synthesized, so CompareRoles skips a comparison it cannot meaningfully make
+// instead of comparing the posture against a restatement of itself and reporting
+// a vacuous agreement.
+func LoadGroundTruthForRole(role PoolRole) (*GroundTruth, error) {
+	switch role {
+	case RoleDomain:
+		return LoadGroundTruth()
+	case RoleCoordinator:
+		gt := &GroundTruth{
+			RequiredTablePrivileges: map[string]PrivilegeSet{},
+			ColumnScopedTables:      map[string]bool{},
+		}
+		if err := gt.loadPosture(postgresstore.CoordinatorPosture(), "CoordinatorPosture"); err != nil {
+			return nil, err
+		}
+		return gt, nil
+	default:
+		return nil, fmt.Errorf("domaingrants: no ground truth defined for pool role %q", role)
+	}
+}
+
+// loadPosture reads a RolePosture declaration into the comparable per-table
+// privilege sets. Shared by both roles so a change to how a posture row maps to
+// privileges cannot apply to one role and be missed for the other.
+func (gt *GroundTruth) loadPosture(posture postgresstore.RolePosture, name string) error {
+	for _, table := range posture.RequiredTables {
+		var set PrivilegeSet
+		set.add(PrivSelect) // SELECT is implied by every posture row
+		if table.AllowInsert {
+			set.add(PrivInsert)
+		}
+		if table.AllowUpdate {
+			set.add(PrivUpdate)
+		}
+		if table.AllowDelete {
+			set.add(PrivDelete)
+		}
+		gt.RequiredTablePrivileges[strings.ToLower(table.TableName)] = set
+	}
+	if len(gt.RequiredTablePrivileges) == 0 {
+		return fmt.Errorf("domaingrants: %s() declared zero required tables, "+
+			"which cannot be right for a role the runtime asserts a posture for", name)
+	}
+	for _, column := range posture.ColumnScoped {
+		gt.ColumnScopedTables[strings.ToLower(column.TableName)] = true
+	}
+	return nil
+}
+
 func LoadGroundTruth() (*GroundTruth, error) {
 	gt := &GroundTruth{
 		Grants:                  map[string]PrivilegeSet{},
@@ -76,29 +139,8 @@ func LoadGroundTruth() (*GroundTruth, error) {
 			"the extraction regex has drifted from migrate.go's actual statement shape", riverstore.GrantCheckDomainRole)
 	}
 
-	posture := postgresstore.DomainPosture()
-	for _, table := range posture.RequiredTables {
-		var set PrivilegeSet
-		set.add(PrivSelect) // SELECT is implied by every posture row
-		if table.AllowInsert {
-			set.add(PrivInsert)
-		}
-		if table.AllowUpdate {
-			set.add(PrivUpdate)
-		}
-		if table.AllowDelete {
-			set.add(PrivDelete)
-		}
-		gt.RequiredTablePrivileges[strings.ToLower(table.TableName)] = set
+	if err := gt.loadPosture(postgresstore.DomainPosture(), "DomainPosture"); err != nil {
+		return nil, err
 	}
-	if len(gt.RequiredTablePrivileges) == 0 {
-		return nil, fmt.Errorf("domaingrants: DomainPosture() declared zero required tables, " +
-			"which cannot be right for a role the runtime asserts a posture for")
-	}
-
-	for _, column := range posture.ColumnScoped {
-		gt.ColumnScopedTables[strings.ToLower(column.TableName)] = true
-	}
-
 	return gt, nil
 }

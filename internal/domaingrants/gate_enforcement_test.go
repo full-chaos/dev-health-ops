@@ -13,62 +13,87 @@ import (
 // structure, while the code that ACTS on that value was never exercised. Proving
 // a fact is available is not proving anything is done with it.
 
-// TestGateFailsOnEveryEnforcedCategory drives GateFailures directly, so deleting
-// any enforced category is caught. Previously each category was reported by its
-// own loop inside the gate test, and a unit test could only show the value
-// arrived in IncompleteRoleSurface -- deleting the loop that reported it left
-// every test green.
-func TestGateFailsOnEveryEnforcedCategory(t *testing.T) {
+// TestAdvisoryReportCoversEveryCategory is the successor to the enforcement test,
+// under the advisory posture.
+//
+// Nothing gates any more, so "deleting the enforcement is undetected" is no longer
+// the risk. The risk that remains is a whole CATEGORY of reporting silently
+// vanishing -- which, for a tool whose only output is its report, is the same
+// failure wearing different clothes: a category with nothing to say and a category
+// that is no longer printed look identical to the reader.
+//
+// Driving AdvisoryReport directly is what makes that assertable. When each
+// category was printed by its own loop in the surface test, a unit test could
+// prove the value reached the data structure while the loop that printed it was
+// deletable with everything still green.
+func TestAdvisoryReportCoversEveryCategory(t *testing.T) {
 	var selectOnly PrivilegeSet
 	selectOnly.add(PrivSelect)
 
+	criticalFinding := Finding{
+		Severity: Critical, Role: RoleCoordinator, Table: "some_table", Privilege: PrivUpdate,
+		Summary: "synthetic critical",
+	}
+	knownOpen := Finding{
+		Severity: Critical, Role: RoleCoordinator, Table: "sync_dispatch_outbox", Privilege: PrivInsert,
+		Summary: "synthetic known-open",
+	}
+	advisoryFinding := Finding{
+		Severity: Advisory, Role: RoleDomain, Table: "other_table", Privilege: PrivSelect,
+		Summary: "synthetic advisory",
+	}
+
 	report := &RoleReport{
+		Stats:       []string{"synthetic stats line"},
+		Findings:    []Finding{criticalFinding, knownOpen, advisoryFinding},
+		SharedPairs: []string{"shared_table SELECT (evidence on: coordinator+domain)"},
 		Incomplete: []IncompleteRoleSurface{{
-			Role: RoleCoordinator,
-			UndeclaredByEvidence: []PostureGapWithoutEvidence{
-				{Table: "nobody_touches_it", Privilege: PrivUpdate},
-			},
-			DynamicSQL: []DynamicSite{
-				{File: "internal/brand/new.go", Line: 3, Reason: "not a constant"},
-			},
-			UnparsedLocks: []UnparsedLockSite{
-				{File: "internal/x/y.go", Line: 9, Statement: "LOCK a, b"},
-			},
-			FuncValueConflicts: []FuncValueConflictSite{
-				{File: "cmd/x/deps.go", Line: 7, Field: "sources.newThing", Reason: "two implementations"},
-			},
+			Role:                 RoleCoordinator,
+			UndeclaredByEvidence: []PostureGapWithoutEvidence{{Table: "nobody_touches_it", Privilege: PrivUpdate}},
+			DynamicSQL:           []DynamicSite{{File: "internal/brand/new.go", Line: 3, Reason: "not a constant"}},
+			UnparsedLocks:        []UnparsedLockSite{{File: "internal/x/y.go", Line: 9, Statement: "LOCK \"a.b\""}},
+			FuncValueConflicts:   []FuncValueConflictSite{{File: "cmd/x/deps.go", Line: 7, Field: "sources.newThing", Reason: "two implementations"}},
+			WiringHops:           []UnresolvedCallSite{{File: "internal/x/y.go", Line: 11, Callee: "", Reason: "function value"}},
+			NameSeedOverrides:    []NameSeedOverride{{File: "cmd/x/deps.go", Line: 5, Name: "domainPool", Function: "build", ObservedRoles: []string{"coordinator"}}},
 		}},
 	}
 
-	failures := strings.Join(GateFailures(report), "\n")
-	for _, want := range []string{
-		"UNACKNOWLEDGED BLIND SPOT",
-		"UNACKNOWLEDGED DYNAMIC SQL",
-		"UNPARSED LOCK",
-		"UNRESOLVED FUNCTION-VALUE CALL",
-	} {
-		if !strings.Contains(failures, want) {
-			t.Errorf("GateFailures did not report %s -- that category is collected but no longer "+
-				"enforced, which is the exact state where the gate looks green over unanalyzed "+
-				"surface:\n%s", want, failures)
+	seen := map[AdvisoryCategory]int{}
+	for _, line := range AdvisoryReport(report) {
+		seen[line.Category]++
+	}
+	for _, category := range AllAdvisoryCategories {
+		if seen[category] == 0 {
+			t.Errorf("AdvisoryReport emitted nothing for category %s, but the input contains one. "+
+				"A category that stops being reported is indistinguishable from a category with "+
+				"nothing to say, and this report is the tool's ONLY output", category)
 		}
 	}
 
-	// And a clean report must produce NO failures, or the gate is unconditional and
-	// its green means nothing either. The acknowledgement lists are emptied for
-	// this half: with the REAL lists, an empty report correctly reports every
-	// acknowledgement as stale, which is the self-cleaning property working rather
-	// than a failure.
-	realBlind := acknowledgedBlindSpots
-	realDynamic := acknowledgedDynamicSQL
-	t.Cleanup(func() {
-		acknowledgedBlindSpots = realBlind
-		acknowledgedDynamicSQL = realDynamic
-	})
-	acknowledgedBlindSpots = nil
-	acknowledgedDynamicSQL = nil
-	if extra := GateFailures(&RoleReport{}); len(extra) != 0 {
-		t.Errorf("an empty report with no acknowledgements must produce no gate failures, got %v", extra)
+	// WIRING-HOP specifically: it was collected and never reported for three
+	// review rounds. Its line must name the count, because "taint stopped in N
+	// places" is the number that tells a reader how much of the surface is unseen.
+	var wiringLine string
+	for _, line := range AdvisoryReport(report) {
+		if line.Category == CategoryWiringHop {
+			wiringLine = line.Text
+		}
+	}
+	if !strings.Contains(wiringLine, "taint STOPPED") {
+		t.Errorf("the wiring-hop line must say what a hop MEANS -- that SQL beyond it is invisible: %q",
+			wiringLine)
+	}
+
+	// A ticketed known-open critical must be distinguishable from an untriaged
+	// one, or the report flattens "someone is fixing this" into "unreviewed".
+	var sawKnownOpen bool
+	for _, line := range AdvisoryReport(report) {
+		if line.Category == CategoryKnownOpen {
+			sawKnownOpen = true
+		}
+	}
+	if !sawKnownOpen {
+		t.Error("a ticketed known-open critical must be reported under its own category")
 	}
 }
 
@@ -104,11 +129,19 @@ func TestAcknowledgementsRequireAReason(t *testing.T) {
 			len(unreasoned))
 	}
 
-	// And it must reach the gate, not just the partition function.
-	failures := strings.Join(GateFailures(&RoleReport{Incomplete: []IncompleteRoleSurface{surface}}), "\n")
-	if !strings.Contains(failures, "has no reason recorded") ||
-		!strings.Contains(failures, "has no reasoning recorded") {
-		t.Errorf("reasonless acknowledgements must fail the gate:\n%s", failures)
+	// And it must reach the REPORT, not just the partition function. Under the
+	// advisory posture this no longer fails anything, but a reasonless
+	// acknowledgement that is never printed is an unexplained suppression nobody
+	// can review.
+	var reported string
+	for _, line := range AdvisoryReport(&RoleReport{Incomplete: []IncompleteRoleSurface{surface}}) {
+		if line.Category == CategoryAcknowledgement {
+			reported += line.Text + "\n"
+		}
+	}
+	if !strings.Contains(reported, "has no reason recorded") ||
+		!strings.Contains(reported, "has no reasoning recorded") {
+		t.Errorf("reasonless acknowledgements must appear in the advisory report:\n%s", reported)
 	}
 }
 
@@ -123,24 +156,7 @@ func TestAcknowledgementsRequireAReason(t *testing.T) {
 // produced. The fixture below is a self-contained module (its own local package
 // named pgxpool, so isPgxPoolPtr matches) and needs no network.
 func TestBuildPoolParamRolesMarksPartialEvidenceIncomplete(t *testing.T) {
-	dir := t.TempDir()
-	write := func(rel, content string) {
-		full := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	write("go.mod", "module fixture\n\ngo 1.25\n")
-	write("pgxpool/pgxpool.go", "package pgxpool\n\ntype Pool struct{}\n")
-	// `build` is spelled for the DOMAIN role. One call site passes a recognised
-	// coordinator root; the other passes an expression this pass cannot classify
-	// (a struct field with a non-seed name). The observed set is therefore a LOWER
-	// BOUND -- and must not suppress the domain seed.
-	write("main.go", `package main
+	dir := writeFixtureModule(t, `package main
 
 import "fixture/pgxpool"
 
@@ -149,10 +165,16 @@ type pools struct {
 	Other       *pgxpool.Pool
 }
 
-func build(domainPool *pgxpool.Pool) {}
+// build executes REAL SQL through its domain-spelled parameter. The table is the
+// observable consequence: an earlier version of this test had an empty body and
+// asserted only on audit metadata, so it could not tell whether the SQL survived
+// in the domain surface -- which is the entire property under test.
+func build(domainPool *pgxpool.Pool) {
+	_ = domainPool.Exec(nil, "SELECT id FROM public.fixture_partial")
+}
 
-func wireOne(p *pools)   { build(p.Coordinator) }
-func wireTwo(p *pools)   { build(p.Other) }
+func wireOne(p *pools) { build(p.Coordinator) }
+func wireTwo(p *pools) { build(p.Other) }
 
 func main() { wireOne(nil); wireTwo(nil) }
 `)
@@ -161,23 +183,77 @@ func main() { wireOne(nil); wireTwo(nil) }
 	if err != nil {
 		t.Fatalf("DeriveForRole: %v", err)
 	}
-	// The observable consequence: no override is emitted, because the evidence is
-	// incomplete. If partial evidence were allowed to outrank spelling, the domain
-	// seed would be suppressed here and any SQL beyond `build` would vanish from
-	// the domain surface -- a false ABSENCE.
+	// wireTwo passes an argument this pass cannot classify, so the observed role
+	// set is a LOWER BOUND. It must not suppress the domain seed -- if it did, the
+	// SQL would vanish from the domain surface entirely: a false ABSENCE.
+	if surface := derived.Tables["fixture_partial"]; surface == nil || !surface.Privileges.Has(PrivSelect) {
+		t.Error("the domain surface LOST fixture_partial. Partial call-site evidence suppressed the " +
+			"domain seed, so real SQL disappeared -- the false absence this mechanism exists to avoid")
+	}
 	if len(derived.NameSeedOverrides) != 0 {
-		t.Errorf("partial call-site evidence must NOT override the parameter name; got overrides %+v. "+
-			"One call site passes an unclassifiable argument, so the observed role set is a lower "+
-			"bound, and suppressing the domain seed on it makes real SQL disappear",
-			derived.NameSeedOverrides)
+		t.Errorf("partial evidence must not be reported as an override: %+v", derived.NameSeedOverrides)
 	}
 }
 
 // TestBuildPoolParamRolesOverridesOnCompleteContradictingEvidence is the control:
-// with EVERY call site classified and none of them this role, the override must
-// fire. Without this half, the test above would pass for a build that simply
-// never overrides anything.
+// with EVERY call site classified and none of them this role, the override fires
+// and the SQL leaves this role's surface. Without this half the companion test
+// passes for a build that simply never overrides anything.
+//
+// It asserts on the TABLE, not on the override record, for the same reason: a
+// regression that records an override while still treating the expression as
+// tainted would keep an audit-metadata assertion green while attributing real SQL
+// to the wrong role.
 func TestBuildPoolParamRolesOverridesOnCompleteContradictingEvidence(t *testing.T) {
+	dir := writeFixtureModule(t, `package main
+
+import "fixture/pgxpool"
+
+type pools struct {
+	Coordinator *pgxpool.Pool
+}
+
+func build(domainPool *pgxpool.Pool) {
+	_ = domainPool.Exec(nil, "SELECT id FROM public.fixture_control")
+}
+
+func wireOne(p *pools) { build(p.Coordinator) }
+func wireTwo(p *pools) { build(p.Coordinator) }
+
+func main() { wireOne(nil); wireTwo(nil) }
+`)
+
+	domain, err := DeriveForRole(dir, RoleDomain)
+	if err != nil {
+		t.Fatalf("DeriveForRole(domain): %v", err)
+	}
+	if surface := domain.Tables["fixture_control"]; surface != nil && surface.Privileges.Has(PrivSelect) {
+		t.Error("every call site passes the COORDINATOR pool, so this SQL must not appear in the " +
+			"DOMAIN surface -- the parameter's spelling is the only thing suggesting otherwise, and " +
+			"call-site evidence is supposed to outrank it")
+	}
+	if len(domain.NameSeedOverrides) == 0 {
+		t.Error("the override must be REPORTED, not silent: a naming convention lied, and a reader " +
+			"seeing a smaller surface deserves to know why")
+	}
+
+	// And it must land on the coordinator, or the override moved the SQL nowhere.
+	coordinator, err := DeriveForRole(dir, RoleCoordinator)
+	if err != nil {
+		t.Fatalf("DeriveForRole(coordinator): %v", err)
+	}
+	if surface := coordinator.Tables["fixture_control"]; surface == nil || !surface.Privileges.Has(PrivSelect) {
+		t.Error("the SQL must appear in the COORDINATOR surface: that is where the pool actually " +
+			"comes from, and an override that removes SQL from one role without adding it to the " +
+			"other has lost it")
+	}
+}
+
+// writeFixtureModule builds a self-contained module with its own local pgxpool
+// package (so isPgxPoolPtr matches) and no external dependencies, so these tests
+// exercise the real package loader without network access.
+func writeFixtureModule(t *testing.T, mainGo string) string {
+	t.Helper()
 	dir := t.TempDir()
 	write := func(rel, content string) {
 		full := filepath.Join(dir, rel)
@@ -189,61 +265,12 @@ func TestBuildPoolParamRolesOverridesOnCompleteContradictingEvidence(t *testing.
 		}
 	}
 	write("go.mod", "module fixture\n\ngo 1.25\n")
-	write("pgxpool/pgxpool.go", "package pgxpool\n\ntype Pool struct{}\n")
-	// Both call sites pass the recognised coordinator root, and `build` executes
-	// SQL through its domain-spelled parameter.
-	write("main.go", `package main
+	write("pgxpool/pgxpool.go", `package pgxpool
 
-import (
-	"context"
+type Pool struct{}
 
-	"fixture/pgxpool"
-)
-
-type pools struct {
-	Coordinator *pgxpool.Pool
-}
-
-func (p *pgxpool.Pool) placeholder() {}
-
-func build(ctx context.Context, domainPool *pgxpool.Pool) {}
-
-func wireOne(ctx context.Context, p *pools) { build(ctx, p.Coordinator) }
-func wireTwo(ctx context.Context, p *pools) { build(ctx, p.Coordinator) }
-
-func main() { wireOne(nil, nil); wireTwo(nil, nil) }
+func (p *Pool) Exec(ctx interface{}, sql string, args ...interface{}) error { return nil }
 `)
-
-	// The method-on-imported-type line above is illegal Go; drop it.
-	write("main.go", `package main
-
-import (
-	"context"
-
-	"fixture/pgxpool"
-)
-
-type pools struct {
-	Coordinator *pgxpool.Pool
-}
-
-func build(ctx context.Context, domainPool *pgxpool.Pool) {
-	_ = domainPool
-}
-
-func wireOne(ctx context.Context, p *pools) { build(ctx, p.Coordinator) }
-func wireTwo(ctx context.Context, p *pools) { build(ctx, p.Coordinator) }
-
-func main() { wireOne(nil, nil); wireTwo(nil, nil) }
-`)
-
-	derived, err := DeriveForRole(dir, RoleDomain)
-	if err != nil {
-		t.Fatalf("DeriveForRole: %v", err)
-	}
-	if len(derived.NameSeedOverrides) == 0 {
-		t.Error("with every call site classified and none of them domain, the domain-spelled parameter " +
-			"must be overridden -- otherwise the collector never overrides anything and the companion " +
-			"test proves nothing")
-	}
+	write("main.go", mainGo)
+	return dir
 }

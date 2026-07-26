@@ -1198,7 +1198,23 @@ func isPgxPoolPtr(t types.Type) bool {
 // barrier is what makes a per-role surface meaningful rather than a
 // union-of-all-pools surface wearing one role's name.
 func (a *analyzer) exprTainted(expr ast.Expr, info *types.Info, locals map[string]bool) bool {
-	if a.isBarrierExpr(expr, info) {
+	// The barrier applies to STRUCTURAL roots -- a selector or getter that IS the
+	// other role's pool -- and deliberately NOT to bare identifiers.
+	//
+	// A local or parameter's taint is established by real propagation (an argument
+	// at a call site, an assignment from a tainted expression), and its NAME is
+	// incidental to that. Barring it by name reproduces the very defect the
+	// call-site pass was added to fix, in mirror image: `build(domainPool *Pool)`
+	// called only with the coordinator pool is genuinely coordinator-tainted, and
+	// a name-based barrier would delete that taint and lose the SQL from BOTH
+	// surfaces -- the domain run suppresses it by call-site evidence, the
+	// coordinator run by spelling. Caught by the control half of
+	// TestBuildPoolParamRolesOverridesOnCompleteContradictingEvidence, which
+	// asserts the SQL lands on the coordinator rather than merely leaving domain.
+	//
+	// Structural roots still need the barrier: `pools.Domain` inside a method whose
+	// receiver is tainted must not read as this role's pool.
+	if _, isIdent := expr.(*ast.Ident); !isIdent && a.isBarrierExpr(expr, info) {
 		return false
 	}
 	switch e := expr.(type) {

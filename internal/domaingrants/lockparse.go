@@ -33,6 +33,24 @@ type lockStatement struct {
 	Mode string
 }
 
+// quotedTargetRefusal explains why a quoted lock target is refused rather than
+// resolved. It is a REFUSAL, not a skip, and that distinction is the point.
+//
+// PostgreSQL's quoting rules make a quoted identifier opaque: `"private.outbox"`
+// is ONE relation whose name contains a dot, and `"Outbox"` is a DIFFERENT
+// relation from `outbox`. Downstream, splitSchemaQualified reads embedded dots as
+// a schema separator and table keys are lowercased -- so a quoted target would be
+// re-interpreted as schema `private` (then dropped as out-of-scope, silently) or
+// folded into `outbox`. A posture covering the misidentified table then passes
+// while the real target holds no privileges.
+//
+// The mis-parse is not the defect; the SILENT SKIP is. This analyzer cannot
+// represent a quoted identifier faithfully, so it says so instead of guessing,
+// and the statement lands in UnparsedLocks where a reader can see it.
+const quotedTargetRefusal = "quoted lock target cannot be resolved faithfully " +
+	"(quoting makes dots and case significant, which this analyzer's schema-splitting " +
+	"and lower-casing would silently reinterpret)"
+
 // lockModeWords are the tokens that may appear inside a mode name. Parsing stops
 // at MODE, so this only has to bound the scan.
 var lockModeWords = map[string]bool{
@@ -137,6 +155,10 @@ func parseOneLock(after string) (lockStatement, string, bool) {
 		if !isNameToken(tok) {
 			return lockStatement{}, after, false
 		}
+		if strings.HasPrefix(tok, quotedTokenPrefix) {
+			// Refused, not skipped -- see quotedTargetRefusal.
+			return lockStatement{}, after, false
+		}
 		statement.Targets = append(statement.Targets, tok)
 
 		// Optional descendant marker, then either another target or the end of
@@ -201,6 +223,10 @@ func parseOneLock(after string) (lockStatement, string, bool) {
 // nextToken returns the next SQL token: a punctuation character, a quoted
 // identifier, or a run of identifier characters (dots included, so a qualified
 // name arrives whole).
+// quotedTokenPrefix marks a token that arrived double-quoted. A byte that cannot
+// appear in an unquoted SQL identifier, so it cannot collide with a real name.
+const quotedTokenPrefix = "\x00quoted:"
+
 func nextToken(s string) (string, string, bool) {
 	i := 0
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
@@ -217,7 +243,9 @@ func nextToken(s string) (string, string, bool) {
 		if end < 0 {
 			return "", "", false
 		}
-		return s[i+1 : i+1+end], s[i+2+end:], true
+		// The caller needs to know this was quoted; signal it with a sentinel
+		// prefix that cannot occur in an unquoted identifier.
+		return quotedTokenPrefix + s[i+1:i+1+end], s[i+2+end:], true
 	}
 	start := i
 	for i < len(s) && (isIdentChar(s[i]) || s[i] == '.') {
@@ -234,6 +262,9 @@ func isIdentChar(c byte) bool {
 }
 
 func isNameToken(tok string) bool {
+	if strings.HasPrefix(tok, quotedTokenPrefix) {
+		return len(tok) > len(quotedTokenPrefix)
+	}
 	if tok == "" {
 		return false
 	}

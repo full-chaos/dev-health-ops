@@ -3,7 +3,6 @@ package domaingrants
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -176,8 +175,17 @@ func main() { run(nil) }
 	if !surfaced {
 		t.Error("the unparsed LOCK did not reach IncompleteRoleSurface, so the gate cannot see it")
 	}
-	if failures := strings.Join(GateFailures(report), "\n"); !strings.Contains(failures, "UNPARSED LOCK") {
-		t.Errorf("an unparsed LOCK must FAIL the gate -- its target may never enter the derived "+
-			"surface at all, so an absence is not a safe default:\n%s", failures)
+	// It must reach the advisory report under its own category. The report is the
+	// tool's only output now, so a refusal that is computed and not printed is
+	// indistinguishable from a statement that parsed cleanly.
+	var reported string
+	for _, line := range AdvisoryReport(report) {
+		if line.Category == CategoryUnparsedLock {
+			reported += line.Text + "\n"
+		}
+	}
+	if reported == "" {
+		t.Error("an unparsed LOCK must be REPORTED: its target may never enter the derived surface " +
+			"at all, so an absence is not a safe default and silence here is a lie by omission")
 	}
 }

@@ -299,76 +299,196 @@ func PartitionBlindSpots(incomplete []IncompleteRoleSurface) (unacknowledged []s
 	return unacknowledged, stale, unreasoned
 }
 
-// GateFailures returns every reason this report must FAIL the gate, as ready-to-
-// print messages. Empty means the enforced properties all hold.
+// AdvisoryCategory names one kind of line the report can contain. Enumerated so a
+// test can assert the report still covers every one -- a category silently
+// dropped from the output is indistinguishable from a category with nothing to
+// say, which is the failure mode this whole checker exists to avoid.
+type AdvisoryCategory string
+
+const (
+	CategoryCritical         AdvisoryCategory = "CRITICAL"
+	CategoryKnownOpen        AdvisoryCategory = "KNOWN-OPEN"
+	CategoryAdvisory         AdvisoryCategory = "ADVISORY"
+	CategorySharedPair       AdvisoryCategory = "SHARED-PAIR"
+	CategoryNoEvidence       AdvisoryCategory = "POSTURE-ROW-WITHOUT-EVIDENCE"
+	CategoryDynamicSQL       AdvisoryCategory = "DYNAMIC-SQL"
+	CategoryUnparsedLock     AdvisoryCategory = "UNPARSED-LOCK"
+	CategoryFuncValue        AdvisoryCategory = "UNRESOLVED-FUNCTION-VALUE"
+	CategoryWiringHop        AdvisoryCategory = "WIRING-HOP"
+	CategoryNameSeedOverride AdvisoryCategory = "NAME-SEED-OVERRIDE"
+	CategoryAcknowledgement  AdvisoryCategory = "ACKNOWLEDGEMENT"
+	CategoryStats            AdvisoryCategory = "STATS"
+)
+
+// AllAdvisoryCategories is every category the report must be able to emit.
+var AllAdvisoryCategories = []AdvisoryCategory{
+	CategoryStats, CategoryCritical, CategoryKnownOpen, CategoryAdvisory,
+	CategorySharedPair, CategoryNoEvidence, CategoryDynamicSQL, CategoryUnparsedLock,
+	CategoryFuncValue, CategoryWiringHop, CategoryNameSeedOverride, CategoryAcknowledgement,
+}
+
+// AdvisoryLine is one reportable statement, tagged with its category.
+type AdvisoryLine struct {
+	Category AdvisoryCategory
+	Text     string
+}
+
+// AdvisoryReport returns everything this checker has to say about a report.
 //
-// It exists as a function rather than a sequence of t.Errorf loops in the test
-// because those loops were untestable: a unit test could prove a conflict reached
-// IncompleteRoleSurface, but deleting the loop that reported it left every test
-// green. The enforcement and the thing being enforced have to be reachable from
-// one assertion, or "it is gated" is a claim about test source rather than about
-// behaviour.
-func GateFailures(report *RoleReport) []string {
-	var failures []string
+// # This is a REPORT, not a gate, and that is a deliberate decision
+//
+// The coordinator surface is advisory because the blind-spot partition does not
+// exist yet. Three review rounds each found new places where THE ANALYSIS CANNOT
+// SEE SOMETHING AND THE CHECK PASSES ANYWAY -- unresolved callees, unresolved
+// interface dispatch, function-valued fields with no single target, dynamic SQL,
+// unparsed statements, non-convergence, unrecognised lock forms, quoted
+// identifiers. Each was fixed where it was found, and reappeared somewhere else.
+// That is one defect with many addresses, and the addresses were being discovered
+// one review at a time.
+//
+// An advisory tool that is sometimes wrong is useful: it puts derived evidence in
+// front of a reviewer who can weigh it. A GATE that passes when the analysis is
+// blind is worse than no gate, because it LICENSES the hand-written rows it was
+// built to check -- which is exactly how this epic produced green tickets over
+// dormant code in the first place.
+//
+// Promoting this to a gate requires the closure argument: a partition of
+// everything the analysis can fail to see, with each cell either failing the
+// check or documented as safe to accept PER SITE. Until that exists, a passing
+// coordinator check is not evidence and must not be read as any.
+//
+// Returning tagged lines from ONE function is also what makes the reporting
+// assertable. When each category was printed by its own loop in the test, a unit
+// test could prove a value reached the data structure while the loop that
+// reported it could be deleted with everything still green.
+func AdvisoryReport(report *RoleReport) []AdvisoryLine {
+	var lines []AdvisoryLine
+	add := func(category AdvisoryCategory, text string) {
+		lines = append(lines, AdvisoryLine{Category: category, Text: text})
+	}
 
-	unacknowledged, staleAcks, unreasoned := PartitionBlindSpots(report.Incomplete)
-	for _, entry := range unacknowledged {
-		failures = append(failures, "UNACKNOWLEDGED BLIND SPOT: "+entry+
-			" -- this role's posture authorizes a privilege that NO role has a derived call site for. "+
-			"Either it is an over-declaration (remove the row) or it sits inside a blind spot (add it to "+
-			"acknowledgedBlindSpots with the reason and where the justification lives). Leaving it "+
-			"unlisted is how a wrong posture row survives review")
-	}
-	for _, entry := range staleAcks {
-		failures = append(failures, fmt.Sprintf(
-			"STALE acknowledged blind spot: %s/%s %s no longer appears as an evidence-free posture row -- "+
-				"the evidence arrived or the row was removed, so this entry now suppresses nothing. DELETE "+
-				"it, or the gate stops failing if the blind spot returns",
-			entry.Role, entry.Table, entry.Privilege))
-	}
-	for _, entry := range unreasoned {
-		failures = append(failures, fmt.Sprintf(
-			"acknowledged blind spot %s/%s %s has no reason recorded; every entry must say where the "+
-				"justification lives", entry.Role, entry.Table, entry.Privilege))
+	for _, stat := range report.Stats {
+		add(CategoryStats, stat)
 	}
 
-	unackDynamic, staleDynamic, unreasonedDynamic := PartitionDynamicSQL(report.Incomplete)
-	for _, entry := range unackDynamic {
-		failures = append(failures, "UNACKNOWLEDGED DYNAMIC SQL: "+entry+
-			" -- this statement's text is not a compile-time constant, so NO table or privilege was "+
-			"derived from it. Hand-trace which tables it can reach and add it to acknowledgedDynamicSQL "+
-			"with that reasoning, or make the SQL constant. Leaving it unlisted means a write to an "+
-			"unlisted table is invisible to every check here")
+	critical, advisory := splitBySeverity(report.Findings)
+	_, accepted, _, _ := PartitionKnownOpen(critical)
+	acceptedSet := map[string]bool{}
+	for _, f := range accepted {
+		acceptedSet[f.Summary] = true
 	}
-	for _, entry := range staleDynamic {
-		failures = append(failures, "STALE acknowledged dynamic SQL: "+entry.File+
-			" no longer has a dynamic site -- the SQL became constant or the file moved, so DELETE this "+
-			"entry rather than letting it excuse a future one")
+	for _, f := range critical {
+		if acceptedSet[f.Summary] {
+			add(CategoryKnownOpen, "[ticketed, known open] "+f.Summary)
+			continue
+		}
+		add(CategoryCritical, f.Summary)
 	}
-	for _, entry := range unreasonedDynamic {
-		failures = append(failures, "acknowledged dynamic SQL "+entry.File+" has no reasoning recorded")
+	for _, f := range advisory {
+		add(CategoryAdvisory, f.Summary)
+	}
+	for _, pair := range report.SharedPairs {
+		add(CategorySharedPair, pair)
 	}
 
 	for _, surface := range report.Incomplete {
+		for _, gap := range surface.UndeclaredByEvidence {
+			add(CategoryNoEvidence, fmt.Sprintf("role %s: %s", surface.Role, gap.String()))
+		}
+		for _, site := range surface.DynamicSQL {
+			add(CategoryDynamicSQL, fmt.Sprintf(
+				"role %s: %s:%d %s -- no table or privilege could be derived from this statement",
+				surface.Role, site.File, site.Line, site.Reason))
+		}
 		for _, lock := range surface.UnparsedLocks {
-			failures = append(failures, fmt.Sprintf(
-				"UNPARSED LOCK (role %s): %s:%d %q -- this analyzer could not fully understand a LOCK "+
-					"statement, so the privilege it demands was NOT derived and its target may not appear "+
-					"in the surface at all. PostgreSQL accepts an optional TABLE keyword, multiple "+
-					"comma-separated targets, ONLY, a trailing *, an omitted mode (defaulting to ACCESS "+
-					"EXCLUSIVE) and NOWAIT; extend parseLockStatements rather than letting it pass as an absence",
+			add(CategoryUnparsedLock, fmt.Sprintf(
+				"role %s: %s:%d %q -- the privilege this LOCK demands was NOT derived, and its target "+
+					"may not appear in the surface at all",
 				surface.Role, lock.File, lock.Line, lock.Statement))
 		}
 		for _, conflict := range surface.FuncValueConflicts {
-			failures = append(failures, fmt.Sprintf(
-				"UNRESOLVED FUNCTION-VALUE CALL (role %s): %s:%d %s -- %s. Pool-tainted arguments cross "+
-					"this call and NOTHING beyond it was analyzed. Fail-closed resolution is correct, but "+
-					"it must not be silent: give the field a single implementation, or narrow the type so "+
-					"the resolver can see it",
+			add(CategoryFuncValue, fmt.Sprintf(
+				"role %s: %s:%d %s -- %s. Pool-tainted arguments cross this call and NOTHING beyond "+
+					"it was analyzed",
 				surface.Role, conflict.File, conflict.Line, conflict.Field, conflict.Reason))
 		}
+		if len(surface.WiringHops) > 0 {
+			add(CategoryWiringHop, fmt.Sprintf(
+				"role %s: %d in-module call site(s) where pool taint STOPPED -- any SQL beyond them is "+
+					"invisible to this analysis. First: %s",
+				surface.Role, len(surface.WiringHops), describeHops(surface.WiringHops, 5)))
+		}
+		for _, override := range surface.NameSeedOverrides {
+			add(CategoryNameSeedOverride, fmt.Sprintf(
+				"role %s: %s:%d parameter %q in %s is spelled for this role but its call sites pass %v "+
+					"-- call-site evidence wins, and the parameter name is misleading",
+				surface.Role, override.File, override.Line, override.Name, override.Function,
+				override.ObservedRoles))
+		}
 	}
-	return failures
+
+	// Acknowledgement bookkeeping. Under the advisory posture these no longer
+	// fail anything, but they must still be SAID: an acknowledgement that has
+	// stopped corresponding to a real gap is suppressing nothing and should be
+	// deleted, and a gap nobody has acknowledged is one nobody has looked at.
+	unacknowledged, staleAcks, unreasoned := PartitionBlindSpots(report.Incomplete)
+	for _, entry := range unacknowledged {
+		add(CategoryAcknowledgement, "UNACKNOWLEDGED posture row without evidence: "+entry+
+			" -- either an over-declaration (remove the row) or a blind spot (add it to "+
+			"acknowledgedBlindSpots with the reason and where the justification lives)")
+	}
+	for _, entry := range staleAcks {
+		add(CategoryAcknowledgement, fmt.Sprintf(
+			"STALE acknowledged blind spot: %s/%s %s no longer appears as an evidence-free posture "+
+				"row -- delete it, or it will silently excuse a future one",
+			entry.Role, entry.Table, entry.Privilege))
+	}
+	for _, entry := range unreasoned {
+		add(CategoryAcknowledgement, fmt.Sprintf(
+			"acknowledged blind spot %s/%s %s has no reason recorded",
+			entry.Role, entry.Table, entry.Privilege))
+	}
+	unackDynamic, staleDynamic, unreasonedDynamic := PartitionDynamicSQL(report.Incomplete)
+	for _, entry := range unackDynamic {
+		add(CategoryAcknowledgement, "UNACKNOWLEDGED dynamic SQL: "+entry+
+			" -- hand-trace which tables it can reach and record that, or make the SQL constant")
+	}
+	for _, entry := range staleDynamic {
+		add(CategoryAcknowledgement, "STALE acknowledged dynamic SQL: "+entry.File+
+			" no longer has a dynamic site -- delete it")
+	}
+	for _, entry := range unreasonedDynamic {
+		add(CategoryAcknowledgement, "acknowledged dynamic SQL "+entry.File+" has no reasoning recorded")
+	}
+
+	return lines
+}
+
+func describeHops(hops []UnresolvedCallSite, n int) string {
+	var parts []string
+	for i, hop := range hops {
+		if i >= n {
+			parts = append(parts, "...")
+			break
+		}
+		callee := hop.Callee
+		if callee == "" {
+			callee = "<function value>"
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d %s", hop.File, hop.Line, callee))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func splitBySeverity(findings []Finding) (critical, advisory []Finding) {
+	for _, f := range findings {
+		if f.Severity == Critical {
+			critical = append(critical, f)
+		} else {
+			advisory = append(advisory, f)
+		}
+	}
+	return critical, advisory
 }
 
 // RoleInput is one role's derived surface paired with the posture it is
@@ -399,10 +519,14 @@ type IncompleteRoleSurface struct {
 	// value). These FAIL the gate: pool-tainted arguments cross them and nothing
 	// beyond was analyzed, so they are unanalyzed surface, not a known limit.
 	FuncValueConflicts []FuncValueConflictSite
-	// UnparsedLocks are LOCK statements the parser could not understand. These
-	// FAIL the gate for the same reason: the demand is real and its target may not
-	// even appear in the derived surface.
+	// UnparsedLocks are LOCK statements the parser could not understand or could
+	// not represent faithfully (including quoted targets). The demand is real and
+	// its target may not even appear in the derived surface.
 	UnparsedLocks []UnparsedLockSite
+	// NameSeedOverrides are places call-site evidence overruled a parameter's
+	// spelling. Carried here so the advisory report has ONE source for everything
+	// it prints.
+	NameSeedOverrides []NameSeedOverride
 	// UndeclaredByEvidence are the (table, privilege) PAIRS this role's posture
 	// declares that this role's derivation found no call site for. Each is either
 	// a legitimate over-declaration or a path inside a blind spot -- this tool
@@ -1040,6 +1164,7 @@ func incompleteFor(in RoleInput, byRole map[PoolRole]RoleInput) IncompleteRoleSu
 		out.FuncValueConflicts = append(out.FuncValueConflicts, conflict)
 	}
 	out.UnparsedLocks = in.Derived.UnparsedLocks
+	out.NameSeedOverrides = in.Derived.NameSeedOverrides
 
 	// PAIR-granular, and computed against THIS role's own derivation. A
 	// table-level check would miss the case that matters most: SELECT still

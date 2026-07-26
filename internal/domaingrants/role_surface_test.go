@@ -1,7 +1,6 @@
 package domaingrants
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -10,36 +9,47 @@ import (
 	"testing"
 )
 
-// TestRoleGrantSurfacesMatchQuerySurfaces is the CI gate for the COORDINATOR
-// half of CHAOS-3033's grant derivation, and the role-attribution half for both
-// roles.
+// TestReportCoordinatorGrantSurface is a REPORT, not a gate, and the name says so
+// deliberately.
 //
-// It derives, separately per pool, which (table, privilege) pairs the code
-// reachable through that pool actually needs, and checks each against that
-// role's own declared posture -- DomainPosture() and CoordinatorPosture() in
-// internal/storage/postgres/domain_authorization.go.
+// # Why advisory
 //
-// Why a second gate rather than an extension of
-// TestDomainGrantSurfaceMatchesQuerySurface: that test's job is the DOMAIN
-// role's two-hand-maintained-lists problem (runtimeGrantStatements vs
-// DomainPosture, which agreed with each other and drifted from the code). The
-// coordinator has only one list, so its whole failure surface is different, and
-// the interesting new property -- attribution BETWEEN roles -- is not a property
-// of either role alone. Both gates run; neither replaces the other.
+// Three adversarial review rounds each found new places where THE ANALYSIS CANNOT
+// SEE SOMETHING AND THE CHECK PASSES ANYWAY: unresolved callees, unresolved
+// interface dispatch, function-valued fields with no single target, dynamic SQL,
+// unparsed statements, non-convergence, unrecognised lock forms, quoted
+// identifiers. Each was fixed where it was found and reappeared elsewhere -- one
+// defect with many addresses, discovered one review at a time.
 //
-// Read the CRITICAL/ADVISORY split in roles.go's header before acting on output.
-// The short version: a CRITICAL means real code on that pool executes something
-// the posture forbids. An ADVISORY means this tool cannot attribute the pair per
-// role, and a hand derivation from the construction site is more precise --
-// notably NOT a licence to widen a posture.
-func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
+// An advisory tool that is sometimes wrong is useful: it puts derived evidence in
+// front of a reviewer who can weigh it. A GATE that passes when the analysis is
+// blind is worse than no gate, because it LICENSES the hand-written rows it was
+// built to check -- which is how this epic produced green tickets over dormant
+// code in the first place.
+//
+// So: this test PRINTS everything and FAILS on nothing about the surface. A
+// passing run here is NOT evidence that the coordinator posture is correct.
+// TestDomainGrantSurfaceMatchesQuerySurface continues to gate the domain role as
+// it always has.
+//
+// Promoting this to a gate requires the blind-spot closure argument: a partition
+// of everything the analysis can fail to see, with each cell either failing the
+// check or documented as safe to accept PER SITE (not per file). That is tracked
+// separately as a design task.
+//
+// The only failures here are TOOL-BROKEN conditions -- the analysis could not run
+// at all. Those are not findings about the code under analysis, and reporting
+// nothing because the tool crashed would be the same silence this whole checker
+// exists to avoid.
+func TestReportCoordinatorGrantSurface(t *testing.T) {
 	root := findModuleRoot(t)
 
 	inputs := make([]RoleInput, 0, len(AllPoolRoles))
 	for _, role := range AllPoolRoles {
 		derived, err := DeriveForRole(root, role)
 		if err != nil {
-			t.Fatalf("DeriveForRole(%s): %v", role, err)
+			t.Fatalf("DeriveForRole(%s): %v -- the analysis could not run, so this report says "+
+				"nothing about the posture either way", role, err)
 		}
 		truth, err := LoadGroundTruthForRole(role)
 		if err != nil {
@@ -53,124 +63,20 @@ func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
 		t.Fatalf("CompareRoles: %v", err)
 	}
 
-	for _, line := range report.Stats {
-		t.Log(line)
+	byCategory := map[AdvisoryCategory][]string{}
+	for _, line := range AdvisoryReport(report) {
+		byCategory[line.Category] = append(byCategory[line.Category], line.Text)
 	}
-
-	// Name-seed overrides: places where call-site evidence overruled a parameter's
-	// spelling. Reported because it means a naming convention LIED, and the reader
-	// should know that rather than assume the surface shrank on its own. This was
-	// collected but never printed or gated, so the "the override is reported"
-	// property did not actually exist.
-	for _, in := range inputs {
-		for _, override := range in.Derived.NameSeedOverrides {
-			t.Logf("NAME-SEED OVERRIDE (role %s): %s:%d parameter %q in %s is spelled for this role but "+
-				"its call sites pass %v -- call-site evidence wins, and the parameter name is misleading",
-				in.Role, override.File, override.Line, override.Name, override.Function, override.ObservedRoles)
+	for _, category := range AllAdvisoryCategories {
+		entries := byCategory[category]
+		t.Logf("=== %s (%d) ===", category, len(entries))
+		for _, entry := range entries {
+			t.Logf("    %s", entry)
 		}
 	}
-
-	// The derived shared set, printed so it is reviewable. It makes the dual-grant
-	// question checkable rather than purely asserted, but it is NOT authoritative
-	// on its own and does not replace the role-partition manifest's whitelist --
-	// see RoleReport.SharedPairs for the three reasons (pair-level vs table-level,
-	// dual-constructed-type artifacts, and inherited blind spots).
-	t.Logf("derived shared pairs -- proven call sites on more than one pool (%d). Reviewable signal, not authoritative; see RoleReport.SharedPairs:", len(report.SharedPairs))
-	for _, pair := range report.SharedPairs {
-		t.Logf("    %s", pair)
-	}
-
-	// Enumerated incompleteness. This block is the reason the gate can be
-	// trusted: it states what was NOT verified, so a table this tool cannot see
-	// never looks the same as a table it checked and approved.
-	for _, gap := range report.Incomplete {
-		t.Logf("INCOMPLETENESS for role %s -- the gate proves NOTHING about the following, and silence here is not confirmation:", gap.Role)
-		t.Logf("    posture (table, privilege) pairs with no derived call site (%d):", len(gap.UndeclaredByEvidence))
-		for _, pair := range gap.UndeclaredByEvidence {
-			t.Logf("        %s", pair.String())
-		}
-		t.Logf("    in-module wiring hops where taint stopped (%d, first 25 shown):", len(gap.WiringHops))
-		for _, hop := range firstNHops(gap.WiringHops, 25) {
-			callee := hop.Callee
-			if callee == "" {
-				callee = "<function value>"
-			}
-			t.Logf("        %s:%d callee=%s", hop.File, hop.Line, callee)
-		}
-		t.Logf("    non-constant SQL sites (%d):", len(gap.DynamicSQL))
-		for _, site := range gap.DynamicSQL {
-			t.Logf("        %s:%d %s", site.File, site.Line, site.Reason)
-		}
-	}
-
-	// Incompleteness must GATE, not merely print. A printout nobody is required to
-	// act on is indistinguishable from having checked.
-	//
-	// The enforcement lives in GateFailures rather than in loops here, because
-	// loops here were untestable: a unit test could prove a conflict reached
-	// IncompleteRoleSurface while deleting the loop that reported it left every
-	// test green.
-	//
-	// Deliberately NOT gated on the raw wiring-hop count: most hops are ordinary
-	// interface dispatch that reaches no SQL, so a count threshold would be noise
-	// that gets raised rather than investigated. What IS gated is the set with a
-	// real consequence -- a posture privilege nothing justifies, a tainted call
-	// through a field the resolver refused, a LOCK the parser could not read, and
-	// a non-constant SQL site nobody has traced.
-	for _, failure := range GateFailures(report) {
-		t.Error(failure)
-	}
-
-	var critical, advisory []Finding
-	for _, f := range report.Findings {
-		if f.Severity == Critical {
-			critical = append(critical, f)
-		} else {
-			advisory = append(advisory, f)
-		}
-	}
-	for _, f := range advisory {
-		t.Logf("[ADVISORY] %s", f.Summary)
-	}
-
-	blocking, accepted, stale, unticketed := PartitionKnownOpen(critical)
-	for _, f := range accepted {
-		t.Logf("[KNOWN-OPEN CRITICAL, ticketed] %s", f.Summary)
-	}
-	// A stale entry means the defect was fixed and the allowlist is now carrying
-	// a blind spot for nothing. Failing here is what stops this list from
-	// becoming permanent suppression.
-	for _, entry := range stale {
-		t.Errorf("STALE known-open entry: %s/%s %s (%s) no longer reproduces. "+
-			"The fix has landed -- DELETE this entry from knownOpenCriticals. "+
-			"Leaving it there means the gate would not fail if the defect came back",
-			entry.Role, entry.Table, entry.Privilege, entry.Ticket)
-	}
-	for _, entry := range unticketed {
-		t.Errorf("known-open entry %s/%s %s has no ticket; every accepted-open finding must name one",
-			entry.Role, entry.Table, entry.Privilege)
-	}
-	if len(blocking) == 0 {
-		return
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "\n%d CRITICAL role-grant disagreement(s) between a derived per-pool query surface and that role's declared posture:\n\n", len(blocking))
-	for i, f := range blocking {
-		fmt.Fprintf(&b, "%d) [%s] %s\n", i+1, f.Role, f.Summary)
-		for _, e := range f.Evidence {
-			fmt.Fprintf(&b, "     evidence: %s:%d  %s\n", e.File, e.Line, e.Statement)
-		}
-	}
-	fmt.Fprintf(&b, "\nFix: add the row to the OWNING role's posture in "+
-		"internal/storage/postgres/domain_authorization.go (domainPosture or coordinatorPosture). "+
-		"The coordinator's GRANT statements are projected from CoordinatorPosture() by "+
-		"cmd/dev-health-worker-migrate, so the posture is the only edit for that role; the domain role "+
-		"additionally needs the matching runtimeGrantStatements entry in internal/storage/river/migrate.go "+
-		"in the SAME commit, or CheckDomainAuthorization fails closed for every domain worker.\n\n"+
-		"Before widening anything, check whether the finding names SHARED evidence sites: those are an "+
-		"artifact of this tool's (type, field) taint granularity, not a missing grant. See roles.go's header.\n")
-	t.Fatal(b.String())
+	t.Log("ADVISORY ONLY: nothing above fails this test. A passing run is NOT evidence that the " +
+		"coordinator posture is correct -- see this test's doc comment for why, and what would be " +
+		"required to promote it to a gate.")
 }
 
 // TestPoolRoleSeedsMatchLiveWiringSites is the anti-vacuity guard for the whole

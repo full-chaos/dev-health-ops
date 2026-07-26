@@ -182,15 +182,11 @@ func Compare(derived *DerivedSurface, gt *GroundTruth) *Report {
 			// family exactly.
 			requirement := *surface.LockRequirement
 			if !lockSatisfiedBy(requirement, granted) {
-				unknown := ""
-				if requirement.Unknown {
-					unknown = " (mode UNRECOGNIZED by this analyzer, assumed strictest -- verify by hand)"
-				}
 				report.Findings = append(report.Findings, Finding{
 					Severity: Critical, Table: table,
 					Summary: fmt.Sprintf(
-						"table %q: LOCK TABLE IN %s MODE requires at least one of %s%s, but runtimeGrantStatements grants none of them",
-						table, requirement.Mode, privilegeSetNames(requirement.Satisfying), unknown,
+						"table %q: LOCK IN %s MODE requires at least ONE of %s -- a disjunction, NOT a conjunction with SELECT -- but runtimeGrantStatements grants none of them",
+						table, requirement.Mode, privilegeSetNames(requirement.Satisfying),
 					),
 					Evidence: surface.WriteLockEvidence,
 				})

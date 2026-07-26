@@ -58,7 +58,7 @@ func TestLockDowngradeRequiresBothExclusivityAndOtherRoleLocking(t *testing.T) {
 	}
 	found := false
 	for _, f := range report.Findings {
-		if f.Severity == Critical && f.Role == RoleCoordinator && strings.Contains(f.Summary, "LOCK TABLE") {
+		if f.Severity == Critical && f.Role == RoleCoordinator && strings.Contains(f.Summary, "LOCK IN") {
 			found = true
 		}
 	}
@@ -506,7 +506,7 @@ func TestLockWithNoEvidenceStaysCritical(t *testing.T) {
 	}
 	found := false
 	for _, f := range report.Findings {
-		if f.Severity == Critical && strings.Contains(f.Summary, "LOCK TABLE") {
+		if f.Severity == Critical && strings.Contains(f.Summary, "LOCK IN") {
 			found = true
 		}
 	}

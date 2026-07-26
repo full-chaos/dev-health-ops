@@ -255,6 +255,10 @@ type IncompleteRoleSurface struct {
 	// value). These FAIL the gate: pool-tainted arguments cross them and nothing
 	// beyond was analyzed, so they are unanalyzed surface, not a known limit.
 	FuncValueConflicts []FuncValueConflictSite
+	// UnparsedLocks are LOCK statements the parser could not understand. These
+	// FAIL the gate for the same reason: the demand is real and its target may not
+	// even appear in the derived surface.
+	UnparsedLocks []UnparsedLockSite
 	// UndeclaredByEvidence are the (table, privilege) PAIRS this role's posture
 	// declares that this role's derivation found no call site for. Each is either
 	// a legitimate over-declaration or a path inside a blind spot -- this tool
@@ -632,15 +636,11 @@ func compareOneRole(
 					attribution = "but every LOCK site is SHARED with another role's derivation, so the locking method is reached through a type constructed from more than one pool"
 					remedy = fmt.Sprintf("this tool's (type, field) taint granularity cannot attribute it per role -- DO NOT widen %s's posture on this finding alone", in.Role)
 				}
-				unknown := ""
-				if requirement.Unknown {
-					unknown = " (mode UNRECOGNIZED by this analyzer, so it is assumed to be the strictest tier -- verify it by hand)"
-				}
 				findings = append(findings, Finding{
 					Severity: severity, Table: table, Role: in.Role,
 					Summary: fmt.Sprintf(
-						"role %s, table %q: LOCK TABLE IN %s MODE requires at least one of %s%s, and this role's posture grants none of them; %s -- %s",
-						in.Role, table, requirement.Mode, privilegeSetNames(requirement.Satisfying), unknown, attribution, remedy),
+						"role %s, table %q: LOCK IN %s MODE requires at least ONE of %s -- a disjunction, NOT a conjunction with SELECT -- and this role's posture grants none of them; %s -- %s",
+						in.Role, table, requirement.Mode, privilegeSetNames(requirement.Satisfying), attribution, remedy),
 					Evidence: surface.WriteLockEvidence,
 				})
 			}
@@ -873,6 +873,7 @@ func incompleteFor(in RoleInput, byRole map[PoolRole]RoleInput) IncompleteRoleSu
 		}
 		out.FuncValueConflicts = append(out.FuncValueConflicts, conflict)
 	}
+	out.UnparsedLocks = in.Derived.UnparsedLocks
 
 	// PAIR-granular, and computed against THIS role's own derivation. A
 	// table-level check would miss the case that matters most: SELECT still

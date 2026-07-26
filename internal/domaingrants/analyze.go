@@ -105,6 +105,10 @@ type DerivedSurface struct {
 	// pass refused to resolve (two implementations, or an unresolvable value).
 	// Each is an unanalyzed hole reached by pool-tainted arguments.
 	FuncValueConflicts []FuncValueConflictSite
+	// UnparsedLocks are LOCK statements the parser could not fully understand.
+	// Each is a hole with a table-shaped consequence: an unparsed LOCK may demand
+	// a privilege on a table that never appears in this surface at all.
+	UnparsedLocks []UnparsedLockSite
 	// NameSeedOverrides are places a parameter named after THIS role's pool was
 	// NOT treated as a seed, because its call sites pass a different role's pool.
 	// Reported because it is a correction of a naming convention, and the reader
@@ -352,6 +356,7 @@ type analyzer struct {
 	// See buildPoolParamRoles.
 	poolParamRoles    map[*types.Func]map[int]map[PoolRole]bool
 	nameSeedOverrides []NameSeedOverride
+	unparsedLocks     []UnparsedLockSite
 
 	// txOriginParam[fn][paramIndex] holds the origin ID (a "file:line"
 	// string naming the specific `.Begin(ctx)` call site) of a pgx.Tx-typed
@@ -368,6 +373,15 @@ type analyzer struct {
 	// they commit together). Built once, independent of taint state, same
 	// fixed-point shape as buildSQLParamConstants.
 	txOriginParam map[*types.Func]map[int]string
+}
+
+// UnparsedLockSite is one LOCK statement the parser refused. Reported, never
+// swallowed: a parser that silently ignores what it cannot recognise is the
+// worst possible shape for a tool whose job is to fail closed.
+type UnparsedLockSite struct {
+	File      string
+	Line      int
+	Statement string
 }
 
 // DevirtualizedCallSite records every place the analyzer resolved an
@@ -585,6 +599,7 @@ func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
 		a.funcValueResolved = nil
 		a.funcValueConflictSites = nil
 		a.nameSeedOverrides = nil
+		a.unparsedLocks = nil
 		for fn, ctx := range a.funcDecls {
 			a.walkFunc(fn, ctx)
 		}
@@ -620,6 +635,7 @@ func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
 		FuncValueResolved:  a.funcValueResolved,
 		FuncValueConflicts: a.funcValueConflictSites,
 		NameSeedOverrides:  a.nameSeedOverrides,
+		UnparsedLocks:      a.unparsedLocks,
 		UnresolvedTx:       dedupUnresolvedTx(a.unresolvedTx),
 		rootModule:         moduleDir,
 	}, nil
@@ -1667,6 +1683,15 @@ func (a *analyzer) recordSQLText(sqlText string, pos token.Position, txGroup str
 		}
 		surface.WriteLockEvidence = append(surface.WriteLockEvidence, Evidence{
 			File: a.relFile(pos), Line: pos.Line, Statement: normalized,
+		})
+	}
+	for _, text := range stmt.UnparsedLocks {
+		// A LOCK the parser could not understand may demand a privilege on a
+		// table that never enters the derived surface at all, so this is recorded
+		// as a first-class fact and fails the gate. Swallowing it is the shape
+		// that let `LOCK a, b` derive nothing and pass CI.
+		a.unparsedLocks = append(a.unparsedLocks, UnparsedLockSite{
+			File: a.relFile(pos), Line: pos.Line, Statement: text,
 		})
 	}
 }

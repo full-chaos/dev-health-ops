@@ -116,6 +116,15 @@ func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
 			"justification lives", entry.Role, entry.Table, entry.Privilege)
 	}
 	for _, surface := range report.Incomplete {
+		for _, lock := range surface.UnparsedLocks {
+			t.Errorf("UNPARSED LOCK (role %s): %s:%d %q -- this analyzer could not fully understand a "+
+				"LOCK statement, so the privilege it demands was NOT derived and its target may not "+
+				"appear in the surface at all. PostgreSQL accepts an optional TABLE keyword, multiple "+
+				"comma-separated targets, ONLY, a trailing *, an omitted mode (defaulting to ACCESS "+
+				"EXCLUSIVE) and NOWAIT; extend parseLockStatements to cover this shape rather than "+
+				"letting it pass as an absence",
+				surface.Role, lock.File, lock.Line, lock.Statement)
+		}
 		for _, conflict := range surface.FuncValueConflicts {
 			t.Errorf("UNRESOLVED FUNCTION-VALUE CALL (role %s): %s:%d %s -- %s. Pool-tainted arguments "+
 				"cross this call and NOTHING beyond it was analyzed. Fail-closed resolution is correct, "+
@@ -511,16 +520,18 @@ func TestLockTableRequirementIsModeAware(t *testing.T) {
 	var selectDelete PrivilegeSet
 	selectDelete.add(PrivSelect)
 	selectDelete.add(PrivDelete)
+	var updateOnly PrivilegeSet
+	updateOnly.add(PrivUpdate)
 
 	lockSurface := func(role PoolRole, mode string) *DerivedSurface {
-		requirement, needsMore := lockRequirementForMode(mode)
+		requirement, recognized := lockRequirementForMode(mode)
 		s := &TableSurface{Table: "outbox"}
 		s.Privileges.add(PrivSelect)
 		s.Evidence = append(s.Evidence, Evidence{
 			File: "internal/jobroute/control.go", Line: 197, Privilege: PrivSelect,
 			Statement: "LOCK TABLE public.outbox IN " + mode + " MODE", TxGroup: "tx",
 		})
-		if needsMore {
+		if recognized {
 			held := requirement
 			s.LockRequirement = &held
 			s.WriteLockEvidence = append(s.WriteLockEvidence, Evidence{
@@ -538,8 +549,10 @@ func TestLockTableRequirementIsModeAware(t *testing.T) {
 		postureName string
 		wantFinding bool
 	}{
-		// ACCESS SHARE: SELECT is enough.
+		// ACCESS SHARE: SELECT is enough -- and so is UPDATE ALONE, because the
+		// demand is a disjunction rather than a conjunction with SELECT.
 		{"ACCESS SHARE", selectOnly, "SELECT", false},
+		{"ACCESS SHARE", updateOnly, "UPDATE only (no SELECT)", false},
 
 		// ROW SHARE and ROW EXCLUSIVE: SELECT alone is NOT enough (the docs say
 		// ROW SHARE needs only SELECT; measurement says otherwise), and INSERT IS.
@@ -561,8 +574,9 @@ func TestLockTableRequirementIsModeAware(t *testing.T) {
 		{"SHARE ROW EXCLUSIVE", selectDelete, "SELECT+DELETE", false},
 		{"ACCESS EXCLUSIVE", selectUpdate, "SELECT+UPDATE", false},
 
-		// An unrecognized mode must fail CLOSED, not open.
-		{"SOME FUTURE", selectInsert, "SELECT+INSERT", true},
+		// A lock-only path authorized by UPDATE alone needs NO SELECT. If the
+		// model required SELECT as well, this would report a finding.
+		{"SHARE ROW EXCLUSIVE", updateOnly, "UPDATE only (no SELECT)", false},
 	}
 
 	for _, tc := range cases {
@@ -579,7 +593,7 @@ func TestLockTableRequirementIsModeAware(t *testing.T) {
 		}
 		found := false
 		for _, f := range report.Findings {
-			if f.Severity == Critical && strings.Contains(f.Summary, "LOCK TABLE") {
+			if f.Severity == Critical && strings.Contains(f.Summary, "LOCK IN") {
 				found = true
 			}
 		}
@@ -628,7 +642,7 @@ func TestLockTableSharedEvidenceIsDowngraded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range report.Findings {
-		if f.Severity == Critical && strings.Contains(f.Summary, "LOCK TABLE") {
+		if f.Severity == Critical && strings.Contains(f.Summary, "LOCK IN") {
 			t.Errorf("a LOCK whose every site is shared between roles was reported CRITICAL, which "+
 				"tells maintainers to widen both postures on evidence that cannot attribute either: %s", f.Summary)
 		}

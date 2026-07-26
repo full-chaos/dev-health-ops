@@ -101,6 +101,11 @@ TWO RESIDUAL LIMITATIONS, disclosed rather than discovered later:
     does not: there would be nothing left to recover from. A proof command that
     edits or cleans the tree is a bug in the plan, and the freshness check now
     catches the editing case explicitly.
+  * A declared ``build`` command that does not match the proofs' build
+    configuration -- their tags, their constraints -- is a check that can pass
+    while the proof cannot run. Measured instance: a plain ``go build`` accepted
+    a mutation whose orphaned variable only broke the ``-tags integration``
+    configuration the proofs actually execute under.
   * A proof command that alternates pass/fail on successive invocations fakes
     the whole green -> red -> green sequence and reports KILLED for a reason
     unrelated to the mutation. Nothing here can distinguish that from a real
@@ -788,6 +793,22 @@ def restore(root: Path, force: bool = False) -> str:
             release_lock(_state_dir(root) / LOCK_DIRNAME)
 
 
+def _mutated_text(mutation: Mutation, original_text: str) -> str:
+    """The exact text the mutation produces. One derivation, used twice.
+
+    Computed before the write so the applied record can carry the digest, and
+    again during the write. Deriving it in two places would be a second source of
+    truth and would drift.
+    """
+
+    mutated = original_text.replace(mutation.find, mutation.replace)
+    if mutated == original_text:
+        raise HarnessError(
+            f"{mutation.identifier}: applying the replacement changed nothing"
+        )
+    return mutated
+
+
 def _apply(target: Path, mutation: Mutation, original_text: str) -> None:
     occurrences = original_text.count(mutation.find)
     if occurrences != mutation.expect_occurrences:
@@ -807,11 +828,7 @@ def _apply(target: Path, mutation: Mutation, original_text: str) -> None:
             "the result would be a false SURVIVED. Anchor on adjacent code, or "
             "set allow_comment_anchor if this really is the target."
         )
-    mutated = original_text.replace(mutation.find, mutation.replace)
-    if mutated == original_text:
-        raise HarnessError(
-            f"{mutation.identifier}: applying the replacement changed nothing"
-        )
+    mutated = _mutated_text(mutation, original_text)
     _atomic_write(target, mutated.encode("utf-8"))
 
 
@@ -962,6 +979,23 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
             failing_proof=failing,
         )
 
+    # Compute the digest the file WILL hold, before writing it, so the record is
+    # complete the moment the mutation can exist on disk. Filled in afterwards
+    # instead, a SIGKILL between the write and the update leaves a mutated file
+    # whose record cannot prove the content is ours -- and recovery then refuses,
+    # correctly but uselessly, for a case this tool created. SIGKILL runs no
+    # handler, so only the on-disk record can cover it, and the record has to be
+    # right before the window opens rather than after it closes.
+    expected_mutated_sha: str | None = None
+    try:
+        expected_mutated_sha = _digest(
+            _mutated_text(mutation, original_bytes.decode("utf-8")).encode("utf-8")
+        )
+    except (HarnessError, UnicodeDecodeError):
+        # The apply below will reject it with the precise reason; leave the record
+        # honest about not knowing rather than guessing.
+        expected_mutated_sha = None
+
     # FRESHNESS, immediately before writing. The baseline above may have run for
     # minutes, during which an editor, a formatter, or a proof command with a
     # side effect can have saved an unrelated change. Writing the mutation now
@@ -993,7 +1027,7 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
                 # into the data loss this tool exists to prevent. Written as None
                 # first and filled in after the apply, because between these two
                 # points the file holds the original.
-                "mutated_sha256": None,
+                "mutated_sha256": expected_mutated_sha,
                 "pid": os.getpid(),
             },
         },
@@ -1015,6 +1049,12 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
         )
 
     mutated_sha = _digest(target.read_bytes())
+    if expected_mutated_sha is not None and mutated_sha != expected_mutated_sha:
+        raise HarnessError(
+            f"{mutation.identifier}: {mutation.path} does not hold the content this "
+            "run computed before writing it. Something wrote the file in the same "
+            "instant. Stop and inspect by hand."
+        )
     _update_applied_record(root, "mutated_sha256", mutated_sha)
 
     # A mutation that does not COMPILE is not a kill. The proof command exits

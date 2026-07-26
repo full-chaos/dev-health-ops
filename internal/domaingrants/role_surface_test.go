@@ -303,29 +303,50 @@ func TestFuncValueTargetsResolveTheKnownWiringHops(t *testing.T) {
 		t.Fatalf("DeriveForRole(coordinator): %v", err)
 	}
 
-	wantFields := []string{
-		"schedulerRuntimeSources.newRepository",
-		"schedulerRuntimeSources.newOccurrences",
-		"schedulerRuntimeSources.newFixedLoop",
-		"reconcilerDependencySources.buildRelay",
-		"reconcilerDependencySources.buildSyncMutation",
+	// Assert the MECHANISM and the TARGET, not a count and not merely that some
+	// table showed up.
+	//
+	// Why that distinction is load-bearing: taint ALSO re-seeds on the naming
+	// convention (a parameter literally named `coordinatorPool` is a seed root), so
+	// a table can become visible EITHER through this hop resolution OR because
+	// someone renamed a parameter. Those are not equivalent -- the convention is a
+	// comment enforced by nothing, and these three scheduler hops are the proof:
+	// they carried the coordinator pool with their parameter named `pool` and
+	// nothing caught it. A test asserting a table's presence, or a total count of
+	// resolved hops, would keep passing after such a rename while the mechanism it
+	// exists to pin had silently stopped working.
+	wantTargets := map[string]string{
+		"schedulerRuntimeSources.newRepository":         "func literal",
+		"schedulerRuntimeSources.newOccurrences":        "func literal",
+		"schedulerRuntimeSources.newFixedLoop":          "buildFixedScheduleLoop",
+		"reconcilerDependencySources.buildRelay":        "buildReconcilerRelay",
+		"reconcilerDependencySources.buildSyncMutation": "buildSyncMutationPipeline",
 	}
 	got := map[string]string{}
 	for _, resolved := range derived.FuncValueResolved {
 		got[resolved.Field] = resolved.Target
 	}
-	for _, field := range wantFields {
+	for field, wantTarget := range wantTargets {
 		target, ok := got[field]
 		if !ok {
-			t.Errorf("function-typed field %s no longer resolves to a single implementation; "+
-				"taint stops there and everything it builds becomes invisible to this role's surface", field)
+			t.Errorf("function-typed field %s no longer resolves through func-value resolution; "+
+				"taint stops there and everything it builds becomes invisible to this role's surface. "+
+				"NOTE: the affected tables may still appear via the coordinatorPool naming convention, "+
+				"which is exactly why this test asserts the mechanism and not the tables", field)
+			continue
+		}
+		if !strings.Contains(target, wantTarget) {
+			t.Errorf("function-typed field %s resolved to %q, want something containing %q -- "+
+				"it builds something else now, so what this hop proves has changed", field, target, wantTarget)
 			continue
 		}
 		t.Logf("%s -> %s", field, target)
 	}
 
-	// And the surface those hops unlock must actually be present. These are the
-	// tables that were missing before the hop was closed.
+	// Corroboration only: the surface those hops unlock is present. Deliberately
+	// secondary to the assertions above -- after a `pool` -> `coordinatorPool`
+	// rename anywhere in the scheduler wiring this block becomes satisfiable by the
+	// naming convention alone, and stops being evidence about the hop.
 	for _, table := range []string{
 		"scheduled_jobs",
 		"scheduled_sync_occurrences",
@@ -333,8 +354,80 @@ func TestFuncValueTargetsResolveTheKnownWiringHops(t *testing.T) {
 		"sync_configurations",
 	} {
 		if surface := derived.Tables[table]; surface == nil || surface.Privileges.Empty() {
-			t.Errorf("coordinator surface lost %q: the scheduler wiring hop that reaches it "+
-				"is no longer resolved", table)
+			t.Errorf("coordinator surface lost %q entirely -- neither the wiring hop nor the "+
+				"naming convention reaches it now", table)
+		}
+	}
+}
+
+// TestLockTableRequiresAnyWritePrivilege pins the LOCK TABLE rule per role.
+//
+// This test exists because mutation testing found the rule was NOT covered:
+// deleting the whole check left the repo-wide gate green, since every table this
+// repo LOCKs already holds a write privilege for some other reason. A rule that
+// cannot fail is not a rule, and this one has already shipped a production 42501
+// (CHAOS-3113: workerctl's route rollback runs LOCK worker_job_outbox IN SHARE
+// ROW EXCLUSIVE MODE while the domain role holds only SELECT+INSERT).
+//
+// Postgres wants at least ONE of INSERT/UPDATE/DELETE for a LOCK mode stricter
+// than ROW EXCLUSIVE -- any one, not a specific one. That is a DIFFERENT shape
+// from `SELECT ... FOR UPDATE`, which requires UPDATE specifically and is
+// modelled as an ordinary UPDATE requirement. Both halves are asserted so the
+// asymmetry cannot be "simplified" into a single rule later.
+func TestLockTableRequiresAnyWritePrivilege(t *testing.T) {
+	var selectOnly PrivilegeSet
+	selectOnly.add(PrivSelect)
+	var selectInsert PrivilegeSet
+	selectInsert.add(PrivSelect)
+	selectInsert.add(PrivInsert)
+
+	lockSurface := func(role PoolRole) *DerivedSurface {
+		s := &TableSurface{Table: "outbox"}
+		s.Privileges.add(PrivSelect)
+		s.Evidence = append(s.Evidence, Evidence{
+			File: "internal/jobroute/control.go", Line: 197, Privilege: PrivSelect,
+			Statement: "LOCK TABLE public.outbox IN SHARE ROW EXCLUSIVE MODE", TxGroup: "tx",
+		})
+		s.RequiresAnyWriteLock = true
+		s.WriteLockEvidence = append(s.WriteLockEvidence, Evidence{
+			File: "internal/jobroute/control.go", Line: 197,
+			Statement: "LOCK TABLE public.outbox IN SHARE ROW EXCLUSIVE MODE",
+		})
+		return &DerivedSurface{Role: role, Tables: map[string]*TableSurface{"outbox": s}}
+	}
+
+	// SELECT-only posture: the LOCK is denied at runtime. Must be CRITICAL.
+	report, err := CompareRoles([]RoleInput{
+		{Role: RoleDomain, Derived: &DerivedSurface{Role: RoleDomain, Tables: map[string]*TableSurface{}},
+			Truth: truthWith(map[string]PrivilegeSet{"unrelated": selectOnly})},
+		{Role: RoleCoordinator, Derived: lockSurface(RoleCoordinator),
+			Truth: truthWith(map[string]PrivilegeSet{"outbox": selectOnly})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(findingSummaries(report, Critical), "\n")
+	if !strings.Contains(joined, "LOCK TABLE") {
+		t.Fatalf("a LOCK TABLE against a SELECT-only posture was not reported CRITICAL -- that is the "+
+			"CHAOS-3113 defect shape exactly, and it must fail closed:\n%s", joined)
+	}
+
+	// SELECT+INSERT posture: any ONE write privilege satisfies Postgres, so there
+	// must be no finding. This half is what stops the rule degenerating into
+	// "report every table that is ever LOCKed".
+	report, err = CompareRoles([]RoleInput{
+		{Role: RoleDomain, Derived: &DerivedSurface{Role: RoleDomain, Tables: map[string]*TableSurface{}},
+			Truth: truthWith(map[string]PrivilegeSet{"unrelated": selectOnly})},
+		{Role: RoleCoordinator, Derived: lockSurface(RoleCoordinator),
+			Truth: truthWith(map[string]PrivilegeSet{"outbox": selectInsert})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range report.Findings {
+		if f.Severity == Critical && strings.Contains(f.Summary, "LOCK TABLE") {
+			t.Errorf("INSERT alone should satisfy the LOCK requirement (Postgres accepts any one of "+
+				"INSERT/UPDATE/DELETE), but it was still reported: %s", f.Summary)
 		}
 	}
 }

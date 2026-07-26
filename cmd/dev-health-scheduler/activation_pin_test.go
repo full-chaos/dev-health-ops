@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
 	"sort"
 	"testing"
@@ -64,11 +67,19 @@ var schedulerReadinessNamesClosedWhenDormant = []string{
 // assignment, a parallel activation type, and a test-only reset of the global:
 // it goes through the production wrapper and checks the outcome. If someone
 // activates the scheduler by any route, this test fails.
+//
+// The cfg passed in names the production Service (schedulerSpec.Service),
+// not a zero config.Config{}. Adversarial review pointed out that an empty
+// config leaves room for a future configureSchedulerDependencies to branch
+// on cfg.Service or another populated field and activate only when the input
+// looks like config.Load's real output -- a rewrite this test would then miss
+// entirely. Passing the real Service name closes that specific route without
+// needing every other Config field, since activation here does not read them.
 func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 
 	components, err := configureSchedulerDependencies(
-		context.Background(), config.Config{}, registry,
+		context.Background(), config.Config{Service: schedulerSpec.Service}, registry,
 	)
 
 	if err != nil {
@@ -137,15 +148,35 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 // that the logger-taking variant is now in use and this pin no longer covers the
 // path production takes.
 //
-// PINNED: the spec field IS configureSchedulerDependencies, and the logger-taking
-// field is nil so shell.Main cannot take the other one. Combined with the
-// behavioural pin above -- which calls that exact function -- the link from the
-// spec to the observed dormant behaviour is covered.
+// PINNED: the spec field's code pointer equals configureSchedulerDependencies's
+// code pointer, and the logger-taking field is nil so shell.Main cannot take the
+// other one. Combined with the behavioural pin above -- which calls that exact
+// function -- the link from the spec to the observed dormant behaviour is
+// covered, PROVIDED both sides stay what they are today: direct references to
+// the same plain top-level function declaration.
 //
-// NOT PINNED: `main()` calling shell.Main(schedulerSpec). A test cannot observe
-// main(), so a binary rewired to a different spec would not fail here. And, as
-// stated above, neither pin proves that flipping the seam retains the capability
-// the seam guards.
+// NOT PINNED, and this is a real gap rather than pedantry: that neither side is
+// ever refactored into a closure or a bound method value. Adversarial review
+// pointed out that Go documents a function's code pointer as not necessarily
+// unique -- two closures produced by a shared factory, or two bound method
+// values with different receivers, can compare equal by reflect.Value.Pointer()
+// while invoking different code. That is not what schedulerSpec.
+// ConfigureDependencies or configureSchedulerDependencies are today -- both are
+// direct references to one package-level function declaration, for which this
+// code-pointer comparison is conclusive -- but nothing here would notice the
+// day either one stops being that. A stronger runtime check (comparing
+// runtime.FuncForPC names, for instance) would not close this: if the
+// compiler/linker ever did fold two distinct closures onto one code address,
+// there would be exactly one symbol table entry for it, so name and pointer
+// comparisons would agree and still miss the same case. This is a limit of
+// what reflection can prove, not a gap this file chose to leave open.
+//
+// NOT PINNED: `main()` calling shell.Main(schedulerSpec) at runtime -- a running
+// test cannot observe process startup. TestSchedulerMainInvokesShellMainWithThePinnedSpec
+// below closes the practical version of this gap by parsing main.go's committed
+// source instead of trying to observe its execution. And, as stated above,
+// neither pin proves that flipping the seam retains the capability the seam
+// guards.
 func TestSchedulerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
 	if schedulerSpec.ConfigureDependenciesWithLogger != nil {
 		t.Fatal(
@@ -329,5 +360,78 @@ func TestSchedulerActivationPinIsNotVacuous(t *testing.T) {
 				field,
 			)
 		}
+	}
+}
+
+// TestSchedulerMainInvokesShellMainWithThePinnedSpec closes the one gap the
+// rest of this file states it cannot: whether `main()` actually calls
+// shell.Main(schedulerSpec). A running test cannot observe process startup,
+// but it can read the committed source that becomes it. This parses main.go
+// directly and requires func main()'s body to be exactly one statement,
+// calling shell.Main with the identifier every other pin in this file already
+// covers end to end.
+//
+// This is deliberately strict about shape: rewiring main() to call something
+// else, to pass a copy or a second spec, or to do anything at all beyond this
+// one call, fails the test. A future legitimate change to main() must update
+// this test in the same commit, which is the point -- that change becomes
+// visible instead of silently falling outside every other pin's reach.
+func TestSchedulerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing main.go: %v", err)
+	}
+
+	var mainDecl *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Recv != nil || function.Name.Name != "main" {
+			continue
+		}
+		mainDecl = function
+	}
+	if mainDecl == nil || mainDecl.Body == nil {
+		t.Fatal(
+			"main.go declares no func main() with a body; the pins in this file " +
+				"cover a function the binary never runs",
+		)
+	}
+	if len(mainDecl.Body.List) != 1 {
+		t.Fatalf(
+			"func main() has %d statements, want exactly 1 (the shell.Main call "+
+				"this test pins). If this is a reviewed change, confirm the new "+
+				"statements cannot skip or alter the shell.Main(schedulerSpec) call "+
+				"before updating this test.",
+			len(mainDecl.Body.List),
+		)
+	}
+
+	expressionStatement, ok := mainDecl.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("func main()'s only statement is not a call expression: %#v", mainDecl.Body.List[0])
+	}
+	call, ok := expressionStatement.X.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("func main()'s statement is not a function call: %#v", expressionStatement.X)
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("func main() does not call a package-qualified function: %#v", call.Fun)
+	}
+	packageIdent, ok := selector.X.(*ast.Ident)
+	if !ok || packageIdent.Name != "shell" || selector.Sel.Name != "Main" {
+		t.Fatalf("func main() calls %#v, not shell.Main", call.Fun)
+	}
+	if len(call.Args) != 1 {
+		t.Fatalf("shell.Main call has %d arguments, want exactly 1", len(call.Args))
+	}
+	argument, ok := call.Args[0].(*ast.Ident)
+	if !ok || argument.Name != "schedulerSpec" {
+		t.Fatalf(
+			"func main() passes %#v to shell.Main, not schedulerSpec -- the pins "+
+				"in this file cover a spec the binary does not use",
+			call.Args[0],
+		)
 	}
 }

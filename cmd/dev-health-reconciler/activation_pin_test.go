@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -81,6 +84,13 @@ func TestCheckedInReconcilerActivationMatchesItsPin(t *testing.T) {
 // assignment, a parallel activation type), the mutation builder runs and this
 // fails. Adversarial review showed the structural pin alone is silently defeated
 // by a value constructed at the call site; this is what closes that.
+//
+// The cfg passed in names the production Service (reconcilerSpec.Service), not
+// only RiverDatabaseSchema. Adversarial review pointed out that a config this
+// unlike config.Load's real output leaves room for a future rewrite to branch
+// on cfg.Service and activate only when the input looks production-shaped --
+// this test would then never see it. This does not close every such route
+// (cfg still has other zero fields), but it removes the cheapest version of it.
 func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 	// The contract roots are repo-relative, so reach the stepper branch the same
 	// way the neighbouring dependency tests do. Without this the configuration
@@ -139,7 +149,7 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 
 	if _, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
-		config.Config{RiverDatabaseSchema: "river"},
+		config.Config{Service: reconcilerSpec.Service, RiverDatabaseSchema: "river"},
 		health.NewRegistry(100*time.Millisecond),
 		reconcilerTestLogger(),
 		sources,
@@ -167,11 +177,142 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 	}
 }
 
+// TestReconcilerSpecInvokesTheReviewedActivation closes the gap named in the
+// test above's residual-risk statement, and in this file's other comments:
+// that the behavioural pin enters through
+// configureReconcilerDependenciesWithSourcesAndLogger, one level below the
+// production wrapper, so keeping the configureReconcilerDependenciesWithLogger
+// symbol but rewriting its body to supply reconcilerActivation{syncMutation:
+// true}, or to delegate somewhere else, would leave every other pin in this
+// file green.
+//
+// This closes that specific route: it swaps fakes into the PACKAGE VARIABLE
+// productionReconcilerDependencySources -- what
+// configureReconcilerDependenciesWithLogger actually reads -- restores it via
+// defer, and calls reconcilerSpec.ConfigureDependenciesWithLogger, the spec
+// field itself, which TestReconcilerSpecUsesTheConfigurationThisFilePins below
+// pins to be that exact function. Between the two tests, a body rewrite that
+// hardcodes mutation, or that stops reading productionReconcilerDependencySources
+// at all, has nowhere left to hide: this test calls through the real symbol,
+// reached through the real spec field, reading the real (now-faked) global.
+func TestReconcilerSpecInvokesTheReviewedActivation(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+
+	original := productionReconcilerDependencySources
+	defer func() { productionReconcilerDependencySources = original }()
+
+	var shadowBuilt, mutationBuilt bool
+
+	sources := reconcilerSourcesForTest(t, &fakeReconcilerDatabase{})
+	sources.buildRelay = func(
+		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry,
+	) (joboutbox.RelayStepper, error) {
+		return reconcilerStepFunc(func(
+			context.Context, time.Time, int,
+		) (joboutbox.StepResult, error) {
+			return joboutbox.StepResult{}, nil
+		}), nil
+	}
+	sources.buildSyncShadow = func(
+		*pgxpool.Pool, *syncdispatchcontract.Registry,
+	) (syncreconciler.Stepper, error) {
+		shadowBuilt = true
+		return syncStepFunc(func(
+			context.Context, time.Time, int,
+		) (syncreconciler.Observation, error) {
+			return syncreconciler.Observation{}, nil
+		}), nil
+	}
+	sources.buildSyncMutation = func(
+		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
+		*syncdispatchcontract.Registry,
+	) (syncreconciler.Stepper, error) {
+		mutationBuilt = true
+		return syncStepFunc(func(
+			context.Context, time.Time, int,
+		) (syncreconciler.Observation, error) {
+			return syncreconciler.Observation{}, nil
+		}), nil
+	}
+	productionReconcilerDependencySources = sources
+
+	if reconcilerSpec.ConfigureDependenciesWithLogger == nil {
+		t.Fatal("reconcilerSpec.ConfigureDependenciesWithLogger is nil; this test has nothing to call through")
+	}
+	if _, err := reconcilerSpec.ConfigureDependenciesWithLogger(
+		context.Background(),
+		config.Config{Service: reconcilerSpec.Service, RiverDatabaseSchema: "river"},
+		health.NewRegistry(100*time.Millisecond),
+		reconcilerTestLogger(),
+	); err != nil {
+		t.Fatalf("configuring the reconciler through the spec field failed: %v", err)
+	}
+
+	if mutationBuilt {
+		t.Fatal(
+			"calling reconcilerSpec.ConfigureDependenciesWithLogger built the sync " +
+				"MUTATION stepper. configureReconcilerDependenciesWithLogger's body " +
+				"must still delegate to checkedInReconcilerActivation through " +
+				"productionReconcilerDependencySources -- a hardcoded activation, or a " +
+				"delegate that bypasses that global, would reach here.",
+		)
+	}
+	if !shadowBuilt {
+		t.Fatal(
+			"calling reconcilerSpec.ConfigureDependenciesWithLogger built NEITHER " +
+				"stepper, so this test can no longer tell observation from mutation.",
+		)
+	}
+}
+
+// TestProductionSyncShadowBuilderReturnsTheShadowStepper closes the specific
+// gap named in TestProductionReconcilerSelectsTheShadowStepper's comment above:
+// that test's fakes replace
+// productionReconcilerDependencySources.buildSyncShadow entirely, so it cannot
+// see what that field's PRODUCTION value actually returns. Adversarial review
+// pointed out that repointing buildSyncShadow at an adapter returning a
+// mutating stepper would still pass, because nothing calls the real field.
+//
+// This calls the real field directly. syncreconciler.NewObserver only rejects a
+// nil pool and performs no I/O during construction -- confirmed by reading
+// NewObserver/NewShadow, not assumed -- so an inert, unconnected *pgxpool.Pool
+// is enough to exercise it without becoming an integration test. The registry
+// is loaded from the real committed contract artifact, the same one production
+// loads, because a nil or fake registry would let construction take a path
+// production never takes.
+func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+
+	if productionReconcilerDependencySources.buildSyncShadow == nil {
+		t.Fatal("productionReconcilerDependencySources.buildSyncShadow is nil; nothing to pin")
+	}
+
+	registry, err := syncdispatchcontract.Load(defaultSyncDispatchContractRoot)
+	if err != nil {
+		t.Fatalf("loading the real sync-dispatch contract: %v", err)
+	}
+
+	stepper, err := productionReconcilerDependencySources.buildSyncShadow(&pgxpool.Pool{}, registry)
+	if err != nil {
+		t.Fatalf("the production shadow builder failed against an inert pool: %v", err)
+	}
+	if _, ok := stepper.(*syncreconciler.Shadow); !ok {
+		t.Fatalf(
+			"productionReconcilerDependencySources.buildSyncShadow returned %T, not "+
+				"*syncreconciler.Shadow. This field is what the dormant path actually "+
+				"runs; if it now returns something else, the reviewed shadow-vs-mutation "+
+				"distinction this file pins no longer describes production.",
+			stepper,
+		)
+	}
+}
+
 // TestReconcilerSpecUsesTheConfigurationThisFilePins pins ONE LINK of the chain
-// from `main` to the behaviour asserted below. It does not close the chain, and an
-// earlier version of this comment claimed it did while the paragraph below already
-// admitted the gap -- a self-contradiction that shipped. Adversarial review caught
-// it; the honest statement of coverage follows.
+// from `main` to the behaviour asserted below. A fourth adversarial round found
+// that the round-3 fix corrected the CLAIM here without closing three of the
+// four gaps it named, and found two more (an untested config.Config{} shape,
+// and this PINNED line's own overclaim about what code-pointer equality
+// proves). The honest, now-verified statement of coverage follows.
 //
 // The behavioural pin calls configureReconcilerDependenciesWithSourcesAndLogger
 // so it can inject fakes. `shell.Main` does not call that directly -- it calls
@@ -180,30 +321,44 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 // test pins both ends of that chain: the spec field points where we think, and the
 // delegate is the function under test.
 //
-// PINNED: `reconcilerSpec.ConfigureDependenciesWithLogger` is
-// configureReconcilerDependenciesWithLogger (by code pointer), and
-// ConfigureDependencies is nil so shell.Main cannot take the other field.
+// PINNED: `reconcilerSpec.ConfigureDependenciesWithLogger`'s code pointer equals
+// configureReconcilerDependenciesWithLogger's, and ConfigureDependencies is nil
+// so shell.Main cannot take the other field. This is conclusive PROVIDED both
+// sides stay what they are today -- direct references to the same package-level
+// function declaration, not a closure or bound method value. Go documents a
+// function's code pointer as not necessarily unique for those; a stronger
+// runtime check (comparing runtime.FuncForPC names) would not close that
+// residual case either, because two code paths truly folded onto one address
+// would share one symbol-table entry and so agree under a name comparison too.
+// This is a limit of what reflection can prove, disclosed here rather than
+// silently left off the list the way it was after round 3.
 //
 // PINNED: given the checked-in activation, the sources-taking function selects the
 // SHADOW stepper and never the mutation stepper -- asserted by the behavioural test
 // below, which is the sole supplier of checkedInReconcilerActivation.
 //
+// PINNED: TestReconcilerSpecInvokesTheReviewedActivation, above, calls through
+// reconcilerSpec.ConfigureDependenciesWithLogger itself (not a direct call to
+// the sources-taking function), with fakes swapped into the package variable
+// that function actually reads. Keeping the
+// configureReconcilerDependenciesWithLogger symbol but rewriting its body to
+// hardcode mutation, or to delegate elsewhere, fails there. Round 3 found this
+// gap; it is closed, not disclosed.
+//
+// PINNED: TestProductionSyncShadowBuilderReturnsTheShadowStepper, above, calls
+// productionReconcilerDependencySources.buildSyncShadow directly (not a fake
+// substitute) against an inert pool and the real committed contract, and
+// requires its return type to be *syncreconciler.Shadow. Round 3 found that the
+// behavioural test's fakes conceal this field's real behaviour; this closes it
+// for what construction can prove -- the concrete stepper type actually wired,
+// not the outcome of a fully connected Step() call.
+//
 // NOT PINNED, and these are real gaps rather than pedantry:
 //
-//   - `main()` calling shell.Main(reconcilerSpec) at all. A test cannot observe
-//     main(); if the binary were rewired to a different spec these tests would not
-//     notice.
-//   - The BODY of configureReconcilerDependenciesWithLogger. Keep its symbol and
-//     change it to supply reconcilerActivation{syncMutation: true}, or to delegate
-//     somewhere else, and both the pointer comparison and the behavioural pin stay
-//     green while the binary mutates. The behavioural pin enters BELOW that
-//     function so it can inject fakes, which is exactly why it cannot see this.
-//     The only mitigation is that the function is four lines of pure delegation:
-//     if it ever grows logic, these pins stop describing production.
-//   - What production's buildSyncShadow actually RETURNS. The behavioural test
-//     substitutes a fake for it, so a mutating stepper behind that field would
-//     pass. Measured, not assumed: wrapping the production builder fails on the
-//     clean tree because it needs a real pool.
+//   - `main()` calling shell.Main(reconcilerSpec) at runtime. A running test
+//     cannot observe process startup.
+//     TestReconcilerMainInvokesShellMainWithThePinnedSpec, below, closes the
+//     practical version of this by parsing main.go's committed source instead.
 //   - That flipping the seam retains concrete River delivery capability. Set the
 //     flag and the pin together and everything here passes, 42501 and all
 //     (CHAOS-3146).
@@ -379,5 +534,78 @@ func TestReconcilerActivationPinIsNotVacuous(t *testing.T) {
 				field,
 			)
 		}
+	}
+}
+
+// TestReconcilerMainInvokesShellMainWithThePinnedSpec closes the one gap this
+// file states it cannot: whether `main()` actually calls
+// shell.Main(reconcilerSpec). A running test cannot observe process startup,
+// but it can read the committed source that becomes it. This parses main.go
+// directly and requires func main()'s body to be exactly one statement,
+// calling shell.Main with the identifier every other pin in this file already
+// covers end to end.
+//
+// This is deliberately strict about shape: rewiring main() to call something
+// else, to pass a copy or a second spec, or to do anything at all beyond this
+// one call, fails the test. A future legitimate change to main() must update
+// this test in the same commit, which is the point -- that change becomes
+// visible instead of silently falling outside every other pin's reach.
+func TestReconcilerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing main.go: %v", err)
+	}
+
+	var mainDecl *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Recv != nil || function.Name.Name != "main" {
+			continue
+		}
+		mainDecl = function
+	}
+	if mainDecl == nil || mainDecl.Body == nil {
+		t.Fatal(
+			"main.go declares no func main() with a body; the pins in this file " +
+				"cover a function the binary never runs",
+		)
+	}
+	if len(mainDecl.Body.List) != 1 {
+		t.Fatalf(
+			"func main() has %d statements, want exactly 1 (the shell.Main call "+
+				"this test pins). If this is a reviewed change, confirm the new "+
+				"statements cannot skip or alter the shell.Main(reconcilerSpec) call "+
+				"before updating this test.",
+			len(mainDecl.Body.List),
+		)
+	}
+
+	expressionStatement, ok := mainDecl.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("func main()'s only statement is not a call expression: %#v", mainDecl.Body.List[0])
+	}
+	call, ok := expressionStatement.X.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("func main()'s statement is not a function call: %#v", expressionStatement.X)
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("func main() does not call a package-qualified function: %#v", call.Fun)
+	}
+	packageIdent, ok := selector.X.(*ast.Ident)
+	if !ok || packageIdent.Name != "shell" || selector.Sel.Name != "Main" {
+		t.Fatalf("func main() calls %#v, not shell.Main", call.Fun)
+	}
+	if len(call.Args) != 1 {
+		t.Fatalf("shell.Main call has %d arguments, want exactly 1", len(call.Args))
+	}
+	argument, ok := call.Args[0].(*ast.Ident)
+	if !ok || argument.Name != "reconcilerSpec" {
+		t.Fatalf(
+			"func main() passes %#v to shell.Main, not reconcilerSpec -- the pins "+
+				"in this file cover a spec the binary does not use",
+			call.Args[0],
+		)
 	}
 }

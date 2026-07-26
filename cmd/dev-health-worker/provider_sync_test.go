@@ -224,9 +224,10 @@ func disjointHandlerSets(left, right map[string]struct{}) bool {
 func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]providersync.CompleteRouteSwitches{
-		"none":   {},
-		"github": {GithubRepoMetadata: true},
-		"both":   {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
+		"none":       {},
+		"github":     {GithubRepoMetadata: true},
+		"github_prs": {GithubPRs: true},
+		"both":       {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -262,6 +263,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"github": {
 			cfg:  config.Config{WorkerGithubRepoMetadataEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubRepoMetadata: true},
+		},
+		"github_prs": {
+			cfg:  config.Config{WorkerGithubPRsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubPRs: true},
 		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},

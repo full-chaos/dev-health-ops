@@ -26,6 +26,17 @@ var (
 	ErrRepositoryIdentityAmbiguous = errors.New(
 		"provider sync repository identity cannot be proven identical to the Python derivation",
 	)
+	// ErrPaginationCapExceeded means a paginated fetch hit its page cap
+	// before reaching the end of the provider's result set (codex H2). A
+	// capped fetch must never be reported as a successful, complete unit: an
+	// unbounded Python collector would have kept paging, so a capped Go
+	// fetch that still returns success and still advances the watermark
+	// silently and permanently loses every record past the cap -- no later
+	// incremental run recovers them, because the window has already moved
+	// past where they were.
+	ErrPaginationCapExceeded = errors.New(
+		"provider sync paginated fetch hit its page cap before completion",
+	)
 )
 
 type Unit struct {

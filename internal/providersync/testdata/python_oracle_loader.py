@@ -38,6 +38,7 @@ _LINEAR_BUDGET_SOURCE = _source("dev_health_ops/providers/linear/budget.py")
 _JIRA_BUDGET_SOURCE = _source("dev_health_ops/providers/jira/budget.py")
 _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/budget.py")
 _DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
+_BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
 
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
@@ -103,7 +104,58 @@ def _target_dataset_adapters() -> None:
     )
 
 
+def _target_base_git() -> None:
+    """Stub base_git.py's heavy, unrelated imports (CHAOS-3122).
+
+    ``BaseGitProcessor.coerce_created_at`` and the module-level
+    ``build_git_pull_request`` are pure functions; everything base_git.py
+    imports beyond them (complexity scanning, ORM models, the async batch
+    collector) is dead weight for this oracle and, more importantly, is not
+    importable under the stock interpreter this loader exists for. Each stub
+    only needs to satisfy the *names* base_git.py imports at module-load
+    time -- it never calls into any of them.
+    """
+    _install_module(
+        "dev_health_ops.analytics.complexity",
+        {"DEFAULT_COMPLEXITY_CONFIG_PATH": None, "ComplexityScanner": object},
+    )
+    _install_module(
+        "dev_health_ops.metrics.schemas",
+        {"FileComplexitySnapshot": object, "RepoComplexityDaily": object},
+    )
+    # GitPullRequest must be a real, introspectable class: build_git_pull_request
+    # returns `GitPullRequest(**values)` and the oracle reads the result's
+    # attributes back out. A plain kwargs-storing stand-in is sufficient --
+    # nothing here depends on SQLAlchemy instrumentation.
+    _install_module(
+        "dev_health_ops.models.git",
+        {
+            "CiPipelineRun": object,
+            "Deployment": object,
+            "GitBlame": object,
+            "GitCommitStat": object,
+            "GitFile": object,
+            "GitPullRequest": type(
+                "GitPullRequest",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
+        },
+    )
+    _install_module(
+        "dev_health_ops.processors.fetch_utils", {"AsyncBatchCollector": object}
+    )
+    # False keeps base_git.py's `elif CONNECTORS_AVAILABLE:` branch from firing,
+    # so it never needs dev_health_ops.connectors.utils stubbed too.
+    _install_module("dev_health_ops.utils", {"CONNECTORS_AVAILABLE": False})
+
+
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
+    _BASE_GIT_SOURCE: (
+        "dev_health_ops.processors.base_git",
+        _BASE_GIT_SOURCE,
+        _target_base_git,
+    ),
     _LAUNCHDARKLY_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.launchdarkly",
         _LAUNCHDARKLY_PROCESSOR_SOURCE,
@@ -158,7 +210,9 @@ def _register_module(name: str, module: ModuleType) -> None:
 def _install_namespace() -> None:
     for name in (
         "dev_health_ops",
+        "dev_health_ops.analytics",
         "dev_health_ops.credentials",
+        "dev_health_ops.models",
         "dev_health_ops.metrics",
         "dev_health_ops.metrics.sinks",
         "dev_health_ops.processors",

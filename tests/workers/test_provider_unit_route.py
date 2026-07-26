@@ -126,6 +126,76 @@ def test_github_repo_metadata_switch_does_not_open_gitlab_repo_metadata() -> Non
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-3122: the (github, prs) producer-side switch. Its Go counterpart is
+# config.Config.WorkerGithubPRsEnabled, read from the same
+# WORKER_GITHUB_PRS_ENABLED name.
+# ---------------------------------------------------------------------------
+
+
+def test_github_prs_defaults_to_false() -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "true"}
+    )
+    assert switches.github_prs is False
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._TRUE))
+def test_github_prs_parses_true_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_PRS_ENABLED": value}
+    )
+    assert switches.github_prs is True
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._FALSE))
+def test_github_prs_parses_false_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_PRS_ENABLED": value}
+    )
+    assert switches.github_prs is False
+
+
+def test_github_prs_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_PRS_ENABLED": "sometimes"}
+        )
+
+
+def test_github_prs_is_not_yet_route_ready() -> None:
+    """(github, prs) has a real Go handler (CHAOS-3122) but is deliberately
+    NOT route_ready: codex H1 found that first_review_at/reviews_count/
+    changes_requested_count on git_pull_requests are owned by Python's
+    review-enrichment phase, which the Go handler does not perform, so it
+    would always write fabricated zeros into columns it does not own. The
+    switch exists and is wired end to end (so flipping RouteReady later is a
+    one-line change, not new plumbing) but can never route traffic while the
+    matrix says not-ready -- routes_to_river must stay False even with the
+    switch on."""
+
+    assert not ProviderUnitRouteSwitches.is_route_ready("github", "prs")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_PRS_ENABLED": "true"}
+    )
+    assert not on.routes_to_river("github", "prs")
+
+
+def test_github_prs_switch_does_not_open_pr_reviews_or_pr_comments() -> None:
+    """github/pr-reviews and github/pr-comments share the "prs" legacy target
+    in Python (they are the same _sync_github_prs_to_store_async execution),
+    but neither has its own Go handler yet and both stay route_ready=false in
+    the matrix, so turning on GithubPRs must never widen either open."""
+
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_PRS_ENABLED": "true"}
+    )
+    for dataset in ("pr-reviews", "pr-comments"):
+        assert not ProviderUnitRouteSwitches.is_route_ready("github", dataset)
+        assert not switches.routes_to_river("github", dataset)
+
+
+# ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.
 # ---------------------------------------------------------------------------

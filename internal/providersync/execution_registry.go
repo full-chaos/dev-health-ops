@@ -33,6 +33,7 @@ const (
 var providerExecutorRegistry = map[string]ExecutorKind{
 	"launchdarkly/feature-flags": ExecutorNativeGo,
 	"github/repo-metadata":       ExecutorNativeGo,
+	"github/prs":                 ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -118,6 +119,16 @@ type CompleteRouteSwitches struct {
 	// CompleteRouteHandler, so it stays RouteReady=false regardless of this
 	// field (see Descriptor's separate gitlab case below).
 	GithubRepoMetadata bool
+	// GithubPRs gates (github, prs) only (CHAOS-3122/CHAOS-3123 follow-on).
+	// It must never gate github/pr-reviews or github/pr-comments: those two
+	// datasets share the "prs" legacy target and processor flag in Python
+	// (they are the SAME _sync_github_prs_to_store_async execution), but
+	// GitHubPullRequestRouteHandler only emits the git_pull_requests effect.
+	// Review-derived enrichment (first_review_at, reviews_count,
+	// changes_requested_count) and the git_pull_request_reviews table are
+	// left for github/pr-reviews, which needs its own GraphQL fetch — see
+	// deploy/go-workers/provider-sync-porting-recipe.md.
+	GithubPRs bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -176,6 +187,38 @@ func (switches CompleteRouteSwitches) Descriptor(
 		// the github case above: doing so would make GithubRepoMetadata
 		// enable a route with no handler behind it.
 		descriptor.Destinations = []string{"repos"}
+	case provider == "github" && dataset == "prs":
+		// GitHub has a native complete-route handler
+		// (GitHubPullRequestRouteHandler) and a git_pull_requests effect sink
+		// (GitHubPullRequestClickHouseEffects), fixture-level field parity
+		// evidence against the production Python collector
+		// (_collect_github_pr_objects / build_git_pull_request /
+		// normalize_pr_state / get_repo_uuid_from_repo /
+		// ClickHouseStore.insert_git_pull_requests), and a codex adversarial
+		// pass that found and fixed four HIGH-severity silent-data-loss
+		// defects (CHAOS-3122).
+		//
+		// RouteReady stays false deliberately -- this is NOT the same waiver
+		// CHAOS-3123 used for repo-metadata. The codex H1 finding: three
+		// columns on this pair's own destination table
+		// (first_review_at, reviews_count, changes_requested_count) are
+		// owned by Python's review-enrichment phase
+		// (_enrich_prs_with_reviews_batch), which this handler does not
+		// perform, so it always writes them as zero. route_ready is a
+		// promise that the Go path produces the product data for a pair;
+		// writing fabricated zeros into columns this pair does not own would
+		// let review-latency/rework/AI-impact tiles read "no reviews
+		// fetched" as "no reviews exist". github/prs and github/pr-reviews
+		// share one row (git_pull_requests) but are scheduled as
+		// independent, separately-committed units — see
+		// deploy/go-workers/provider-sync-porting-recipe.md's "column versus
+		// unit ownership" section for the write-conflict analysis this
+		// forced. Both pairs flip to RouteReady together when
+		// github/pr-reviews lands with a real review fetch. GithubPRs
+		// (below) stays wired and off by default in the meantime, so this
+		// is a no-op today and a one-line flip later, not new plumbing.
+		descriptor.Destinations = []string{"git_pull_requests"}
+		descriptor.RouteEnabled = switches.GithubPRs
 	}
 	return descriptor, true
 }

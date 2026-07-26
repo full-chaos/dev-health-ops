@@ -63,6 +63,19 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //   - github/repo-metadata: CHAOS-3123, fixture-level field parity against the
 //     Python collector (TestGitHubRepositoryRouteEmitsOneBoundedReposEffect).
 //     Canary staging and live-traffic parity are waived for this program.
+//
+// github/prs (CHAOS-3122) is deliberately NOT in this set despite having a
+// real CompleteRouteHandler and passing fixture-level parity evidence: codex
+// H1 found that three columns on its own destination table
+// (first_review_at, reviews_count, changes_requested_count) are owned by
+// Python's review-enrichment phase, which this handler does not perform, so
+// it always writes them as zero. route_ready is a promise that the Go path
+// produces the product data for a pair, not merely that it compiles and
+// passes its own tests; writing fabricated zeros into columns it does not
+// own would corrupt review-latency/rework/AI-impact analytics. It flips
+// RouteReady together with github/pr-reviews when that pair lands with a
+// real review fetch — see execution_registry.go's github/prs case and
+// deploy/go-workers/provider-sync-porting-recipe.md.
 var routeReadyPairs = map[string]struct{}{
 	"launchdarkly/feature-flags": {},
 	"github/repo-metadata":       {},
@@ -88,8 +101,9 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	all := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
+		GithubPRs: true,
 	}
-	if reflect.TypeOf(all).NumField() != 5 {
+	if reflect.TypeOf(all).NumField() != 6 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -121,6 +135,34 @@ func TestGithubRepoMetadataSwitchDoesNotOpenGitLab(t *testing.T) {
 	}
 	if descriptor.RouteReady || descriptor.RouteEnabled {
 		t.Fatalf("gitlab/repo-metadata descriptor=%+v", descriptor)
+	}
+}
+
+// TestGithubPRsSwitchAloneCannotOpenTheRoute pins codex's H1 finding: even
+// with its switch on, github/prs must stay RouteReady=false until
+// github/pr-reviews exists to own the three review-derived columns on the
+// same destination table. This is the opposite direction from
+// TestGithubRepoMetadataSwitchDoesNotOpenGitLab's "unrelated switch can't
+// open an unready pair" — here the pair's OWN switch is on, and it still
+// must not route, because RouteReady itself (not RouteEnabled) is the gate.
+func TestGithubPRsSwitchAloneCannotOpenTheRoute(t *testing.T) {
+	t.Parallel()
+	switches := CompleteRouteSwitches{GithubPRs: true}
+	descriptor, ok := switches.Descriptor("github", "prs")
+	if !ok {
+		t.Fatal("github/prs has no descriptor")
+	}
+	if descriptor.RouteReady {
+		t.Fatalf("github/prs descriptor=%+v: RouteReady must stay false until "+
+			"github/pr-reviews lands (codex H1)", descriptor)
+	}
+	// The destination manifest and the fixed native_go executor are still
+	// recorded -- RouteReady is what fails closed, not the rest of the
+	// descriptor going dark.
+	if descriptor.Executor != ExecutorNativeGo ||
+		len(descriptor.Destinations) != 1 ||
+		descriptor.Destinations[0] != "git_pull_requests" {
+		t.Fatalf("github/prs descriptor=%+v", descriptor)
 	}
 }
 
@@ -169,6 +211,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 	handlers := map[string]CompleteRouteHandler{
 		"launchdarkly/feature-flags": LaunchDarklyRouteHandler{},
 		"github/repo-metadata":       GitHubRepositoryRouteHandler{},
+		"github/prs":                 GitHubPullRequestRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

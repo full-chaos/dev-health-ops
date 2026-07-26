@@ -124,6 +124,108 @@ otherwise read as a conflict.
    the next merge. `src/dev_health_ops/api/queries/heatmap.py` is a known
    pre-existing example and is not a regression introduced by this contract.
 
+## Activation status for `(github, prs)`
+
+CHAOS-3122 built a real `CompleteRouteHandler`
+(`GitHubPullRequestRouteHandler`) and `EffectSink`
+(`GitHubPullRequestClickHouseEffects`) — `go_executor: native_go` — but the
+pair is deliberately **`route_ready: false`**, not `true`. This is not the
+same shape as `(github, repo-metadata)`'s waiver.
+
+An adversarial (codex) review of the first draft returned BLOCK with four
+HIGH-severity findings, all fixed before this pair's code landed:
+
+1. **Silent watermark loss on a capped fetch.** A paginated fetch that hit
+   its page cap was reported as a successful, complete unit, so the claimed
+   watermark advanced past PRs the cap never fetched — permanently, since no
+   later incremental run revisits a window the watermark already passed.
+   Fixed: `Collect` now fails the whole unit (`ErrPaginationCapExceeded`)
+   whenever `CapReached` is true. Never both capped and successful.
+2. **Silently dropped PRs with an unparseable `updated_at`.** Python's
+   window comparison only applies when `updated_at` type-checks as a
+   `datetime`; a missing/null/unparseable value is unconditionally included.
+   An earlier version of the Go filter excluded such items instead — the
+   empty-success trap: a window where every PR has that shape reported zero
+   records instead of including them. Fixed: `pullOutsideKnownWindow` now
+   only compares the window when the timestamp is known, mirroring Python's
+   guard exactly, as a named, independently mutation-tested clause.
+3. **Fail-open repository identity.** A blank/missing `full_name` from the
+   repo GET fell back to `claim.SourceExternalID`, writing PRs under a
+   *guessed* `repo_id`. Python's `get_repo_uuid_from_repo` raises on a falsy
+   input and `Repo.__init__` never even attempts the call, so nothing
+   downstream in Python would ever derive that repo_id. Fixed: the fallback
+   was deleted; `repositoryIdentity` (already shared with repo-metadata)
+   rejects the blank input on its own, and the test that previously
+   asserted the fallback was inverted to require the failure.
+4. **`route_ready: true` while three columns were always fabricated zeros.**
+   `first_review_at`, `reviews_count`, and `changes_requested_count` are
+   columns on `git_pull_requests`, but the data that fills them is Python's
+   review-enrichment phase (`_enrich_prs_with_reviews_batch`) — a different
+   dataset pair's (`github/pr-reviews`) job in this port's per-unit model.
+   Writing them as zero while claiming route readiness would let
+   review-latency/rework/AI-impact tiles read "never fetched" as "doesn't
+   exist". **Resolution: `route_ready` stays `false` until `github/pr-reviews`
+   lands and both pairs flip together** — see `CompleteRouteSwitches.Descriptor`'s
+   `github`/`prs` case and
+   `deploy/go-workers/provider-sync-porting-recipe.md`'s defect class 9 for
+   the full column-versus-unit-ownership analysis and the three resolutions
+   it lays out for future pairs in the same situation.
+
+Five MEDIUM findings, also fixed, on the ClickHouse effect sink specifically
+(`GitHubPullRequestClickHouseEffects`):
+
+5. Provider timestamps were not truncated to millisecond precision at
+   construction, so a value with finer-than-`DateTime64(3)` precision could
+   compare unequal to what a later readback SELECT scans back. Fixed:
+   truncated once, in `parseGitHubPullTime`.
+6. The readback "exact" comparison omitted `first_review_at`,
+   `first_comment_at`, `changes_requested_count`, and `reviews_count`
+   entirely, and collapsed nullable strings through `ifNull(col, '')`,
+   losing the NULL/empty-string distinction. Fixed: every column is now
+   scanned into a Go pointer type and compared as its own named clause, not
+   folded into one boolean expression.
+7. State normalization stripped whitespace throughout the string instead of
+   only leading/trailing (diverging on internal whitespace) and did not
+   strip `\r` (diverging on a trailing carriage return) — not equivalent to
+   Python's `raw_state.strip().lower()`. Fixed: `strings.ToLower(strings.TrimSpace(...))`.
+8. A non-string `user.login` (e.g. a JSON number) silently became the
+   `"Unknown"` fallback instead of being stringified the way Python's
+   `str(user["login"])` would. Fixed: decode into `any` and reuse the
+   package's existing `stringValue` helper.
+
+What this activation actually proves, and how:
+
+- Fixture-level field parity against the real Python collector
+  (`TestGitHubPullRequestRouteEmitsOneBoundedEffect`).
+- **Live parity, not a hand-authored comment:** state normalization and the
+  `created_at` fallback chain are checked against the REAL, live
+  `normalize_pr_state` / `build_git_pull_request` functions, shelled out to
+  at test time (`TestGitHubPRSNormalizationMatchesLivePythonFunctions` →
+  `testdata/python_github_prs_normalization_oracle.py`) — not a fixture that
+  was verified once and pasted into a comment. This closes the codex H9
+  finding: an earlier hand-authored fixture omitted the review-enrichment
+  phase entirely and then asserted its own zero-valued output as "verified"
+  parity, which cannot fail when the omitted phase is wrong.
+- A full mutation-testing pass via the shared harness
+  (`internal/providersync/testdata/mutation-plans/github_prs.json`, run with
+  `scripts/mutation_harness.py`), 12/12 mutations `KILLED` (one additional
+  mutation `SURVIVED` on a first pass and identified genuinely dead/redundant
+  code — see the plan's `$limitation` field).
+- `repo_id` is derived the same way `(github, repo-metadata)` derives its
+  repository identity: `repositoryIdentity(fullName)` where `fullName` comes
+  from a `GET /repos/{owner}/{repo}` call's `full_name` field, matching
+  `get_repo_uuid_from_repo(repo_info.full_name)` in
+  `models/git.py::Repo.__init__` — and now fails closed rather than falling
+  back, per finding 3 above.
+- `comments_count` and `first_comment_at` are NOT part of the review-data
+  gap (finding 4): the former comes from the REST pull-detail payload
+  directly, and the latter is `None` unconditionally in Python's own
+  collector, so leaving it nil in Go is exact parity, not an omission.
+
+Full recipe, the nine defect classes above generalized into a checklist for
+the remaining 16 GitHub pairs, and difficulty tiers, are in
+`deploy/go-workers/provider-sync-porting-recipe.md`.
+
 ## Known Go/Python divergences (fail-closed by design)
 
 `repositoryIdentity` mirrors Python's `get_repo_uuid_from_repo` for the ASCII

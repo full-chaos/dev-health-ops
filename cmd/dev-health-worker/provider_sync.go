@@ -181,18 +181,19 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Two route-ready pairs can reach this closure today
-			// (launchdarkly/feature-flags, github/repo-metadata — see
-			// CompleteRouteSwitches.Descriptor), and each has its own
-			// CompleteRouteHandler and effect sink. session.Claim is already
-			// known here — providerunit.Handler.Work only calls BuildExecutor
-			// after its own descriptor gate passed for THIS claim's
-			// provider/dataset — so select by claim rather than hardcoding
-			// one pair. A hardcoded Handler was exactly the CHAOS-3123 gap:
-			// it would compile, satisfy every other test, and still fail
-			// every github/repo-metadata claim (LaunchDarklyRouteHandler.Collect
-			// fails closed on claim.Provider != "launchdarkly") the moment the
-			// switch was flipped on.
+			// Three route-ready pairs can reach this closure today
+			// (launchdarkly/feature-flags, github/repo-metadata,
+			// github/prs — see CompleteRouteSwitches.Descriptor), and each
+			// has its own CompleteRouteHandler and effect sink. session.Claim
+			// is already known here — providerunit.Handler.Work only calls
+			// BuildExecutor after its own descriptor gate passed for THIS
+			// claim's provider/dataset — so select by claim rather than
+			// hardcoding one pair. A hardcoded Handler was exactly the
+			// CHAOS-3123 gap: it would compile, satisfy every other test, and
+			// still fail every github/repo-metadata claim
+			// (LaunchDarklyRouteHandler.Collect fails closed on
+			// claim.Provider != "launchdarkly") the moment the switch was
+			// flipped on.
 			var (
 				routeHandler providersync.CompleteRouteHandler
 				sink         providersync.EffectSink
@@ -217,10 +218,17 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubRepositoryRouteHandler{}
 				sink, readback = ghSink, ghSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "prs":
+				ghPRSink := providersync.GitHubPullRequestClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubPullRequestRouteHandler{}
+				sink, readback = ghPRSink, ghPRSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
-				// reported RouteReady && RouteEnabled, and those two cases
+				// reported RouteReady && RouteEnabled, and those three cases
 				// above are the only pairs CompleteRouteSwitches.Descriptor
 				// ever marks RouteReady. Fail closed rather than construct an
 				// executor with a nil Handler.
@@ -286,11 +294,13 @@ func buildProviderSyncWorker(
 	logger *slog.Logger,
 ) (workerFamily, error) {
 	// Construct the family when ANY route switch is on, not launchdarkly's
-	// alone: (github, repo-metadata) became routable in CHAOS-3123, and a
-	// process that dispatches github units while refusing to build the handler
-	// for them would strand every unit at a worker with nothing registered.
+	// alone: (github, repo-metadata) became routable in CHAOS-3123 and
+	// (github, prs) in CHAOS-3122, and a process that dispatches github units
+	// while refusing to build the handler for them would strand every unit at
+	// a worker with nothing registered.
 	if cfg.Profile != "sync" ||
-		(!cfg.WorkerLaunchDarklyFeatureFlagsEnabled && !cfg.WorkerGithubRepoMetadataEnabled) {
+		(!cfg.WorkerLaunchDarklyFeatureFlagsEnabled &&
+			!cfg.WorkerGithubRepoMetadataEnabled && !cfg.WorkerGithubPRsEnabled) {
 		return workerFamily{}, nil
 	}
 	if registry == nil || observer == nil || logger == nil ||

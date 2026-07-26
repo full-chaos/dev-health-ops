@@ -462,3 +462,57 @@ func (stepper staticStepper) Step(context.Context, time.Time) (WindowResult, err
 func (stepper staticStepper) Schedules() []Schedule {
 	return append([]Schedule(nil), stepper.schedules...)
 }
+
+// An ordinary SkipReason must NOT reach the degraded gauge.
+//
+// This pins the fix for a defect this change introduced into shared engine behaviour,
+// affecting a producer it did not write. Because a degraded reason now persists until
+// the schedule next evaluates, promoting a skip made it LATCH for a full period: the
+// weekly remaining-metrics fan-out would show "no_active_organizations" for a week
+// after organizations were added, and an operator would be looking at a fault that
+// resolved days earlier.
+//
+// The distinction is the same one that motivated Evaluated in the first place, one
+// level down. A skip reason describes THIS occurrence ("nothing was due"); a degraded
+// reason describes ONGOING state. Only the second may persist.
+func TestSkipReasonIsNotPromotedToTheDegradedGauge(t *testing.T) {
+	const scheduleID = "capacity_forecast_weekly_fanout"
+	schedule := scheduleByID(t, scheduleID)
+	loop, err := NewLoop(
+		staticStepper{schedules: []Schedule{schedule}},
+		DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.July, 27, 4, 0, 0, 0, time.UTC)
+
+	// A window that skipped for a bounded reason and reported NO degraded condition:
+	// exactly what the fan-out produces on an installation with no organizations.
+	loop.record(WindowResult{ObservedAt: now, Schedules: []ScheduleResult{{
+		ScheduleID: scheduleID, Due: 1, Claimed: 1, Skipped: 1, Evaluated: true,
+	}}}, now)
+
+	var exported strings.Builder
+	if err := loop.WritePrometheus(&exported); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(exported.String(), "\n") {
+		if !strings.HasPrefix(line, `fixed_scheduler_schedule_degraded{schedule="`+scheduleID+`"`) {
+			continue
+		}
+		if !strings.Contains(line, `reason="none"`) || !strings.HasSuffix(line, " 0") {
+			t.Fatalf(
+				"gauge = %q; an ordinary skip reason was promoted to the degraded gauge, "+
+					"where it would latch until this weekly schedule next evaluates", line,
+			)
+		}
+		// The skip is still visible where it belongs: as a counted occurrence outcome.
+		if !strings.Contains(exported.String(),
+			`fixed_scheduler_occurrences_total{schedule="`+scheduleID+`",result="skipped"} 1`) {
+			t.Fatalf("the skip was not counted as an occurrence outcome:\n%s", exported.String())
+		}
+		return
+	}
+	t.Fatalf("no degraded gauge for %s in:\n%s", scheduleID, exported.String())
+}

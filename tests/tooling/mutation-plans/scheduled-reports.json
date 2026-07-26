@@ -407,6 +407,48 @@
           "./internal/scheduler/fixed/"
         ]
       ]
+    },
+    {
+      "id": "M33",
+      "file": "internal/scheduler/fixed/engine.go",
+      "find": "\treturn 1, 0, total, 0, degraded, true, nil",
+      "replace": "\treturn 1, 0, total, 0, \"\", true, nil",
+      "rationale": "Drops the degraded reason from the MATERIALIZED branch, so a condition reported alongside produced work never reaches telemetry. This survived before the seam test existed: one test injected synthetic results into Loop.record without ever calling Step, another drove the real engine but asserted only returned values, so both halves were covered and the join between them was not.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "12m",
+          "-run",
+          "TestProducedWorkWithDegradationReachesTheExportedGauge",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "M34",
+      "file": "internal/scheduler/fixed/engine.go",
+      "find": "\tif status == OccurrenceSkipped {\n\t\treturn 1, 0, 0, 1, degraded, true, nil\n\t}",
+      "replace": "\tif status == OccurrenceSkipped {\n\t\tif degraded == \"\" {\n\t\t\tdegraded = reason\n\t\t}\n\t\treturn 1, 0, 0, 1, degraded, true, nil\n\t}",
+      "rationale": "Restores the promotion of an ordinary SkipReason into Degraded \u2014 a defect this change introduced into SHARED engine behaviour and that reached a producer it did not write. Because Degraded now persists until a schedule next evaluates, promoting a skip makes it latch for a full period: on the weekly remaining-metrics fan-out, 'no_active_organizations' stays raised for a week after organizations are added. A skip is 'nothing to do'; degraded is 'something is wrong'. The ledger is unaffected either way \u2014 Complete still receives the original SkipReason. Must be proved THROUGH the engine: the promotion lives in runOccurrence, so a test handing Loop.record a synthetic result never crosses the boundary the defect is on.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "12m",
+          "-run",
+          "TestSkipReasonDoesNotReachTheGaugeThroughTheEngine",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
     }
   ]
 }

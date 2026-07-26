@@ -5,9 +5,11 @@ package fixed
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -1088,4 +1090,211 @@ func mustStep(t *testing.T, ctx context.Context, engine *Engine, at time.Time) W
 		t.Fatalf("Step(%s): %v", at.Format(time.RFC3339), err)
 	}
 	return result
+}
+
+// The SEAM: a real produced-work-with-degradation outcome must reach the exported
+// gauge, driven Engine -> Loop -> WritePrometheus.
+//
+// Nothing covered this. One test injects synthetic ScheduleResults into Loop.record
+// with Stepper.Step never called; another drives the real engine but asserts only the
+// values Step returns. Both halves were covered and the join between them was not, so
+// a mutation dropping Degraded from the materialized branch of runOccurrence could
+// survive — the same shape as M29 and M31, where one half of a pair passing disguised
+// the other half having no reaching test.
+//
+// It also pins the property the whole degraded mechanism exists for and which no other
+// test asserts end to end: a degraded reason reported ALONGSIDE successful work
+// survives into telemetry. A skip reason is deliberately NOT promoted, so this is the
+// only route by which anything reaches that gauge.
+func TestProducedWorkWithDegradationReachesTheExportedGauge(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Tenant A: stranded, so the occurrence is degraded. Tenant B: healthy and due, so
+	// the SAME occurrence also produces work. Degraded must coexist with a handoff.
+	schedule, _, strandedRunID := dueScheduledReport(t, pool)
+	seedHandoff(t, pool, strandedRunID, "dead")
+
+	const (
+		otherOrganizationID = "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0e"
+		otherJobID          = "8b9c0d1e-2f30-4b4c-9d5e-6f7a8b9c0d1f"
+		otherReportID       = "9c0d1e2f-3041-4c5d-8e6f-7a8b9c0d1e20"
+	)
+	createdAt := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+	for _, seed := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO public.organizations (id, name, is_active) VALUES ($1::uuid, 'seam', TRUE)`,
+			[]any{otherOrganizationID}},
+		{`INSERT INTO public.scheduled_jobs
+    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
+VALUES ($1::uuid, $2, 'report:seam', 'report', '0 6 * * *', 'UTC', 0, FALSE, $3, $3)`,
+			[]any{otherJobID, otherOrganizationID, createdAt}},
+		{`INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+VALUES ($1::uuid, $2, 'seam', $3::uuid, TRUE, $4, $4)`,
+			[]any{otherReportID, otherOrganizationID, otherJobID, createdAt}},
+	} {
+		if _, err := pool.Exec(ctx, seed.sql, seed.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	location, err := schedule.Location()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, time.July, 25, 6, 20, 30, 0, time.UTC)
+	dueAt, ok := schedule.Cadence.Previous(observedAt, location)
+	if !ok {
+		t.Fatal("cadence resolved no due time")
+	}
+	previous := NewOccurrence(
+		schedule, dueAt.Add(-schedule.Cadence.Period()), dueAt.Add(-schedule.Cadence.Period()))
+	seedRecordedOccurrence(t, ctx, pool, previous)
+
+	engine, publisher := newReportEngine(t, pool, schedule)
+	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drive the REAL engine, then hand the real WindowResult to the real loop.
+	window, err := engine.Step(ctx, observedAt)
+	if err != nil {
+		t.Fatalf("Step(): %v", err)
+	}
+	result := resultFor(t, window, schedule.ID)
+	if result.Err != nil {
+		t.Fatalf("window failed: %v", result.Err)
+	}
+	// The premise: work WAS produced and the occurrence is degraded at once.
+	if result.Handoffs != 1 || publisher.count() != 1 {
+		t.Fatalf("result = %+v (published %d), want exactly tenant B's handoff",
+			result, publisher.count())
+	}
+	if result.Degraded != DegradedScheduledReportsUndeliverable {
+		t.Fatalf("degraded = %q, want the stranded condition alongside produced work",
+			result.Degraded)
+	}
+	if !result.Evaluated {
+		t.Fatal("a committed producing window did not report Evaluated")
+	}
+
+	loop.record(window, observedAt)
+
+	var exported strings.Builder
+	if err := loop.WritePrometheus(&exported); err != nil {
+		t.Fatal(err)
+	}
+	var gauge string
+	for _, line := range strings.Split(exported.String(), "\n") {
+		if strings.HasPrefix(line, `fixed_scheduler_schedule_degraded{schedule="`+schedule.ID+`"`) {
+			gauge = line
+		}
+	}
+	if gauge == "" {
+		t.Fatalf("no degraded gauge for %s in:\n%s", schedule.ID, exported.String())
+	}
+	if !strings.Contains(gauge, DegradedScheduledReportsUndeliverable) || !strings.HasSuffix(gauge, " 1") {
+		t.Fatalf(
+			"gauge = %q; a degraded reason reported alongside produced work did not "+
+				"survive the Engine -> Loop -> WritePrometheus seam", gauge,
+		)
+	}
+	// And the handoff count still reflects the work, so degradation did not suppress it.
+	if !strings.Contains(exported.String(),
+		`fixed_scheduler_handoffs_total{schedule="`+schedule.ID+`"} 1`) {
+		t.Fatalf("handoff counter did not record the produced work:\n%s", exported.String())
+	}
+}
+
+// A SkipReason must not reach the degraded gauge THROUGH THE ENGINE.
+//
+// There is a unit test asserting Loop.record does not invent a degraded reason from a
+// skipped result. It is not sufficient, and the gap is the third instance of one
+// structural mistake in this change: the promotion being guarded against lives in
+// runOccurrence, so a test that hands Loop.record a synthetic result never crosses the
+// boundary where the defect would be. Covering each side of a boundary is not covering
+// the crossing.
+//
+// This drives the real producer on a report that is not yet due — the ordinary case,
+// which is most ticks of a 300 second sweep — through the real engine into the real
+// loop, and demands the gauge stay clear. With the promotion restored, "nothing was
+// due" is displayed as a fault and latches until the schedule next evaluates.
+func TestSkipReasonDoesNotReachTheGaugeThroughTheEngine(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Created at 06:00 with a 06:00 daily cron: the next fire is tomorrow, so the
+	// sweep finds a report and correctly reports that nothing is due.
+	createdAt := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
+	seedScheduledReport(t, pool, "0 6 * * *", "UTC", createdAt)
+
+	schedule := scheduleByID(t, scheduledReportsScheduleID)
+	location, err := schedule.Location()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, time.July, 25, 6, 20, 30, 0, time.UTC)
+	dueAt, ok := schedule.Cadence.Previous(observedAt, location)
+	if !ok {
+		t.Fatal("cadence resolved no due time")
+	}
+	previous := NewOccurrence(
+		schedule, dueAt.Add(-schedule.Cadence.Period()), dueAt.Add(-schedule.Cadence.Period()))
+	seedRecordedOccurrence(t, ctx, pool, previous)
+
+	engine, publisher := newReportEngine(t, pool, schedule)
+	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	window, err := engine.Step(ctx, observedAt)
+	if err != nil {
+		t.Fatalf("Step(): %v", err)
+	}
+	result := resultFor(t, window, schedule.ID)
+	if result.Err != nil {
+		t.Fatalf("window failed: %v", result.Err)
+	}
+	// The premise: a real, committed, zero-work occurrence.
+	if result.Skipped != 1 || publisher.count() != 0 {
+		t.Fatalf("result = %+v (published %d), want a skipped occurrence with no work",
+			result, publisher.count())
+	}
+	if !result.Evaluated {
+		t.Fatal("a committed skipped window did not report Evaluated")
+	}
+	if result.Degraded != "" {
+		t.Fatalf(
+			"degraded = %q; an ordinary skip reason was promoted, and it would now latch "+
+				"until this schedule next evaluates", result.Degraded,
+		)
+	}
+
+	loop.record(window, observedAt)
+	var exported strings.Builder
+	if err := loop.WritePrometheus(&exported); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(exported.String(), "\n") {
+		if !strings.HasPrefix(line, `fixed_scheduler_schedule_degraded{schedule="`+schedule.ID+`"`) {
+			continue
+		}
+		if !strings.Contains(line, `reason="none"`) || !strings.HasSuffix(line, " 0") {
+			t.Fatalf("gauge = %q, want it clear after an ordinary skip", line)
+		}
+		// The skip is still visible where it belongs.
+		if !strings.Contains(exported.String(),
+			`fixed_scheduler_occurrences_total{schedule="`+schedule.ID+`",result="skipped"} 1`) {
+			t.Fatalf("the skip was not counted as an occurrence outcome:\n%s", exported.String())
+		}
+		return
+	}
+	t.Fatalf("no degraded gauge for %s in:\n%s", schedule.ID, exported.String())
 }

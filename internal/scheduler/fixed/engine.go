@@ -88,8 +88,16 @@ type ScheduleResult struct {
 	// is spent. It is exported so an operator can tell "nothing to do" from
 	// "working", and it may accompany produced work.
 	Degraded string
-	// Evaluated reports that a producer actually ran and returned a verdict in
-	// this window, so Degraded reflects a fresh observation.
+	// Evaluated reports that a producer returned a verdict AND the occurrence
+	// committed, so Degraded reflects a fresh, durable observation.
+	//
+	// "Committed verdict" is the precise meaning, and it is narrower than "the
+	// producer ran". If publication, ledger completion or the commit itself fails
+	// after Produce returned, this stays FALSE even though the producer did look.
+	// That is deliberate: the transaction rolled back, so nothing the producer
+	// observed is durable, and for the gauge's purpose an uncommitted verdict is
+	// indistinguishable from never having looked. Treating it as an observation
+	// would let a failed window clear a live reason.
 	//
 	// It exists because most windows do NOT evaluate most schedules: the loop
 	// polls every few seconds while a 300 second schedule is due once per period
@@ -419,16 +427,29 @@ func (engine *Engine) runOccurrence(
 		return 0, 0, 0, 0, "", false, fmt.Errorf("commit fixed schedule occurrence %s: %w", occurrence.Key, err)
 	}
 	committed = true
-	// A producer-reported degraded condition outranks the ledger's skip reason for
-	// telemetry: "nothing was due" is routine, whereas a named non-fatal fault is
-	// the thing an operator needs to see. The LEDGER still records the skip reason,
-	// because that column is the occurrence's own outcome and must stay a bounded
-	// value from the occurrence-status vocabulary.
+	// ONLY a producer-reported condition becomes Degraded. A SkipReason is
+	// deliberately NOT promoted, and that distinction is load-bearing rather than
+	// tidy:
+	//
+	// A skip reason describes THIS occurrence — "nothing was due", "no active
+	// organizations". A degraded reason describes ONGOING state, and because it now
+	// persists until the schedule next evaluates, promoting a skip made it latch for
+	// a full evaluation period. On the weekly capacity fan-out that is a raised
+	// gauge for a week: organizations added the day after Monday's skipped run leave
+	// an operator looking at a fault that resolved days earlier.
+	//
+	// That regression reached a producer this change did not write, and the reason it
+	// slipped through is worth recording: "the zero value preserves prior behaviour"
+	// is true of the Degraded FIELD and false of the promotion path that fills it.
+	// Heartbeat and retention were unaffected only because their successful outcomes
+	// always carry work — luck about those two producers, not a property of the
+	// change.
+	//
+	// The LEDGER is unaffected either way: Complete still receives the original
+	// SkipReason, which must stay a bounded value from the occurrence-status
+	// vocabulary.
 	degraded = result.Degraded
 	if status == OccurrenceSkipped {
-		if degraded == "" {
-			degraded = reason
-		}
 		return 1, 0, 0, 1, degraded, true, nil
 	}
 	return 1, 0, total, 0, degraded, true, nil

@@ -39,8 +39,16 @@ func NewPostgresOrganizationLister() OrganizationLister {
 // on the org_id='default' string. Either "fix" manufactures zero-work runs that
 // report success, which is the false-pass class the cutover plan forbids. The
 // empty-table case is therefore surfaced by the caller as a bounded skip with
-// reason SkipNoActiveOrganizations and exported as
-// fixed_scheduler_schedule_degraded, never silently treated as healthy work.
+// reason SkipNoActiveOrganizations, never silently treated as healthy work: it is
+// recorded on the occurrence in the durable ledger and counted as a skip in
+// fixed_scheduler_occurrences_total.
+//
+// It is NOT exported as fixed_scheduler_schedule_degraded, and this comment used to
+// say it was. Skip reasons are no longer promoted to that gauge, because the gauge
+// now persists until a schedule next evaluates — so promoting a weekly fan-out's
+// skip would raise a fault for a week after the condition had resolved. If this
+// condition needs its own alertable signal, the producer should report it as a
+// degraded condition deliberately, weighing that staleness.
 //
 // Whether any live installation actually depends on that fallback is an
 // evidence question, not a design one, and is answered at CUT-17 baseline

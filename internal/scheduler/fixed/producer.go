@@ -45,6 +45,25 @@ type Outcome struct {
 	// example an installation with no active organizations. It is recorded on
 	// the occurrence so an operator can tell "nothing to do" from "broken".
 	SkipReason string
+	// Degraded records a bounded, non-fatal condition that coexists WITH
+	// produced work. SkipReason cannot express it: that field only reaches
+	// telemetry when the occurrence produced nothing at all.
+	//
+	// It exists because a per-row fault must not become a per-schedule failure.
+	// A producer that sweeps many tenants can meet data it cannot act on for one
+	// of them — a report run whose durable handoff is spent, say — and returning
+	// an error there rolls the engine's transaction back, discarding the work it
+	// had already correctly materialized for every OTHER tenant, on every tick,
+	// forever. That is strictly less available than the Celery task being
+	// replaced, which dispatches each row independently.
+	//
+	// Setting it is therefore the honest middle: the occurrence commits, the
+	// unaffected tenants get their work, and the condition is exported as
+	// fixed_scheduler_schedule_degraded, which deliberately does NOT close
+	// readiness. Use it only for a condition that is genuinely scoped to some
+	// rows and genuinely non-fatal for the rest. A fault that invalidates the
+	// whole sweep is still an error.
+	Degraded string
 }
 
 // Producer materializes the authoritative domain rows for one occurrence and
@@ -127,6 +146,41 @@ func NewNotImplementedProducer(id, reason string) Producer {
 }
 
 func (producer notImplementedProducer) ID() string { return producer.id }
+
+// UnbuiltReason reports the recorded reason this producer is not built. It makes
+// "declared but unbuilt" a queryable property of a constructed producer set
+// rather than a fact only a reader of the construction site can see.
+func (producer notImplementedProducer) UnbuiltReason() string { return producer.reason }
+
+// unbuiltProducer is satisfied only by a declared-but-unbuilt producer.
+type unbuiltProducer interface{ UnbuiltReason() string }
+
+// Unbuilt names every schedule whose producer is declared but not built, keyed
+// by schedule ID and carrying the recorded reason, in stable order.
+//
+// Missing (above) answers "is any schedule unowned"; this answers the distinct
+// and, so far, more dangerous question "is any schedule owned on paper only".
+// ScheduleCoverage proves the legacy Beat inventory maps onto this table, but it
+// compares names, cadences, zones and policies — never executability — so a
+// schedule whose producer fails every invocation passes coverage unchanged. That
+// is exactly how three unbuilt producers coexisted with a green coverage test
+// while their tickets were closed. Exposing the set makes it assertable.
+func (set *ProducerSet) Unbuilt(schedules []Schedule) map[string]string {
+	unbuilt := make(map[string]string)
+	if set == nil {
+		return unbuilt
+	}
+	for _, schedule := range schedules {
+		producer, ok := set.Producer(schedule.ProducerID)
+		if !ok {
+			continue
+		}
+		if stub, isStub := producer.(unbuiltProducer); isStub {
+			unbuilt[schedule.ID] = stub.UnbuiltReason()
+		}
+	}
+	return unbuilt
+}
 
 func (producer notImplementedProducer) Produce(
 	context.Context,

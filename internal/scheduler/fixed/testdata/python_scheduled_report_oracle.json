@@ -1,0 +1,75 @@
+{
+  "_generated_by": "scripts/generate_scheduled_report_oracle.py",
+  "_regenerate": "PYTHONPATH=src .venv/bin/python scripts/generate_scheduled_report_oracle.py internal/scheduler/fixed/testdata/python_scheduled_report_oracle.json",
+  "identity_version": "report_scheduler_occurrence_v1",
+  "occurrence_identities": [
+    {
+      "report_id": "8d4e2f10-5a61-4b7c-8d9e-1f2a3b4c5d6e",
+      "scheduled_for": "2026-07-25T06:00:00+00:00",
+      "occurrence_id": "sha256:3bcf784add41e4bdd5fda59e8614add36af0751220f85823f3e8c652a6e60d6c"
+    },
+    {
+      "report_id": "8d4e2f10-5a61-4b7c-8d9e-1f2a3b4c5d6e",
+      "scheduled_for": "2026-07-26T06:00:00+00:00",
+      "occurrence_id": "sha256:220a102d11c2e9a080dafc1c0e7ea4564bcfbf9bad3fd1d11f17457d68dea81e"
+    },
+    {
+      "report_id": "00000000-0000-4000-8000-000000000001",
+      "scheduled_for": "2026-07-25T01:05:00+00:00",
+      "occurrence_id": "sha256:a0cee5c0250d05d6d02278490f2a2f5410373c4219e3d3d4b961da9b7aeb2486"
+    },
+    {
+      "report_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+      "scheduled_for": "2026-01-01T00:00:00+00:00",
+      "occurrence_id": "sha256:aadb0633dcf138f4a3edfb10f235fdd44c2b13e3aa6b3a1c19fa74dced656f7b"
+    },
+    {
+      "report_id": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+      "scheduled_for": "2026-12-31T23:59:00+00:00",
+      "occurrence_id": "sha256:204f05fa04edc906109781645d6ebb36ad8080741346559f79329d763bf7fbf2"
+    },
+    {
+      "report_id": "9b5e1a44-0c2f-4f6b-8d31-7ac0f5e29b10",
+      "scheduled_for": "2026-03-08T07:30:00+00:00",
+      "occurrence_id": "sha256:1fb0b9d3698354fcb942e6bd508442394c934c6d22fa91bd0a5ae2fc5287500f"
+    }
+  ],
+  "cron_occurrences": [
+    {
+      "expression": "*/5 * * * *",
+      "base": "2026-07-25T01:02:00+00:00",
+      "timezone": "UTC",
+      "next": "2026-07-25T01:05:00+00:00"
+    },
+    {
+      "expression": "0 6 * * *",
+      "base": "2026-07-24T06:00:00+00:00",
+      "timezone": "UTC",
+      "next": "2026-07-25T06:00:00+00:00"
+    },
+    {
+      "expression": "0 6 * * *",
+      "base": "2026-07-24T06:00:00+00:00",
+      "timezone": "America/New_York",
+      "next": "2026-07-24T10:00:00+00:00"
+    },
+    {
+      "expression": "30 2 * * 1",
+      "base": "2026-07-20T02:30:00+00:00",
+      "timezone": "Europe/London",
+      "next": "2026-07-27T01:30:00+00:00"
+    },
+    {
+      "expression": "0 1 * * *",
+      "base": "2026-03-07T01:00:00+00:00",
+      "timezone": "America/New_York",
+      "next": "2026-03-07T06:00:00+00:00"
+    },
+    {
+      "expression": "0 0 1 * *",
+      "base": "2026-01-01T00:00:00+00:00",
+      "timezone": "Australia/Sydney",
+      "next": "2026-01-31T13:00:00+00:00"
+    }
+  ]
+}

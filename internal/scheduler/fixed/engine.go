@@ -83,10 +83,30 @@ type ScheduleResult struct {
 	// StaleSkipped records that the newest due time was past this schedule's
 	// staleness horizon and was deliberately not run.
 	StaleSkipped bool
-	// Degraded names a bounded condition that produced no work but is not a
-	// failure, for example an installation with no active organizations. It is
-	// exported so an operator can tell "nothing to do" from "working".
+	// Degraded names a bounded condition that is not a failure, for example an
+	// installation with no active organizations or a report whose durable handoff
+	// is spent. It is exported so an operator can tell "nothing to do" from
+	// "working", and it may accompany produced work.
 	Degraded string
+	// Evaluated reports that a producer returned a verdict AND the occurrence
+	// committed, so Degraded reflects a fresh, durable observation.
+	//
+	// "Committed verdict" is the precise meaning, and it is narrower than "the
+	// producer ran". If publication, ledger completion or the commit itself fails
+	// after Produce returned, this stays FALSE even though the producer did look.
+	// That is deliberate: the transaction rolled back, so nothing the producer
+	// observed is durable, and for the gauge's purpose an uncommitted verdict is
+	// indistinguishable from never having looked. Treating it as an observation
+	// would let a failed window clear a live reason.
+	//
+	// It exists because most windows do NOT evaluate most schedules: the loop
+	// polls every few seconds while a 300 second schedule is due once per period
+	// and a daily one once per day. Without this flag a consumer cannot tell "the
+	// producer looked and found nothing wrong" from "the producer did not look",
+	// and treating the second as the first silently clears a degraded reason that
+	// is still true — which made a permanent fault visible for a single poll and
+	// invisible to any realistic scrape interval.
+	Evaluated bool
 	// MissingFor is how long the newest recorded occurrence has been older
 	// than the schedule expects. It drives missing-occurrence alerting.
 	MissingFor time.Duration
@@ -256,7 +276,7 @@ func (engine *Engine) stepSchedule(
 		// A cold start and a resumed-after-gap skip both record the boundary
 		// without producing work, so they take the same baseline path.
 		baseline := decision.ColdStart || decision.SkippedStale
-		claimed, duplicate, handoffs, skipped, degraded, err := engine.runOccurrence(
+		claimed, duplicate, handoffs, skipped, degraded, evaluated, err := engine.runOccurrence(
 			ctx, schedule, *decision.Occurrence, baseline,
 		)
 		outcome.Claimed += claimed
@@ -264,8 +284,15 @@ func (engine *Engine) stepSchedule(
 		outcome.Handoffs += handoffs
 		outcome.Skipped += skipped
 		outcome.ColdStart = decision.ColdStart
-		if degraded != "" && degraded != coldStartBaselineReason {
-			outcome.Degraded = degraded
+		// Evaluated gates the degraded verdict, so an empty Degraded from a real
+		// evaluation CLEARS a stale reason while a window that never ran the
+		// producer leaves it alone. The cold-start baseline is excluded because it
+		// deliberately produces no work and is not an observation of health.
+		if evaluated {
+			outcome.Evaluated = true
+			if degraded != coldStartBaselineReason {
+				outcome.Degraded = degraded
+			}
 		}
 		if err != nil {
 			outcome.Err = err
@@ -311,14 +338,14 @@ func (engine *Engine) runOccurrence(
 	schedule Schedule,
 	occurrence Occurrence,
 	baseline bool,
-) (claimed, duplicate, handoffs, skipped int, degraded string, err error) {
+) (claimed, duplicate, handoffs, skipped int, degraded string, evaluated bool, err error) {
 	producer, ok := engine.producers.Producer(schedule.ProducerID)
 	if !ok {
-		return 0, 0, 0, 0, "", fmt.Errorf("%w: %s", ErrProducerUnavailable, schedule.ProducerID)
+		return 0, 0, 0, 0, "", false, fmt.Errorf("%w: %s", ErrProducerUnavailable, schedule.ProducerID)
 	}
 	tx, err := engine.beginner.Begin(ctx)
 	if err != nil {
-		return 0, 0, 0, 0, "", fmt.Errorf("begin fixed schedule transaction: %w", err)
+		return 0, 0, 0, 0, "", false, fmt.Errorf("begin fixed schedule transaction: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -332,13 +359,13 @@ func (engine *Engine) runOccurrence(
 
 	claim, err := engine.ledger.Claim(ctx, tx, occurrence)
 	if err != nil {
-		return 0, 0, 0, 0, "", err
+		return 0, 0, 0, 0, "", false, err
 	}
 	if claim == ClaimDuplicate {
 		// Another replica or an earlier tick owns this due time. Rolling back
 		// is correct: the winner's transaction already carries the production
 		// work, and repeating it here would double the product effect.
-		return 0, 1, 0, 0, "", nil
+		return 0, 1, 0, 0, "", false, nil
 	}
 
 	if baseline {
@@ -350,36 +377,36 @@ func (engine *Engine) runOccurrence(
 		if err := engine.ledger.Complete(
 			ctx, tx, occurrence, OccurrenceSkipped, 0, coldStartBaselineReason,
 		); err != nil {
-			return 0, 0, 0, 0, "", err
+			return 0, 0, 0, 0, "", false, err
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return 0, 0, 0, 0, "", fmt.Errorf("commit fixed schedule baseline %s: %w", occurrence.Key, err)
+			return 0, 0, 0, 0, "", false, fmt.Errorf("commit fixed schedule baseline %s: %w", occurrence.Key, err)
 		}
 		committed = true
-		return 1, 0, 0, 1, coldStartBaselineReason, nil
+		return 1, 0, 0, 1, coldStartBaselineReason, false, nil
 	}
 
 	result, err := producer.Produce(ctx, tx, schedule, occurrence)
 	if err != nil {
-		return 0, 0, 0, 0, "", fmt.Errorf("produce occurrence %s: %w", occurrence.Key, err)
+		return 0, 0, 0, 0, "", false, fmt.Errorf("produce occurrence %s: %w", occurrence.Key, err)
 	}
 	published := 0
 	for _, request := range result.Requests {
 		descriptor, ok := engine.registry.Descriptor(request.Kind)
 		if !ok {
-			return 0, 0, 0, 0, "", fmt.Errorf(
+			return 0, 0, 0, 0, "", false, fmt.Errorf(
 				"%w: producer %s emitted unregistered kind %s",
 				ErrInvalidSchedule, schedule.ProducerID, request.Kind,
 			)
 		}
 		if request.Kind != schedule.TargetKind {
-			return 0, 0, 0, 0, "", fmt.Errorf(
+			return 0, 0, 0, 0, "", false, fmt.Errorf(
 				"%w: schedule %s targets %s but produced %s",
 				ErrInvalidSchedule, schedule.ID, schedule.TargetKind, request.Kind,
 			)
 		}
 		if err := engine.publisher.Publish(ctx, tx, request, descriptor.Executable()); err != nil {
-			return 0, 0, 0, 0, "", fmt.Errorf("publish %s for occurrence %s: %w", request.Kind, occurrence.Key, err)
+			return 0, 0, 0, 0, "", false, fmt.Errorf("publish %s for occurrence %s: %w", request.Kind, occurrence.Key, err)
 		}
 		published++
 	}
@@ -394,16 +421,38 @@ func (engine *Engine) runOccurrence(
 		}
 	}
 	if err := engine.ledger.Complete(ctx, tx, occurrence, status, total, reason); err != nil {
-		return 0, 0, 0, 0, "", err
+		return 0, 0, 0, 0, "", false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, 0, 0, "", fmt.Errorf("commit fixed schedule occurrence %s: %w", occurrence.Key, err)
+		return 0, 0, 0, 0, "", false, fmt.Errorf("commit fixed schedule occurrence %s: %w", occurrence.Key, err)
 	}
 	committed = true
+	// ONLY a producer-reported condition becomes Degraded. A SkipReason is
+	// deliberately NOT promoted, and that distinction is load-bearing rather than
+	// tidy:
+	//
+	// A skip reason describes THIS occurrence — "nothing was due", "no active
+	// organizations". A degraded reason describes ONGOING state, and because it now
+	// persists until the schedule next evaluates, promoting a skip made it latch for
+	// a full evaluation period. On the weekly capacity fan-out that is a raised
+	// gauge for a week: organizations added the day after Monday's skipped run leave
+	// an operator looking at a fault that resolved days earlier.
+	//
+	// That regression reached a producer this change did not write, and the reason it
+	// slipped through is worth recording: "the zero value preserves prior behaviour"
+	// is true of the Degraded FIELD and false of the promotion path that fills it.
+	// Heartbeat and retention were unaffected only because their successful outcomes
+	// always carry work — luck about those two producers, not a property of the
+	// change.
+	//
+	// The LEDGER is unaffected either way: Complete still receives the original
+	// SkipReason, which must stay a bounded value from the occurrence-status
+	// vocabulary.
+	degraded = result.Degraded
 	if status == OccurrenceSkipped {
-		return 1, 0, 0, 1, reason, nil
+		return 1, 0, 0, 1, degraded, true, nil
 	}
-	return 1, 0, total, 0, "", nil
+	return 1, 0, total, 0, degraded, true, nil
 }
 
 // missingFor reports how far the newest recorded occurrence lags the newest due

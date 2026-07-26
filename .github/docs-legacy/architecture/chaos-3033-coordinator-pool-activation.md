@@ -165,6 +165,14 @@ therefore one connection per loop — exactly 2.
   `schedulersync.NewUnavailableMaterializer()`, so activating today would
   durably record occurrences Go can never materialize. The binary stays dormant
   and opens no pool at all. No privilege precondition remains — see below.
+- **Two fixed schedules are still owned on paper only** (`daily_metrics_fanout`,
+  `scheduled_metrics_dispatch`), and `scheduled_reports_dispatch` — built since
+  this document was written — adds three tables to `runOccurrence`'s statement
+  set that `coordinatorPosture()` does not yet declare, so it IS a live privilege
+  precondition despite the line above. See
+  [fixed-schedule-producers.md](fixed-schedule-producers.md) for the per-schedule
+  state, the three held grant rows and why they are held, and the five statement
+  shapes the coordinator statement-privilege test does not yet cover.
 
 ## CHAOS-3114 — both halves shipped
 

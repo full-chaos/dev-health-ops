@@ -94,9 +94,12 @@ type scheduleState struct {
 	failures   uint64
 	overdue    bool
 	missingFor time.Duration
-	// degraded names a bounded no-work condition, for example an installation
-	// with no active organizations. It is exported so an operator can
-	// distinguish "nothing to do" from "producing work".
+	// degraded names a bounded, named non-fatal condition reported by a producer,
+	// for example a report run whose durable handoff has exhausted its delivery
+	// budget. It may coexist with produced work, so it is NOT a "no work" marker —
+	// an ordinary SkipReason is deliberately never promoted here, because this value
+	// persists until the schedule next evaluates and a skip would latch for a full
+	// period. It holds the last EVALUATED verdict, not the current instant.
 	degraded string
 	// coldStarts counts baseline records, which are expected exactly once per
 	// schedule on a new deployment and never again.
@@ -308,7 +311,14 @@ func (loop *Loop) record(result WindowResult, now time.Time) {
 		state.handoffs += uint64(schedule.Handoffs)
 		state.skipped += uint64(schedule.Skipped)
 		state.missingFor = schedule.MissingFor
-		state.degraded = schedule.Degraded
+		// Only a window that actually evaluated this schedule may change its
+		// degraded verdict. The loop polls far more often than any schedule is due,
+		// so overwriting unconditionally cleared a live reason on the very next
+		// poll: a permanent fault stayed visible for one poll interval and was
+		// missed by any realistic scrape.
+		if schedule.Evaluated {
+			state.degraded = schedule.Degraded
+		}
 		if schedule.ColdStart {
 			state.coldStarts++
 		}
@@ -478,11 +488,18 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	for _, identifier := range identifiers {
 		fmt.Fprintf(&text, "fixed_scheduler_cold_starts_total{schedule=%q} %d\n", identifier, snapshot[identifier].coldStarts)
 	}
-	// A degraded schedule is not a failure and must not close readiness, but it
-	// is also not healthy work. Exporting the reason as a labelled gauge lets an
-	// operator alert on, for example, an installation whose organization table
-	// is empty and whose nightly fan-outs therefore schedule nothing.
-	text.WriteString("# HELP fixed_scheduler_schedule_degraded Whether a schedule produced no work for a bounded, named reason.\n# TYPE fixed_scheduler_schedule_degraded gauge\n")
+	// A degraded schedule is not a failure and must not close readiness, but it is
+	// also not healthy work. Exporting the reason as a labelled gauge lets an
+	// operator alert on a named non-fatal condition, for example a report run whose
+	// durable handoff has exhausted its delivery budget.
+	//
+	// The HELP text says "at its last evaluation" advisedly. The value persists
+	// across the many polls that do not evaluate this schedule, so it describes the
+	// most recent verdict rather than this instant — and for an infrequent schedule
+	// that verdict can be up to a full period old. An operator reading it as current
+	// would draw the wrong conclusion. It is also process-local, so replicas can
+	// disagree and a restart begins empty (CHAOS-3161).
+	text.WriteString("# HELP fixed_scheduler_schedule_degraded Whether a schedule reported a bounded, named non-fatal condition at its last evaluation; it may coexist with produced work.\n# TYPE fixed_scheduler_schedule_degraded gauge\n")
 	for _, identifier := range identifiers {
 		reason := snapshot[identifier].degraded
 		value := 0

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"path/filepath"
@@ -14,7 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
@@ -85,12 +85,23 @@ func TestCheckedInReconcilerActivationMatchesItsPin(t *testing.T) {
 // fails. Adversarial review showed the structural pin alone is silently defeated
 // by a value constructed at the call site; this is what closes that.
 //
-// The cfg passed in names the production Service (reconcilerSpec.Service), not
-// only RiverDatabaseSchema. Adversarial review pointed out that a config this
-// unlike config.Load's real output leaves room for a future rewrite to branch
-// on cfg.Service and activate only when the input looks production-shaped --
-// this test would then never see it. This does not close every such route
-// (cfg still has other zero fields), but it removes the cheapest version of it.
+// The cfg passed in is config.Load's own real output for reconcilerSpec.Service
+// with no environment set, not a hand-built literal. Adversarial review found
+// this twice: first that a config unlike config.Load's real output (missing
+// Service) leaves room for a future rewrite to branch on cfg.Service and
+// activate only for production-shaped input; then, after Service was added,
+// that a hand-picked subset still isn't what production computes -- every
+// other field a future rewrite might branch on (for instance
+// cfg.CoordinatorDatabaseRole, non-empty by default even with no environment
+// set) was still left zero, unlike production. Calling config.Load itself
+// closes that gap for every field it can populate without a real secret.
+//
+// NOT covered, and disclosed rather than assumed closed: a field config.Load
+// only populates when a secret environment variable is actually set
+// (cfg.CoordinatorDatabaseURI.Configured(), for instance) still reads zero
+// here, because supplying a real one would make this an integration test. A
+// future rewrite that activates specifically on a CONFIGURED coordinator URI,
+// rather than on checkedInReconcilerActivation, would still pass undetected.
 func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 	// The contract roots are repo-relative, so reach the stepper branch the same
 	// way the neighbouring dependency tests do. Without this the configuration
@@ -149,7 +160,7 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 
 	if _, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
-		config.Config{Service: reconcilerSpec.Service, RiverDatabaseSchema: "river"},
+		reconcilerProductionShapedConfig(t),
 		health.NewRegistry(100*time.Millisecond),
 		reconcilerTestLogger(),
 		sources,
@@ -243,7 +254,7 @@ func TestReconcilerSpecInvokesTheReviewedActivation(t *testing.T) {
 	}
 	if _, err := reconcilerSpec.ConfigureDependenciesWithLogger(
 		context.Background(),
-		config.Config{Service: reconcilerSpec.Service, RiverDatabaseSchema: "river"},
+		reconcilerProductionShapedConfig(t),
 		health.NewRegistry(100*time.Millisecond),
 		reconcilerTestLogger(),
 	); err != nil {
@@ -367,6 +378,16 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 //     than the spec's configure fields -- would bypass every pin in this file
 //     the same way a rewired main() would, and nothing here exercises
 //     shell.Main/Execute's own internals to catch it.
+//   - A future configureReconcilerDependenciesWithLogger that branches on a
+//     config.Config field only populated when a real secret environment
+//     variable is set (cfg.CoordinatorDatabaseURI.Configured(), for
+//     instance), rather than on checkedInReconcilerActivation. The
+//     behavioural pin passes config.Load's own defaulted output
+//     (reconcilerProductionShapedConfig), which closes the version of this
+//     where the branch condition is merely non-empty -- config.Load already
+//     defaults most fields -- but not a branch on whether a SECRET was
+//     actually configured, because supplying one would turn this into an
+//     integration test.
 //   - That flipping the seam retains concrete River delivery capability. Set the
 //     flag and the pin together and everything here passes, 42501 and all
 //     (CHAOS-3146).
@@ -568,9 +589,32 @@ func TestReconcilerActivationPinIsNotVacuous(t *testing.T) {
 // close.
 func TestReconcilerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
 	fileSet := token.NewFileSet()
-	file, err := parser.ParseFile(fileSet, "main.go", nil, 0)
+	file, err := parser.ParseFile(fileSet, "main.go", nil, parser.ParseComments)
 	if err != nil {
 		t.Fatalf("parsing main.go: %v", err)
+	}
+
+	// A build-constrained main.go could be excluded from the build actually
+	// shipped, with a differently-behaving entry point compiling in its place
+	// under a platform- or tag-specific filename -- this test would keep
+	// parsing and passing against a file the binary never contains. Adversarial
+	// review raised this as a plausible ordinary refactor (a platform-specific
+	// entrypoint split), not a contrived one, so it is rejected outright rather
+	// than merely disclosed.
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			if constraint.IsGoBuild(comment.Text) || constraint.IsPlusBuild(comment.Text) {
+				t.Fatalf(
+					"main.go carries a build constraint (%q). This file's pins only "+
+						"cover main.go's content, not whether the build actually "+
+						"includes it -- a constrained main.go could be dead code while "+
+						"another file supplies the real entry point. Remove the "+
+						"constraint, or move the pinned main() to whichever file is "+
+						"unconditionally built and retarget this test at it.",
+					comment.Text,
+				)
+			}
+		}
 	}
 
 	var mainDecl *ast.FuncDecl

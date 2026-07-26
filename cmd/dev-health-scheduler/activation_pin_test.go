@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"reflect"
@@ -68,19 +69,39 @@ var schedulerReadinessNamesClosedWhenDormant = []string{
 // it goes through the production wrapper and checks the outcome. If someone
 // activates the scheduler by any route, this test fails.
 //
-// The cfg passed in names the production Service (schedulerSpec.Service),
-// not a zero config.Config{}. Adversarial review pointed out that an empty
-// config leaves room for a future configureSchedulerDependencies to branch
-// on cfg.Service or another populated field and activate only when the input
-// looks like config.Load's real output -- a rewrite this test would then miss
-// entirely. Passing the real Service name closes that specific route without
-// needing every other Config field, since activation here does not read them.
+// The cfg passed in is config.Load's own real output for schedulerSpec.Service
+// with no environment set, not a hand-built config.Config{} literal.
+// Adversarial review pointed out twice: first that an empty config leaves room
+// for a future configureSchedulerDependencies to branch on cfg.Service and
+// activate only for realistic input; then, after that was fixed by adding just
+// Service, that a hand-picked subset still isn't what production computes --
+// every other field a future refactor might branch on (for instance
+// cfg.CoordinatorDatabaseRole, which config.Load defaults to a non-empty
+// value even with no environment set) was still left zero, unlike production.
+// Calling config.Load itself removes the gap between "what this test passes"
+// and "what production would actually compute for this input", for every
+// field config.Load can populate without a real secret being set.
+//
+// NOT covered by this, and disclosed rather than assumed closed: a field that
+// config.Load only populates when a secret environment variable is actually
+// set (cfg.CoordinatorDatabaseURI.Configured(), for instance) still reads
+// zero here, because supplying a real one would make this an integration
+// test against infrastructure that may not exist. A future
+// configureSchedulerDependencies that activates specifically on a CONFIGURED
+// coordinator URI, rather than on the checked-in activation map, would still
+// pass this test undetected.
 func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 
-	components, err := configureSchedulerDependencies(
-		context.Background(), config.Config{Service: schedulerSpec.Service}, registry,
-	)
+	cfg, err := config.Load(config.Spec{
+		Service:   schedulerSpec.Service,
+		LookupEnv: func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatalf("loading a production-defaulted config for %q: %v", schedulerSpec.Service, err)
+	}
+
+	components, err := configureSchedulerDependencies(context.Background(), cfg, registry)
 
 	if err != nil {
 		t.Fatalf(
@@ -180,8 +201,20 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 // environment variable directly, or dispatching on something other than the
 // spec's configure fields -- would bypass every pin in this file the same way
 // a rewired main() would, and no test here would notice, because none of them
-// exercise shell.Main/Execute's own internals. And, as stated above, neither
-// pin proves that flipping the seam retains the capability the seam guards.
+// exercise shell.Main/Execute's own internals.
+//
+// NOT PINNED: a future configureSchedulerDependencies that branches on a
+// config.Config field only populated when a real secret environment variable
+// is set (cfg.CoordinatorDatabaseURI.Configured(), for instance), rather than
+// on checkedInSchedulerActivation. TestProductionSchedulerConfigurationIsDormant
+// passes config.Load's own defaulted output, which closes the version of this
+// where the branch condition is merely non-empty (config.Load already
+// defaults most fields); it does not close a branch on whether a SECRET was
+// actually configured, because supplying one would turn this into an
+// integration test.
+//
+// And, as stated above, neither pin proves that flipping the seam retains the
+// capability the seam guards.
 func TestSchedulerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
 	if schedulerSpec.ConfigureDependenciesWithLogger != nil {
 		t.Fatal(
@@ -391,9 +424,32 @@ func TestSchedulerActivationPinIsNotVacuous(t *testing.T) {
 // close.
 func TestSchedulerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
 	fileSet := token.NewFileSet()
-	file, err := parser.ParseFile(fileSet, "main.go", nil, 0)
+	file, err := parser.ParseFile(fileSet, "main.go", nil, parser.ParseComments)
 	if err != nil {
 		t.Fatalf("parsing main.go: %v", err)
+	}
+
+	// A build-constrained main.go could be excluded from the build actually
+	// shipped, with a differently-behaving entry point compiling in its place
+	// under a platform- or tag-specific filename -- this test would keep
+	// parsing and passing against a file the binary never contains. Adversarial
+	// review raised this as a plausible ordinary refactor (a platform-specific
+	// entrypoint split), not a contrived one, so it is rejected outright rather
+	// than merely disclosed.
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			if constraint.IsGoBuild(comment.Text) || constraint.IsPlusBuild(comment.Text) {
+				t.Fatalf(
+					"main.go carries a build constraint (%q). This file's pins only "+
+						"cover main.go's content, not whether the build actually "+
+						"includes it -- a constrained main.go could be dead code while "+
+						"another file supplies the real entry point. Remove the "+
+						"constraint, or move the pinned main() to whichever file is "+
+						"unconditionally built and retarget this test at it.",
+					comment.Text,
+				)
+			}
+		}
 	}
 
 	var mainDecl *ast.FuncDecl

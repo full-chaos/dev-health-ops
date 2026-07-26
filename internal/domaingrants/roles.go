@@ -770,19 +770,22 @@ func transactionStraddleFindings(inputs []RoleInput, byRole map[PoolRole]RoleInp
 			traced := strings.HasPrefix(group, "txorigin:")
 			groupSites := txGroupSites(in.Derived, group)
 			var otherGroupSites []map[string]bool
-			othersHaveGroup := false
 			for role, other := range byRole {
 				if role == in.Role {
 					continue
 				}
-				sites := txGroupSites(other.Derived, group)
-				if len(sites) > 0 {
-					othersHaveGroup = true
-				}
-				otherGroupSites = append(otherGroupSites, sites)
+				otherGroupSites = append(otherGroupSites, txGroupSites(other.Derived, group))
 			}
+			// One exclusive site is necessary AND sufficient here. A group key only
+			// exists because this role's own evidence produced it, so groupSites is
+			// never empty; therefore "no other role has this group" already implies
+			// every site is exclusive. An earlier version also OR'd in an explicit
+			// !othersHaveGroup clause, which mutation testing showed to be dead --
+			// unreachable rather than merely untested. Removed instead of left in
+			// place, because a dead clause reads as a second safeguard that is
+			// actually doing nothing.
 			exclusive := exclusiveTo(groupSites, otherGroupSites)
-			attributed := len(exclusive) > 0 || !othersHaveGroup
+			attributed := len(exclusive) > 0
 
 			severity := Critical
 			var caveat string

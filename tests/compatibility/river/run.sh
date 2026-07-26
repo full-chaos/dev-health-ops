@@ -132,6 +132,48 @@ compose_down() {
   COMPOSE_ATTEMPTED=0
 }
 
+# Strips connection strings and credential-bearing key=value pairs from
+# Compose/service diagnostic text before it can reach stderr (CI logs).
+# Matches the same category of secret the final-result redaction guards
+# against (assert_final_redaction): DSNs, postgresql:// URLs, and
+# password/credential fields. Portable sed -E (no GNU-only extensions),
+# since this also runs under BSD sed during local development.
+redact_diagnostic_stream() {
+  sed -E \
+    -e 's#postgresql(\+[A-Za-z0-9]+)?://[^[:space:]]+#postgresql://[redacted]#g' \
+    -e 's/(POSTGRES_PASSWORD|PGPASSWORD|DB_PASSWORD|ADMIN_USERS|AUTH_TYPE)=[^[:space:]]*/\1=[redacted]/g' \
+    -e 's/([Pp]assword[[:space:]]*[:=][[:space:]]*)[^[:space:],}]*/\1[redacted]/g'
+}
+
+# Called only on the unhealthy-bootstrap path (never on success). Emits a
+# sanitized service-status/health summary and a bounded log tail per service
+# to stderr so a bootstrap failure is diagnosable from the CI log alone,
+# instead of only the bounded "did not become healthy" message. This must
+# run BEFORE die()/cleanup() removes TEMP_DIR and tears the Compose project
+# down, and before any output reaches stdout (stdout is reserved for the one
+# sanitized JSON result on success).
+dump_bootstrap_diagnostics() {
+  local status_file="${TEMP_DIR}/bootstrap-status.log"
+
+  progress "collecting sanitized service diagnostics for the failed bootstrap"
+
+  {
+    printf -- '-- docker compose up (captured stdout+stderr) --\n'
+    cat -- "${TEMP_DIR}/compose-up.stdout" 2>/dev/null
+    cat -- "${TEMP_DIR}/compose-up.stderr" 2>/dev/null
+    printf -- '\n-- docker compose ps --\n'
+    "${compose[@]}" ps --all 2>&1
+    printf -- '\n-- postgres logs (tail 40) --\n'
+    "${compose[@]}" logs --no-color --tail=40 postgres 2>&1
+    printf -- '\n-- pgbouncer logs (tail 40) --\n'
+    "${compose[@]}" logs --no-color --tail=40 pgbouncer 2>&1
+  } 2>&1 | redact_diagnostic_stream >"${status_file}" || true
+
+  printf 'river compatibility harness: bootstrap diagnostics (sanitized) ----------\n' >&2
+  cat -- "${status_file}" >&2 || true
+  printf 'river compatibility harness: ---- end bootstrap diagnostics ----------\n' >&2
+}
+
 resolve_local_port() {
   local service="$1"
   local container_port="$2"
@@ -1021,6 +1063,7 @@ COMPOSE_ATTEMPTED=1
 if ! "${compose[@]}" up -d --wait postgres pgbouncer \
   >"${TEMP_DIR}/compose-up.stdout" \
   2>"${TEMP_DIR}/compose-up.stderr"; then
+  dump_bootstrap_diagnostics
   die "the isolated compatibility services did not become healthy"
 fi
 

@@ -38,6 +38,20 @@ type GitHubPageOptions struct {
 	Query    url.Values
 	DataKey  string
 	MaxPages int
+	// StopAt, when set, is evaluated for each item in page order (codex H1,
+	// CHAOS-3122). The first item it reports true for is excluded from
+	// Items, and pagination stops immediately without requesting a next
+	// page. This mirrors code_client.py's GitHubCodeClient.iter_pulls: for a
+	// sort=updated&direction=desc listing, once a caller-recognized boundary
+	// (e.g. "older than the incremental window") is crossed, every
+	// remaining item on this page and every later page is guaranteed to be
+	// on the same side of it, so continuing to paginate only spends
+	// requests fetching history the caller was never going to keep -- and,
+	// worse, can trip MaxPages on a repository whose IN-WINDOW page count is
+	// small but whose total history is not. Leave nil for a caller that has
+	// no such boundary (e.g. an unbounded backfill), which reproduces the
+	// unmodified fetch-every-page behavior exactly.
+	StopAt func(json.RawMessage) bool
 }
 
 // CollectGitHubLinkPages mirrors the Python InstrumentedRESTCore contract:
@@ -72,7 +86,22 @@ func CollectGitHubLinkPages(
 			return PageCollection{}, decodeErr
 		}
 		result.Pages++
-		result.Items = append(result.Items, items...)
+		if options.StopAt == nil {
+			result.Items = append(result.Items, items...)
+			next = githubNextLink(response.Header.Get("Link"))
+			continue
+		}
+		crossedBoundary := false
+		for _, item := range items {
+			if options.StopAt(item) {
+				crossedBoundary = true
+				break
+			}
+			result.Items = append(result.Items, item)
+		}
+		if crossedBoundary {
+			return result, nil
+		}
 		next = githubNextLink(response.Header.Get("Link"))
 	}
 	return result, nil

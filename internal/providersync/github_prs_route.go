@@ -172,9 +172,21 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	if maxPages == 0 {
 		maxPages = nativeMaxPages
 	}
+	// codex H1 (first half): Python's client.iter_pulls stops paginating the
+	// moment a listed item's updated_at is known and falls below since --
+	// for a sort=updated&direction=desc listing every later item is
+	// guaranteed to be even older, so continuing only spends requests
+	// fetching history the caller was never going to keep. Without this,
+	// the H2 cap check below counts pages of TOTAL history, not pages
+	// WITHIN the incremental window: a repository with 10,001 historical
+	// PRs but only one page inside the window would cap (and now fail the
+	// unit) on every attempt, forever, even though Python syncs it fine.
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx, client, providerfoundation.GitHubPageOptions{
 			Path: root + "/pulls", Query: query, MaxPages: maxPages,
+			StopAt: func(raw json.RawMessage) bool {
+				return pullCrossedSinceBoundary(raw, claim)
+			},
 		},
 	)
 	if err != nil {
@@ -184,7 +196,10 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	// fetch that still reports success and still lets Collect return
 	// claim.BeforeAt as the watermark would silently and permanently lose
 	// every PR past the cap -- the window never revisits them. Fail the
-	// whole unit instead: never both capped and successful.
+	// whole unit instead: never both capped and successful. With the
+	// since-boundary early stop above, CapReached now means what it claims:
+	// more than MaxPages pages fall WITHIN the claim's window, not that the
+	// repository merely has a long history.
 	if page.CapReached {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
@@ -235,11 +250,16 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 }
 
 // filterGitHubPullWindow applies the claim's since/before window to the
-// listed PR numbers, client-side -- the same window
+// listed PR numbers, client-side -- the same per-item recheck
 // `_collect_github_pr_objects` (processors/github.py) applies over
-// `client.iter_pulls`'s results. GitHub's /pulls list endpoint has no
-// server-side `since` parameter (unlike /issues), so this is the only
-// filter, not a redundant belt-and-suspenders layer.
+// `client.iter_pulls`'s already-early-stopped results. GitHub's /pulls list
+// endpoint has no server-side `since` OR `until` parameter, so for the
+// `before` bound this is the ONLY enforcement; for the `since` bound it is a
+// deliberate belt-and-suspenders recheck behind pullCrossedSinceBoundary's
+// pagination-level early stop (codex H1), mirroring Python's own redundant
+// two-layer structure (iter_pulls's internal early-stop, then
+// _collect_github_pr_objects's own per-item since/until recheck) rather than
+// relying on only one of the two layers being correct.
 //
 // codex H3: Python applies the since/until comparison ONLY when
 // `updated_at` is a real `datetime` (`isinstance(updated_at, datetime)`);
@@ -284,6 +304,31 @@ func pullOutsideKnownWindow(updatedAt time.Time, claim Claim) bool {
 	before := claim.SinceAt != nil && updatedAt.Before(claim.SinceAt.UTC())
 	after := claim.BeforeAt != nil && updatedAt.After(claim.BeforeAt.UTC())
 	return before || after
+}
+
+// pullCrossedSinceBoundary is the GitHubPageOptions.StopAt predicate for the
+// /pulls listing (codex H1, first half): a direct port of
+// code_client.py::GitHubCodeClient.iter_pulls's per-item
+// `since is not None and pull.updated_at is not None and pull.updated_at <
+// since` check, which BREAKS iteration (not merely skips the one item) once
+// it fires. For a sort=updated&direction=desc page this is safe: everything
+// after the crossing item, on this page and every later page, is guaranteed
+// to be at least as old. windowKnown is split out for the same clause-level
+// mutation-testing reason pullOutsideKnownWindow's is.
+func pullCrossedSinceBoundary(raw json.RawMessage, claim Claim) bool {
+	if claim.SinceAt == nil {
+		return false
+	}
+	var item gitHubPullListItem
+	if json.Unmarshal(raw, &item) != nil {
+		return false
+	}
+	updatedAt := firstTime(item.UpdatedAt)
+	windowKnown := !updatedAt.IsZero()
+	if !windowKnown {
+		return false
+	}
+	return updatedAt.Before(claim.SinceAt.UTC())
 }
 
 // normalizeGitHubPullRequest mirrors build_git_pull_request +

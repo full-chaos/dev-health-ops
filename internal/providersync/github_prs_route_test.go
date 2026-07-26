@@ -270,6 +270,98 @@ func TestGitHubPullRequestRouteFailsClosedOnPaginationCap(t *testing.T) {
 	}
 }
 
+// TestGitHubPullRequestRouteStopsPaginatingAtTheSinceBoundary is codex H1's
+// first half: a repository whose TOTAL history spans more pages than
+// MaxPages must still succeed as long as only ONE page falls inside the
+// claim's window -- code_client.py's iter_pulls stops the moment a listed
+// item's updated_at (sort=updated&direction=desc) is known and older than
+// `since`, so Python never pays for, or is limited by, the pages beyond
+// that point. Page 1 here holds one in-window PR followed by one
+// ancient PR that crosses the since boundary; pages 2 and 3 hold only
+// further ancient PRs and must never be requested at all.
+func TestGitHubPullRequestRouteStopsPaginatingAtTheSinceBoundary(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &gitHubPullRequestDeepHistoryDoer{t: t, ancientPages: 2}
+	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	claim := nativeTestClaim("github", "prs") // since=2026-07-01, before=2026-07-31
+	batch, err := (GitHubPullRequestRouteHandler{
+		Now: func() time.Time { return now }, MaxPages: 2,
+	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
+	if err != nil {
+		t.Fatalf("Collect error=%v want nil: a deep-history repo with only "+
+			"one page inside the window must not cap", err)
+	}
+	if batch.Evidence.CapReached {
+		t.Fatal("CapReached=true: the early stop did not fire before the cap")
+	}
+	if batch.Evidence.Records != 1 {
+		t.Fatalf("records=%d want 1 (only the in-window PR)", batch.Evidence.Records)
+	}
+	for _, path := range doer.requests {
+		if path == "/repos/acme/api/pulls/2" {
+			t.Fatalf("fetched detail for the ancient PR: %s", path)
+		}
+	}
+	if doer.listPagesServed != 1 {
+		t.Fatalf("list pages served=%d want 1: pages 2/3 must never be requested "+
+			"once the since boundary is crossed on page 1", doer.listPagesServed)
+	}
+}
+
+// gitHubPullRequestDeepHistoryDoer serves one page holding [in-window PR
+// #1, ancient PR #2 whose updated_at is older than nativeTestClaim's
+// since], followed by `ancientPages` further pages of nothing but more
+// ancient PRs and a "next" Link header -- pages a correct implementation
+// must never request.
+type gitHubPullRequestDeepHistoryDoer struct {
+	t               *testing.T
+	ancientPages    int
+	listPagesServed int
+	requests        []string
+}
+
+func (doer *gitHubPullRequestDeepHistoryDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	path := request.URL.Path
+	doer.requests = append(doer.requests, path)
+	header := http.Header{"Content-Type": []string{"application/json"}}
+	switch {
+	case path == "/repos/acme/api":
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: header,
+			Body: io.NopCloser(strings.NewReader(gitHubPullRequestRepoFixture)), Request: request,
+		}, nil
+	case path == "/repos/acme/api/pulls":
+		doer.listPagesServed++
+		var body string
+		if doer.listPagesServed == 1 {
+			body = `[{"number": 1, "updated_at": "2026-07-15T00:00:00Z"},` +
+				`{"number": 2, "updated_at": "2020-01-01T00:00:00Z"}]`
+			// A "next" link is present -- it must never be followed, since
+			// the since boundary is crossed by PR #2 on THIS page.
+			header.Set("Link", `<https://api.github.com/repos/acme/api/pulls?page=2>; rel="next"`)
+		} else {
+			body = `[{"number": 999, "updated_at": "2019-01-01T00:00:00Z"}]`
+			if doer.listPagesServed-1 < doer.ancientPages {
+				header.Set("Link", `<https://api.github.com/repos/acme/api/pulls?page=`+
+					strconv.Itoa(doer.listPagesServed+1)+`>; rel="next"`)
+			}
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: header,
+			Body: io.NopCloser(strings.NewReader(body)), Request: request,
+		}, nil
+	default:
+		// /pulls/1 detail (the only PR that should ever be detail-fetched).
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: header,
+			Body:    io.NopCloser(strings.NewReader(gitHubPullRequestDetailFixture42)),
+			Request: request,
+		}, nil
+	}
+}
+
 // gitHubPullRequestPagingDoer serves `totalPages` pages of one PR each (all
 // with an updated_at inside nativeTestClaim's window) via the Link header,
 // plus the repo GET and every /pulls/{number} detail GET.
@@ -572,22 +664,67 @@ func TestParseGitHubPullTimeTruncatesToMilliseconds(t *testing.T) {
 	}
 }
 
-// TestGitHubPullUserLoginStringifiesNonStringLogins is codex M8: Python's
-// _pull_from_item does `str(user["login"])` for ANY non-null login value,
-// not only a string one. Decoding straight into a Go `string` field makes
-// json.Unmarshal fail (and silently fall back to "Unknown") for a numeric
-// login, which Python would have stringified and kept.
+// TestGitHubPullRequestRouteTruncatesNormalizedAtToMilliseconds is codex M5's
+// follow-up: `last_synced` (and created_at's now() fallback) come from
+// Collect's OWN `normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)`
+// line -- a SEPARATE truncation point from parseGitHubPullTime's, which only
+// covers provider-supplied created_at/merged_at/closed_at. Every other test
+// in this file constructs `now` with zero sub-second precision
+// (`time.Date(..., 0, time.UTC)`), so removing Collect's own truncate call
+// would be invisible to them: truncating an already-round value is a no-op.
+// This test exists specifically so that gap has a fixture -- codex flagged
+// that the mutation plan would have let a deleted truncation survive for
+// exactly this reason.
+func TestGitHubPullRequestRouteTruncatesNormalizedAtToMilliseconds(t *testing.T) {
+	t.Parallel()
+	subMillisecondNow := time.Date(2026, 7, 23, 12, 30, 0, 123_456_789, time.UTC)
+	doer := &gitHubPullRequestDoer{t: t, bodies: defaultGitHubPullRequestFixtures()}
+	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	batch, err := (GitHubPullRequestRouteHandler{
+		Now: func() time.Time { return subMillisecondNow },
+	}).Collect(
+		context.Background(), nativeTestClaim("github", "prs"),
+		providerfoundation.Credential{}, client, subMillisecondNow,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row pullRequestRow
+	if err := json.Unmarshal(batch.Effects[0].Rows[0], &row); err != nil {
+		t.Fatal(err)
+	}
+	wantLastSynced := time.Date(2026, 7, 23, 12, 30, 0, 123_000_000, time.UTC)
+	if !row.LastSynced.Equal(wantLastSynced) {
+		t.Fatalf("last_synced=%v want %v (truncated to ms)", row.LastSynced, wantLastSynced)
+	}
+	if row.LastSynced.Nanosecond()%int(time.Millisecond) != 0 {
+		t.Fatalf("last_synced retained sub-millisecond precision: %v", row.LastSynced)
+	}
+}
+
+// TestGitHubPullUserLoginStringifiesNonStringLogins is codex M8 (and M4's
+// follow-up on it): Python's _pull_from_item does `str(user["login"])` for
+// ANY non-null login value, not only a numeric one. codex M4 found that an
+// earlier version of this test claimed "ANY non-null" while covering only
+// an integer -- stringValue's own switch handled numbers but fell through
+// to "" for a boolean, silently different from Python's str(True)=="True".
+// This table now genuinely covers every JSON scalar type a login could
+// plausibly be: string, number, and boolean. list/dict/null are
+// deliberately NOT claimed here -- see stringValue's own doc comment for
+// why those are out of scope rather than silently unhandled.
 func TestGitHubPullUserLoginStringifiesNonStringLogins(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
 		raw  string
 		want string
 	}{
-		"string login":      {`{"login":"octocat"}`, "octocat"},
-		"numeric login":     {`{"login":12345}`, "12345"},
-		"null login":        {`{"login":null}`, ""},
-		"absent login":      {`{}`, ""},
-		"user is JSON null": {`null`, ""},
+		"string login":          {`{"login":"octocat"}`, "octocat"},
+		"numeric login":         {`{"login":12345}`, "12345"},
+		"boolean login (true)":  {`{"login":true}`, "True"},
+		"boolean login (false)": {`{"login":false}`, "False"},
+		"null login":            {`{"login":null}`, ""},
+		"absent login":          {`{}`, ""},
+		"user is JSON null":     {`null`, ""},
 	} {
 		test := test
 		t.Run(name, func(t *testing.T) {

@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "name": "github/prs codex-review fixes (CHAOS-3122)",
+  "build": ["go", "build", "./..."],
   "$limitation": "H4 (blank full_name must fail closed) has no entry here. The first version of this plan mutated github_prs_route.go's own `if fullName == \"\" {...}` guard and it SURVIVED: repositoryIdentity(fullName) (github_repository_route.go) already rejects an empty/all-whitespace string with the identical ErrNormalizationInvalid before hashing anything, so the explicit guard was dead code duplicating a check the callee already makes. It was deleted (see github_prs_route.go's repositoryIdentity call site comment) rather than kept alive only to give this plan something to mutate. The fail-closed behavior itself is proven by TestGitHubPullRequestRouteFailsClosedOnScopeAndPayloadFaults's noFullName case (asserts Collect errors) and, at the shared-function level, by TestRepositoryIdentityFailsClosedOnDocumentedPythonDivergences in github_repository_route_test.go.",
   "mutations": [
     {
@@ -16,9 +17,9 @@
     {
       "id": "H3-unknown-updated-at-must-not-exclude",
       "file": "internal/providersync/github_prs_route.go",
-      "find": "windowKnown := !updatedAt.IsZero()",
-      "replace": "windowKnown := true",
-      "rationale": "a missing/null/unparseable updated_at must be unconditionally included (Python only compares when isinstance(updated_at, datetime)), never excluded",
+      "find": "func pullOutsideKnownWindow(updatedAt time.Time, claim Claim) bool {\n\twindowKnown := !updatedAt.IsZero()",
+      "replace": "func pullOutsideKnownWindow(updatedAt time.Time, claim Claim) bool {\n\twindowKnown := true",
+      "rationale": "a missing/null/unparseable updated_at must be unconditionally included (Python only compares when isinstance(updated_at, datetime)), never excluded. Anchored on the function signature too: pullCrossedSinceBoundary (H1a) declares the identical `windowKnown := !updatedAt.IsZero()` line for its own, separate clause, so the bare line alone is not a unique anchor",
       "proof": [
         ["go", "test", "-run", "^TestFilterGitHubPullWindowClauseCoverage$", "./internal/providersync/"]
       ]
@@ -54,13 +55,67 @@
       ]
     },
     {
-      "id": "M5-truncate-to-milliseconds",
+      "id": "M5-truncate-provider-timestamps-to-milliseconds",
       "file": "internal/providersync/github_prs_route.go",
       "find": "parsed = parsed.UTC().Truncate(time.Millisecond)",
       "replace": "parsed = parsed.UTC()",
-      "rationale": "provider timestamps must be truncated to millisecond precision at construction, matching ClickHouse's DateTime64(3), or a later readback compares unequal to the in-memory value",
+      "rationale": "provider timestamps (created_at/merged_at/closed_at) must be truncated to millisecond precision at construction, matching ClickHouse's DateTime64(3), or a later readback compares unequal to the in-memory value",
       "proof": [
         ["go", "test", "-run", "^TestParseGitHubPullTimeTruncatesToMilliseconds$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "M5-truncate-normalizedAt-to-milliseconds",
+      "file": "internal/providersync/github_prs_route.go",
+      "find": "normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)",
+      "replace": "normalizedAt = normalizedAt.UTC()",
+      "rationale": "codex M5: last_synced (and created_at's now() fallback) come from Collect's OWN normalizedAt truncation, a SEPARATE line from parseGitHubPullTime's. Every other fixture in this package uses a whole-second `now`, so this needed its own sub-millisecond test (TestGitHubPullRequestRouteTruncatesNormalizedAtToMilliseconds) or this mutation would have survived silently",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubPullRequestRouteTruncatesNormalizedAtToMilliseconds$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "H1a-stop-at-since-boundary",
+      "file": "internal/providersync/github_prs_route.go",
+      "find": "return updatedAt.Before(claim.SinceAt.UTC())",
+      "replace": "return false",
+      "rationale": "codex H1 first half: pagination must stop the moment a listed item's updated_at is known and older than since (mirroring iter_pulls), or a deep-history repository with only one page inside the window caps -- and now fails the unit -- on every attempt, forever, even though Python syncs it fine",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubPullRequestRouteStopsPaginatingAtTheSinceBoundary$", "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "H2-readback-must-read-one-consistent-row",
+      "file": "internal/providersync/github_prs_effects_clickhouse.go",
+      "find": "FROM git_pull_requests FINAL",
+      "replace": "FROM git_pull_requests",
+      "rationale": "codex H2, the single most dangerous defect in this pair: independent per-column argMax(column, last_synced) calls are not equivalent to reading the row with the maximum last_synced, because ClickHouse's argMax skips a row whose ARGUMENT is NULL -- so a winning row with a NULL column can be silently backfilled from an older, non-winning row's non-NULL value in that same column. FINAL forces a row-consistent read; removing it reintroduces the per-column-aggregate reconstruction bug",
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run",
+         "^TestGitHubPullRequestReadbackDoesNotReconstructRowFromMixedVersions$",
+         "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "H1b-release-for-retry-preserves-ledger",
+      "file": "internal/providersync/repository_postgres.go",
+      "find": "COALESCE(unit.result::jsonb, '{}'::jsonb) ||",
+      "replace": "'{}'::jsonb ||",
+      "rationale": "codex H1 second half: ReleaseForRetry must MERGE error_category into the existing result document, not replace it -- a blind overwrite deletes the go_effect_ledger_v1 key an EffectReadbackRequired effect depends on, so a later attempt forgets the frozen normalizedAt/digest and can no longer classify a possibly-landed ClickHouse write as exact, absent, or conflict",
+      "proof": [
+        ["go", "test", "-tags", "integration", "-run",
+         "^TestReleaseForRetryPreservesAnInFlightEffectLedger$",
+         "./internal/providersync/"]
+      ]
+    },
+    {
+      "id": "M4-stringify-boolean-like-python-str",
+      "file": "internal/providersync/launchdarkly_route.go",
+      "find": "\tcase bool:\n\t\t// Python's str(True)/str(False) are capitalized, unlike Go's\n\t\t// strconv.FormatBool(\"true\"/\"false\").\n\t\tif typed {\n\t\t\treturn \"True\"\n\t\t}\n\t\treturn \"False\"",
+      "replace": "\tcase bool:\n\t\treturn \"\"",
+      "rationale": "codex M4: Python's str(True)/str(False) must be matched exactly (capitalized), not silently dropped to the \"\" default -- which is what an earlier version of stringValue did for any non-string, non-numeric JSON value, including a boolean login",
+      "proof": [
+        ["go", "test", "-run", "^TestGitHubPullUserLoginStringifiesNonStringLogins$", "./internal/providersync/"]
       ]
     },
     {

@@ -222,8 +222,49 @@ What this activation actually proves, and how:
   directly, and the latter is `None` unconditionally in Python's own
   collector, so leaving it nil in Go is exact parity, not an omission.
 
-Full recipe, the nine defect classes above generalized into a checklist for
-the remaining 16 GitHub pairs, and difficulty tiers, are in
+A SECOND adversarial pass on the fix commit itself (`140b64eed`) returned
+BLOCK again with two more HIGH findings — both in the fixes above, not new
+surface:
+
+- The H2 (pagination cap) fix made a deep-history repository with only one
+  page inside the incremental window cap, and fail, on every attempt
+  forever, because Go fetched every page up to `MaxPages` regardless of
+  content while Python's `iter_pulls` stops the moment a listed item's
+  `updated_at` is known and older than `since`. Fixed by adding the same
+  early stop (`providerfoundation.GitHubPageOptions.StopAt`) rather than
+  only filtering the fetched set post-hoc.
+- Separately, if an earlier attempt had written to ClickHouse and died
+  before `CommitEffect`, and a LATER attempt then failed for any reason
+  (the capped fetch above being what made this newly, deterministically
+  reachable), the job runtime's retry-release path
+  (`PostgresRepository.ReleaseForRetry`) overwrote the unit's whole result
+  document instead of merging into it, deleting the effect ledger the next
+  attempt needed to classify that in-flight write as exact, absent, or
+  conflicting. Fixed by merging (`COALESCE(result, '{}') ||
+  jsonb_build_object(...)`) instead of replacing.
+- The readback "exact" comparison itself had a deeper defect than the first
+  round's field-omission fix addressed: assembling the "winning row" from
+  independent per-column `argMax(column, last_synced)` calls is not the
+  same as reading the row with the maximum `last_synced` — ClickHouse's
+  `argMax` skips a row whose argument is NULL, so a winning row with a NULL
+  column could be silently backfilled from an older row's non-NULL value in
+  that column. Fixed by switching to `FROM git_pull_requests FINAL WHERE
+  org_id = ? AND repo_id = ? AND number = ?` (a bounded point lookup on the
+  full `ORDER BY` prefix), which reads one consistent physical row instead.
+- Three MEDIUM findings also landed: the live oracle test decoded but never
+  asserted the `build_git_pull_request` result's own
+  created_at/merged_at/closed_at fields; `stringValue` (M8's fix) handled
+  numeric but not boolean JSON scalars, diverging from Python's
+  `str(True) == "True"`; and the `normalizedAt`→`last_synced` millisecond
+  truncation had no sub-millisecond fixture of its own (a separate
+  truncation call site from the one M5's first fix covered).
+
+All five (two HIGH, three MEDIUM) are proven via the shared mutation harness
+plan (`testdata/mutation-plans/github_prs.json`) alongside the first round's
+findings — 17/17 mutations `KILLED`.
+
+Full recipe, the (now fifteen) defect classes above generalized into a
+checklist for the remaining 16 GitHub pairs, and difficulty tiers, are in
 `deploy/go-workers/provider-sync-porting-recipe.md`.
 
 ## Known Go/Python divergences (fail-closed by design)

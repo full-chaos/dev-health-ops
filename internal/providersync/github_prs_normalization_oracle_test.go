@@ -141,6 +141,61 @@ func TestGitHubPRSNormalizationMatchesLivePythonFunctions(t *testing.T) {
 				t.Fatalf("resolveCreatedAt fell through to the now() branch; "+
 					"case %q should have a non-empty created/merged/closed input", testCase.id)
 			}
+
+			// codex M3: the oracle DECODED built_created_at/built_merged_at/
+			// built_closed_at from the live build_git_pull_request(...) result
+			// (not merely from the standalone coerce_created_at/
+			// normalize_pr_state calls above) but never compared them against
+			// anything -- a Python builder change that dropped, renamed, or
+			// transformed those fields on the actual GitPullRequest object
+			// would stay green. Assert all three explicitly.
+			if oracle.BuiltCreatedAt == nil {
+				t.Fatalf("oracle case %q: build_git_pull_request result has no created_at", testCase.id)
+			}
+			builtCreatedAt, err := time.Parse(time.RFC3339, *oracle.BuiltCreatedAt)
+			if err != nil {
+				t.Fatalf("parse oracle built_created_at: %v", err)
+			}
+			if !builtCreatedAt.Equal(wantResolved) {
+				t.Fatalf("build_git_pull_request(...).created_at = %v, want %v "+
+					"(coerce_created_at's own result) -- the builder's "+
+					"composition of coerce_created_at diverged from calling it directly",
+					builtCreatedAt, wantResolved)
+			}
+			// merged_at/closed_at are passed straight through by
+			// build_git_pull_request (processors/base_git.py:
+			// "merged_at": merged_at, "closed_at": closed_at) -- the object's
+			// fields must equal the RAW inputs, not the resolved created_at.
+			assertOracleTimePointerMatchesInput(t, testCase.id, "built_merged_at", oracle.BuiltMergedAt, mergedAt)
+			assertOracleTimePointerMatchesInput(t, testCase.id, "built_closed_at", oracle.BuiltClosedAt, closedAt)
 		})
+	}
+}
+
+// assertOracleTimePointerMatchesInput compares an oracle-decoded,
+// ISO8601-string-or-null field against the *time.Time (possibly nil) that
+// was fed into the live Python call for the same case.
+func assertOracleTimePointerMatchesInput(
+	t *testing.T,
+	caseID, field string,
+	oracleValue *string,
+	want *time.Time,
+) {
+	t.Helper()
+	if oracleValue == nil {
+		if want != nil {
+			t.Fatalf("case %q: oracle %s=nil, Go input=%v", caseID, field, want)
+		}
+		return
+	}
+	if want == nil {
+		t.Fatalf("case %q: oracle %s=%s, Go input=nil", caseID, field, *oracleValue)
+	}
+	parsed, err := time.Parse(time.RFC3339, *oracleValue)
+	if err != nil {
+		t.Fatalf("case %q: parse oracle %s: %v", caseID, field, err)
+	}
+	if !parsed.Equal(*want) {
+		t.Fatalf("case %q: oracle %s=%v, Go input=%v", caseID, field, parsed, *want)
 	}
 }

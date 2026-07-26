@@ -149,6 +149,92 @@ question.
        worth of plumbing.
    If none of the three fits, that is itself a real design finding — say so
    explicitly rather than shipping `route_ready: true` anyway.
+10. **Never assemble a "winning row" from independent per-column
+    aggregates over a ReplacingMergeTree table.** `argMax(column,
+    last_synced)` computed separately per column is NOT the same as reading
+    the row with the maximum `last_synced`: ClickHouse's `argMax` skips a
+    row whose ARGUMENT is NULL when picking the max, so a genuinely winning
+    row with a NULL in one column can have that column silently backfilled
+    from an OLDER, non-winning row's non-NULL value in the same column —
+    verified empirically (see step 4 below) by writing two versions as
+    separate physical parts (not one batch — a single-part insert did NOT
+    reproduce it, which is its own trap: test this against realistic,
+    separately-written parts, not a convenient single-batch fixture) and
+    observing `argMax(body)` correctly pick the newer row while
+    `argMax(merged_at)` incorrectly reached back to the older row's value.
+    `FROM table FINAL WHERE <full ORDER BY prefix>` reads the winning
+    version as one consistent row instead — cheap for a point lookup
+    matching the primary key, and it doesn't need `ifNull`-collapsing NULLs
+    to stay safe, so it doesn't reopen the NULL-vs-empty-string problem
+    class 6's fix cares about either. A readback test that only puts NULLs
+    on the OLDER version cannot see this bug — the fixture must put a NULL
+    on the WINNING version specifically, with an older version that has a
+    non-NULL value in that same column.
+11. **A failure path that discards shared recovery state is worse than the
+    failure it was handling.** If a job-runtime "release this unit for
+    retry" primitive blindly overwrites a JSON result/state column instead
+    of merging into it, ANY failure after an effect ledger was written
+    (not only the specific one you're fixing) can delete the record of an
+    in-flight, possibly-already-landed write — and the next attempt then
+    has no way to classify that write as exact, absent, or conflicting, so
+    it either starts a whole new unreconciled write or wedges. This is easy
+    to introduce by accident: a NEW way for your handler to fail (a page
+    cap, a stricter validation) that fires reliably on retry turns a
+    latent, rare exposure in shared retry-path code into a deterministic
+    one. Grep for the retry-release SQL/function your job runtime uses and
+    confirm it merges (`COALESCE(existing, '{}') || new_fields`) rather
+    than replaces; write an integration test that begins an
+    `EffectReadbackRequired` effect, calls the release-for-retry path, and
+    asserts the ledger is still loadable afterward.
+12. **A page cap only means what it claims once the fetch is bounded the
+    same way the Python authority bounds it.** If Python's collector stops
+    paginating early once it crosses some recognizable boundary (e.g. an
+    item older than the incremental window, for a sort=updated&desc
+    listing), a Go port that fetches every page up to `MaxPages` regardless
+    of content is capping on TOTAL HISTORY, not on the same thing Python
+    bounds — so a repository whose total history is long but whose
+    in-window page count is small will cap, and fail the unit, on every
+    attempt, even though Python syncs it fine every time. Match the early
+    stop, not just the final filtered set: a per-item post-hoc filter
+    (defect class 2) and a pagination-level early stop are not
+    interchangeable, and Python itself frequently has BOTH (a belt-and-
+    suspenders structure worth mirroring exactly rather than picking one).
+13. **An oracle comparison must ASSERT every field it decodes from the live
+    Python call, not just decode it for inspection.** A field pulled out of
+    the oracle's JSON output and left uncompared provides zero protection
+    the moment the Python side changes that field — decoding without
+    asserting is a more subtle version of defect class 9's original sin
+    (a fixture that never exercises what it claims to prove). Also: **Go's
+    test result cache does not know about your Python source files.**
+    Editing only `testdata/python_*_oracle.py` and rerunning `go test`
+    (without `-count=1`) can report a stale PASS from before the edit,
+    because from Go's perspective no Go-tracked input changed. Always use
+    `-count=1` — or better, drive the check through the shared mutation
+    harness, whose proof commands you control — when iterating on or
+    mutation-testing an oracle script.
+14. **A stringification/type-coercion helper must cover every JSON scalar
+    type the Python original's `str()`-equivalent would, and a test's name
+    must claim only what it actually covers.** "Handles ANY non-null value"
+    is a claim to verify against Python's actual type-dispatch (string,
+    number, AND boolean at minimum — Python's `str(True)` is `"True"`,
+    capitalized, not Go's lowercase `strconv.FormatBool`), not a claim to
+    make and then only test with a number. If a type is deliberately out of
+    scope (e.g. a JSON list/object is not a realistic shape for the
+    specific field you're stringifying), say so explicitly in the
+    function's doc comment rather than let the untested gap hide behind an
+    overbroad test name.
+15. **A precision/truncation fix needs a fixture at EVERY point that value
+    is truncated, not just one.** `github/prs` truncates a provider
+    timestamp to millisecond precision in one function
+    (`parseGitHubPullTime`) and truncates `normalizedAt` (which becomes
+    `last_synced`) at a SEPARATE call site inside `Collect`. A test proving
+    the first truncation says nothing about the second, and if every OTHER
+    fixture in the test file happens to use whole-second timestamps (a
+    natural default when hand-writing `time.Date(...)` literals), deleting
+    the second truncation is invisible to the entire existing suite. Grep
+    for every `.Truncate(` call the handler makes and confirm each one has
+    its own sub-precision fixture, not just the first one you wrote a test
+    for.
 
 ## The recipe
 

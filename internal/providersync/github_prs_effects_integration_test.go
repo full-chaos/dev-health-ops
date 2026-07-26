@@ -151,9 +151,10 @@ func pullRequestEffect(t *testing.T, row pullRequestRow) EffectBatch {
 
 // TestGitHubPullRequestReadbackResolvesWinningReplacingMergeTreeVersion
 // mirrors TestGitHubRepositoryReadbackResolvesWinningReplacingMergeTreeVersion
-// for git_pull_requests: only a live engine proves the argMax query shape
-// actually resolves the winning version and that NULL merged_at/closed_at
-// survive the ifNull(..., toDateTime64(0,3)) scan contract.
+// for git_pull_requests: only a live engine proves the `FINAL` point-lookup
+// query shape actually resolves the winning version and that NULL
+// merged_at/closed_at on the WINNING row read back as nil, not some other
+// version's value.
 func TestGitHubPullRequestReadbackResolvesWinningReplacingMergeTreeVersion(
 	t *testing.T,
 ) {
@@ -205,6 +206,79 @@ func TestGitHubPullRequestReadbackResolvesWinningReplacingMergeTreeVersion(
 	inspection, err = sink.InspectEffect(ctx, claim, effect)
 	if err != nil || inspection != EffectExact {
 		t.Fatalf("duplicate inspection=%s error=%v", inspection, err)
+	}
+}
+
+// TestGitHubPullRequestReadbackDoesNotReconstructRowFromMixedVersions is
+// codex H2 (CHAOS-3122), the single most dangerous defect in this pair's
+// review: independently computing `argMax(column, last_synced)` per column
+// is NOT equivalent to reading the row with the maximum last_synced.
+// ClickHouse's argMax skips a row whose ARGUMENT is NULL when picking the
+// max, so if the WINNING (most recent) row has a NULL in some column while
+// an OLDER, non-winning row has a non-NULL value there, the old per-column
+// query would silently backfill that column from the wrong version --
+// verified empirically against a real unmerged multi-part ReplacingMergeTree
+// table before this fix landed. The existing
+// TestGitHubPullRequestReadbackResolvesWinningReplacingMergeTreeVersion test
+// puts NULLs on the OLDER version only, which cannot observe this: this
+// test puts them on the WINNING version specifically, with an OLDER version
+// that has non-NULL values in the exact same columns, which is the only
+// shape that can distinguish "read the winning row" from "assemble a row
+// from whichever version has a non-NULL value per column".
+func TestGitHubPullRequestReadbackDoesNotReconstructRowFromMixedVersions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	harness := startPullRequestReadbackHarness(t, ctx)
+	claim, sink, now := harness.claim, harness.sink, harness.now
+
+	// Older version (merged, so merged_at/closed_at/body are all non-NULL).
+	older := pullRequestReadbackFixture(now.Add(-time.Hour))
+	older.OrgID = claim.OrgID
+	if err := sink.WriteEffect(ctx, claim, pullRequestEffect(t, older)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Winning version: the PR was reopened (state back to "open"), so
+	// merged_at, closed_at, AND first_review_at are all NULL on the row
+	// that must win -- while the older version above has non-NULL values in
+	// every one of those columns. A per-column argMax reconstruction would
+	// backfill some or all of them from the older row instead of correctly
+	// reading NULL.
+	winning := pullRequestReadbackFixture(now)
+	winning.OrgID = claim.OrgID
+	winning.State = "open"
+	winning.MergedAt, winning.ClosedAt = nil, nil
+	winning.FirstReviewAt = nil
+	winning.ReviewsCount, winning.ChangesRequestedCount = 0, 0
+	effect := pullRequestEffect(t, winning)
+	if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+		t.Fatal(err)
+	}
+	assertPullRequestVersionCount(t, ctx, harness, winning.RepoID, winning.Number, 2)
+
+	inspection, err := sink.InspectEffect(ctx, claim, effect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection != EffectExact {
+		t.Fatalf("inspection=%s want %s: a row-consistent read of the winning "+
+			"version (all fields NULL) must match exactly, not a Frankenstein "+
+			"row backfilled from the older, non-winning version", inspection, EffectExact)
+	}
+
+	// The other direction: asserting the OLDER row's (non-NULL) shape as
+	// "expected" must now report a conflict, not an accidental exact match
+	// -- if the bug were present, an attacker (or a future refactor) could
+	// have this comparison spuriously pass by reconstructing exactly the
+	// old row's values.
+	staleEffect := pullRequestEffect(t, older)
+	inspection, err = sink.InspectEffect(ctx, claim, staleEffect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection != EffectConflict {
+		t.Fatalf("inspection=%s want %s: the older, superseded version must "+
+			"never read back as the current winner", inspection, EffectConflict)
 	}
 }
 

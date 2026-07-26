@@ -137,47 +137,48 @@ func (sink GitHubPullRequestClickHouseEffects) InspectEffect(
 	}
 }
 
-// inspectPullRequest resolves the latest ReplacingMergeTree version for
+// inspectPullRequest resolves the winning ReplacingMergeTree version for
 // (org_id, repo_id, number) and compares the full stable persisted row
-// against it -- the argMax/FINAL discipline every raw reader of this table
-// owes (per repo convention).
+// against it.
 //
-// codex M6: every Nullable column is scanned into a Go pointer directly
-// (never through `ifNull(col, ”)`/`ifNull(col, sentinel)`), and every
-// column the row actually carries -- including first_review_at,
-// first_comment_at, changes_requested_count, and reviews_count, which an
-// earlier version of this query omitted entirely -- is read back. An
-// "exact" comparison that cannot see a column, or that collapses NULL and
-// "" to the same Go value, can report EffectExact for a row that actually
-// differs, which lets crash recovery mark corrupted data as committed.
+// codex H2: this reads the winning version's row AS A UNIT (`FROM
+// git_pull_requests FINAL`), not by assembling one `argMax(column,
+// last_synced)` per column. Independent per-column argMax calls are NOT
+// equivalent to "read the row with the maximum last_synced": ClickHouse's
+// argMax skips a row whose ARGUMENT is NULL when picking the maximum, so a
+// winning row with (say) a NULL merged_at can have its merged_at silently
+// backfilled from an OLDER, non-winning row's non-NULL value -- verified
+// empirically against a real (unmerged, multi-part) ReplacingMergeTree
+// table: separate INSERTs of {body:"old", merged_at:T1} then {body:"new",
+// merged_at:NULL} at a later last_synced produced
+// argMax(body)="new" (correct) alongside argMax(merged_at)=T1 (WRONG --
+// reconstructed from the OLDER row instead of the winning row's true NULL).
+// `FINAL` forces the same merge-time dedup logic the table's own background
+// merges eventually apply, so every column comes from the one row that
+// index actually selects -- self-consistent even in the documented
+// ReplacingMergeTree tie case (two versions sharing an identical
+// `last_synced`), where FINAL still returns one real, whole row rather than
+// letting independent per-column aggregates disagree about which physical
+// row "won". The WHERE clause matches the table's full ORDER BY prefix
+// (org_id, repo_id, number), which is what keeps FINAL a bounded point
+// lookup rather than a full-table merge.
+//
+// codex M6 (unchanged by this fix): every Nullable column is still scanned
+// into a Go pointer directly, and comparePullRequestVersion still compares
+// every column as its own named clause -- that logic already operates on a
+// materialized pullRequestVersion and doesn't care how the row was
+// selected, only that it IS one consistent row.
 func (sink GitHubPullRequestClickHouseEffects) inspectPullRequest(
 	ctx context.Context,
 	expected pullRequestRow,
 ) (EffectInspection, error) {
 	rows, err := sink.Conn.Query(ctx, `
 SELECT
-  argMax(title, last_synced)                    AS winning_title,
-  argMax(body, last_synced)                      AS winning_body,
-  argMax(state, last_synced)                     AS winning_state,
-  argMax(author_name, last_synced)               AS winning_author_name,
-  argMax(author_email, last_synced)              AS winning_author_email,
-  argMax(created_at, last_synced)                AS winning_created_at,
-  argMax(merged_at, last_synced)                 AS winning_merged_at,
-  argMax(closed_at, last_synced)                 AS winning_closed_at,
-  argMax(head_branch, last_synced)               AS winning_head_branch,
-  argMax(base_branch, last_synced)               AS winning_base_branch,
-  argMax(additions, last_synced)                 AS winning_additions,
-  argMax(deletions, last_synced)                 AS winning_deletions,
-  argMax(changed_files, last_synced)             AS winning_changed_files,
-  argMax(first_review_at, last_synced)           AS winning_first_review_at,
-  argMax(first_comment_at, last_synced)          AS winning_first_comment_at,
-  argMax(changes_requested_count, last_synced)   AS winning_changes_requested_count,
-  argMax(reviews_count, last_synced)             AS winning_reviews_count,
-  argMax(comments_count, last_synced)            AS winning_comments_count,
-  argMax(source_id, last_synced)                 AS winning_source_id,
-  argMax(org_id, last_synced)                    AS winning_org_id,
-  max(last_synced)                               AS winning_version
-FROM git_pull_requests
+  title, body, state, author_name, author_email, created_at, merged_at,
+  closed_at, head_branch, base_branch, additions, deletions, changed_files,
+  first_review_at, first_comment_at, changes_requested_count, reviews_count,
+  comments_count, source_id, org_id, last_synced
+FROM git_pull_requests FINAL
 WHERE org_id = ? AND repo_id = ? AND number = ?`,
 		expected.OrgID, expected.RepoID, expected.Number,
 	)

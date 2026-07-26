@@ -52,14 +52,45 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from internal.providersync.testdata import oracle_registry  # noqa: E402
 
+_ORACLE_PAIRS_DIR = pathlib.Path(__file__).resolve().parent / "oracle_pairs"
+_ORACLE_PAIRS_PACKAGE = "internal.providersync.testdata.oracle_pairs"
 
-def _module_name_for_pair(pair_id: str) -> str:
-    parts = pair_id.split("/")
-    if len(parts) != 3:
-        raise ValueError(
-            f"pair id must be '<provider>/<dataset>/<boundary>', got {pair_id!r}"
-        )
-    return "internal.providersync.testdata.oracle_pairs." + "_".join(parts)
+
+def _known_pair_modules() -> dict[str, str]:
+    """Enumerate the checked-in oracle_pairs/*.py files and return a
+    {pair_id: module_name} whitelist.
+
+    Security note (github-advanced-security / Semgrep
+    python.lang.security.audit.non-literal-import.non-literal-import,
+    flagged on PR #1307): `main` previously formatted `sys.argv[1]`
+    straight into `importlib.import_module(...)` -- a caller-controlled
+    string driving a dynamic import is exactly the shape that rule exists
+    to catch, regardless of how narrow this specific CLI's actual blast
+    radius is. The fix is a real whitelist, not a suppression: this
+    function is the ONLY place that walks the filesystem, and it can only
+    ever discover FILES ALREADY CHECKED INTO THIS REPOSITORY under
+    oracle_pairs/ -- a pair_id that does not correspond to one of them is
+    rejected in `main` before `importlib.import_module` is ever called,
+    with a plain dict-key lookup (`_known_pair_modules()[pair_id]`) as the
+    only value ever passed to it. This is also a real behavioral
+    improvement independent of the scanner: "import whatever string you
+    are handed" becomes "import one of the pairs this framework knows
+    about", which is the property CHAOS-3162's own registry already
+    enforces one step later (oracle_registry.get raises for an
+    unregistered id) -- this closes the SAME gap one step earlier, before
+    an attempted import can even reach arbitrary application code that
+    happens to sit under that dotted path.
+    """
+    known: dict[str, str] = {}
+    for path in sorted(_ORACLE_PAIRS_DIR.glob("*.py")):
+        if path.stem.startswith("_"):
+            continue
+        parts = path.stem.split("_")
+        if len(parts) != 3:
+            continue
+        pair_id = "/".join(parts)
+        known[pair_id] = f"{_ORACLE_PAIRS_PACKAGE}.{path.stem}"
+    return known
 
 
 def _encode(value: Any) -> Any:
@@ -107,7 +138,30 @@ def main() -> int:
         return 2
     pair_id, cases_path = sys.argv[1], sys.argv[2]
 
-    importlib.import_module(_module_name_for_pair(pair_id))
+    known_modules = _known_pair_modules()
+    if pair_id not in known_modules:
+        raise ValueError(
+            f"pair id {pair_id!r} does not correspond to a checked-in "
+            f"testdata/oracle_pairs/*.py file -- known pairs: "
+            f"{sorted(known_modules)!r}"
+        )
+    # The only string this ever passes to importlib.import_module is a
+    # dict VALUE from _known_pair_modules()'s own filesystem enumeration --
+    # never sys.argv[1] (or anything derived from it) directly, and the
+    # `pair_id not in known_modules` check above already rejected anything
+    # that isn't a checked-in testdata/oracle_pairs/*.py file. Confirmed by
+    # running the exact rule directly (`semgrep --config
+    # r/python.lang.security.audit.non-literal-import.non-literal-import`):
+    # it still flags this line even with the whitelist in place, because it
+    # is a purely syntactic check on import_module's argument shape (any
+    # non-literal expression) with no data-flow awareness of the preceding
+    # validation -- there is no call shape this rule would accept for a
+    # loader whose whole job is resolving one of several checked-in
+    # modules by name. Narrow, justified suppression, not a workaround: see
+    # _known_pair_modules's docstring for the actual security property.
+    module_name = known_modules[pair_id]
+    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+    importlib.import_module(module_name)
     spec = oracle_registry.get(pair_id)
 
     cases = json.loads(pathlib.Path(cases_path).read_text())

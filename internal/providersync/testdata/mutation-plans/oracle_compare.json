@@ -22,10 +22,26 @@
     {
       "id": "value-mismatch-clause",
       "file": "internal/providersync/oracle_compare_test.go",
-      "find": "case !reflect.DeepEqual(pythonValue, goValue):",
+      "find": "case !typedValuesEqual(pythonValue, goValue):",
       "replace": "case false:",
-      "rationale": "two present-on-both-sides values that differ must be reported -- this is the clause every one of the six CHAOS-3162 rediscovery defects that are value mismatches (not present/absent mismatches) actually depends on",
+      "rationale": "two present-on-both-sides values that differ must be reported -- this is the clause every one of the six CHAOS-3162 rediscovery defects that are value mismatches (not present/absent mismatches) actually depends on. Anchor updated (codex fourth review): this used to call reflect.DeepEqual directly; it now calls typedValuesEqual, which falls back to reflect.DeepEqual for everything except float/datetime -- see the typed-value-equality mutations below for that function's own clauses",
       "proof": [["go", "test", "-run", "^TestDiffRowsClauseCoverage/differing_value", "./internal/providersync/"]]
+    },
+    {
+      "id": "typed-values-equal-float-must-parse-and-compare",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn pythonFloat == goFloat\n\t\t\t}",
+      "replace": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn false\n\t\t\t}",
+      "rationale": "codex fourth review: Python's repr(5.0) is \"5.0\"; Go's strconv.FormatFloat(5.0, 'g', -1, 64) is \"5\" -- same IEEE754 double, different text. Without this clause a genuinely-equal float pair would report a false divergence, and a mutation collapsing it to false would make every equal-float case fail",
+      "proof": [["go", "test", "-run", "^TestTypedValuesEqualCanonicalizesFloatAndDatetimeText/equal_floats", "./internal/providersync/"]]
+    },
+    {
+      "id": "typed-values-equal-datetime-must-parse-and-compare",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn pythonTime.Equal(goTime)\n\t\t\t}",
+      "replace": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn false\n\t\t\t}",
+      "rationale": "codex fourth review: Python's isoformat() shows a fixed 6-digit microsecond field when non-zero (.123000Z); Go's RFC3339Nano strips trailing zero fractional digits (.123Z) -- same instant, different text",
+      "proof": [["go", "test", "-run", "^TestTypedValuesEqualCanonicalizesFloatAndDatetimeText/equal_instants", "./internal/providersync/"]]
     },
     {
       "id": "python-excluded-fields-must-suppress",

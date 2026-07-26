@@ -119,6 +119,20 @@ oracle_registry.register(
         id="github/prs/row",
         build_row=_build_row,
         reflected_fields=_reflected_fields,
+        # codex adversarial review (CHAOS-3162, fourth round): last_synced/
+        # source_id/org_id used to ALSO be declared here, redundantly with
+        # oraclePullRequestGoOnlyFields in github_prs_generic_oracle_test.go.
+        # That redundancy defeated checkExclusionIntegrity's own staleness
+        # check for the Go-side declaration -- if someone deleted the
+        # goOnlyFields entry for, say, org_id, this excluded_fields entry
+        # would still suppress the comparison and the test would stay
+        # green, silently masking that the Go-side declaration was no
+        # longer doing anything. None of the three are part of
+        # reflected_fields() (they are not keys build_git_pull_request's
+        # own `values`/`optional_values` dict literals ever assign), so
+        # Python-side completeness does not need them declared here at
+        # all -- they belong ONLY in goOnlyFields, where they are the
+        # single, real, load-bearing declaration.
         excluded_fields={
             "first_review_at": (
                 "owned by github/pr-reviews' review-enrichment phase "
@@ -136,22 +150,6 @@ oracle_registry.register(
             "reviews_count": (
                 "owned by github/pr-reviews' review-enrichment phase, "
                 "not this row-construction boundary"
-            ),
-            "last_synced": (
-                "Go-side effect/tenant bookkeeping: the write timestamp, "
-                "stamped by the sink at WriteEffect time -- has no "
-                "build_git_pull_request equivalent at all"
-            ),
-            "source_id": (
-                "Go-side external-ingest marker column; the native sink "
-                "always writes NULL and Python's build_git_pull_request has "
-                "no equivalent parameter"
-            ),
-            "org_id": (
-                "Go-side tenant column; ClickHouseStore._insert_rows "
-                "auto-injects it from self.org_id at insert time, never "
-                "part of the GitPullRequest object build_git_pull_request "
-                "constructs"
             ),
         },
     )

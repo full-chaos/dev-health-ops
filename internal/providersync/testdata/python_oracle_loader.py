@@ -159,16 +159,33 @@ def _target_github_code_client() -> None:
     imports. The only reason loading the file needs them satisfied at all is
     that Python evaluates every top-level `import`/`from` statement when a
     module loads, regardless of which names the function you actually want
-    ends up using. `from __future__ import annotations` (present at the top
-    of code_client.py) is what makes stubbing httpx ITSELF safe: it defers
-    every type annotation (e.g. `transport: httpx.AsyncBaseTransport | None`)
-    to a string, so an annotation referencing a stub attribute that doesn't
-    exist is never evaluated. Verified empirically: loading the real file
-    under this exact stub set and calling `_pull_from_item({"user":
-    {"login": True}, ...})` returns `author_login='True'` -- the live
-    `str(user["login"])` call, not a re-implementation of it.
+    ends up using.
+
+    CORRECTED (CHAOS-3162, fourth adversarial review): an earlier version of
+    this docstring claimed `from __future__ import annotations` (present at
+    the top of code_client.py) makes stubbing httpx as a fully EMPTY module
+    safe, because "an annotation referencing a stub attribute that doesn't
+    exist is never evaluated." That was true only as long as nothing ever
+    resolved those annotations -- true of `_pull_from_item` itself, NOT true
+    in general: `load_live_module` now calls `_force_annotation_evaluation`,
+    which resolves every annotation via `typing.get_type_hints`, and
+    `_lowered_github_headers(response: httpx.Response)` genuinely needs
+    `httpx.Response` to exist. An empty httpx stub loaded successfully and
+    silently, with the broken annotation never surfacing until something
+    (mypy, `get_type_hints`, an eager-evaluation Python) actually looked --
+    the SAME class of bug as the RateLimitGate incident, just a level
+    deeper (in a *different* stubbed module) than the one that shipped it.
+    httpx therefore needs every name an ANNOTATION in this file
+    dereferences, even though `_pull_from_item` itself never touches httpx
+    at runtime.
+
+    Verified empirically: loading the real file under this stub set and
+    calling `_pull_from_item({"user": {"login": True}, ...})` still returns
+    `author_login='True'` -- the live `str(user["login"])` call, not a
+    re-implementation of it -- and `_force_annotation_evaluation` now
+    passes cleanly against every function/class this module defines.
     """
-    _install_module("httpx", {})
+    _install_module("httpx", {"Response": object, "AsyncBaseTransport": object})
     _install_module(
         "dev_health_ops.connectors.models",
         {"FileBlame": object, "SecurityAlertData": object},
@@ -507,43 +524,68 @@ def _force_annotation_evaluation(module_name: str, module: ModuleType) -> None:
     broken path the one that always runs, not the one only some future
     Python (or some future CI image) happens to discover.
 
-    Accessing `member.__annotations__` is sufficient to trigger PEP 649's
-    lazy `__annotate__` call on 3.14+; on older Pythons the annotations
-    were already eager and this is a harmless re-read. Either way, a
-    broken stub now raises HERE, inside load_live_module, on every Python
-    version, not conditionally depending on which one happens to be
-    running.
+    CODEX FINDING (CHAOS-3162, fourth adversarial review): the first version
+    of this function only touched `member.__annotations__` directly. That
+    is sufficient to trigger PEP 649's lazy `__annotate__` call on 3.14+ for
+    a module WITHOUT `from __future__ import annotations` (like
+    processors/github.py, the RateLimitGate incident) -- but modules WITH
+    that future-import (like code_client.py) store STRING literals in
+    `__annotations__` unconditionally, on every Python version, regardless
+    of PEP 649. Reading `__annotations__` on such a module never evaluates
+    anything and never raises -- proven empirically: an httpx stub with NO
+    `Response` attribute loads `code_client.py` successfully even though
+    `_lowered_github_headers(response: httpx.Response)` requires it, and
+    only `typing.get_type_hints()` (which actually RESOLVES a string
+    annotation against the function's `__globals__`, string-annotated
+    module or not) surfaces `AttributeError: module 'httpx' has no
+    attribute 'Response'`. This function now uses `get_type_hints` instead
+    of a bare attribute read, closing that gap uniformly for both
+    annotation styles.
+
+    One deliberate exception: `NameError` is NOT treated as a failure here.
+    Forward-referencing a TYPE_CHECKING-only import in a string annotation
+    (e.g. `-> "GitHubCodeClient":` when `GitHubCodeClient` is only imported
+    under `if TYPE_CHECKING:`) is a normal, load-bearing Python idiom this
+    codebase already uses (processors/github.py's own
+    `_github_code_client_from_connector`) -- that name is never meant to
+    resolve at runtime, and failing loudly on it would break legitimate
+    production code, not catch a stub bug. `TypeError` (an operator applied
+    to the wrong shape, e.g. `None | None`) and `AttributeError` (a stub
+    missing an attribute real code dereferences) cannot come from a
+    deliberately-unresolvable forward reference -- only from a name that DID
+    resolve, to something the wrong shape. Those two stay hard failures.
     """
     import inspect
+    import typing
+
+    def _check(qualified_name: str, member: object) -> None:
+        try:
+            typing.get_type_hints(member)
+        except NameError:
+            return  # a TYPE_CHECKING-only forward reference; expected, not a stub bug.
+        except (TypeError, AttributeError) as exc:
+            raise RuntimeError(
+                f"{qualified_name}'s annotations failed to evaluate: {exc} -- "
+                "a stub in this loader's configure() is very likely the wrong "
+                "SHAPE for a name used in an annotation (e.g. a bare None "
+                "standing in for a type, which does not support `X | None`, "
+                "or an empty stub module missing an attribute the real "
+                "annotation dereferences). See _force_annotation_evaluation's "
+                "docstring."
+            ) from exc
 
     for name, member in vars(module).items():
         if inspect.isclass(member) and member.__module__ != module.__name__:
             continue  # an imported (stub) class, not one this module defines
         if inspect.isfunction(member) and member.__module__ != module.__name__:
             continue
-        if not (inspect.isfunction(member) or inspect.isclass(member)):
-            continue
-        try:
-            _ = member.__annotations__
-        except TypeError as exc:
-            raise RuntimeError(
-                f"{module_name}.{name}'s annotations failed to evaluate: {exc} -- "
-                "a stub in this loader's configure() is very likely the wrong "
-                "SHAPE for a name used in an annotation (e.g. a bare None "
-                "standing in for a type, which does not support `X | None`). "
-                "See _force_annotation_evaluation's docstring."
-            ) from exc
-        if inspect.isclass(member):
+        if inspect.isfunction(member):
+            _check(f"{module_name}.{name}", member)
+        elif inspect.isclass(member):
+            _check(f"{module_name}.{name}", member)
             for method_name, method in vars(member).items():
                 if inspect.isfunction(method):
-                    try:
-                        _ = method.__annotations__
-                    except TypeError as exc:
-                        raise RuntimeError(
-                            f"{module_name}.{name}.{method_name}'s annotations "
-                            f"failed to evaluate: {exc} -- see "
-                            "_force_annotation_evaluation's docstring."
-                        ) from exc
+                    _check(f"{module_name}.{name}.{method_name}", method)
 
 
 def load_live_module(source: Path) -> Any:

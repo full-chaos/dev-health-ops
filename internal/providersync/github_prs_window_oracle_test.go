@@ -68,6 +68,39 @@ func windowDecisionOracleCases() []oracleCase {
 			windowOracleTime("2026-07-10T09:00:00Z"),
 			nil, nil,
 		),
+		// codex adversarial review (CHAOS-3162, fourth round): every case
+		// above sets BOTH since and until, so a Python regression coupling
+		// the two independent checks into one conjunction (e.g. `if until
+		// is not None and since is not None:` instead of two separate
+		// `if`s) preserves every one of those results while silently
+		// breaking a since-only or until-only claim -- an accidental "and"
+		// where two unrelated existence checks belong is exactly the kind
+		// of thing a table missing single-bound cases cannot see. These
+		// four close that gap: two isolate each bound alone (the other
+		// bound entirely absent, not just outside its own reach), two pin
+		// the exact boundary value on each bound (Python's own comparisons
+		// are strict `<`/`>`, so the boundary itself is INSIDE the window
+		// -- a `<`->`<=` or `>`->`>=` regression flips exactly these two).
+		windowDecisionOracleCase(
+			"since_only_excludes_and_stops",
+			windowOracleTime("2026-06-01T00:00:00Z"),
+			windowOracleTime("2026-07-01T00:00:00Z"), nil,
+		),
+		windowDecisionOracleCase(
+			"until_only_excludes_without_stop",
+			windowOracleTime("2026-08-15T00:00:00Z"),
+			nil, windowOracleTime("2026-07-31T23:59:59Z"),
+		),
+		windowDecisionOracleCase(
+			"at_since_boundary_included",
+			windowOracleTime("2026-07-01T00:00:00Z"),
+			windowOracleTime("2026-07-01T00:00:00Z"), windowOracleTime("2026-07-31T23:59:59Z"),
+		),
+		windowDecisionOracleCase(
+			"at_until_boundary_included",
+			windowOracleTime("2026-07-31T23:59:59Z"),
+			windowOracleTime("2026-07-01T00:00:00Z"), windowOracleTime("2026-07-31T23:59:59Z"),
+		),
 	}
 }
 

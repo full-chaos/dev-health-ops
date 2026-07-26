@@ -499,7 +499,7 @@ func diffRows(
 				"case %q, field %q: present in Go's row (%v) but absent from "+
 					"Python's -- declare an exclusion with a reason if this is intentional, "+
 					"don't leave it silently missing", caseID, key, goValue))
-		case !reflect.DeepEqual(pythonValue, goValue):
+		case !typedValuesEqual(pythonValue, goValue):
 			messages = append(messages, fmt.Sprintf(
 				"case %q, field %q: python=%#v go=%#v", caseID, key, pythonValue, goValue))
 		}
@@ -511,6 +511,71 @@ func diffRows(
 				"over-broad exclusion list), not a pass", caseID)}
 	}
 	return messages
+}
+
+// typedValuesEqual compares two type-tagged leaf values (codex adversarial
+// review, CHAOS-3162 fourth round). Plain reflect.DeepEqual on the {"t":
+// ..., "v": "<string>"} envelope is exactly right for str/int/bool -- those
+// three types each have exactly one canonical string form on both sides
+// (an int's digit sequence, a bool's "true"/"false", a string verbatim) --
+// but it is WRONG for float and datetime, which do not:
+//   - Python's `repr(5.0)` is `"5.0"`; Go's `strconv.FormatFloat(5.0, 'g',
+//     -1, 64)` is `"5"`. Same IEEE754 double, different text.
+//   - Python's `datetime.isoformat()` shows microseconds as a fixed
+//     6-digit field when non-zero (`.123000Z`); Go's `time.RFC3339Nano`
+//     strips trailing zero fractional digits (`.123Z`). Same instant,
+//     different text.
+//
+// Both gaps were latent, not active: every case in this package so far
+// uses whole-second or millisecond-truncated timestamps and no float
+// fields, so the mismatch never fired -- exactly why it needed fixing at
+// the comparator level rather than by adding a case that happens to dodge
+// it. Values are parsed back and compared numerically/temporally instead
+// of as text; everything else still falls through to reflect.DeepEqual
+// unchanged.
+func typedValuesEqual(pythonValue, goValue any) bool {
+	pythonTagged, pythonOK := asTaggedValue(pythonValue)
+	goTagged, goOK := asTaggedValue(goValue)
+	if pythonOK && goOK && pythonTagged.tag == goTagged.tag {
+		switch pythonTagged.tag {
+		case "float":
+			pythonFloat, pythonErr := strconv.ParseFloat(pythonTagged.value, 64)
+			goFloat, goErr := strconv.ParseFloat(goTagged.value, 64)
+			if pythonErr == nil && goErr == nil {
+				return pythonFloat == goFloat
+			}
+		case "datetime":
+			pythonTime, pythonErr := time.Parse(time.RFC3339Nano, pythonTagged.value)
+			goTime, goErr := time.Parse(time.RFC3339Nano, goTagged.value)
+			if pythonErr == nil && goErr == nil {
+				return pythonTime.Equal(goTime)
+			}
+		}
+	}
+	return reflect.DeepEqual(pythonValue, goValue)
+}
+
+type taggedValue struct {
+	tag   string
+	value string
+}
+
+// asTaggedValue recognizes the {"t": "<tag>", "v": "<string>"} shape
+// typedEncode/_encode produce, without assuming every map[string]any this
+// package ever compares is one (a nested struct/dict legitimately encodes
+// to a map with arbitrary other keys, which must keep falling through to
+// reflect.DeepEqual).
+func asTaggedValue(value any) (taggedValue, bool) {
+	asMap, ok := value.(map[string]any)
+	if !ok || len(asMap) != 2 {
+		return taggedValue{}, false
+	}
+	tag, tagOK := asMap["t"].(string)
+	leaf, leafOK := asMap["v"].(string)
+	if !tagOK || !leafOK {
+		return taggedValue{}, false
+	}
+	return taggedValue{tag: tag, value: leaf}, true
 }
 
 // embeddedOracleSources exists purely so `go:embed` makes the compiled test
@@ -745,6 +810,74 @@ func TestCheckExclusionIntegrityClauseCoverage(t *testing.T) {
 					t.Fatalf("checkExclusionIntegrity() = %v, want a message containing %q",
 						messages, tt.wantSubstring)
 				}
+			}
+		})
+	}
+}
+
+// TestTypedValuesEqualCanonicalizesFloatAndDatetimeText is codex's fourth-
+// round finding: the SAME IEEE754 double or the SAME instant can encode to
+// DIFFERENT text on the Python and Go sides (Python's repr(5.0) is "5.0";
+// Go's strconv.FormatFloat(5.0, 'g', -1, 64) is "5" -- same value, and
+// Python's isoformat() shows a fixed 6-digit microsecond field while Go's
+// RFC3339Nano strips trailing zero fractional digits). A bare
+// reflect.DeepEqual on the tagged {"t","v"} envelope would report these as
+// DIVERGENT even though the underlying values are equal -- exactly the
+// false-positive noise that would make a real pair with float/sub-second
+// fields untrustworthy. Also proves the inverse: genuinely different
+// values still compare unequal, and non-float/datetime tags (str/int/bool)
+// are untouched by the new parse-and-compare path.
+func TestTypedValuesEqualCanonicalizesFloatAndDatetimeText(t *testing.T) {
+	tagged := func(tag, value string) map[string]any {
+		return map[string]any{"t": tag, "v": value}
+	}
+	tests := []struct {
+		name      string
+		a, b      any
+		wantEqual bool
+	}{
+		{
+			name:      "equal floats, different text (Python repr vs Go FormatFloat)",
+			a:         tagged("float", "5.0"),
+			b:         tagged("float", "5"),
+			wantEqual: true,
+		},
+		{
+			name:      "equal instants, different fractional-second width",
+			a:         tagged("datetime", "2026-07-10T09:00:00.123000Z"),
+			b:         tagged("datetime", "2026-07-10T09:00:00.123Z"),
+			wantEqual: true,
+		},
+		{
+			name:      "genuinely different floats stay unequal",
+			a:         tagged("float", "5.0"),
+			b:         tagged("float", "5.1"),
+			wantEqual: false,
+		},
+		{
+			name:      "genuinely different instants stay unequal",
+			a:         tagged("datetime", "2026-07-10T09:00:00Z"),
+			b:         tagged("datetime", "2026-07-10T09:00:01Z"),
+			wantEqual: false,
+		},
+		{
+			name:      "str tag: exact text comparison, untouched by the float/datetime path",
+			a:         tagged("str", "open"),
+			b:         tagged("str", "open"),
+			wantEqual: true,
+		},
+		{
+			name:      "int tag: exact text comparison, untouched by the float/datetime path",
+			a:         tagged("int", "5"),
+			b:         tagged("int", "5.0"), // an int side must never accept float-shaped text
+			wantEqual: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := typedValuesEqual(tt.a, tt.b)
+			if got != tt.wantEqual {
+				t.Fatalf("typedValuesEqual(%#v, %#v) = %v, want %v", tt.a, tt.b, got, tt.wantEqual)
 			}
 		})
 	}

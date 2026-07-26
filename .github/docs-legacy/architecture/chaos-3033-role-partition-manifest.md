@@ -702,7 +702,14 @@ through a local `grantStatementsForPosture()` helper, **not** through
 real migration fails to issue — it proves the posture is self-consistent, not that
 the migration provisions it.
 
-The shape to recognise: **coverage that exists somewhere, asserted as coverage
-everywhere.** A posture row is exercised against the real migration path only via
-sources 1–3; the test that adapts automatically is the one testing something else.
-That is the same failure family that made the coordinator checker advisory.
+The shape to recognise, stated plainly because it is the reusable part:
+**coverage that adapts automatically while testing something else is worse than
+absent coverage, because it stays green through the failure it appears to cover.**
+
+Absent coverage at least looks absent. This test picks up a new posture row with no
+edit, which reads as "already covered" — while the thing it actually verifies is
+posture self-consistency, not migration provisioning. A posture row is exercised
+against the real migration path only via sources 1–3.
+
+That is the same failure family that made the coordinator checker advisory: not a
+wrong answer, but a green signal whose meaning is narrower than its appearance.

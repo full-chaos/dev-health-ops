@@ -68,10 +68,20 @@ on any undeclared survivor.
 
 Usage:
     python3 scripts/mutation_harness.py verify [--root PATH]
-    python3 scripts/mutation_harness.py restore [--root PATH]
+    python3 scripts/mutation_harness.py restore [--root PATH] [--force]
+    python3 scripts/mutation_harness.py accept --digest SHA256 [--root PATH]
     python3 scripts/mutation_harness.py run --plan PATH [--only M1,M2]
                                             [--assert-all-killed]
     python3 scripts/mutation_harness.py report [--root PATH]
+
+``accept`` is the exit from a safe refusal. Several of ``restore``'s refusals
+are terminal -- the snapshot was deleted, or the file was reconciled by hand and
+matches neither digest -- and without an acknowledged repair the record could
+only be cleared by a successful restore, so the gate stayed red with nothing
+left to do. A safe path that dead-ends teaches people to take the unsafe one. It
+is not an override: it re-checks the file's identity, requires the caller to pin
+the content by digest, refuses while the recorded mutation is still on disk, and
+requires the mutation's replacement text to be absent and its anchor present.
 
 ``verify`` is the gate: it belongs in the local validation script so that a
 green gate cannot be reported from a tree with a mutation still applied.
@@ -641,19 +651,35 @@ def _live_run(root: Path) -> int | None:
     return pid
 
 
-def _describe_holder(live: int) -> str:
-    if live == _LOCK_HELD_BY_UNKNOWN:
-        return "pid unknown -- the lock exists but its pid file does not"
-    return f"pid {live}"
+def _unknown_holder_advice(root: Path) -> str:
+    """What to DO about a lock whose holder cannot be named.
+
+    A pid-less lock has no pid to wait for and no pid to check, so every message
+    phrased around one is unusable -- and interpolating the sentinel produces
+    'wait for pid -1', which is advice no reader can act on. Since `verify` runs
+    first in ci/local_validate.sh, a message with no action in it leaves the gate
+    red forever. This is the same advice `acquire_lock` gives, kept in one place
+    so the two cannot drift.
+    """
+
+    lock = _state_dir(root) / LOCK_DIRNAME
+    return (
+        f"The lock {lock} exists but contains no pid file. `mkdir` and the pid "
+        "write are not atomic, so this is either a run in that window right now "
+        "or -- far more likely, if nothing is running -- a run that was killed "
+        "inside it. There is no pid to wait for. Check for a live "
+        "'mutation_harness.py run' process; if there is none, this is a STALE "
+        f"lock: break it with 'rm -rf {lock}'."
+    )
 
 
 def verify(root: Path) -> list[str]:
     """Return the reasons the tree is not verified clean. Empty means clean.
 
-    Both outcomes below are failures for gate purposes -- no test result from a
+    Every outcome below is a failure for gate purposes -- no test result from a
     tree with a mutation on it is trustworthy, whether or not a run is live --
-    but the two messages must never be confused, because one says "wait" and the
-    other says "repair".
+    but the messages must never be confused, because one says "wait", one says
+    "repair", and one says "break the stale lock".
     """
 
     state = _read_state(root)
@@ -661,13 +687,24 @@ def verify(root: Path) -> list[str]:
     live = _live_run(root)
 
     if not applied:
+        if live == _LOCK_HELD_BY_UNKNOWN:
+            return [
+                "a mutation run holds the lock and cannot be identified, and "
+                "nothing is recorded as applied yet. A held lock alone is enough "
+                "to distrust this tree: the mutation may land underneath a check "
+                "that has already read the record.\n    "
+                + _unknown_holder_advice(root)
+                + "\n    Then re-run this check; if it then reports a leaked "
+                "mutation, repair it with: "
+                "python3 scripts/mutation_harness.py restore"
+            ]
         if live is not None:
             # A run holds the lock but has not applied anything yet -- it is in
             # its baseline. Reporting clean here is a time-of-check hole: the
             # gate would proceed and the mutation would land underneath it. A
             # held lock alone is enough to distrust every result from this tree.
             return [
-                f"a mutation run is IN PROGRESS ({_describe_holder(live)}) and has not applied "
+                f"a mutation run is IN PROGRESS (pid {live}) and has not applied "
                 "its mutation yet, so nothing is on disk right now -- but it will "
                 "be, possibly before the caller of this check finishes. No result "
                 "from this tree is trustworthy until the run completes. Wait for "
@@ -677,9 +714,18 @@ def verify(root: Path) -> list[str]:
 
     identifier = applied.get("mutation_id", "?")
     relative = applied.get("file", "?")
+    if live == _LOCK_HELD_BY_UNKNOWN:
+        return [
+            f"mutation {identifier} is applied to {relative} and the lock's "
+            "holder cannot be identified, so this is not the ordinary 'wait for "
+            "the run' case and must not be read as one.\n    "
+            + _unknown_holder_advice(root)
+            + "\n    Then repair the mutation with: "
+            "python3 scripts/mutation_harness.py restore"
+        ]
     if live is not None:
         return [
-            f"a mutation run appears IN PROGRESS ({_describe_holder(live)}), currently applying "
+            f"a mutation run appears IN PROGRESS (pid {live}), currently applying "
             f"{identifier} to {relative}. If that pid really is the harness this "
             "needs no repair, only patience -- but no test or build result from "
             "this tree is meaningful until it finishes.\n"
@@ -695,8 +741,22 @@ def verify(root: Path) -> list[str]:
         "is void, including a passing build -- a mutation like "
         "'if false && (guard)' compiles cleanly, which is exactly why a build "
         "cannot be used to verify a restore. Repair with: "
-        "python3 scripts/mutation_harness.py restore"
+        "python3 scripts/mutation_harness.py restore\n"
+        "    If `restore` refuses -- the snapshot is gone, or the file holds "
+        "neither the original nor the mutation because it was reconciled by "
+        f"hand -- undo the mutation in {relative} yourself, then clear the "
+        "record with: python3 scripts/mutation_harness.py accept --digest "
+        f"$(shasum -a 256 {relative} | cut -d' ' -f1)"
     ]
+
+
+def _accept_hint(relative: str) -> str:
+    """The exact command that clears a record after a by-hand repair."""
+
+    return (
+        "python3 scripts/mutation_harness.py accept --digest "
+        f"$(shasum -a 256 {relative} | cut -d' ' -f1)"
+    )
 
 
 def restore(root: Path, force: bool = False) -> str:
@@ -767,10 +827,24 @@ def restore(root: Path, force: bool = False) -> str:
                     f"the mutation by hand; the pre-run content is in "
                     f"{STATE_DIRNAME}/{SNAPSHOT_DIRNAME}/{snapshot_name}."
                 )
+        # Content is examined BEFORE the snapshot is required. A user who has
+        # already undone the mutation by hand holds a correct tree, and refusing
+        # to clear the record because the snapshot is gone leaves the gate red
+        # with nothing left to do. A safe refusal that offers no exit is still a
+        # dead end, and a dead end is what makes people delete the record blind.
+        current = _digest(target.read_bytes())
+        if expected and current == expected:
+            _write_state(root, None)
+            return (
+                f"{relative} already matches the recorded original content; "
+                "cleared the applied record without writing"
+            )
+
         if _sanitised_identifier(snapshot_name) is None:
             raise HarnessError(
                 f"recorded snapshot name {snapshot_name!r} is not a plain "
-                "filename; refusing to read it. Recover by hand."
+                "filename; refusing to read it. Recover by hand, then clear the "
+                f"record with: {_accept_hint(relative)}"
             )
         snapshot = _state_dir(root) / SNAPSHOT_DIRNAME / snapshot_name
         if not snapshot.is_file():
@@ -782,16 +856,18 @@ def restore(root: Path, force: bool = False) -> str:
                 "`git diff` first and undo the mutation by hand. "
                 "A proof command that runs `git clean -fdX` will delete this "
                 f"directory, because {STATE_DIRNAME}/ is gitignored -- if that is "
-                "what happened, that proof command is the bug."
+                "what happened, that proof command is the bug.\n"
+                f"    Once {relative} is correct again, clear the record with: "
+                f"{_accept_hint(relative)}"
             )
         original = snapshot.read_bytes()
         if expected and _digest(original) != expected:
             raise HarnessError(
                 f"snapshot {snapshot} does not match its recorded digest; refusing "
-                "to write it over your source. Recover by hand."
+                "to write it over your source. Recover by hand, then clear the "
+                f"record with: {_accept_hint(relative)}"
             )
         expected_mutated = applied.get("mutated_sha256")
-        current = _digest(target.read_bytes())
         if current == _digest(original):
             _write_state(root, None)
             return (
@@ -804,7 +880,8 @@ def restore(root: Path, force: bool = False) -> str:
                 "mutated digest -- so the run was interrupted before it wrote, and "
                 "this content came from somewhere else. Refusing to overwrite it. "
                 f"The pre-run content is in {STATE_DIRNAME}/{SNAPSHOT_DIRNAME}/"
-                f"{snapshot_name}; reconcile by hand."
+                f"{snapshot_name}; reconcile by hand, then clear the record with: "
+                f"{_accept_hint(relative)}"
             )
         if current != str(expected_mutated):
             raise HarnessError(
@@ -818,7 +895,10 @@ def restore(root: Path, force: bool = False) -> str:
                 f"{snapshot_name}. Reconcile by hand.\n"
                 "    If the recorded path is a symlink that has since been "
                 "retargeted, the originally-mutated file is NOT the one this "
-                "message names -- check that before writing anything."
+                "message names -- check that before writing anything.\n"
+                f"    Once {relative} is correct again -- your edit preserved and "
+                "the mutation gone -- clear the record with: "
+                f"{_accept_hint(relative)}"
             )
         _atomic_write(target, original)
         written = target.read_bytes()
@@ -833,6 +913,155 @@ def restore(root: Path, force: bool = False) -> str:
             release_lock(lock)
         elif force:
             release_lock(_state_dir(root) / LOCK_DIRNAME)
+
+
+def accept_manual_repair(root: Path, claimed_digest: str) -> str:
+    """Clear an applied record after the mutation was undone BY HAND.
+
+    Every refusal in `restore` is safe, and several of them are terminal: the
+    snapshot was deleted by a proof running `git clean -fdX`, or the file was
+    reconciled and now matches neither the original nor the mutation. In those
+    states the right thing for the user to do is repair the file themselves --
+    and then they were stuck, because the record could only be cleared by a
+    successful restore. `verify` stayed red, the gate stayed red, and the only
+    way out was to delete the record blind. A tool whose safe path dead-ends
+    teaches people to take the unsafe one.
+
+    This is that exit, and it is deliberately NOT "ignore the record". Leak
+    detection is the entire point of the record, so clearing it has to be
+    EARNED. Three pieces of evidence are required, and each is checked, not
+    taken on trust:
+
+      1. the caller states the digest of the file they are accepting. This does
+         not prove they read it -- the refusal messages print the digest -- but
+         it pins the decision to specific content: if anything writes the file
+         between looking and accepting, the digest no longer matches and the
+         acceptance fails rather than clearing a record against content nobody
+         approved;
+      2. the file must not hold the recorded mutation byte-for-byte. That state
+         is not a repair, it is the leak itself, and `restore` handles it;
+      3. the mutation's own text must be gone from the file: the replacement
+         string absent, and the anchor it replaced back at EVERY site the
+         mutation touched. This is what makes the acceptance a measurement
+         rather than an assertion -- a file that was merely edited near the
+         mutation, or reformatted while still mutated, fails it. The anchor is
+         counted rather than looked for, because `str.replace` rewrites all
+         occurrences and a partial repair would satisfy a presence test. Where
+         one string contains the other the containing direction is skipped,
+         because it cannot discriminate; `find` and `replace` are never equal,
+         so at least one check always applies -- and in each degenerate
+         direction the surviving check is the one that discriminates.
+
+    Nothing is written to the source. The only effect is removing the record.
+    """
+
+    lock = acquire_lock(root)
+    try:
+        state = _read_state(root)
+        applied = (state or {}).get("applied")
+        if not applied:
+            return "nothing to accept: no mutation is recorded as applied"
+
+        relative = str(applied.get("file") or "")
+        target = _resolve_target(root, relative)
+        recorded_identity = applied.get("identity")
+        if recorded_identity is not None:
+            current_identity = _file_identity(target)
+            if current_identity != str(recorded_identity):
+                raise HarnessError(
+                    f"REFUSING TO ACCEPT {relative}: it no longer resolves to the "
+                    f"file that was mutated. Recorded {recorded_identity}, now "
+                    f"{current_identity}. Accepting would clear the record while "
+                    "the file that actually holds the mutation stays broken and "
+                    "unrecorded -- which is the leak this record exists to make "
+                    "visible. Find the file with the recorded device:inode first."
+                )
+
+        current_bytes = target.read_bytes()
+        current = _digest(current_bytes)
+        claimed = claimed_digest.strip().lower()
+        if claimed != current:
+            raise HarnessError(
+                f"REFUSING TO ACCEPT {relative}: you supplied {claimed[:12] or '(empty)'}"
+                f" but the file hashes to {current}. Either the digest names "
+                "different content than the file now holds -- something wrote it "
+                "since you looked -- or it is for another file. Re-read the file, "
+                "confirm it is what you mean to accept, and pass its current "
+                f"digest: {_accept_hint(relative)}"
+            )
+
+        expected_mutated = applied.get("mutated_sha256")
+        if expected_mutated is not None and current == str(expected_mutated):
+            raise HarnessError(
+                f"REFUSING TO ACCEPT {relative}: it still holds the recorded "
+                "mutation byte-for-byte. This is not a repair to acknowledge, it "
+                "is the leak itself, and accepting it would hide exactly what the "
+                "record exists to report. Put the file back with: "
+                "python3 scripts/mutation_harness.py restore"
+            )
+
+        find = applied.get("find")
+        replace = applied.get("replace")
+        if not isinstance(find, str) or not isinstance(replace, str):
+            raise HarnessError(
+                f"REFUSING TO ACCEPT {relative}: the record does not carry the "
+                "mutation's text, so there is no way to check the mutation is "
+                "actually gone -- and an acceptance that checks nothing is the "
+                "blanket override this command must not be. The record predates "
+                "this field. Verify the file by hand and, only once you are "
+                f"certain, delete {STATE_DIRNAME}/{STATE_FILENAME} yourself."
+            )
+        try:
+            text = current_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HarnessError(
+                f"REFUSING TO ACCEPT {relative}: it is not valid UTF-8 ({exc}), so "
+                "the mutation text cannot be looked for. Recover by hand."
+            ) from exc
+
+        # Skip whichever check cannot discriminate. If `replace` contains `find`
+        # (the `if x:` -> `if False and x:` shape) the anchor is present either
+        # way; if `find` contains `replace` (a deleted clause) the replacement is
+        # present either way. They are never equal, so one check always survives.
+        if replace not in find and replace in text:
+            raise HarnessError(
+                f"REFUSING TO ACCEPT {relative}: the mutation's replacement text "
+                f"is still in the file -- {replace.strip()[:70]!r}. The mutation "
+                "has not been undone, whatever else has changed around it. Undo "
+                "it first; accepting now would clear a record that is telling the "
+                "truth."
+            )
+        # Counted, not merely present. A mutation with expect_occurrences > 1
+        # rewrites every site, so a partial repair leaves the anchor back at one
+        # site and the mutation live at another -- and where `replace` is a
+        # substring of `find` (a DELETED clause, the commonest shape in the
+        # scheduled-reports plan) the replacement check above is skipped, so a
+        # presence test would be the only guard and it would pass.
+        expected_sites = applied.get("expect_occurrences", 1)
+        if not isinstance(expected_sites, int) or isinstance(expected_sites, bool):
+            expected_sites = 1
+        found_sites = text.count(find)
+        if find not in replace and found_sites < expected_sites:
+            raise HarnessError(
+                f"REFUSING TO ACCEPT {relative}: the text the mutation replaced is "
+                f"back at {found_sites} site(s), but the mutation was applied to "
+                f"{expected_sites} -- {find.strip()[:70]!r}. Either the repair is "
+                "partial and the file is still mutated somewhere, or the file is "
+                "correct for a reason this command cannot see; both leave the "
+                "acceptance unjustified, and an acceptance that cannot be "
+                "justified is worthless. Repair every site, or verify by hand and "
+                f"delete {STATE_DIRNAME}/{STATE_FILENAME} yourself."
+            )
+
+        identifier = applied.get("mutation_id", "?")
+        _write_state(root, None)
+        return (
+            f"accepted a by-hand repair of {relative} (mutation {identifier}, "
+            f"content {current[:12]}): the replacement text is gone and the "
+            "anchor is back. Cleared the applied record; wrote nothing."
+        )
+    finally:
+        release_lock(lock)
 
 
 def _mutated_text(mutation: Mutation, original_text: str) -> str:
@@ -1027,7 +1256,32 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
             '"./..."]) for any compiled language.'
         )
 
-    # Step 3: a mutation measured against an already-red proof proves nothing.
+    # Step 3: a mutation measured against an already-red proof proves nothing --
+    # and neither does one measured against an already-red BUILD. A build command
+    # that cannot pass on the clean tree reports every mutation in the plan as
+    # INVALID ("the mutated source does not build"), which reads as a plan full of
+    # malformed mutations rather than as one wrong build command. Measured while
+    # writing this plan's own build command: a first attempt failed on the
+    # unmutated file, and without this check the whole self-plan would have
+    # reported INVALID with the mutations blamed.
+    if mutation.build is not None:
+        baseline_build_code, baseline_build_tail = _run_command(mutation.build, root)
+        if baseline_build_code != 0:
+            return Result(
+                identifier=mutation.identifier,
+                verdict=VERDICT_BASELINE_FAILED,
+                detail=(
+                    "the declared build command fails on the CLEAN tree, so it "
+                    "cannot tell a build break from a working one and every "
+                    "verdict under it would be meaningless. Fix the build command "
+                    "or the tree; nothing was mutated.\n"
+                    f"    {_format_command(mutation.build)}\n"
+                    f"{baseline_build_tail.strip()[-1200:]}"
+                ),
+                warnings=warnings,
+                failing_proof=_format_command(mutation.build),
+            )
+
     failing, tail = _proof_outcome(mutation, root)
     if failing is not None:
         return Result(
@@ -1096,6 +1350,18 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
                 # first and filled in after the apply, because between these two
                 # points the file holds the original.
                 "mutated_sha256": expected_mutated_sha,
+                # The mutation's own text, so a by-hand repair can be CHECKED
+                # rather than asserted. `accept` requires the replacement string
+                # to be gone and the anchor to be back; without these two fields
+                # it would have to take the operator's word, which is the blanket
+                # override the acceptance path must not become.
+                "find": mutation.find,
+                "replace": mutation.replace,
+                # How many sites were mutated. `str.replace` rewrites ALL of
+                # them, so a repair that restores only some leaves the anchor
+                # present -- and a presence test would accept a file that is
+                # still mutated everywhere else.
+                "expect_occurrences": mutation.expect_occurrences,
                 "pid": os.getpid(),
             },
         },
@@ -1295,6 +1561,17 @@ def main(argv: list[str] | None = None) -> int:
         help="restore even when a lock is held (use only after confirming the "
         "recorded pid is not really the harness; pids are reused)",
     )
+    accept_parser = sub.add_parser(
+        "accept",
+        help="clear the applied record after undoing the mutation by hand "
+        "(checked, not taken on trust: the mutation text must be gone)",
+    )
+    accept_parser.add_argument(
+        "--digest",
+        required=True,
+        help="sha256 of the file as it now stands, which pins the acceptance to "
+        "the content you inspected",
+    )
     sub.add_parser("report", help="print the last run's report")
     run_parser = sub.add_parser("run", help="execute a mutation plan")
     run_parser.add_argument("--plan", required=True)
@@ -1319,6 +1596,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "restore":
             print(restore(root, force=bool(getattr(args, "force", False))))
+            return 0
+        if args.command == "accept":
+            print(accept_manual_repair(root, str(args.digest)))
             return 0
         if args.command == "report":
             path = _state_dir(root) / REPORT_FILENAME

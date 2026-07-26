@@ -864,3 +864,244 @@ def test_production_stacks_cover_every_celery_queue() -> None:
             f"{name}: production worker pools miss queues {sorted(missing)} "
             f"declared in workers.config.task_queues (consumed: {sorted(consumed)})"
         )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3142: additive Go execution path in compose.yml (go-worker-migrate,
+# go-worker, go-reconciler), profile-gated behind "go" so the default stack
+# is unchanged, plus the postgres image/PGDATA fix from the incident found
+# while wiring it.
+# ---------------------------------------------------------------------------
+
+_GO_WORKER_SERVICES = ("go-worker-migrate", "go-worker", "go-reconciler")
+
+
+def _active_compose_services(
+    services: dict, active_profiles: frozenset[str]
+) -> set[str]:
+    """Mirror Docker Compose profile activation semantics: a service with no
+    `profiles:` key (or an empty one) is always active. A service that
+    declares `profiles:` is active only if at least one of its declared
+    profiles is in `active_profiles`. Passing an empty `active_profiles`
+    reproduces exactly what a bare `docker compose up` starts.
+    """
+    active: set[str] = set()
+    for name, service in services.items():
+        declared = service.get("profiles") or []
+        if not declared or (active_profiles & set(declared)):
+            active.add(name)
+    return active
+
+
+def test_go_worker_services_are_profile_gated() -> None:
+    """The three CHAOS-3142 Go services must be reachable ONLY through the
+    "go" compose profile, so `docker compose up` with no profile selected
+    starts exactly the same service set it always has.
+
+    Mutation coverage (manually verified): removing a service's
+    `profiles: ["go"]` line, or changing it to a different profile name,
+    makes this test fail -- either the membership assertion (service no
+    longer declares "go") or the default-activation assertion (the service
+    now starts on a bare `up`).
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for name in _GO_WORKER_SERVICES:
+        assert name in services, f"compose.yml is missing the {name} service"
+        assert services[name].get("profiles") == ["go"], (
+            f'{name} must declare profiles: ["go"] exactly, '
+            f"got {services[name].get('profiles')!r}"
+        )
+
+    default_active = _active_compose_services(services, frozenset())
+    for name in _GO_WORKER_SERVICES:
+        assert name not in default_active, (
+            f"{name} would start on a bare `docker compose up` (no active "
+            f"profile) -- the default stack must be completely unchanged"
+        )
+
+    go_active = _active_compose_services(services, frozenset({"go"}))
+    for name in _GO_WORKER_SERVICES:
+        assert name in go_active, f"{name} must start once the go profile is selected"
+
+    # The pre-existing default stack (every service with no profiles today)
+    # must be exactly what it was before this change: the three new names
+    # are additive, nothing else lost or gained a profile.
+    non_go_services = {
+        name: service
+        for name, service in services.items()
+        if name not in _GO_WORKER_SERVICES
+    }
+    for name, service in non_go_services.items():
+        assert not service.get("profiles"), (
+            f"{name} unexpectedly gained a compose profile; only the three "
+            f"new CHAOS-3142 services should be profile-gated"
+        )
+
+
+def test_go_worker_migrate_gates_the_other_two_go_services() -> None:
+    """go-worker and go-reconciler must not start until go-worker-migrate
+    (the River schema/grant migration) has completed successfully -- and it
+    must in turn wait for the canonical Python `migrate` service, since its
+    coordinator grants target tables Alembic creates.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for name in ("go-worker", "go-reconciler"):
+        depends_on = services[name]["depends_on"]
+        assert (
+            depends_on["go-worker-migrate"]["condition"]
+            == "service_completed_successfully"
+        ), f"{name} must gate on go-worker-migrate completing successfully"
+    migrate_depends_on = services["go-worker-migrate"]["depends_on"]
+    assert (
+        migrate_depends_on["migrate"]["condition"] == "service_completed_successfully"
+    ), "go-worker-migrate must wait for the canonical Python migrate service"
+
+
+def test_go_reconciler_coordinator_dsn_is_direct_not_pgbouncer() -> None:
+    """Hard constraint: the coordinator connection holds cross-statement
+    row/table locks (FOR UPDATE, LOCK TABLE) and is rejected at Go startup
+    if routed through transaction-mode PgBouncer
+    (internal/storage/postgres/runtime.go ErrCoordinatorTransactionMode).
+    COORDINATOR_DATABASE_URI must target postgres:5432 directly.
+
+    Mutation coverage (manually verified): pointing COORDINATOR_DATABASE_URI
+    at pgbouncer:6432 instead of postgres:5432 makes both assertions fail.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    coordinator_uri = services["go-reconciler"]["environment"][
+        "COORDINATOR_DATABASE_URI"
+    ]
+    assert "@postgres:5432/" in coordinator_uri, (
+        f"COORDINATOR_DATABASE_URI must target postgres:5432 directly: {coordinator_uri!r}"
+    )
+    assert "pgbouncer" not in coordinator_uri, (
+        f"COORDINATOR_DATABASE_URI must not route through pgbouncer: {coordinator_uri!r}"
+    )
+
+
+def test_go_service_dsn_users_match_declared_roles() -> None:
+    """internal/platform/config.Config validates that a DSN's connection
+    user equals the declared RIVER_*_DATABASE_ROLE unconditionally
+    (internal/storage/postgres/runtime.go Validate). Assert compose wires
+    the identical role-variable substitution into both the DSN user segment
+    and its paired ROLE env var, for go-worker (domain, queue) and
+    go-reconciler (domain, queue, coordinator).
+
+    Mutation coverage (manually verified): changing a DSN's role reference to
+    a different (even correctly-spelled) role variable -- e.g. giving
+    go-reconciler's COORDINATOR_DATABASE_URI the queue role's substitution --
+    makes the corresponding assertion fail.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+
+    worker_env = services["go-worker"]["environment"]
+    assert worker_env["POSTGRES_URI"].startswith(
+        "postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:"
+    )
+    assert worker_env["WORKER_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:"
+    )
+
+    reconciler_env = services["go-reconciler"]["environment"]
+    assert reconciler_env["POSTGRES_URI"].startswith(
+        "postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:"
+    )
+    assert reconciler_env["WORKER_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:"
+    )
+    assert reconciler_env["COORDINATOR_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:"
+    )
+
+
+def test_go_worker_route_switches_default_off() -> None:
+    """CHAOS-3142/CHAOS-3123: WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED and
+    WORKER_GITHUB_REPO_METADATA_ENABLED must default to "false" everywhere
+    they are wired -- on the Python producer gate's env (the shared &env
+    anchor, inherited by worker/beat) and on go-worker. Both runtimes read
+    the SAME env var names so one override flips both sides coherently;
+    widening either default alone would silently move live traffic through
+    only one side of that gate.
+
+    Mutation coverage (manually verified): changing either default from
+    "false" to "true" (on either service) makes the corresponding assertion
+    fail.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    switch_names = (
+        "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
+        "WORKER_GITHUB_REPO_METADATA_ENABLED",
+    )
+
+    shared_env = services["api"]["environment"]  # &env anchor: api, worker, beat
+    go_worker_env = services["go-worker"]["environment"]
+    for switch in switch_names:
+        assert shared_env[switch] == f"${{{switch}:-false}}", (
+            f"{switch} must default to false on the shared Celery env anchor"
+        )
+        assert go_worker_env[switch] == f"${{{switch}:-false}}", (
+            f"{switch} must default to false on go-worker"
+        )
+
+    # worker/worker-heavy/beat inherit the anchor via `<<: *env`/`<<: *worker-base`;
+    # confirm the merge actually carried the keys rather than being shadowed.
+    for name in ("worker", "worker-heavy", "beat"):
+        env = services[name]["environment"]
+        for switch in switch_names:
+            assert env[switch] == f"${{{switch}:-false}}", (
+                f"{switch} must reach {name} through the shared env anchor"
+            )
+
+
+def test_local_postgres_image_pinned_and_pgdata_is_subdirectory() -> None:
+    """CHAOS-3142 incident: `postgres:latest` is a moving tag. It silently
+    changed base image family (Debian glibc -> Alpine musl) between when the
+    local dev cluster was created and a later `docker compose up`/pull, and
+    combined with a `PG_DATA` typo (the image only reads `PGDATA`) the new
+    image version picked its own default data directory -- a DIFFERENT
+    subdirectory of the same mounted volume -- and silently initialized a
+    brand-new empty cluster beside the real one instead of using it.
+
+    Pin the image by digest (matching the Postgres build already pinned in
+    internal/testsupport/containers/harness.go) and set PGDATA explicitly to
+    a subdirectory of the /var/lib/postgresql volume mount, never the mount
+    root itself.
+
+    Mutation coverage (manually verified): reverting the image back to
+    `postgres:latest` fails the digest assertion; reverting PGDATA back to
+    `PG_DATA: /var/lib/postgresql/` fails both the "PG_DATA not read" and
+    "PGDATA must be set" assertions; setting `PGDATA: /var/lib/postgresql/`
+    (the mount root) fails the subdirectory assertion.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    postgres = services["postgres"]
+
+    assert "@sha256:" in postgres["image"], (
+        f"postgres image must be pinned by digest, not a moving tag: {postgres['image']!r}"
+    )
+    tag = postgres["image"].split("@sha256:", 1)[0]
+    assert not tag.endswith(":latest"), (
+        f"postgres image tag must not be 'latest', even when digest-pinned: {postgres['image']!r}"
+    )
+
+    env = postgres["environment"]
+    assert "PG_DATA" not in env, (
+        "PG_DATA is not an env var the postgres image reads (typo for PGDATA); "
+        "its presence means the fix was reverted or duplicated"
+    )
+    assert "PGDATA" in env, (
+        "PGDATA must be set explicitly so the cluster path is pinned"
+    )
+
+    mount_root = next(
+        volume.split(":", 1)[1]
+        for volume in postgres["volumes"]
+        if volume.startswith("postgres_data:")
+    )
+    pgdata = env["PGDATA"]
+    assert pgdata.rstrip("/") != mount_root.rstrip("/"), (
+        "PGDATA must be a subdirectory of the volume mount, not the mount root itself"
+    )
+    assert pgdata.rstrip("/").startswith(mount_root.rstrip("/") + "/"), (
+        f"PGDATA {pgdata!r} must be nested under the volume mount {mount_root!r}"
+    )

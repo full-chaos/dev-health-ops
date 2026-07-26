@@ -13,7 +13,7 @@ readonly COMMIT="0000000000000000000000000000000000000000"
 readonly BUILD_TIME="1970-01-01T00:00:00Z"
 readonly SOURCE_DATE_EPOCH="0"
 readonly RUNTIME_TARGETS=(worker scheduler reconciler stream-runner)
-readonly ALL_TARGETS=(worker scheduler reconciler stream-runner operator contractcheck)
+readonly ALL_TARGETS=(worker scheduler reconciler stream-runner operator contractcheck migrate)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -207,6 +207,25 @@ smoke() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-operator:ci" --version \
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "operator did not report injected version metadata"
+
+  # migrate (cmd/dev-health-worker-migrate) is a one-shot job, not a
+  # long-running service: it has no readiness surface to smoke-test against,
+  # so -- like contractcheck and operator above -- it is special-cased rather
+  # than run through smoke_target. --version is its only no-op mode that
+  # requires neither a live database nor MIGRATION_DATABASE_URI (--check
+  # connects to PostgreSQL and applies/validates the pinned River schema, so
+  # it cannot run here); running with no arguments at all still proves real
+  # exit behavior by failing closed on the missing required configuration.
+  printf 'container smoke: migrate\n'
+  build_target migrate "${IMAGE_PREFIX}-migrate:ci"
+  [ "$(docker image inspect --format '{{.Config.User}}' "${IMAGE_PREFIX}-migrate:ci")" = "65532:65532" ] \
+    || die "migrate image is not configured for numeric non-root execution"
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-migrate:ci" --version \
+    | grep -F '"version":"phase1-ci"' >/dev/null \
+    || die "migrate did not report injected version metadata"
+  if docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-migrate:ci" >/dev/null 2>&1; then
+    die "migrate did not fail closed without MIGRATION_DATABASE_URI"
+  fi
 }
 
 reproducible() {

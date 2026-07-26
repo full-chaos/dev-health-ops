@@ -36,7 +36,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         dev-health-reconciler \
         dev-health-stream-runner \
         dev-health-workerctl \
-        worker-contractcheck; do \
+        worker-contractcheck \
+        dev-health-worker-migrate; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
         -buildvcs=false \
         -trimpath \
@@ -63,7 +64,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/operator/app/deploy/go-workers \
       /runtime/contractcheck/usr/local/bin \
       /runtime/contractcheck/app/contracts/jobs \
-      /runtime/contractcheck/app/deploy/go-workers; \
+      /runtime/contractcheck/app/deploy/go-workers \
+      /runtime/migrate/usr/local/bin; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp -R /src/contracts/jobs/v1 /runtime/scheduler/app/contracts/jobs/v1; \
@@ -80,6 +82,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /src/deploy/go-workers/profiles.json /runtime/operator/app/deploy/go-workers/profiles.json; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/profiles.json /runtime/contractcheck/app/deploy/go-workers/profiles.json; \
+    cp /out/dev-health-worker-migrate /runtime/migrate/usr/local/bin/dev-health-worker-migrate; \
     find /runtime -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM ${GO_RUNTIME_IMAGE} AS runtime
@@ -127,3 +130,13 @@ COPY --from=build --chown=65532:65532 /runtime/contractcheck/ /
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/worker-contractcheck"]
 CMD ["validate"]
+
+# migrate is the one-shot River schema/grant migration
+# (cmd/dev-health-worker-migrate). It reads no contract or deployment-profile
+# files at runtime -- only its flags and the MIGRATION_DATABASE_URI /
+# RIVER_*_ROLE environment -- so, unlike the other targets above, its runtime
+# layer stages nothing under /app.
+FROM runtime AS migrate
+COPY --from=build --chown=65532:65532 /runtime/migrate/ /
+WORKDIR /app
+ENTRYPOINT ["/usr/local/bin/dev-health-worker-migrate"]

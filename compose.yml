@@ -8,20 +8,44 @@ volumes:
 
 services:
   postgres:
-    image: postgres:latest
+    # Pinned by digest, not `latest`: an unpinned tag silently changed libc
+    # and default-user family (Debian glibc -> Alpine musl) and moved the
+    # image's own default PGDATA path from underneath a stale `PG_DATA` typo
+    # below, which together caused an `up` to start a brand-new empty
+    # cluster in a different subdirectory of the same volume instead of the
+    # real one -- CHAOS-3142 incident, 2026-07-25. This digest is the same
+    # Postgres 18 Alpine image already pinned in
+    # internal/testsupport/containers/harness.go, so the dev stack and the
+    # Go integration-test harness agree on one Postgres build.
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     container_name: postgres
     restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
-      PG_DATA: /var/lib/postgresql/
+      # Must be a subdirectory of the volume mount (postgres_data is mounted
+      # at the parent /var/lib/postgresql/), never the mount root itself --
+      # otherwise the image's lost+found and other reserved entries live
+      # alongside PGDATA and a future image-default change silently
+      # relocates the cluster again. Previously misspelled `PG_DATA`, which
+      # the postgres image never reads, so this had no effect for seven
+      # months (commit 581ae01e6) while every cluster was created at the
+      # image's own shifting default path.
+      PGDATA: /var/lib/postgresql/pgdata
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      # CHAOS-3142: the coordinator role of the CHAOS-3033 Option B split.
+      # docker/init-extra-dbs.sh already reads these two (defaulting to
+      # devhealth_coordinator) to create the login and grant CONNECT; without
+      # them here an operator override never reaches the script that
+      # provisions it.
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       # Local development credentials only. Production roles are provisioned
       # through the database provider/secret manager before migration.
       RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
       RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
     ports:
       - "5555:5432"
     volumes:
@@ -156,11 +180,33 @@ services:
       PGBOUNCER_TRANSACTION_MODE: "true"
       CLICKHOUSE_URI: "clickhouse://ch:ch@clickhouse:8123/default"
       REDIS_URL: "redis://valkey:6379/1"
+      # Pre-existing gap fixed alongside CHAOS-3142: declared in
+      # .env.example but was never actually referenced by this file, so no
+      # override ever reached any container -- provider credential
+      # decryption (src/dev_health_ops/core/encryption.py, read by
+      # workers/task_utils.py for every provider) silently had no key in
+      # local dev. Also required by the go-worker `sync` profile
+      # (SETTINGS_ENCRYPTION_KEY, deploy/go-workers/profiles.json), which
+      # must decrypt the same stored credentials.
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
       # CHAOS-2299: route sync dispatch to per-provider queues. Safe to enable
       # here because the worker -Q lists below consume sync.<provider> in the
       # SAME change. Bare-image deployments must follow the two-phase rollout
       # in workers/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
+      # CHAOS-3142/CHAOS-3123: the two route-ready provider/dataset switches.
+      # Read by BOTH this Python producer gate
+      # (ProviderUnitRouteSwitches.from_environment,
+      # src/dev_health_ops/workers/provider_unit_route.py) and the Go worker
+      # (config.Config.WorkerLaunchDarklyFeatureFlagsEnabled /
+      # WorkerGithubRepoMetadataEnabled, cmd/dev-health-worker/dependencies.go
+      # workerRouteSwitches) from the SAME env var names, so one override
+      # flips both sides coherently -- a unit the Python gate routes to River
+      # with the switch off here but on for go-worker (or vice versa) finds
+      # no handler. Both default to "false"; only flip alongside a reviewed
+      # route release.
+      WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
+      WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
       AUTO_RUN_MIGRATIONS: "false"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
@@ -323,6 +369,161 @@ services:
     <<: *worker-base
     container_name: beat
     command: -A dev_health_ops.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+
+  # ---------------------------------------------------------------------------
+  # Go execution path (CHAOS-3142) — additive, profile-gated, default OFF.
+  #
+  # Behind `profiles: [go]` so a bare `docker compose up` is completely
+  # unchanged: none of the three services below are created unless the `go`
+  # profile is explicitly selected (`docker compose --profile go up -d` or
+  # `COMPOSE_PROFILES=go`). Celery/Beat remain the only scheduler and the
+  # only owner of every route unless a reviewed release says otherwise --
+  # starting these containers does not transfer a queue or route.
+  #
+  # go-worker-migrate applies the pinned River schema plus the domain/
+  # queue/coordinator role grants (cmd/dev-health-worker-migrate) using an
+  # elevated, non-runtime DSN. It must complete before go-worker or
+  # go-reconciler start, and it depends on the canonical Python `migrate`
+  # service so the tables its grants target (worker_job_outbox,
+  # worker_job_completion_fences, ...) already exist.
+  # ---------------------------------------------------------------------------
+  go-worker-migrate:
+    build:
+      context: .
+      dockerfile: ./docker/go-worker.Dockerfile
+      target: migrate
+    profiles: ["go"]
+    container_name: dev-health-go-worker-migrate
+    restart: "no"
+    environment:
+      # Direct postgres:5432 with the elevated local superuser -- never a
+      # runtime role, and never pgbouncer. cmd/dev-health-worker-migrate
+      # itself rejects a MIGRATION_DATABASE_URI role that collides with any
+      # of the three runtime roles below.
+      MIGRATION_DATABASE_URI: postgresql://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # go-worker runs the `sync` deployment profile (deploy/go-workers/profiles.json):
+  # the provider-unit River handler for the two route-ready pairs. Domain
+  # traffic goes through pgbouncer, as Python's does; River queue control is
+  # direct, as every River process requires.
+  go-worker:
+    build:
+      context: .
+      dockerfile: ./docker/go-worker.Dockerfile
+      target: worker
+    profiles: ["go"]
+    container_name: dev-health-go-worker
+    restart: unless-stopped
+    environment:
+      DEV_HEALTH_PROFILE: sync
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-postgres}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@postgres:5432/${POSTGRES_DB:-postgres}
+      # Native protocol port 9000, NOT the HTTP port 8123 the Python
+      # clickhouse-connect client above uses: internal/storage/clickhouse's
+      # Open() uses ClickHouse/clickhouse-go/v2, which speaks the native
+      # wire protocol and eagerly Pings at construction time. Pointing this
+      # at 8123 makes clickhousestore.Open fail immediately with
+      # ErrUnavailable ("ClickHouse readiness check failed") -- found while
+      # live-verifying this compose wiring end-to-end (CHAOS-3142).
+      CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      VALKEY_URI: redis://valkey:6379/1
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      # Same two switches, same names, as the Celery worker/beat env above --
+      # this is the Go half of the CHAOS-3123 route gate
+      # (config.Config.WorkerLaunchDarklyFeatureFlagsEnabled /
+      # WorkerGithubRepoMetadataEnabled). Both default off.
+      #
+      # NOTE (found live-verifying this wiring): with the domain AND queue
+      # DSNs both configured -- as they are here -- cmd/dev-health-worker's
+      # "sync" profile unconditionally constructs the sync.team_autoimport
+      # handler (buildSyncCoordinatorWorker gates only on profile=="sync",
+      # not on either switch) and then requires an EXACT match between
+      # constructed capability and the "sync" registry profile's full
+      # declared job_kinds (cmd/dev-health-worker/dependencies.go
+      # dependencies.profileReady, the CUT-02 "exact startup validation"
+      # gate) -- which also declares sync.provider_unit. So with BOTH
+      # switches at their secure default of false, go-worker's sync profile
+      # fails closed at startup (crash-loops under restart:unless-stopped)
+      # rather than idling ready-but-idle. This is existing, intentional
+      # fail-closed behavior, not a wiring bug -- see docs/... runbook. An
+      # operator must set one switch true (e.g. via a .env override) for
+      # go-worker to reach /readyz "ok".
+      WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
+      WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
+      # sync.team_autoimport's post-sync bridge (buildSyncCoordinatorWorker)
+      # is constructed unconditionally for the sync profile once the domain
+      # DSN is configured, and syncdispatchruntime.NewHTTPBridge fails
+      # closed on an empty BaseURL/BearerToken -- so, even though
+      # deploy/go-workers/profiles.json's "sync" secret_env list does not
+      # mention it, this IS required for go-worker's sync profile to start.
+      # The dev-local token is a placeholder value, not a real secret; the
+      # api target does not currently authenticate this bridge route.
+      WORKER_OPERATIONAL_BRIDGE_URL: ${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-dev-local-operational-bridge-token}
+      WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    ports:
+      - "8081:8080"
+
+  # go-reconciler relays worker_job_outbox rows into River and observes the
+  # sync-dispatch outbox. It is a coordinator-role binary
+  # (cmd/dev-health-reconciler/dependencies.go openReconcilerDatabase calls
+  # RuntimeConfig.WithCoordinator): COORDINATOR_DATABASE_URI is required and
+  # MUST be direct postgres:5432, never pgbouncer -- transaction-mode pooling
+  # cannot hold the cross-statement row/table locks the coordinator role
+  # takes (internal/storage/postgres/runtime.go ErrCoordinatorTransactionMode).
+  # It declares no DEV_HEALTH_PROFILE (cmd/dev-health-reconciler/main.go sets
+  # no Profiles), so one must not be set here.
+  go-reconciler:
+    build:
+      context: .
+      dockerfile: ./docker/go-worker.Dockerfile
+      target: reconciler
+    profiles: ["go"]
+    container_name: dev-health-go-reconciler
+    restart: unless-stopped
+    environment:
+      POSTGRES_URI: postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-postgres}
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      WORKER_DATABASE_URI: postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@postgres:5432/${POSTGRES_DB:-postgres}
+      COORDINATOR_DATABASE_URI: postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@postgres:5432/${POSTGRES_DB:-postgres}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      WORKER_DOMAIN_DATABASE_MAX_CONNS: ${WORKER_DOMAIN_DATABASE_MAX_CONNS:-4}
+      WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
+      WORKER_COORDINATOR_DATABASE_MAX_CONNS: ${WORKER_COORDINATOR_DATABASE_MAX_CONNS:-2}
+      DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      go-worker-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8082:8080"
 
   # ---------------------------------------------------------------------------
   # Observability — SigNoz (distributed tracing + metrics)

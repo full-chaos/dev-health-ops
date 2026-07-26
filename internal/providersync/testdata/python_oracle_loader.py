@@ -39,6 +39,7 @@ _JIRA_BUDGET_SOURCE = _source("dev_health_ops/providers/jira/budget.py")
 _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/budget.py")
 _DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
 _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
+_GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
 
 _SAFE_SOURCE_MODULES: dict[str, Path] = {
     "dev_health_ops.sync.budget_types": _BUDGET_TYPES_SOURCE,
@@ -150,11 +151,82 @@ def _target_base_git() -> None:
     _install_module("dev_health_ops.utils", {"CONNECTORS_AVAILABLE": False})
 
 
+def _target_github_code_client() -> None:
+    """Stub code_client.py's imports, INCLUDING httpx itself (CHAOS-3162).
+
+    ``_pull_from_item`` is a pure ``Mapping -> GitHubPullData`` function: it
+    never touches httpx, an HTTP connection, or any of this module's other
+    imports. The only reason loading the file needs them satisfied at all is
+    that Python evaluates every top-level `import`/`from` statement when a
+    module loads, regardless of which names the function you actually want
+    ends up using. `from __future__ import annotations` (present at the top
+    of code_client.py) is what makes stubbing httpx ITSELF safe: it defers
+    every type annotation (e.g. `transport: httpx.AsyncBaseTransport | None`)
+    to a string, so an annotation referencing a stub attribute that doesn't
+    exist is never evaluated. Verified empirically: loading the real file
+    under this exact stub set and calling `_pull_from_item({"user":
+    {"login": True}, ...})` returns `author_login='True'` -- the live
+    `str(user["login"])` call, not a re-implementation of it.
+    """
+    _install_module("httpx", {})
+    _install_module(
+        "dev_health_ops.connectors.models",
+        {"FileBlame": object, "SecurityAlertData": object},
+    )
+    _install_module(
+        "dev_health_ops.exceptions",
+        {
+            "APIException": Exception,
+            "AuthenticationException": Exception,
+            "NotFoundException": Exception,
+            "RateLimitException": Exception,
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers._http",
+        {
+            "GITHUB_DIAGNOSTIC_HEADER_NAMES": (),
+            "InstrumentedRESTCore": object,
+            "_default_is_retryable_status": lambda *_args, **_kwargs: False,
+            "github_rest_base_url": lambda *_args, **_kwargs: "",
+        },
+    )
+    _install_module("dev_health_ops.providers.github.client", {"GitHubAuth": object})
+    _install_module(
+        "dev_health_ops.providers.github.graphql",
+        {
+            "BLAME_QUERY": "",
+            "blame_variables": lambda *_args, **_kwargs: {},
+            "build_blob_texts_query": lambda *_args, **_kwargs: "",
+            "github_graphql_url": lambda *_args, **_kwargs: "",
+            "parse_blame_response": lambda *_args, **_kwargs: None,
+            "parse_blob_texts_response": lambda *_args, **_kwargs: None,
+            "raise_for_graphql_errors": lambda *_args, **_kwargs: None,
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers.github.ratelimit",
+        {
+            "classify_github_403": lambda *_args, **_kwargs: None,
+            "github_retry_after_seconds": lambda *_args, **_kwargs: None,
+        },
+    )
+    _install_module("dev_health_ops.sync.budget_types", {"BudgetDimension": object})
+    _install_module(
+        "dev_health_ops.sync.rate_limit_signal", {"RateLimitSignal": object}
+    )
+
+
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",
         _BASE_GIT_SOURCE,
         _target_base_git,
+    ),
+    _GITHUB_CODE_CLIENT_SOURCE: (
+        "dev_health_ops.providers.github.code_client",
+        _GITHUB_CODE_CLIENT_SOURCE,
+        _target_github_code_client,
     ),
     _LAUNCHDARKLY_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.launchdarkly",
@@ -211,12 +283,14 @@ def _install_namespace() -> None:
     for name in (
         "dev_health_ops",
         "dev_health_ops.analytics",
+        "dev_health_ops.connectors",
         "dev_health_ops.credentials",
         "dev_health_ops.models",
         "dev_health_ops.metrics",
         "dev_health_ops.metrics.sinks",
         "dev_health_ops.processors",
         "dev_health_ops.providers",
+        "dev_health_ops.providers.github",
         "dev_health_ops.providers.jira",
         "dev_health_ops.providers.launchdarkly",
         "dev_health_ops.providers.linear",

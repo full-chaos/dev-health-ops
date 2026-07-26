@@ -236,6 +236,78 @@ question.
     its own sub-precision fixture, not just the first one you wrote a test
     for.
 
+16. **A hand-picked field list in a parity oracle is a standing invitation
+    for the NEXT unpicked field to ship broken.** Defect class 13 above (an
+    oracle must assert every field it decodes) and this pair's own review
+    history proved the same shape of gap twice: `github/prs`'s first oracle
+    hand-picked `state`/`author_name`/`created_at`; its replacement decoded
+    `merged_at`/`closed_at` from the live function and simply forgot to
+    assert them, for two review rounds in a row, because nothing forced the
+    list of asserted fields to stay in sync with the list of fields the row
+    actually carries. CHAOS-3162 replaced "assert the fields you thought to
+    hand-pick" with a **generic, declarative, whole-row comparator** that
+    every future pair should use instead of writing a new hand-authored
+    field-by-field oracle test:
+    - `internal/providersync/testdata/oracle_registry.py` — a pair
+      registers itself (`PairSpec(id, build_row, excluded_fields)`) as a
+      side effect of importing its own file under `testdata/oracle_pairs/`.
+      Nothing in the registry, or in the CLI runner
+      (`python_generic_row_oracle.py`), changes to add a pair — that is the
+      whole point: a pair difference is a difference in WHAT gets compared,
+      never in HOW.
+    - `internal/providersync/oracle_compare_test.go` —
+      `compareRowsAgainstPythonOracle`/`oracleDivergences` diff **every
+      key** present on either side (the union, not the intersection) and
+      fail on ANY undeclared divergence, including a key present on one
+      side and absent on the other. An exclusion (a field one side
+      structurally cannot have an opinion about — review-enrichment fields
+      not yet built, Go-only effect bookkeeping like `org_id`/`last_synced`)
+      requires a written reason at both the Python (`excluded_fields`) and
+      Go (`goOnlyFields` parameter) side — mirroring
+      `expected_survivor_reason` in the mutation harness: an omission must
+      be declared, never silently missing.
+    - The same comparator generalizes past row-CONSTRUCTION: this pair also
+      used it for the readback boundary (`oracle_readback_integration_test.go`,
+      comparing a written row against what a real ClickHouse `SELECT`
+      returns) and a list-inclusion-DECISION boundary
+      (`github_prs_window_oracle_test.go`, comparing a boolean decision
+      struct rather than a row). `diffRows` doesn't know or care what shape
+      of thing it's comparing — only that both sides serialize to
+      `map[string]any` with the same keys meaning the same thing.
+    - Proving a comparator actually catches something is itself a testable
+      claim, not an assertion: for every defect class this framework was
+      built to prevent, write a "rediscovers" test — the SAME comparator,
+      cases, and pair id, but with a documented pre-fix/buggy builder
+      substituted for the real one — and assert the divergence list is
+      non-empty. **Do not try to do this by wrapping
+      `compareRowsAgainstPythonOracle` in `t.Run` and checking the returned
+      bool**: a subtest's `t.Errorf` marks EVERY ancestor test failed
+      regardless of what the caller does with `t.Run`'s return value; call
+      `oracleDivergences` directly instead and assert on its returned slice
+      (see `requireOracleRediscovers` and
+      `TestGenericOracleRediscoversRowConstructionDefects`).
+    - Not every crossing can reasonably execute the real, live Python
+      function — `github_prs_window.py`'s pair documents the scope call
+      made when it couldn't: `_collect_github_pr_objects`'s list-inclusion
+      decision is three lines embedded in an async function whose module
+      pulls in the complexity scanner, testops ingestion, and half a dozen
+      other subsystems, too much stubbing surface for a decision this
+      small to be worth the maintenance risk of the stubs themselves
+      drifting from reality. The fallback used there — a byte-for-byte
+      PINNED copy of the exact source lines, with a freshness check that
+      hard-fails if those lines stop matching the live source — is weaker
+      than live execution and is labelled as such in the pair's own
+      docstring, not left for a reader to discover. Prefer live execution;
+      reach for a pinned-and-guarded fallback only when the import cost is
+      genuinely disproportionate to the decision being tested, and say so
+      in writing.
+    - This does NOT retroactively apply to the five oracles that predate
+      CHAOS-3162 (`python_launchdarkly_normalization_oracle.py` and
+      friends, including this pair's own OWN existing
+      `python_github_prs_normalization_oracle.py`) — they keep working
+      exactly as documented in step 8 below. Only NEW pairs should reach
+      for the generic path first.
+
 ## The recipe
 
 ### 1. Read the Python authority for the pair, not just its shape
@@ -454,6 +526,20 @@ The Python side (`tests/workers/test_provider_matrix_contract.py`) needs
 on drift without anyone having to remember to touch it.
 
 ### 8. Tests: prove parity, not just execution
+
+**For a NEW pair, reach for the generic oracle framework (defect class 16)
+first**, not the hand-authored-oracle pattern the rest of this section
+walks through. The numbered steps and worked examples below (the
+`python_<pair>_normalization_oracle.py` / `python_oracle_loader.py`
+pattern) remain accurate and are what the five pairs that predate
+CHAOS-3162 use — read them to understand the loader technique they share
+with the generic framework (stubbing heavy imports so a stock interpreter
+can still execute the real target function) — but a new pair's own oracle
+test should be a `testdata/oracle_pairs/<pair>_<boundary>.py` registration
+plus a Go file calling `compareRowsAgainstPythonOracle`, not a new
+hand-picked-field comparison script. See defect class 16 for why, and
+`internal/providersync/testdata/oracle_pairs/github_prs_row.py` +
+`github_prs_generic_oracle_test.go` for the worked example.
 
 **The parity oracle MUST run the real Python producer live, not compare
 against a hand-authored fixture — and check in the generator, so

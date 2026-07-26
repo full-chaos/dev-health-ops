@@ -1,0 +1,132 @@
+"""github/prs row-construction oracle pair (CHAOS-3162).
+
+Registers the "github/prs/row" boundary: given one raw GitHub REST
+`/pulls/{number}` detail payload (a plain JSON dict, the same shape
+github_prs_route_test.go's fixtures use), calls the REAL, live
+`_pull_from_item` (providers/github/code_client.py) -> `normalize_pr_state`
+(providers/pr_state.py) -> `build_git_pull_request`
+(processors/base_git.py) chain and returns the COMPLETE resulting row as a
+dict -- every attribute the built `GitPullRequest` object carries, not a
+chosen subset.
+
+Importing this module is the only action needed to register the pair;
+nothing in oracle_registry.py or python_generic_row_oracle.py changes.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import pathlib
+from typing import Any
+
+from internal.providersync.testdata import oracle_registry
+from internal.providersync.testdata.python_oracle_loader import load_live_module
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+_CODE_CLIENT_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/github/code_client.py"
+_BASE_GIT_SOURCE = REPO_ROOT / "src/dev_health_ops/processors/base_git.py"
+_PR_STATE_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/pr_state.py"
+
+
+def _load_pr_state() -> Any:
+    """providers/pr_state.py has zero project-internal imports, so it loads
+    directly -- no stub namespace required (mirrors python_registry_oracle.py)."""
+    spec = importlib.util.spec_from_file_location(
+        "dev_health_ops_pr_state_oracle_target", _PR_STATE_SOURCE.resolve(strict=True)
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load {_PR_STATE_SOURCE}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _build_row(case: dict[str, Any]) -> dict[str, Any]:
+    """case: {"raw_pr": <raw GitHub /pulls/{number} JSON payload>,
+    "repo_id": <string>}.
+
+    Loaded fresh per call (load_live_module purges and reinstalls the stub
+    namespace every time) so this stays correct even if a caller loads other
+    pairs' modules in the same process.
+    """
+    code_client = load_live_module(_CODE_CLIENT_SOURCE)
+    base_git = load_live_module(_BASE_GIT_SOURCE)
+    pr_state = _load_pr_state()
+
+    gh_pr = code_client._pull_from_item(case["raw_pr"])
+    state = pr_state.normalize_pr_state(gh_pr.state, gh_pr.merged_at)
+    author_name = gh_pr.author_login if gh_pr.author_login else "Unknown"
+    pr = base_git.build_git_pull_request(
+        repo_id=case["repo_id"],
+        number=gh_pr.number,
+        title=gh_pr.title,
+        body=gh_pr.body,
+        state=state,
+        author_name=author_name,
+        author_email=None,
+        created_at=gh_pr.created_at,
+        merged_at=gh_pr.merged_at,
+        closed_at=gh_pr.closed_at,
+        head_branch=gh_pr.head_ref,
+        base_branch=gh_pr.base_ref,
+        additions=gh_pr.additions,
+        deletions=gh_pr.deletions,
+        changed_files=gh_pr.changed_files,
+        comments_count=gh_pr.comments_count,
+        # first_review_at/first_comment_at/changes_requested_count/
+        # reviews_count are deliberately NOT passed: the real caller
+        # (_collect_github_pr_objects) only supplies them from
+        # _enrich_prs_with_reviews_batch's review fetch, which this
+        # row-construction boundary does not perform (see
+        # deploy/go-workers/provider-sync-porting-recipe.md's defect class
+        # 9). build_git_pull_request's optional_values filtering means an
+        # un-passed (None) field is OMITTED from the built row entirely, not
+        # merely set to None -- so those fields are absent here exactly the
+        # way they would be absent from a call site that has no review data
+        # yet, and the exclusion below documents that this is a declared,
+        # structural absence, not an oversight.
+    )
+    return {key: value for key, value in vars(pr).items() if not key.startswith("_")}
+
+
+oracle_registry.register(
+    oracle_registry.PairSpec(
+        id="github/prs/row",
+        build_row=_build_row,
+        excluded_fields={
+            "first_review_at": (
+                "owned by github/pr-reviews' review-enrichment phase "
+                "(_enrich_prs_with_reviews_batch), not this row-construction "
+                "boundary -- see recipe doc defect class 9"
+            ),
+            "first_comment_at": (
+                "same as first_review_at: review-enrichment phase field, "
+                "always None/absent from this boundary regardless of caller"
+            ),
+            "changes_requested_count": (
+                "owned by github/pr-reviews' review-enrichment phase, "
+                "not this row-construction boundary"
+            ),
+            "reviews_count": (
+                "owned by github/pr-reviews' review-enrichment phase, "
+                "not this row-construction boundary"
+            ),
+            "last_synced": (
+                "Go-side effect/tenant bookkeeping: the write timestamp, "
+                "stamped by the sink at WriteEffect time -- has no "
+                "build_git_pull_request equivalent at all"
+            ),
+            "source_id": (
+                "Go-side external-ingest marker column; the native sink "
+                "always writes NULL and Python's build_git_pull_request has "
+                "no equivalent parameter"
+            ),
+            "org_id": (
+                "Go-side tenant column; ClickHouseStore._insert_rows "
+                "auto-injects it from self.org_id at insert time, never "
+                "part of the GitPullRequest object build_git_pull_request "
+                "constructs"
+            ),
+        },
+    )
+)

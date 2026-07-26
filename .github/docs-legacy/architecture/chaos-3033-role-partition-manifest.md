@@ -207,6 +207,18 @@ hand, not grant blind.
 
 ## Privilege-implication rule: locking clauses need no write statement
 
+> **This section was right, and the checker disagreed with it for a while.** The
+> rule below (verified on Postgres 16) says a role holding only `SELECT`+`INSERT`
+> is denied a `SHARE ROW EXCLUSIVE` lock. `internal/domaingrants` nonetheless
+> modelled every mode above `ACCESS SHARE` as "any one of INSERT/UPDATE/DELETE",
+> and a test later asserted that as correct — contradicting this document. Both are
+> now fixed and re-measured on Postgres 18.4, which **agrees** with the rule below
+> and additionally pins `ROW SHARE`/`ROW EXCLUSIVE`, which this section does not
+> cover. See "LOCK TABLE privilege requirements are MODE-dependent" for the full
+> measured table. Lesson: when the analyzer and this manifest disagree, the
+> manifest was derived from measurement and the analyzer may be carrying a
+> documented-but-unmodelled approximation.
+
 A DML-verb grep (`INSERT|UPDATE|DELETE`) undercounts required privileges.
 Two Postgres locking constructs imply write-level grants with no write verb
 anywhere in the reaching Go statement — both verified empirically against a
@@ -416,14 +428,145 @@ turns out no coordinator path touches them, that is a posture *over*-declaration
 separate finding — route it to the posture lane rather than tightening it here, since a
 wrong tightening fails closed in production.
 
+### LOCK TABLE privilege requirements are MODE-dependent (measured, not documented)
+
+The first version of this gate modelled `LOCK TABLE` as "any one of
+INSERT/UPDATE/DELETE" for every mode above `ACCESS SHARE`, and a test asserted that
+INSERT alone satisfies a `SHARE ROW EXCLUSIVE` lock. **Both were wrong**, and the
+test was the worse half: the pre-existing analyzer had *documented* this
+imprecision as a known gap, and the test converted it into an authoritative rule.
+
+Measured against PostgreSQL 18.4, one grant set per candidate privilege, one query
+per mode, **with the controls that isolate each denial to the lock clause** — an
+empty transaction, and the identical read with only the lock removed. Without those
+controls a `DENIED` result is a denial plus a guess about its cause.
+
+| statement | SELECT | +INSERT | +UPDATE | +DELETE |
+|---|---|---|---|---|
+| C1 empty transaction (control) | ok | ok | ok | ok |
+| C2 read, **no lock** (control) | ok | ok | ok | ok |
+| `ACCESS SHARE` | ok | ok | ok | ok |
+| `ROW SHARE` | DENIED | ok | ok | ok |
+| `ROW EXCLUSIVE` | DENIED | ok | ok | ok |
+| `SHARE UPDATE EXCLUSIVE` | DENIED | DENIED | ok | ok |
+| `SHARE` | DENIED | DENIED | ok | ok |
+| `SHARE ROW EXCLUSIVE` | DENIED | DENIED | ok | ok |
+| `EXCLUSIVE` | DENIED | DENIED | ok | ok |
+| `ACCESS EXCLUSIVE` | DENIED | DENIED | ok | ok |
+
+Three tiers, not two. **INSERT satisfies `ROW SHARE` and `ROW EXCLUSIVE` and
+nothing stricter.** And `ROW SHARE` requires a write privilege even though the
+PostgreSQL `LOCK` documentation says it needs only SELECT — measured, so the table
+above wins over the docs.
+
+`LockRequirement` records the demand as a **disjunction** (any one of a
+mode-specific set) rather than a `PrivilegeSet` entry, because every `PrivilegeSet`
+member is an independent requirement and folding UPDATE in produced a real false
+positive on jobroute's SELECT+INSERT grant. Unrecognized modes fail **closed** at
+the strictest tier: both predecessors of this rule failed *open*.
+
+There are now four distinct rules in this area and none may be collapsed into
+another: `ACCESS SHARE` (SELECT), `ROW SHARE`/`ROW EXCLUSIVE` (any of I/U/D),
+stricter modes (U/D only), and `SELECT ... FOR UPDATE` (UPDATE specifically,
+handled as an ordinary privilege).
+
+**Generalisation worth carrying:** this was a privilege requirement attributed to
+the wrong clause of a compound statement. The same error shape appeared the same
+day in the reports lane — `INSERT ... ON CONFLICT DO NOTHING RETURNING x` needs
+SELECT because of the **`RETURNING`**, not the conflict arbiter. For any claim of
+the form "clause X implies privilege Y", split the clauses and measure each variant
+against a role holding exactly the privilege under test, with a control that
+removes only the suspect clause.
+
+### Attribution can be INVERTED by a parameter name, not just incomplete
+
+A pool-typed parameter is a seed root by **spelling** (`domainPool`,
+`coordinatorPool`), and spelling can contradict reality. `build(domainPool *pgxpool.Pool)`
+called only with the coordinator pool was seeded by the DOMAIN run from its name
+while the coordinator run's barrier discarded it — so downstream SQL looked
+domain-**exclusive**, and role-exclusive evidence is precisely what this gate
+escalates to CRITICAL. It would have directed the grant to the wrong role with
+confidence, and every "is it granted somewhere" check would still pass.
+
+`buildPoolParamRoles` fixes this: a role-agnostic pass records which roles are
+actually passed to each pool-typed parameter at its call sites, and **call-site
+evidence outranks the name**. Where no call site resolves, the name still applies —
+the convention is the only signal left, and suppressing it would trade a false
+attribution for a false absence. Every override is reported, because it means a
+naming convention lied and the reader should know that rather than assume the
+surface shrank.
+
+### Incompleteness GATES, and is per (table, privilege)
+
+Enumerating what was not verified is not enough — a printout nobody must act on is
+indistinguishable from having checked. Two changes:
+
+- **Pair granularity.** A table-level list hid the case that matters most: if
+  SELECT stays visible while an UPDATE path goes dark, the table is nonempty, so a
+  table-level list omits it and the exact `(table, UPDATE)` gap appears in *no*
+  output at all.
+- **Enforcement.** A posture privilege with no derived call site for its own role
+  must be acknowledged in `acknowledgedBlindSpots` with a reason, or the gate
+  fails; and a stale acknowledgement fails too, so the list cannot outlive the
+  blind spot.
+
+Three exclusions are legitimate and are recorded rather than silently applied:
+SELECT is *synthesized* onto every posture row by `loadPosture`, so its absence on
+a write-only table is a representation artifact; a privilege that satisfies a
+derived LOCK is justified by that lock even though a disjunction cannot be recorded
+as evidence; and third-party function-typed fields (`encoding/json`'s
+`scanner.step`, pgx's `QueuedQuery.Fn`) are filtered out because gating on them
+would be pure noise. Running the enforcement for the first time surfaced all three
+as bugs in the check itself.
+
+### Fail-closed must not become fail-SILENT
+
+A function-typed field with two implementations is correctly excluded from
+resolution — but the exclusion used to vanish from every output, because the
+`Unresolved` record's callee is the bare field name and the incompleteness filter
+dropped it along with third-party methods. Conflicts are now first-class
+(`FuncValueConflicts`), reported at the tainted call site, and gated. The filter
+also keeps bare callee names, which cannot be third-party by construction.
+
 ### Transaction-span veto
 
 A transaction cannot span two pools, so every table one touches must be authorized for
 the single role whose pool runs it. `transactionStraddleFindings` reports a group whose
-tables land on opposite sides of the partition, distinguishing a `txorigin:`-traced
-group (provably one transaction) from the coarse same-function-body fallback. This is
-the check that catches a straddle before it becomes a runtime 42501 rather than
-presenting as a routing problem.
+tables land on opposite sides of the partition.
+
+It is **blocking only when both premises are proven**: that the statements really share
+one transaction (a `txorigin:`-traced group, not the coarse same-function-body fallback
+this package's own comment calls unproven), and that the transaction really runs on that
+role's pool (at least one evidence site the other role does not also have). Either
+premise missing downgrades it to advisory — emitting CRITICAL on a guess would tell
+maintainers to dual-grant, which is the same over-widening the per-privilege path
+already refuses.
+
+The lock path routes through that identical downgrade, via one shared `exclusiveTo`
+helper rather than a copy: a copy is how one path ends up still accepting what the
+other rejects.
+
+### Reachability is static wiring, not runtime activation (decision)
+
+The derivation walks every function that is *wired*, including code behind a
+checked-in activation flag that is currently false — `cmd/dev-health-scheduler`'s
+`activation.goOwnsMarkers` gate returns before opening any PostgreSQL client, yet the
+scheduler's coordinator tables are still derived and still demanded. Deliberate:
+
+- Grants ready **before** activation are the point of this epic. Runtime-reachability
+  derivation would read "green, nothing needed" until someone flips the flag, then
+  produce a pile of CRITICALs at the worst moment.
+- Coverage must not depend on configuration, or the gate's strength varies with a
+  boolean and a flag flip silently changes what CI verifies.
+- The error direction is survivable: deriving dormant code can only ever ask for
+  privileges that code will need once active, so the failure mode is an over-grant —
+  a visible, reviewable row — rather than an outage.
+
+Residual risk, stated rather than hidden: a seam that is wired but never activated
+accretes grants permanently, and nothing here distinguishes "not yet" from
+"abandoned". Mitigated by review pressure (such rows surface in the misattribution and
+no-derived-evidence advisories), not by changing the reachability model. If a seam is
+dead, delete the wiring — that is the signal this analyzer reads.
 
 ### Known-open findings carry a ticket and expire
 

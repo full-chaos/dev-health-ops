@@ -161,6 +161,28 @@ func (a *analyzer) buildPoolParamRoles() {
 	}
 }
 
+// resolveTargetConflict is the fail-closed decision for one function-typed
+// field: given what was already recorded and one more observed assignment,
+// either keep a single target or refuse with a REASON.
+//
+// Extracted as a pure function so it can be tested directly. Clause-by-clause
+// mutation testing showed the two-implementation branch was exercised by NO test:
+// this repo has no in-module field with two production builders, so end-to-end
+// coverage is impossible, and a wholesale mutation still reported KILLED while
+// this specific branch was dead.
+func (a *analyzer) resolveTargetConflict(existing funcValueTarget, seen bool, incoming funcValueTarget) (funcValueTarget, string) {
+	if incoming.empty() {
+		return funcValueTarget{}, "assigned a value this analyzer cannot resolve to a function body " +
+			"(a further field, a call result, or a parameter)"
+	}
+	if seen && !existing.sameAs(incoming) {
+		return funcValueTarget{}, fmt.Sprintf(
+			"assigned MORE THAN ONE implementation (%s and %s), so neither is analyzed",
+			a.display(existing), a.display(incoming))
+	}
+	return incoming, ""
+}
+
 // NameSeedOverride records one place the naming convention was overruled by
 // call-site evidence.
 type NameSeedOverride struct {
@@ -313,21 +335,14 @@ func (a *analyzer) buildFuncValueTargets() {
 		if _, conflicted := a.funcValueConflicts[key]; conflicted {
 			return
 		}
-		if target.empty() {
-			a.funcValueConflicts[key] = "assigned a value this analyzer cannot resolve to a function body " +
-				"(a further field, a call result, or a parameter)"
-			delete(a.funcValueTargets, key)
-			return
-		}
 		existing, seen := a.funcValueTargets[key]
-		if seen && !existing.sameAs(target) {
-			a.funcValueConflicts[key] = fmt.Sprintf(
-				"assigned MORE THAN ONE implementation (%s and %s), so neither is analyzed",
-				a.display(existing), a.display(target))
+		resolved, reason := a.resolveTargetConflict(existing, seen, target)
+		if reason != "" {
+			a.funcValueConflicts[key] = reason
 			delete(a.funcValueTargets, key)
 			return
 		}
-		a.funcValueTargets[key] = target
+		a.funcValueTargets[key] = resolved
 	}
 
 	// resolveValue turns the right-hand side of a function-typed assignment

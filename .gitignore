@@ -39,3 +39,9 @@ index.txt
 .codegraph/
 .build/
 .wrangler/
+
+# Mutation-harness working state: snapshots of files it is about to mutate,
+# the applied-mutation record that makes a killed run detectable, and the last
+# report. Never commit these -- a committed applied-record would make every
+# clone refuse to run the harness.
+.mutation-harness/

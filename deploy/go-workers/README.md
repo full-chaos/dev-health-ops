@@ -354,4 +354,154 @@ possibly without realizing a cutover migration is even in the pending set.
 This is a general operational hazard of mounting a live checkout into a
 migration-running service, not specific to CHAOS-3142 or to this migration —
 it deserves review as its own item, independent of the Go execution path
-this document otherwise covers.
+this document otherwise covers. Tracked as CHAOS-3143.
+
+### `SETTINGS_ENCRYPTION_KEY` delivery: the `env_file` path must NOT be parameterized alongside the build context
+
+`go-worker` receives its real, non-placeholder `SETTINGS_ENCRYPTION_KEY` (and
+whatever else a developer's `.env` sets) through an `env_file:` entry, not
+through an `environment:` reference — the service's `environment:` block
+does not name that variable at all, on purpose (see "Provider credentials"
+above: `environment:` wins over `env_file:` when both set the same key, so
+adding `SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}` there would
+let an unset shell variable silently override a real key from `env_file`
+with an empty string for anyone who doesn't happen to export it — a strictly
+worse failure mode than the one below, and the fix that was *not* taken for
+that reason).
+
+When a compose project parameterizes `go-worker`'s build context to follow a
+worktree (e.g. `context: ${DEV_HEALTH_OPS_ROOT:-./ops}`, so the branch with
+the `migrate` Dockerfile target and current Go source actually gets built),
+it is tempting to parameterize the adjacent `env_file:` path the same way.
+**Don't.** The build context should follow the worktree; the developer's
+real configuration should not — it lives at a fixed, well-known location
+(`./ops/.env` in this repository) regardless of which worktree's source is
+being built. A worktree checkout has no `.env` of its own. If the
+`env_file:` path is parameterized alongside the build context, it resolves
+to a nonexistent file under a worktree override, and `required: false`
+(there specifically so a missing dev `.env` doesn't hard-fail the service)
+skips it **in complete silence** — no warning, no log line, just a
+container that starts with `SETTINGS_ENCRYPTION_KEY` absent from its
+environment entirely and crash-loops with the generic
+`"dependency_configuration_failed"` message this document already covers.
+This cost real debugging time while building CHAOS-3142: the symptom looked
+identical to (and was initially misdiagnosed as) the "both switches off"
+crash-loop above, and the two have to be told apart by inspecting the
+container's actual environment (`docker inspect --format
+'{{range .Config.Env}}{{println .}}{{end}}'`), not by reading the compose
+file.
+
+## CHAOS-3142 end-to-end proof: final report
+
+This is the durable record of what CHAOS-3142 actually proved, against both
+a real shared local stack and an isolated throwaway one, and exactly where
+it stopped. Written here rather than in a session-scoped note because this
+is the artifact that outlives the session.
+
+### Proven, against a real shared local stack
+
+- Coordinator-role provisioning on a pre-existing, pre-CHAOS-3033-split
+  Postgres cluster: `go-river-provision` created the `devhealth_coordinator`
+  login where none existed before.
+- The exact grant/readiness asymmetry this document names above, hit for
+  real: `coordinatorPosture()` requires `fixed_schedule_occurrences`
+  (`0065_add_fixed_schedule_occurrences.py`), which didn't exist on this
+  database (`alembic_version` was `0064`, two migrations behind head); the
+  `to_regclass`-guarded grant was silently skipped;
+  `coordinator_postgres` readiness failed with no stated reason until a
+  **targeted** `alembic upgrade 0065` (never `head` — see above) created the
+  table and a re-run of `go-worker-migrate` picked up the previously-skipped
+  grant.
+- `go-reconciler` reaching `/readyz` → `{"status":"ok"}` with `RestartCount
+  0` against the real stack, and staying that way — `CheckCoordinatorAuthorization`
+  re-queries live on every poll, so no restart was needed once the grant
+  landed.
+- Non-zero, real metric series from the real reconciler:
+  `worker_outbox_reconciler_up 1`, `sync_dispatch_observer_up 1`, and their
+  paired `..._last_success_age_seconds` gauges reporting sub-second real
+  values — the "present but zero" failure mode this document elsewhere
+  warns against did not occur here.
+
+### Proven, against an isolated throwaway project
+
+Using a separate compose project (`-p <name>`, its own network/volumes,
+never the shared stack), with a hand-seeded additive
+`Integration`/`IntegrationSource`/`IntegrationDataset`/`SyncRun`/
+`SyncRunUnit`/`SyncRunReferenceDiscovery`/`integration_credentials` row set
+for a synthetic org (github/repo-metadata), and the durable route
+(`worker_job_routes.transport`) and Python producer switch
+(`WORKER_GITHUB_REPO_METADATA_ENABLED`) both flipped ONLY inside that
+isolated project — never on shared infrastructure:
+
+- Producer gate (`dispatch_sync_run`) → `worker_job_outbox` row
+  (`status=delivered`) → reconciler relay → River job → Go handler pickup
+  and execution, all confirmed end to end.
+- The Go handler reached a real `github.com` HTTP round-trip (a fake PAT, so
+  a `retryable`, not `permanent`, failure — real network I/O happened, this
+  wasn't a local rejection) and `worker_budget_wait_seconds{provider="github",
+  cost_class="light"}` carried `count=6`, `sum=0.000241334` — a real,
+  non-zero series, not the present-and-zero shape this document elsewhere
+  calls out as the actual failure mode to guard against.
+
+### Not proven
+
+A ClickHouse `repos` row. This needs a real GitHub PAT, which was
+unavailable throughout — nobody working this ticket had one, and none was
+requested from the user. `worker_sync_lease_expired_total` also never
+carried a non-zero series in any run: this is expected and **not a
+regression signal** — that metric only increments on a claim that itself
+recovered an *expired* lease (`providerunit.Handler.observeLeaseRecovery`
+checks `claim.Recovered`, a no-op for an ordinary first-attempt claim), and
+nothing in this proof deliberately expired and re-claimed a lease.
+
+### Not attempted against the real shared stack, and why
+
+Both the durable route flip (`worker_job_routes.transport` for
+`sync.provider_unit` → `river_canary`) and the Python producer switch
+(`WORKER_GITHUB_REPO_METADATA_ENABLED=true` on `dev-health-worker-1`/`api`/
+`beat`) were considered and explicitly not done, for two compounding
+reasons:
+
+1. **They are not independent, and the order matters.** Flipping the
+   durable route alone, with the Python switch still off, is not a smaller,
+   safer version of flipping both — it actively raises. `dispatch_sync_run`
+   (`src/dev_health_ops/workers/sync_units.py`) consults
+   `ProviderUnitRouteSwitches.is_route_ready(provider, dataset)` (matrix-only,
+   unconditional) BEFORE consulting the switch. If the matrix says a pair is
+   route-ready and the durable route already points at River, but the
+   switch is off, that combination is treated as an explicit ownership
+   fault — `dispatch_sync_run` raises
+   `WorkerJobRouteError("sync provider canary capability is unavailable")`
+   rather than degrading to Celery, by design ("never a reason to silently
+   fall back to legacy Celery dispatch for a pair the matrix says is done").
+   So the durable-route flip cannot be evaluated, or left in place, on its
+   own — getting past it requires the Python switch too, immediately, for
+   every org.
+2. **The Python switch requires a live container recreate, not a
+   reversible row.** Neither route switch is wired into `api`/`worker`/
+   `beat`/`worker-heavy`/`worker-ingest` in the repo-root `compose.yml` at
+   all (confirmed: `docker inspect` on the running containers, and a grep of
+   the compose file, both show zero occurrences outside the `go-worker`
+   service block). Setting it means recreating `dev-health-worker-1` — the
+   real Celery worker actively processing real organizations' real sync
+   traffic — with new environment. That is a materially different, and
+   materially bigger, ask than one reversible `UPDATE` on a single
+   `worker_job_routes` row, and it was not authorized.
+
+The marginal evidence a full route flip would have bought was also small:
+the proof already reached the real GitHub-API boundary in the isolated
+project (see above), so completing the durable-route path on the shared
+stack would have re-verified the same mechanism against a different compose
+file, not produced new information — not worth a live Celery worker
+recreate on someone's real environment for that.
+
+### Credential shape, restated for this report
+
+See "Provider credentials the Go executor can decrypt" above for the full
+detail. The two gotchas worth restating here because they are exactly what
+blocked the isolated-project proof until found: the decrypted plaintext
+must be a JSON object (`{"token": "..."}`), not a bare token string; and the
+claim query resolves `credential_id` via `COALESCE(sync_runs.credential_id,
+integrations.credential_id)`, so a credential row that exists but isn't
+linked from `integrations.credential_id` is invisible to a claim even
+though direct `(org_id, provider)` lookup would find it.

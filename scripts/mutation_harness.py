@@ -154,6 +154,8 @@ COMMENT_PREFIXES = ("//", "#", "/*", "*")
 # `mkdir` and the pid write are not atomic, so the gap between them is a real
 # state and must not be mistaken for an absent run.
 _LOCK_HELD_BY_UNKNOWN = -1
+# `path/to/file.ext:123` -- what test runners print at a failure point.
+_FILE_LINE_RE = re.compile(r"[\w./-]+\.[A-Za-z]{1,6}:\d+")
 # Mutation ids and snapshot filenames must be plain names: they are embedded in
 # filesystem paths, and a plan is contributed data, not a trusted path source.
 _SAFE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -1105,7 +1107,19 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
         )
     else:
         verdict = VERDICT_KILLED
-        detail = f"killed by: {failing}"
+        # The kill SITE, not just the fact of a kill. A mutation killed by a setup
+        # precondition, a panic, or an unrelated assertion is materially weaker
+        # evidence than one killed by the assertion written for it -- and that
+        # difference is invisible in a boolean. Two real misattributions were found
+        # only because someone captured this: one mutation was dying in a seeding
+        # helper with a count mismatch, another was "killed" by a build failure.
+        detail = (
+            f"killed by: {failing}\n"
+            "    Kill site below. Confirm it is the assertion this mutation "
+            "targets: a kill from setup, a panic, or an unrelated test is a weaker "
+            "result than the verdict suggests.\n"
+            f"{_kill_site(tail)}"
+        )
 
     # Step 7: the bytes match, but prove behaviour came back too. This is what
     # makes the restore evidence instead of a claim -- the exact check that a
@@ -1126,6 +1140,23 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
         warnings=warnings,
         failing_proof=failing,
     )
+
+
+def _kill_site(tail: str) -> str:
+    """Return the most site-like lines of a failing proof's output.
+
+    Heuristic and deliberately generous: showing a few extra lines costs a glance,
+    while showing none costs the ability to tell a real kill from an accidental
+    one. Prefers lines that name a file and line number, which is what test
+    runners emit at the point of failure.
+    """
+
+    lines = [line.rstrip() for line in tail.splitlines() if line.strip()]
+    if not lines:
+        return "    (the proof produced no output, so the kill site is unknown)"
+    located = [line for line in lines if _FILE_LINE_RE.search(line)]
+    chosen = located[:6] if located else lines[-6:]
+    return "\n".join(f"    {line[:200]}" for line in chosen)
 
 
 def _render(results: list[Result]) -> str:

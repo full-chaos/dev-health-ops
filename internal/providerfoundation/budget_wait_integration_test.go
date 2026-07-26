@@ -4,7 +4,6 @@ package providerfoundation_test
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -67,18 +66,12 @@ func TestValkeyBudgetStoreAndBackoffGateObserveRealWait(t *testing.T) {
 		MaxBackoff: time.Minute, CostClass: "medium",
 		Observer: collectorBudgetObserver{collector},
 	}
-	// ValkeyBackoffGate.Penalize's Lua script returns a Lua number, which
-	// Valkey encodes as a RESP integer reply; ValkeyBackoffGate.Wait's own
-	// Penalize call then fails inside valkey-go's AsFloat64 ("message type
-	// int64 is not a string") against a real server — a pre-existing defect
-	// in Penalize unrelated to this metric's wiring (see CHAOS-3118 report;
-	// not fixed here, out of scope). To exercise the real, unbroken Wait path
-	// without that defect, write the same key Penalize documents itself as
-	// writing (rate_limit:<provider>:<org>:<host>, a Unix-seconds float
-	// string) directly, exactly as Wait's own GET expects to read it back.
-	future := strconv.FormatFloat(float64(time.Now().Add(2*time.Second).UnixMilli())/1000, 'f', 3, 64)
-	if err := client.Do(ctx, client.B().Set().Key("rate_limit:github:org-1:api.github.com").Value(future).Build()).Error(); err != nil {
-		t.Fatalf("seed backoff key: %v", err)
+	// Penalize's Lua script now returns tostring(applied) (CHAOS-3132), so
+	// this exercises the real, unbroken Penalize -> Wait round trip against a
+	// real server instead of hand-seeding the key it documents itself as
+	// writing.
+	if err := gate.Penalize(ctx, 2*time.Second); err != nil {
+		t.Fatalf("Penalize: %v", err)
 	}
 	wait, err := gate.Wait(ctx)
 	if err != nil {

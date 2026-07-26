@@ -330,6 +330,14 @@ type reconcilerDependencies struct {
 	database    reconcilerDatabase
 	databaseErr error
 
+	// logger and coordinatorRole exist only to make a coordinator_postgres
+	// readiness failure explain itself (see coordinatorReady /
+	// logCoordinatorPostureGaps). Neither is a DSN, host, or credential --
+	// coordinatorRole is a checked-in configuration identifier, and logger is
+	// the same structured logger the rest of the process already uses.
+	logger          *slog.Logger
+	coordinatorRole string
+
 	runtimeRegistry *jobruntime.Registry
 	registryErr     error
 	relayErr        error
@@ -438,7 +446,7 @@ func buildReconcilerDependencies(
 	activation reconcilerActivation,
 	sources reconcilerDependencySources,
 ) *reconcilerDependencies {
-	dependencies := &reconcilerDependencies{}
+	dependencies := &reconcilerDependencies{logger: logger, coordinatorRole: cfg.CoordinatorDatabaseRole}
 	if sources.openDatabase == nil {
 		dependencies.databaseErr = errReconcilerDependencyUnavailable
 	} else {
@@ -567,9 +575,55 @@ func (dependencies *reconcilerDependencies) coordinatorReady(ctx context.Context
 		return errReconcilerDependencyUnavailable
 	}
 	if err := dependencies.database.CoordinatorReady(ctx); err != nil {
+		dependencies.logCoordinatorPostureGaps(ctx)
 		return errReconcilerDependencyUnavailable
 	}
 	return nil
+}
+
+// logCoordinatorPostureGaps re-derives, in a separate best-effort diagnostic
+// query, which of the coordinator role's declared requirements are currently
+// unsatisfied, and logs them at ERROR. Before this existed, a
+// coordinator_postgres readiness failure surfaced only as a check name at
+// the /readyz HTTP surface with no reason in the process logs either --
+// diagnosing CHAOS-3142's actual cause (one required table missing because
+// alembic was two migrations behind head) took manually re-deriving and
+// re-running postgres.CoordinatorPosture()'s table list by hand against the
+// live database. This closes that gap.
+//
+// It never logs a DSN, host, or credential: postgres.PostureGap is built
+// entirely from checked-in table/column identifiers (schema identifiers
+// already committed to this repository, not connection material) and
+// standard SQL privilege keywords -- see
+// internal/storage/postgres/posture_diagnostics_integration_test.go's
+// TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial, which
+// renders every gap the same way this function does and asserts the
+// rendered line never contains a real connection URI or password.
+//
+// Best-effort and silent on its own failure: losing the diagnostic must
+// never turn an otherwise-handled readiness failure into a harder one, and
+// this runs on every failed poll, so it must never itself become a new
+// failure mode.
+func (dependencies *reconcilerDependencies) logCoordinatorPostureGaps(ctx context.Context) {
+	if dependencies == nil || dependencies.logger == nil || dependencies.database == nil {
+		return
+	}
+	pool := dependencies.database.CoordinatorPool()
+	if pool == nil {
+		return
+	}
+	gaps, err := postgres.DiagnoseRolePosture(ctx, pool, dependencies.coordinatorRole, postgres.CoordinatorPosture())
+	if err != nil || len(gaps) == 0 {
+		return
+	}
+	details := make([]string, len(gaps))
+	for i, gap := range gaps {
+		details[i] = gap.String()
+	}
+	dependencies.logger.ErrorContext(ctx, "coordinator readiness posture gap",
+		"check", "coordinator_postgres",
+		"gaps", details,
+	)
 }
 
 func (dependencies *reconcilerDependencies) registryReady(context.Context) error {

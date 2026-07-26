@@ -1,4 +1,16 @@
-name: dev-health
+# CHAOS-3142 incident, 2026-07-25: this file previously shared the compose
+# project name `dev-health` with the repo-root `compose.yml` (a separate,
+# divergent file with an incompatible postgres definition -- different
+# image, role/database names, PGDATA path, and port). Because Docker Compose
+# tracks service ownership by (project name, service name), an `up` from
+# EITHER file could recreate the OTHER file's already-running containers in
+# place, discarding whatever they had (see the postgres image/PGDATA history
+# below). Naming this project `dev-health-ops` makes that collision
+# structurally impossible: this file now owns its own containers, network,
+# and volumes, entirely separate from whatever the repo-root compose.yml
+# manages. That also means this file's postgres always starts from its own
+# empty volume -- it is no longer a way to attach to another project's data.
+name: dev-health-ops
 
 volumes:
   postgres_data:
@@ -8,20 +20,54 @@ volumes:
 
 services:
   postgres:
-    image: postgres:latest
+    # CHAOS-3142 incident, 2026-07-25: the immediate trigger was this file
+    # sharing its compose project name with the repo-root compose.yml (see
+    # the `name:` comment above) -- an `up` from either file could recreate
+    # the other's already-running postgres container in place. But this
+    # image was also unpinned (`latest`) and PGDATA was misspelled
+    # (`PG_DATA`, which the postgres image never reads), so the container
+    # that got recreated started an entirely new, empty cluster in whatever
+    # subdirectory that image version's own default PGDATA happened to be,
+    # rather than failing loudly or reusing the real one. Both defects are
+    # fixed independently of the project-name fix, so this file's own
+    # isolated volume can't suffer the same silent-relocation failure mode
+    # on some future `up`. Pinned to the same Postgres 18 Alpine digest
+    # already pinned in internal/testsupport/containers/harness.go, so the
+    # dev stack and the Go integration-test harness agree on one Postgres
+    # build. The repo-root compose.yml already got PGDATA right under
+    # CHAOS-1771 (`PGDATA: /var/lib/postgresql/data/pgdata`, with its own
+    # comment on the same anonymous-volume trap) -- this file adopts the
+    # identical reasoning so the two agree rather than looking like
+    # independent guesses.
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     container_name: postgres
     restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
-      PG_DATA: /var/lib/postgresql/
+      # Must be a subdirectory of the volume mount (postgres_data is mounted
+      # at the parent /var/lib/postgresql/), never the mount root itself --
+      # otherwise the image's lost+found and other reserved entries live
+      # alongside PGDATA and a future image-default change silently
+      # relocates the cluster again. Previously misspelled `PG_DATA`, which
+      # the postgres image never reads, so this had no effect for seven
+      # months (commit 581ae01e6) while every cluster was created at the
+      # image's own shifting default path.
+      PGDATA: /var/lib/postgresql/pgdata
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      # CHAOS-3142: the coordinator role of the CHAOS-3033 Option B split.
+      # docker/init-extra-dbs.sh already reads these two (defaulting to
+      # devhealth_coordinator) to create the login and grant CONNECT; without
+      # them here an operator override never reaches the script that
+      # provisions it.
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       # Local development credentials only. Production roles are provisioned
       # through the database provider/secret manager before migration.
       RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
       RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
     ports:
       - "5555:5432"
     volumes:
@@ -156,11 +202,35 @@ services:
       PGBOUNCER_TRANSACTION_MODE: "true"
       CLICKHOUSE_URI: "clickhouse://ch:ch@clickhouse:8123/default"
       REDIS_URL: "redis://valkey:6379/1"
+      # Pre-existing gap fixed alongside CHAOS-3142: declared in
+      # .env.example but was never actually referenced by this file, so no
+      # override ever reached any container -- provider credential
+      # decryption (src/dev_health_ops/core/encryption.py, read by
+      # workers/task_utils.py for every provider) silently had no key in
+      # local dev. The Go worker's `sync` profile decrypts the same stored
+      # credentials with the same variable name
+      # (SETTINGS_ENCRYPTION_KEY, deploy/go-workers/profiles.json) wherever
+      # it runs, so this value stays byte-identical to whatever a Go
+      # topology alongside this stack is given.
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
       # CHAOS-2299: route sync dispatch to per-provider queues. Safe to enable
       # here because the worker -Q lists below consume sync.<provider> in the
       # SAME change. Bare-image deployments must follow the two-phase rollout
       # in workers/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
+      # CHAOS-3142/CHAOS-3123: the two route-ready provider/dataset switches.
+      # Read by BOTH this Python producer gate
+      # (ProviderUnitRouteSwitches.from_environment,
+      # src/dev_health_ops/workers/provider_unit_route.py) and the Go worker
+      # (config.Config.WorkerLaunchDarklyFeatureFlagsEnabled /
+      # WorkerGithubRepoMetadataEnabled, cmd/dev-health-worker/dependencies.go
+      # workerRouteSwitches) from the SAME env var names, so one override
+      # flips both sides coherently wherever the Go worker runs -- a unit
+      # this Python gate routes to River with the switch off here but on for
+      # the Go worker (or vice versa) finds no handler. Both default to
+      # "false"; only flip alongside a reviewed route release.
+      WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
+      WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
       AUTO_RUN_MIGRATIONS: "false"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}

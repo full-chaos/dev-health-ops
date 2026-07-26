@@ -36,7 +36,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         dev-health-reconciler \
         dev-health-stream-runner \
         dev-health-workerctl \
-        worker-contractcheck; do \
+        worker-contractcheck \
+        dev-health-worker-migrate; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
         -buildvcs=false \
         -trimpath \
@@ -63,7 +64,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/operator/app/deploy/go-workers \
       /runtime/contractcheck/usr/local/bin \
       /runtime/contractcheck/app/contracts/jobs \
-      /runtime/contractcheck/app/deploy/go-workers; \
+      /runtime/contractcheck/app/deploy/go-workers \
+      /runtime/migrate/usr/local/bin; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp -R /src/contracts/jobs/v1 /runtime/scheduler/app/contracts/jobs/v1; \
@@ -80,6 +82,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /src/deploy/go-workers/profiles.json /runtime/operator/app/deploy/go-workers/profiles.json; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/profiles.json /runtime/contractcheck/app/deploy/go-workers/profiles.json; \
+    cp /out/dev-health-worker-migrate /runtime/migrate/usr/local/bin/dev-health-worker-migrate; \
     find /runtime -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM ${GO_RUNTIME_IMAGE} AS runtime
@@ -127,3 +130,36 @@ COPY --from=build --chown=65532:65532 /runtime/contractcheck/ /
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/worker-contractcheck"]
 CMD ["validate"]
+
+# migrate is the one-shot River schema/grant migration
+# (cmd/dev-health-worker-migrate). It reads no contract or deployment-profile
+# files at runtime -- only its flags and the MIGRATION_DATABASE_URI /
+# RIVER_*_ROLE environment -- so, unlike most targets above, its runtime layer
+# stages nothing under /app.
+#
+# It therefore must NOT declare `WORKDIR /app`, and follows stream-runner (the
+# only other target with no /app tree) in omitting it. The `runtime` base does
+# not create /app, so the two cases are not equivalent:
+#
+#   - targets that stage an app/ tree receive /app from the build stage, where
+#     `find /runtime -exec touch -d @$SOURCE_DATE_EPOCH` has already flattened
+#     its mtime, and WORKDIR is then a no-op on an existing directory;
+#   - a target with no app/ tree makes WORKDIR *create* the directory during
+#     this stage, which is not covered by that normalisation.
+#
+# With `WORKDIR /app` here, `check_go_containers.sh reproducible` failed on two
+# separate CI runs -- `migrate image is not reproducible` -- while all six
+# other targets passed both times. Those seven results isolate this line as the
+# only structural difference: five targets pair WORKDIR with a staged app/
+# tree, stream-runner has neither, and migrate was the sole WORKDIR-without-app
+# combination.
+#
+# Caveat for whoever revisits this: the mechanism above is inferred from that
+# CI evidence, not confirmed locally. A platform-faithful local probe
+# (--platform linux/amd64, SOURCE_DATE_EPOCH=0, --no-cache) found migrate
+# reproducible both with and without the line, so the timestamp normalisation
+# apparently differs between Docker Desktop's BuildKit and the CI runner's.
+# Do not re-add WORKDIR on the strength of a local probe alone.
+FROM runtime AS migrate
+COPY --from=build --chown=65532:65532 /runtime/migrate/ /
+ENTRYPOINT ["/usr/local/bin/dev-health-worker-migrate"]

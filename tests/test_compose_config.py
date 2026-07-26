@@ -171,6 +171,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
+_GO_PROFILE_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-profile.yml"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
 
@@ -863,4 +864,196 @@ def test_production_stacks_cover_every_celery_queue() -> None:
         assert not missing, (
             f"{name}: production worker pools miss queues {sorted(missing)} "
             f"declared in workers.config.task_queues (consumed: {sorted(consumed)})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3142: local-dev postgres hardening, plus the incident that motivated
+# it.
+#
+# This file previously shared its Compose project name (`dev-health`) with
+# the repo-root `compose.yml`, a separate file with an incompatible postgres
+# definition. Because Compose tracks service ownership by
+# (project name, service name), an `up` from either file could recreate the
+# other file's already-running postgres container in place -- which is
+# exactly what happened: the additive Go worker services for this ticket
+# were designed to live here, adding RIVER_COORDINATOR_DATABASE_ROLE to this
+# postgres service's environment, and `docker compose up -d postgres` from
+# this file recreated the repo-root project's live postgres container with
+# this file's incompatible role/database/PGDATA layout. The Go worker
+# services moved to the repo-root compose.yml (the file that actually owns
+# that project), and this file's project name changed so the collision is
+# now structurally impossible. The digest pin and PGDATA fix below are
+# independent, also-real defects that predated and outlasted the same
+# incident; they still matter for this file's own isolated volume.
+# ---------------------------------------------------------------------------
+
+
+def test_ops_compose_project_name_is_not_dev_health() -> None:
+    """The regression barrier for the CHAOS-3142 incident: this file's
+    Compose project name must never again collide with the repo-root
+    compose.yml's `dev-health` project. A shared name lets either file's
+    `up` recreate the other's already-running containers with an
+    incompatible postgres definition -- silently, since Compose reports it
+    as an ordinary "Recreate", not a conflict.
+
+    Mutation coverage (manually verified): setting `name: dev-health` back
+    makes this test fail.
+    """
+    compose = _load_yaml(_LEGACY_COMPOSE)
+    assert compose.get("name") != "dev-health", (
+        "CHAOS-3142: this file's compose project name must not be "
+        "'dev-health' -- that collides with the repo-root compose.yml's "
+        "project and lets either file's `up` recreate the other's "
+        "containers with an incompatible postgres definition"
+    )
+    assert compose.get("name"), "compose.yml must declare an explicit project name"
+
+
+def test_local_postgres_image_pinned_and_pgdata_is_subdirectory() -> None:
+    """CHAOS-3142 incident: `postgres:latest` is a moving tag. It silently
+    changed base image family (Debian glibc -> Alpine musl) between when the
+    local dev cluster was created and a later `docker compose up`/pull, and
+    combined with a `PG_DATA` typo (the image only reads `PGDATA`) the new
+    image version picked its own default data directory -- a DIFFERENT
+    subdirectory of the same mounted volume -- and silently initialized a
+    brand-new empty cluster beside the real one instead of using it.
+
+    Pin the image by digest (matching the Postgres build already pinned in
+    internal/testsupport/containers/harness.go) and set PGDATA explicitly to
+    a subdirectory of the /var/lib/postgresql volume mount, never the mount
+    root itself.
+
+    Mutation coverage (manually verified): reverting the image back to
+    `postgres:latest` fails the digest assertion; reverting PGDATA back to
+    `PG_DATA: /var/lib/postgresql/` fails both the "PG_DATA not read" and
+    "PGDATA must be set" assertions; setting `PGDATA: /var/lib/postgresql/`
+    (the mount root) fails the subdirectory assertion.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    postgres = services["postgres"]
+
+    assert "@sha256:" in postgres["image"], (
+        f"postgres image must be pinned by digest, not a moving tag: {postgres['image']!r}"
+    )
+    tag = postgres["image"].split("@sha256:", 1)[0]
+    assert not tag.endswith(":latest"), (
+        f"postgres image tag must not be 'latest', even when digest-pinned: {postgres['image']!r}"
+    )
+
+    env = postgres["environment"]
+    assert "PG_DATA" not in env, (
+        "PG_DATA is not an env var the postgres image reads (typo for PGDATA); "
+        "its presence means the fix was reverted or duplicated"
+    )
+    assert "PGDATA" in env, (
+        "PGDATA must be set explicitly so the cluster path is pinned"
+    )
+
+    mount_root = next(
+        volume.split(":", 1)[1]
+        for volume in postgres["volumes"]
+        if volume.startswith("postgres_data:")
+    )
+    pgdata = env["PGDATA"]
+    assert pgdata.rstrip("/") != mount_root.rstrip("/"), (
+        "PGDATA must be a subdirectory of the volume mount, not the mount root itself"
+    )
+    assert pgdata.rstrip("/").startswith(mount_root.rstrip("/") + "/"), (
+        f"PGDATA {pgdata!r} must be nested under the volume mount {mount_root!r}"
+    )
+
+
+def test_route_switches_default_off_for_producer_gate() -> None:
+    """CHAOS-3142/CHAOS-3123: WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED and
+    WORKER_GITHUB_REPO_METADATA_ENABLED must default to "false" wherever
+    this file wires them -- the shared &env anchor (api, inherited by
+    worker/worker-heavy/beat via <<: *env / <<: *worker-base). This is the
+    Python producer gate's half of the CHAOS-3123 route gate
+    (ProviderUnitRouteSwitches, src/dev_health_ops/workers/provider_unit_route.py);
+    a Go worker topology running alongside this stack must read the same
+    variable names with the same default so a unit the Python gate routes
+    to River never finds no handler.
+
+    Mutation coverage (manually verified): changing either default from
+    "false" to "true" makes the corresponding assertion fail.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    switch_names = (
+        "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
+        "WORKER_GITHUB_REPO_METADATA_ENABLED",
+    )
+
+    shared_env = services["api"]["environment"]  # &env anchor: api, worker, beat
+    for switch in switch_names:
+        assert shared_env[switch] == f"${{{switch}:-false}}", (
+            f"{switch} must default to false on the shared Celery env anchor"
+        )
+
+    # worker/worker-heavy/beat inherit the anchor via `<<: *env`/`<<: *worker-base`;
+    # confirm the merge actually carried the keys rather than being shadowed.
+    for name in ("worker", "worker-heavy", "beat"):
+        env = services[name]["environment"]
+        for switch in switch_names:
+            assert env[switch] == f"${{{switch}:-false}}", (
+                f"{switch} must reach {name} through the shared env anchor"
+            )
+
+
+def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
+    """CHAOS-3142/CHAOS-3143: no `go-*` service may `depends_on` the Python
+    `migrate` service.
+
+    `depends_on` pulls a service in regardless of profile, so such an edge makes
+    `docker compose --profile go up -d` run Alembic to *head* -- which is
+    0066_activate_river_worker_job_routes, the cutover that retargets 23 job
+    kinds from Celery to River. Both Go runtimes sit downstream of
+    go-worker-migrate, so the edge guaranteed precisely the ordering 0066's own
+    docstring forbids: routes flip to River before any River consumer can
+    start, and envelopes then pile up in worker_job_outbox with no executor.
+
+    Standing up the Go observation path must never be able to move real traffic
+    as a side effect, so the Python schema stays an explicitly authorized
+    prerequisite (`migrate postgres --revision 0065`) rather than a compose
+    dependency edge.
+
+    Mutation coverage (manually verified): re-adding
+    `migrate: {condition: service_completed_successfully}` to
+    go-worker-migrate's depends_on fails this test.
+    """
+    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    go_services = {
+        name: spec for name, spec in services.items() if name.startswith("go-")
+    }
+    assert go_services, "the overlay must define the go-* services it exists to carry"
+
+    for name, spec in go_services.items():
+        depends_on = spec.get("depends_on") or {}
+        # Normalise both the mapping (long) and list (short) syntaxes.
+        dependencies = (
+            set(depends_on) if isinstance(depends_on, dict) else set(depends_on)
+        )
+        assert "migrate" not in dependencies, (
+            f"{name} must not depend on the Python `migrate` service: that edge runs "
+            "Alembic to head (0066, the Celery->River cutover) on a plain "
+            "`--profile go up`, before any Go consumer can start"
+        )
+
+
+def test_go_profile_overlay_services_are_all_profile_gated() -> None:
+    """CHAOS-3142: every service the overlay adds must be gated behind the `go`
+    profile, so a default `docker compose up` brings up the unchanged Celery
+    stack and nothing else.
+
+    This is what makes the overlay safe to leave in place permanently -- the
+    developer opts in per-invocation (`--profile go`) or via COMPOSE_PROFILES in
+    the root `.env`, and forgetting to opt in costs nothing.
+
+    Mutation coverage (manually verified): deleting `profiles: ["go"]` from any
+    go-* service fails this test.
+    """
+    services = _load_yaml(_GO_PROFILE_OVERLAY)["services"]
+    for name, spec in services.items():
+        assert spec.get("profiles") == ["go"], (
+            f'{name} must declare profiles: ["go"] so a default `up` never starts it'
         )

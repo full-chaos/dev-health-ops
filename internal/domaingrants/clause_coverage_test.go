@@ -344,41 +344,6 @@ func TestFuncValueConflictReachesTheGate(t *testing.T) {
 	}
 }
 
-// --- H6.f: the strictest mode must win ACROSS call sites ----------------------
-//
-// The same-statement case was covered; two separate call sites locking one table
-// in different modes was not.
-func TestStrictestLockModeWinsAcrossSeparateCallSites(t *testing.T) {
-	weak, _ := lockRequirementForMode("ROW EXCLUSIVE")
-	strong, _ := lockRequirementForMode("ACCESS EXCLUSIVE")
-	if !(strong.rank > weak.rank) {
-		t.Fatalf("ACCESS EXCLUSIVE must outrank ROW EXCLUSIVE: %d vs %d", strong.rank, weak.rank)
-	}
-
-	// Whichever order the analyzer visits the two sites in, the surface must end
-	// up demanding the STRICT one. Both orders asserted, because the fixed point
-	// iterates a map and the order is not stable.
-	for _, order := range [][]LockRequirement{{weak, strong}, {strong, weak}} {
-		surface := &TableSurface{Table: "outbox"}
-		for _, requirement := range order {
-			if surface.LockRequirement == nil || requirement.rank > surface.LockRequirement.rank {
-				held := requirement
-				surface.LockRequirement = &held
-			}
-		}
-		if surface.LockRequirement.Mode != "ACCESS EXCLUSIVE" {
-			t.Errorf("strictest mode did not win (order %v/%v): got %s",
-				order[0].Mode, order[1].Mode, surface.LockRequirement.Mode)
-		}
-		var selectInsert PrivilegeSet
-		selectInsert.add(PrivSelect)
-		selectInsert.add(PrivInsert)
-		if lockSatisfiedBy(*surface.LockRequirement, selectInsert) {
-			t.Error("after escalation INSERT must no longer satisfy the lock")
-		}
-	}
-}
-
 // --- H1.a: the override only applies to THIS role's seed names ---------------
 func TestNameOverrideOnlyAppliesToSeedNamedParameters(t *testing.T) {
 	poolType := fakePoolType()
@@ -393,11 +358,160 @@ func TestNameOverrideOnlyAppliesToSeedNamedParameters(t *testing.T) {
 	ctx := funcCtx{decl: decl, info: info}
 
 	domainSeeds, domainBarrier := seedsFor(RoleDomain)
-	a := &analyzer{seeds: domainSeeds, barrier: domainBarrier}
-	// Even with call-site evidence naming only the coordinator, a parameter that
-	// was never a name-based seed has nothing to override -- reporting one would
-	// be a phantom correction of a convention that was never applied.
-	if a.nameSeedContradicted(use, ctx, nil) {
-		t.Error("the override must only fire for parameters this role would have seeded BY NAME")
+	// A REAL *types.Func with call-site evidence naming only the coordinator. An
+	// earlier version of this test passed fn=nil, which short-circuits on the
+	// `fn == nil` clause and MASKED the clause under test -- the mutation removing
+	// the seed-name check survived. Every sibling clause must be satisfied so the
+	// clause under test is the only thing that can decide the result.
+	fn := types.NewFunc(token.NoPos, nil, "build", nil)
+	a := &analyzer{
+		seeds: domainSeeds, barrier: domainBarrier,
+		poolParamRoles: map[*types.Func]map[int]map[PoolRole]bool{
+			fn: {0: {RoleCoordinator: true}},
+		},
+	}
+	// The parameter is `pool`, which is not a seed name for any role, so the domain
+	// run never seeded it by name and there is nothing to override. Firing here
+	// would be a phantom correction of a convention that was never applied.
+	if a.nameSeedContradicted(use, ctx, fn) {
+		t.Error("the override must only fire for parameters this role would have seeded BY NAME; " +
+			"`pool` is not a seed name, so no name-based seed exists to contradict")
+	}
+	// Control: the SAME state with a seed-named parameter MUST fire, proving the
+	// negative above comes from the seed-name clause and not from something else.
+	seedNamed := ast.NewIdent("domainPool")
+	seedCtx := funcCtx{
+		decl: &ast.FuncDecl{Name: ast.NewIdent("build"),
+			Type: &ast.FuncType{Params: &ast.FieldList{List: []*ast.Field{{
+				Names: []*ast.Ident{ast.NewIdent("domainPool")}, Type: ast.NewIdent("ignored"),
+			}}}},
+			Body: &ast.BlockStmt{}},
+		info: &types.Info{Types: map[ast.Expr]types.TypeAndValue{seedNamed: {Type: poolType}}},
+	}
+	if !a.nameSeedContradicted(seedNamed, seedCtx, fn) {
+		t.Error("control failed: a seed-named parameter with contradicting call sites must fire")
+	}
+}
+
+// TestStrictestLockModeWinsViaRecordSQLText exercises the PRODUCTION escalation
+// line rather than a reimplementation of it.
+//
+// The first version of this test rebuilt the "keep the stricter rank" comparison
+// inside the test body, so it passed while analyze.go's own copy was mutated away.
+// A test that reimplements the logic it is checking cannot fail with it.
+func TestStrictestLockModeWinsViaRecordSQLText(t *testing.T) {
+	// Two SEPARATE recordSQLText calls, as two distinct call sites would produce.
+	// Both orders, because the analyzer walks a map and the order is not stable.
+	for _, order := range [][]string{
+		{"LOCK TABLE public.outbox IN ROW EXCLUSIVE MODE", "LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"},
+		{"LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE", "LOCK TABLE public.outbox IN ROW EXCLUSIVE MODE"},
+	} {
+		fset := token.NewFileSet()
+		file := fset.AddFile("internal/x/y.go", -1, 4096)
+		a := &analyzer{fset: fset, rootModule: "/", tables: map[string]*TableSurface{}}
+		for i, sql := range order {
+			a.recordSQLText(sql, fset.Position(file.Pos(10*(i+1))), "tx")
+		}
+		surface := a.tables["outbox"]
+		if surface == nil || surface.LockRequirement == nil {
+			t.Fatalf("no lock requirement recorded for order %v", order)
+		}
+		if surface.LockRequirement.Mode != "ACCESS EXCLUSIVE" {
+			t.Errorf("order %v: strictest mode did not win across call sites, got %s",
+				order, surface.LockRequirement.Mode)
+		}
+		var selectInsert PrivilegeSet
+		selectInsert.add(PrivSelect)
+		selectInsert.add(PrivInsert)
+		if lockSatisfiedBy(*surface.LockRequirement, selectInsert) {
+			t.Errorf("order %v: INSERT must not satisfy the escalated requirement", order)
+		}
+	}
+}
+
+// TestTracedStraddleWithSharedEvidenceIsAdvisory covers the straddle's ATTRIBUTION
+// premise on its own. The coarse-grouping test has traced=false, so `attributed`
+// never decided anything there and the mutations neutralising it survived. Here
+// co-residency IS proven and only the attribution is missing.
+func TestTracedStraddleWithSharedEvidenceIsAdvisory(t *testing.T) {
+	var selectOnly PrivilegeSet
+	selectOnly.add(PrivSelect)
+
+	const traced = "txorigin:internal/shared/repo.go:5"
+	// Both roles derive the SAME traced group at the SAME sites -- a type fed by
+	// both pools -- so neither role can claim the transaction.
+	build := func(role PoolRole) *DerivedSurface {
+		coord := &TableSurface{Table: "coord_table"}
+		coord.Privileges.add(PrivSelect)
+		coord.Evidence = append(coord.Evidence, Evidence{
+			File: "internal/shared/repo.go", Line: 10, Privilege: PrivSelect,
+			TxGroup: traced, Statement: "SELECT 1",
+		})
+		dom := &TableSurface{Table: "domain_table"}
+		dom.Privileges.add(PrivSelect)
+		dom.Evidence = append(dom.Evidence, Evidence{
+			File: "internal/shared/repo.go", Line: 11, Privilege: PrivSelect,
+			TxGroup: traced, Statement: "SELECT 1",
+		})
+		return &DerivedSurface{Role: role,
+			Tables: map[string]*TableSurface{"coord_table": coord, "domain_table": dom}}
+	}
+
+	report, err := CompareRoles([]RoleInput{
+		{Role: RoleDomain, Derived: build(RoleDomain),
+			Truth: truthWith(map[string]PrivilegeSet{"domain_table": selectOnly})},
+		{Role: RoleCoordinator, Derived: build(RoleCoordinator),
+			Truth: truthWith(map[string]PrivilegeSet{"coord_table": selectOnly})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range report.Findings {
+		if f.Severity == Critical && strings.Contains(f.Summary, "STRADDLES") {
+			t.Errorf("a traced straddle whose every evidence site is SHARED between roles was reported "+
+				"CRITICAL. Co-residency is proven but attribution is not, so blocking tells maintainers "+
+				"to dual-grant on a guess about whose pool runs it: %s", f.Summary)
+		}
+	}
+	joined := strings.Join(findingSummaries(report, Advisory), "\n")
+	if !strings.Contains(joined, "SHARED with another role") {
+		t.Errorf("expected the straddle to downgrade citing shared evidence, got:\n%s", joined)
+	}
+}
+
+// TestLockWithNoEvidenceStaysCritical pins the `othersLock` clause of the lock
+// downgrade. It guards a degenerate state -- a LockRequirement recorded with no
+// lock evidence -- which production never produces (analyze.go sets both together)
+// but which a future refactor could. Without the clause that state would silently
+// DOWNGRADE, turning a missing grant into an advisory.
+func TestLockWithNoEvidenceStaysCritical(t *testing.T) {
+	var selectOnly PrivilegeSet
+	selectOnly.add(PrivSelect)
+
+	requirement, _ := lockRequirementForMode("SHARE ROW EXCLUSIVE")
+	held := requirement
+	// LockRequirement set, WriteLockEvidence deliberately empty.
+	s := &TableSurface{Table: "outbox", LockRequirement: &held}
+	s.Privileges.add(PrivSelect)
+
+	report, err := CompareRoles([]RoleInput{
+		{Role: RoleDomain, Derived: &DerivedSurface{Role: RoleDomain, Tables: map[string]*TableSurface{}},
+			Truth: truthWith(map[string]PrivilegeSet{"unrelated": selectOnly})},
+		{Role: RoleCoordinator,
+			Derived: &DerivedSurface{Role: RoleCoordinator, Tables: map[string]*TableSurface{"outbox": s}},
+			Truth:   truthWith(map[string]PrivilegeSet{"outbox": selectOnly})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range report.Findings {
+		if f.Severity == Critical && strings.Contains(f.Summary, "LOCK TABLE") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a lock requirement with no recorded evidence must stay CRITICAL: with no sites there " +
+			"is nothing to call shared, so downgrading would hide a denial behind an advisory")
 	}
 }

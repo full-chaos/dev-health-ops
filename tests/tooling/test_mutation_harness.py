@@ -992,3 +992,97 @@ def test_a_kill_reports_where_it_died(tree: Path) -> None:
     assert results[0].verdict == VERDICT_KILLED
     assert "widget_test.go:42" in results[0].detail
     assert "Confirm it is the assertion this mutation targets" in results[0].detail
+
+
+def test_no_write_follows_a_planted_symlink_anywhere(tree: Path) -> None:
+    """The CLASS fix, not the instance.
+
+    Round 2 hardened only the mutation write. The state record, the snapshot and
+    the report all had predictable names and wrote directly, so planting any of
+    them as a symlink truncated its target. Every write now goes through the
+    audited primitive, which refuses a symlinked destination.
+    """
+
+    outsider = tree / "outsider.txt"
+    outsider.write_text("must survive\n", encoding="utf-8")
+    state = tree / ".mutation-harness"
+    (state / "snapshots").mkdir(parents=True)
+    # Every predictable auxiliary path, planted.
+    for planted in (
+        state / "state.json",
+        state / "state.json.tmp",
+        state / "report.json",
+    ):
+        planted.symlink_to(outsider)
+
+    plan = _plan(tree, [_mutation()])
+    # The run may refuse or succeed, but it must not write through any link.
+    try:
+        run_plan(tree, plan, None, assert_all_killed=False)
+    except HarnessError:
+        pass
+    assert outsider.read_text(encoding="utf-8") == "must survive\n"
+
+
+def test_a_symlinked_state_directory_is_refused(tree: Path) -> None:
+    """The state directory is part of the trust boundary, not just its contents."""
+
+    elsewhere = tree / "elsewhere"
+    elsewhere.mkdir()
+    (tree / ".mutation-harness").symlink_to(elsewhere)
+
+    with pytest.raises(HarnessError, match="is a symlink"):
+        verify(tree)
+
+
+def test_restore_refuses_when_the_path_resolves_to_a_different_file(
+    tree: Path,
+) -> None:
+    """Recovery must bind to the FILE, not to the path.
+
+    Re-resolving the recorded path is not identity: an in-repo symlink retargeted
+    after a crash resolves to a different file, and restore would repair that one
+    while the originally-mutated file stayed broken -- then clear the record and
+    hide it.
+    """
+
+    real = tree / "real.txt"
+    real.write_text(_source(GUARD), encoding="utf-8")
+    decoy = tree / "decoy.txt"
+    decoy.write_text(_source(DISABLED_GUARD), encoding="utf-8")
+    link = tree / "link.txt"
+    link.symlink_to(real)
+
+    state = tree / ".mutation-harness"
+    (state / "snapshots").mkdir(parents=True)
+    (state / "snapshots" / "M1-x.snapshot").write_bytes(real.read_bytes())
+    import os as _os
+
+    real_stat = real.stat()
+    (state / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "applied": {
+                    "mutation_id": "M1",
+                    "file": "link.txt",
+                    "snapshot": "M1-x.snapshot",
+                    "mutated_sha256": hashlib.sha256(
+                        _source(DISABLED_GUARD).encode()
+                    ).hexdigest(),
+                    "identity": f"{real_stat.st_dev}:{real_stat.st_ino}",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Retarget the symlink: the path still resolves, to the wrong file.
+    link.unlink()
+    link.symlink_to(decoy)
+    assert _os.path.samefile(link, decoy)
+
+    with pytest.raises(HarnessError, match="no longer resolves to the file"):
+        restore(tree)
+    # The decoy is untouched and the record is kept.
+    assert decoy.read_text(encoding="utf-8") == _source(DISABLED_GUARD)
+    assert verify(tree) != []

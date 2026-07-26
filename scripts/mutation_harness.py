@@ -234,6 +234,12 @@ def _atomic_write(target: Path, data: bytes) -> None:
     failure. Extended attributes and ACLs are likewise not carried across.
     """
 
+    if target.is_symlink():
+        raise HarnessError(
+            f"{target} is a symlink; refusing to write through it. A write that "
+            "follows a link truncates whatever it points at, which is an "
+            "arbitrary-overwrite primitive rather than a file update."
+        )
     mode: int | None = None
     try:
         mode = target.stat().st_mode & 0o7777
@@ -275,7 +281,21 @@ def _sanitised_identifier(candidate: str) -> str | None:
 
 
 def _state_dir(root: Path) -> Path:
-    return root / STATE_DIRNAME
+    """The state directory, refusing a symlink.
+
+    Every auxiliary write lands here. A symlinked `.mutation-harness` would
+    redirect all of them outside the repository, so the directory itself is part
+    of the trust boundary -- not just the files in it.
+    """
+
+    directory = root / STATE_DIRNAME
+    if directory.is_symlink():
+        raise HarnessError(
+            f"{directory} is a symlink. Every snapshot, record and report is "
+            "written there, so a symlinked state directory redirects all of them. "
+            "Remove it and re-run; do not follow it."
+        )
+    return directory
 
 
 def _read_state(root: Path) -> dict[str, Any] | None:
@@ -317,9 +337,10 @@ def _write_state(root: Path, payload: dict[str, Any] | None) -> None:
         return
     # Write-then-rename so a crash cannot leave a half-written record that
     # _read_state would refuse to parse.
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    # Through the audited primitive, not a predictable sibling. `state.json.tmp`
+    # was guessable, so planting it as a symlink truncated its target -- the same
+    # defect as the mutation write, in the file that records the mutation.
+    _atomic_write(path, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
 
 
 def _update_applied_record(root: Path, key: str, value: Any) -> None:
@@ -336,6 +357,13 @@ def _update_applied_record(root: Path, key: str, value: Any) -> None:
         )
     applied[key] = value
     _write_state(root, state)
+
+
+def _file_identity(target: Path) -> str:
+    """A stable identity for the file itself, independent of its path."""
+
+    info = target.stat()
+    return f"{info.st_dev}:{info.st_ino}"
 
 
 def _resolve_target(root: Path, relative: str) -> Path:
@@ -725,6 +753,20 @@ def restore(root: Path, force: bool = False) -> str:
         # could name `../../elsewhere`, or a retargeted in-repo symlink could
         # redirect the write to a different file than the one that was mutated.
         target = _resolve_target(root, relative)
+        recorded_identity = applied.get("identity")
+        if recorded_identity is not None:
+            current_identity = _file_identity(target)
+            if current_identity != str(recorded_identity):
+                raise HarnessError(
+                    f"REFUSING TO RESTORE {relative}: it no longer resolves to the "
+                    f"file that was mutated. Recorded {recorded_identity}, now "
+                    f"{current_identity}. A symlink was retargeted, or the file was "
+                    "replaced. Writing here would repair the wrong file and leave "
+                    "the mutated one broken -- and clearing the record would hide "
+                    "that. Find the file with the recorded device:inode and undo "
+                    f"the mutation by hand; the pre-run content is in "
+                    f"{STATE_DIRNAME}/{SNAPSHOT_DIRNAME}/{snapshot_name}."
+                )
         if _sanitised_identifier(snapshot_name) is None:
             raise HarnessError(
                 f"recorded snapshot name {snapshot_name!r} is not a plain "
@@ -857,10 +899,29 @@ def _require_unchanged(
 
 
 def _restore_after_apply(
-    target: Path, original_bytes: bytes, original_sha: str, mutation: Mutation
+    target: Path,
+    original_bytes: bytes,
+    original_sha: str,
+    mutated_sha: str,
+    mutation: Mutation,
 ) -> None:
-    """Undo an applied mutation on an early-return path, asserting the result."""
+    """Undo an applied mutation on an early-return path, asserting the result.
 
+    Uses the same three-way check as the main restore. Writing unconditionally
+    here would destroy an edit saved during the build -- reintroducing, on the
+    new early-return path, exactly the defect the main path was fixed for.
+    """
+
+    current = _digest(target.read_bytes())
+    if current == original_sha:
+        return
+    if current != mutated_sha:
+        raise HarnessError(
+            f"REFUSING TO RESTORE {mutation.path}: it changed while the build ran. "
+            f"Expected the mutated content ({mutated_sha[:12]}), found "
+            f"{current[:12]}. Writing either version would destroy that change. "
+            "The file is left exactly as found and the record is kept."
+        )
     _atomic_write(target, original_bytes)
     if _digest(target.read_bytes()) != original_sha:
         raise HarnessError(
@@ -924,8 +985,9 @@ def run_plan(
         ],
     }
     _state_dir(root).mkdir(parents=True, exist_ok=True)
-    (_state_dir(root) / REPORT_FILENAME).write_text(
-        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    _atomic_write(
+        _state_dir(root) / REPORT_FILENAME,
+        (json.dumps(report, indent=2) + "\n").encode("utf-8"),
     )
 
     exit_code = 0
@@ -951,7 +1013,7 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
     original_bytes = target.read_bytes()
     original_sha = _digest(original_bytes)
     snapshot_name = f"{mutation.identifier}-{original_sha[:16]}.snapshot"
-    (snapshot_dir / snapshot_name).write_bytes(original_bytes)
+    _atomic_write(snapshot_dir / snapshot_name, original_bytes)
 
     warnings: list[str] = []
     self_referential = _self_referential_warning(root, mutation)
@@ -1020,6 +1082,12 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
                 "file": mutation.path,
                 "snapshot": snapshot_name,
                 "original_sha256": original_sha,
+                # Device and inode, so recovery binds to the FILE rather than to
+                # the path. Re-resolving `mutation.path` is not identity: an
+                # in-repo symlink retargeted after a crash resolves to a
+                # different file, and restore would "repair" that one while the
+                # originally-mutated file stayed mutated.
+                "identity": _file_identity(target),
                 # Recorded so RECOVERY can refuse the same way the in-run path
                 # does. Without an expected mutated digest, `restore` treats any
                 # non-original content as safe to overwrite -- so a crash after a
@@ -1067,7 +1135,9 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
     if mutation.build is not None:
         build_code, build_tail = _run_command(mutation.build, root)
         if build_code != 0:
-            _restore_after_apply(target, original_bytes, original_sha, mutation)
+            _restore_after_apply(
+                target, original_bytes, original_sha, mutated_sha, mutation
+            )
             _write_state(root, None)
             return Result(
                 identifier=mutation.identifier,

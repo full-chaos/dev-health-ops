@@ -395,17 +395,48 @@ func AdvisoryReport(report *RoleReport) []AdvisoryLine {
 	}
 
 	critical, advisory := splitBySeverity(report.Findings)
-	_, accepted, _, _ := PartitionKnownOpen(critical)
-	acceptedSet := map[string]bool{}
+	_, accepted, staleKnownOpen, unticketed := PartitionKnownOpen(critical)
+
+	// The ENTIRE lifecycle must be reported, not just the accepted set. An earlier
+	// version discarded stale and unticketed and labelled accepted entries with a
+	// generic "[ticketed, known open]" that named neither ticket nor reason -- so
+	// the claim "expiry is suspended but still reported" was false for two of the
+	// three properties, and an entry with an EMPTY ticket was presented as ticketed.
+	// That is the same stale-claim defect as the doc comments, in behaviour rather
+	// than prose, and it is worse: prose can be re-read, a dropped code path cannot.
+	acceptedByTicket := map[string]KnownOpenCritical{}
 	for _, f := range accepted {
-		acceptedSet[f.Summary] = true
+		for _, known := range knownOpenCriticals {
+			if known.matches(f) {
+				acceptedByTicket[f.Summary] = known
+				break
+			}
+		}
 	}
 	for _, f := range critical {
-		if acceptedSet[f.Summary] {
-			add(CategoryKnownOpen, "[ticketed, known open] "+f.Summary)
+		if known, isAccepted := acceptedByTicket[f.Summary]; isAccepted {
+			ticket := known.Ticket
+			if strings.TrimSpace(ticket) == "" {
+				ticket = "NO TICKET RECORDED -- this entry names no owner and cannot be tracked"
+			}
+			add(CategoryKnownOpen, fmt.Sprintf("[%s] %s\n        accepted because: %s",
+				ticket, f.Summary, known.Why))
 			continue
 		}
 		add(CategoryCritical, f.Summary)
+	}
+	for _, entry := range staleKnownOpen {
+		add(CategoryKnownOpen, fmt.Sprintf(
+			"STALE: %s/%s %s (%s) no longer reproduces. Under gating this would have FAILED and forced "+
+				"its own deletion; expiry is suspended, so it will sit here indefinitely until someone "+
+				"removes it. If the defect regresses it would be silently re-accepted under this same "+
+				"entry rather than reported as new",
+			entry.Role, entry.Table, entry.Privilege, entry.Ticket))
+	}
+	for _, entry := range unticketed {
+		add(CategoryKnownOpen, fmt.Sprintf(
+			"NO TICKET: %s/%s %s is accepted as known-open but names no ticket, so nothing tracks its fix",
+			entry.Role, entry.Table, entry.Privilege))
 	}
 	for _, f := range advisory {
 		add(CategoryAdvisory, f.Summary)

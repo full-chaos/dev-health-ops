@@ -348,6 +348,25 @@ independently.
 > of everything the analysis can fail to see, with each cell either failing the
 > check or documented as safe to accept **per site** (not per file), and a test per
 > cell demonstrating the failure. Tracked as **CHAOS-3164**.
+>
+> **How to read the report:**
+> `go run ./cmd/dev-health-grantcheck -roles`
+>
+> That command is the report's real delivery channel, and it exists because the test
+> alone is not one. `TestReportCoordinatorGrantSurface` emits everything through
+> `t.Log`, and `ci/check_go.sh` runs `go test -mod=readonly ./...` **without `-v`** —
+> which discards a passing package's logs entirely. In CI the report was therefore
+> invisible: consumers saw a zero exit and a package-level `ok` and nothing else,
+> which is exactly the "advisory output read as a pass" failure the advisory posture
+> was supposed to make impossible. **A report whose only channel is suppressed output
+> is not a report.**
+>
+> The command always exits **0**, including when it reports CRITICAL findings. A
+> nonzero exit would make it a gate by the back door. Read the report; do not read
+> the exit code.
+>
+> Not yet wired into CI as a published artifact — see the note at the end of this
+> section.
 
 `TestRoleGrantSurfacesMatchQuerySurfaces` (`internal/domaingrants/role_surface_test.go`)
 derives, per connection pool, which `(table, privilege)` pairs the reachable Go code

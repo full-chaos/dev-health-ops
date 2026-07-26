@@ -8,12 +8,28 @@
 // same analysis can be re-run standalone to regenerate a report, without
 // depending on `go test`'s output format.
 //
+// It also emits the COORDINATOR role's ADVISORY report (-roles), which exists
+// because that report has no other delivery channel. The coordinator analysis is
+// advisory (see internal/domaingrants.AdvisoryReport), so it is delivered through
+// t.Log -- and ci/check_go.sh runs `go test -mod=readonly ./...` WITHOUT -v, which
+// suppresses a passing test's logs entirely. In CI the coordinator report was
+// therefore invisible: consumers saw a zero exit status and a package-level "ok"
+// and nothing else, which is precisely the "advisory output read as a pass" failure
+// the advisory posture was supposed to make impossible. A report whose only channel
+// is suppressed output is not a report.
+//
 // Usage:
 //
 //	go run ./cmd/dev-health-grantcheck [-root <module dir>] [-format text|markdown]
+//	go run ./cmd/dev-health-grantcheck -roles [-root <module dir>]
 //
-// Exit status is 1 if any CRITICAL finding is present, 0 otherwise
-// (ADVISORY-only or clean). Same pass/fail contract as the test.
+// Exit status for the DOMAIN check is 1 if any CRITICAL finding is present, 0
+// otherwise -- the same pass/fail contract as the gating test.
+//
+// Exit status for -roles is ALWAYS 0, including when it reports CRITICAL findings.
+// That is deliberate and is the whole point: the coordinator surface gates nothing,
+// so a nonzero exit would make it a gate by the back door. Read the report; do not
+// read the exit code.
 package main
 
 import (
@@ -29,12 +45,26 @@ import (
 func main() {
 	root := flag.String("root", ".", "module root directory (containing go.mod)")
 	format := flag.String("format", "text", "output format: text or markdown")
+	roles := flag.Bool("roles", false,
+		"emit the per-role ADVISORY report (coordinator + domain) instead of the domain gate check; "+
+			"always exits 0, because this surface gates nothing")
 	flag.Parse()
 
 	absRoot, err := absPath(*root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dev-health-grantcheck: %v\n", err)
 		os.Exit(2)
+	}
+
+	if *roles {
+		if err := printRoleAdvisoryReport(absRoot); err != nil {
+			fmt.Fprintf(os.Stderr, "dev-health-grantcheck: %v\n", err)
+			os.Exit(2)
+		}
+		// Deliberately exit 0 even with CRITICAL findings present: see the package
+		// doc comment. A nonzero exit here would silently turn an advisory report
+		// into a gate, which is the decision this posture exists to avoid.
+		return
 	}
 
 	derived, err := domaingrants.Derive(absRoot)
@@ -122,4 +152,55 @@ func privilegeLabel(f domaingrants.Finding) string {
 		return ""
 	}
 	return f.Privilege.String()
+}
+
+// printRoleAdvisoryReport writes the full per-role advisory report to stdout.
+//
+// This is the coordinator report's ONLY non-suppressed delivery channel. The test
+// that produces the same content does so through t.Log, which `go test` discards
+// for a passing package unless -v is passed -- and CI does not pass it.
+func printRoleAdvisoryReport(root string) error {
+	inputs := make([]domaingrants.RoleInput, 0, len(domaingrants.AllPoolRoles))
+	for _, role := range domaingrants.AllPoolRoles {
+		derived, err := domaingrants.DeriveForRole(root, role)
+		if err != nil {
+			return fmt.Errorf("deriving %s surface: %w", role, err)
+		}
+		truth, err := domaingrants.LoadGroundTruthForRole(role)
+		if err != nil {
+			return fmt.Errorf("loading %s ground truth: %w", role, err)
+		}
+		inputs = append(inputs, domaingrants.RoleInput{Role: role, Derived: derived, Truth: truth})
+	}
+	report, err := domaingrants.CompareRoles(inputs)
+	if err != nil {
+		return fmt.Errorf("comparing roles: %w", err)
+	}
+
+	const banner = "ADVISORY REPORT -- THIS GATES NOTHING."
+	fmt.Println("=====================================================================")
+	fmt.Println(banner)
+	fmt.Println("Everything below is REPORTED, not asserted. A clean run is NOT evidence")
+	fmt.Println("that CoordinatorPosture() is correct, and this command exits 0 even when")
+	fmt.Println("it reports CRITICAL findings. The domain role is gated separately by")
+	fmt.Println("TestDomainGrantSurfaceMatchesQuerySurface. Promoting this to a gate")
+	fmt.Println("requires the blind-spot closure argument tracked in CHAOS-3164.")
+	fmt.Println("=====================================================================")
+
+	byCategory := map[domaingrants.AdvisoryCategory][]string{}
+	for _, line := range domaingrants.AdvisoryReport(report) {
+		byCategory[line.Category] = append(byCategory[line.Category], line.Text)
+	}
+	for _, category := range domaingrants.AllAdvisoryCategories {
+		entries := byCategory[category]
+		fmt.Printf("\n=== %s (%d) ===\n", category, len(entries))
+		for _, entry := range entries {
+			fmt.Printf("    %s\n", entry)
+		}
+	}
+	fmt.Println()
+	fmt.Println("=====================================================================")
+	fmt.Println(banner + " Exit status is 0 regardless of the above.")
+	fmt.Println("=====================================================================")
+	return nil
 }

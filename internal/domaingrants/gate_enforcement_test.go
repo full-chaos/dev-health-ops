@@ -98,6 +98,71 @@ func TestAdvisoryReportCoversEveryCategory(t *testing.T) {
 	}
 }
 
+// TestKnownOpenLifecycleIsFullyReported covers the whole known-open lifecycle,
+// not just the accepted set.
+//
+// An earlier version of AdvisoryReport called PartitionKnownOpen and used only its
+// `accepted` result, discarding stale and unticketed, and labelled accepted entries
+// with a generic "[ticketed, known open]" naming neither ticket nor reason. So the
+// documented claim -- "expiry is suspended but the properties are still REPORTED"
+// -- was false for two of the three, and an entry with an empty ticket was
+// presented as ticketed. Same stale-claim defect as the doc comments, but in
+// BEHAVIOUR: prose can be re-read, a dropped code path cannot.
+func TestKnownOpenLifecycleIsFullyReported(t *testing.T) {
+	real := knownOpenCriticals
+	t.Cleanup(func() { knownOpenCriticals = real })
+
+	// One entry that reproduces (accepted, with a ticket and reason), one that no
+	// longer reproduces (stale), and one with no ticket at all.
+	knownOpenCriticals = []KnownOpenCritical{
+		{Role: RoleCoordinator, Table: "reproduces", Privilege: PrivInsert,
+			Ticket: "CHAOS-1111", Why: "the documented reason"},
+		{Role: RoleCoordinator, Table: "vanished", Privilege: PrivUpdate,
+			Ticket: "CHAOS-2222", Why: "was real once"},
+		{Role: RoleDomain, Table: "untracked", Privilege: PrivDelete,
+			Ticket: "", Why: "nobody owns this"},
+	}
+
+	report := &RoleReport{Findings: []Finding{
+		{Severity: Critical, Role: RoleCoordinator, Table: "reproduces", Privilege: PrivInsert,
+			Summary: "synthetic reproducing critical"},
+		{Severity: Critical, Role: RoleDomain, Table: "untracked", Privilege: PrivDelete,
+			Summary: "synthetic untracked critical"},
+	}}
+
+	var knownOpen string
+	for _, line := range AdvisoryReport(report) {
+		if line.Category == CategoryKnownOpen {
+			knownOpen += line.Text + "\n"
+		}
+	}
+
+	// Accepted: ticket AND reason must both be visible. "[ticketed]" with neither
+	// tells a reader nothing they can act on.
+	if !strings.Contains(knownOpen, "CHAOS-1111") {
+		t.Errorf("an accepted entry must name its TICKET, or nothing connects it to the fix:\n%s", knownOpen)
+	}
+	if !strings.Contains(knownOpen, "the documented reason") {
+		t.Errorf("an accepted entry must carry its recorded reason:\n%s", knownOpen)
+	}
+
+	// Stale: reported, and the report must say what suspension MEANS for it.
+	if !strings.Contains(knownOpen, "STALE") || !strings.Contains(knownOpen, "vanished") {
+		t.Errorf("an entry that no longer reproduces must be reported as stale -- under gating it "+
+			"would have failed and forced its own deletion:\n%s", knownOpen)
+	}
+	if !strings.Contains(knownOpen, "indefinitely") {
+		t.Errorf("the stale line must state the consequence of suspended expiry, not merely the fact "+
+			"of staleness:\n%s", knownOpen)
+	}
+
+	// Unticketed: must never be presented as ticketed.
+	if !strings.Contains(knownOpen, "NO TICKET") || !strings.Contains(knownOpen, "untracked") {
+		t.Errorf("an entry with no ticket must be reported as untracked, not labelled ticketed:\n%s",
+			knownOpen)
+	}
+}
+
 // TestAcknowledgementsRequireAReason makes the mandatory-reason check
 // falsifiable. It could not fail before, because every real acknowledgement
 // already carries a reason -- so the check had no input that would exercise it.

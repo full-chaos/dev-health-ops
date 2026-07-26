@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
+	"sort"
 )
 
 // This file closes the analyzer's function-VALUE blind spot: taint that dies
@@ -44,6 +45,180 @@ import (
 // and is reported as unresolved, rather than picking one and guessing. Only
 // non-test files contribute targets, so a test double cannot widen or poison
 // the production surface.
+
+// buildPoolParamRoles records, for every *pgxpool.Pool-typed PARAMETER of an
+// in-module function, which pool roles are actually passed to it at its call
+// sites. It is deliberately ROLE-AGNOSTIC -- computed once from poolRoleSeeds for
+// every role, independent of which role the current run is deriving -- because
+// its whole purpose is to let one run see what the other run's evidence says.
+//
+// It exists to close an ATTRIBUTION INVERSION, which is worse than the
+// incompleteness this package already documents. A parameter is a seed root by
+// SPELLING (`coordinatorPool`, `domainPool`), and spelling can contradict
+// reality: `build(domainPool *pgxpool.Pool)` called only with the coordinator
+// pool is seeded by the DOMAIN run purely from its name, while the coordinator
+// run's barrier discards it. The downstream SQL then looks domain-EXCLUSIVE, and
+// the gate confidently directs the privilege to the WRONG role -- a false
+// attribution, not merely a missing one, and role attribution is the central
+// correctness property of the split.
+//
+// So: call-site evidence outranks the name. When the observed roles for a
+// parameter are non-empty and exclude the role being derived, the name-based seed
+// is suppressed for that run (see nameSeedContradicted). When no call site can be
+// resolved, the name still applies -- the convention is the only signal left, and
+// dropping it would lose real surface.
+func (a *analyzer) buildPoolParamRoles() {
+	a.poolParamRoles = map[*types.Func]map[int]map[PoolRole]bool{}
+
+	// roleOfExpr answers "which role's pool is this expression, syntactically?"
+	// for every role at once.
+	roleOfExpr := func(expr ast.Expr, info *types.Info) []PoolRole {
+		var out []PoolRole
+		for role, seeds := range poolRoleSeeds {
+			match := false
+			switch e := expr.(type) {
+			case *ast.SelectorExpr:
+				match = seeds.fields[e.Sel.Name] && isPgxPoolPtr(info.TypeOf(e))
+			case *ast.CallExpr:
+				if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
+					match = seeds.getters[sel.Sel.Name] && isPgxPoolPtr(info.TypeOf(e))
+				}
+			case *ast.Ident:
+				match = seeds.idents[e.Name] && isPgxPoolPtr(info.TypeOf(e))
+			}
+			if match {
+				out = append(out, role)
+			}
+		}
+		return out
+	}
+
+	record := func(fn *types.Func, idx int, roles []PoolRole) bool {
+		if len(roles) == 0 {
+			return false
+		}
+		if a.poolParamRoles[fn] == nil {
+			a.poolParamRoles[fn] = map[int]map[PoolRole]bool{}
+		}
+		if a.poolParamRoles[fn][idx] == nil {
+			a.poolParamRoles[fn][idx] = map[PoolRole]bool{}
+		}
+		changed := false
+		for _, role := range roles {
+			if !a.poolParamRoles[fn][idx][role] {
+				a.poolParamRoles[fn][idx][role] = true
+				changed = true
+			}
+		}
+		return changed
+	}
+
+	const maxIterations = 12
+	for iter := 0; iter < maxIterations; iter++ {
+		changed := false
+		for _, ctx := range a.funcDecls {
+			var currentFn *types.Func
+			if obj, ok := ctx.info.Defs[ctx.decl.Name]; ok {
+				currentFn, _ = obj.(*types.Func)
+			}
+			ast.Inspect(ctx.decl.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callee := simpleCalleeFunc(call, ctx.info)
+				if callee == nil {
+					return true
+				}
+				sig, ok := callee.Type().(*types.Signature)
+				if !ok {
+					return true
+				}
+				for i, arg := range call.Args {
+					if i >= sig.Params().Len() || !isPgxPoolPtr(sig.Params().At(i).Type()) {
+						continue
+					}
+					roles := roleOfExpr(arg, ctx.info)
+					// Forward the enclosing function's own parameter roles, so a
+					// pool threaded through several hops keeps its provenance.
+					if id, isIdent := arg.(*ast.Ident); isIdent && currentFn != nil {
+						if idx := paramIndex(ctx.funcType(), id.Name); idx >= 0 {
+							for role := range a.poolParamRoles[currentFn][idx] {
+								roles = append(roles, role)
+							}
+						}
+					}
+					if record(callee, i, roles) {
+						changed = true
+					}
+				}
+				return true
+			})
+		}
+		if !changed {
+			break
+		}
+	}
+}
+
+// NameSeedOverride records one place the naming convention was overruled by
+// call-site evidence.
+type NameSeedOverride struct {
+	File string
+	Line int
+	// Name is the parameter whose spelling suggested this run's pool.
+	Name string
+	// Function is the enclosing function.
+	Function string
+	// ObservedRoles are the roles actually passed at the parameter's call sites.
+	ObservedRoles []string
+}
+
+func (a *analyzer) recordNameSeedOverride(expr ast.Expr, ctx funcCtx, fn *types.Func) {
+	id, ok := expr.(*ast.Ident)
+	if !ok || fn == nil {
+		return
+	}
+	idx := paramIndex(ctx.funcType(), id.Name)
+	if idx < 0 {
+		return
+	}
+	var observed []string
+	for role := range a.poolParamRoles[fn][idx] {
+		observed = append(observed, string(role))
+	}
+	sort.Strings(observed)
+	pos := a.fset.Position(expr.Pos())
+	override := NameSeedOverride{
+		File: a.relFile(pos), Line: pos.Line, Name: id.Name,
+		Function: txGroupFallbackName(ctx), ObservedRoles: observed,
+	}
+	for _, existing := range a.nameSeedOverrides {
+		if existing.File == override.File && existing.Line == override.Line {
+			return
+		}
+	}
+	a.nameSeedOverrides = append(a.nameSeedOverrides, override)
+}
+
+// nameSeedContradicted reports whether expr is an identifier that would be a seed
+// for this run PURELY by its name, while the call-site evidence for that
+// parameter names only OTHER roles. See buildPoolParamRoles.
+func (a *analyzer) nameSeedContradicted(expr ast.Expr, ctx funcCtx, fn *types.Func) bool {
+	id, ok := expr.(*ast.Ident)
+	if !ok || fn == nil || !a.seeds.idents[id.Name] {
+		return false
+	}
+	idx := paramIndex(ctx.funcType(), id.Name)
+	if idx < 0 {
+		return false // a local, not a parameter: no call sites to consult
+	}
+	observed := a.poolParamRoles[fn][idx]
+	if len(observed) == 0 {
+		return false // no resolvable call site: the name is the only signal left
+	}
+	return !observed[a.seeds.role]
+}
 
 // funcValueScope is one file buildFuncValueTargets scans for function-typed
 // field assignments. Scanning whole files (rather than only function bodies)
@@ -98,6 +273,17 @@ type FuncValueResolvedCallSite struct {
 	Target string
 }
 
+// FuncValueConflictSite is a tainted call through a function-typed field this
+// pass deliberately refused to resolve. Every one is a hole in the surface: the
+// arguments are pool-tainted, so real SQL may lie beyond it, and nothing past
+// this point was analyzed.
+type FuncValueConflictSite struct {
+	File   string
+	Line   int
+	Field  string // "OwnerType.fieldName"
+	Reason string
+}
+
 // buildFuncValueTargets resolves each function-typed field to its single
 // implementation, or to nothing when the module assigns it more than one.
 //
@@ -112,20 +298,32 @@ type FuncValueResolvedCallSite struct {
 // not read the same as "nothing goes here".
 func (a *analyzer) buildFuncValueTargets() {
 	a.funcValueTargets = map[funcValueKey]funcValueTarget{}
-	conflict := map[funcValueKey]bool{}
+	a.funcValueConflicts = map[funcValueKey]string{}
 
+	// Excluding a field is only half of fail-closed. The exclusion has to be
+	// REPORTED, or "two production builders, neither analyzed" is
+	// indistinguishable from "no such field" and CI stays green over a surface
+	// nothing examined. That is fail-SILENT, and it is what a.funcValueConflicts
+	// exists to prevent -- the reason is carried so the report can say which of
+	// the two shapes happened.
 	record := func(key funcValueKey, target funcValueTarget) {
-		if key.owner == nil || key.field == "" || conflict[key] {
+		if key.owner == nil || key.field == "" {
+			return
+		}
+		if _, conflicted := a.funcValueConflicts[key]; conflicted {
 			return
 		}
 		if target.empty() {
-			conflict[key] = true
+			a.funcValueConflicts[key] = "assigned a value this analyzer cannot resolve to a function body " +
+				"(a further field, a call result, or a parameter)"
 			delete(a.funcValueTargets, key)
 			return
 		}
 		existing, seen := a.funcValueTargets[key]
 		if seen && !existing.sameAs(target) {
-			conflict[key] = true
+			a.funcValueConflicts[key] = fmt.Sprintf(
+				"assigned MORE THAN ONE implementation (%s and %s), so neither is analyzed",
+				a.display(existing), a.display(target))
 			delete(a.funcValueTargets, key)
 			return
 		}
@@ -248,6 +446,23 @@ func (a *analyzer) propagateIntoFuncValue(
 ) bool {
 	target := a.resolveFuncValueField(sel, ctx.info)
 	if target.empty() {
+		// Deliberately excluded, so say so at the CALL SITE. Reporting only the
+		// field would leave a reader unable to tell whether any tainted call ever
+		// reaches it; reporting only Unresolved loses it entirely, because that
+		// record's callee is the bare field name and the incompleteness filter
+		// cannot tell such a name from a third-party method.
+		if owner := namedTypeOf(ctx.info.TypeOf(sel.X)); owner != nil {
+			key := funcValueKey{owner: owner, field: sel.Sel.Name}
+			if reason, conflicted := a.funcValueConflicts[key]; conflicted {
+				pos := a.fset.Position(call.Pos())
+				a.funcValueConflictSites = append(a.funcValueConflictSites, FuncValueConflictSite{
+					File:   a.relFile(pos),
+					Line:   pos.Line,
+					Field:  owner.Obj().Name() + "." + sel.Sel.Name,
+					Reason: reason,
+				})
+			}
+		}
 		return false
 	}
 	for i, arg := range call.Args {

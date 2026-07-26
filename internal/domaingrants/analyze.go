@@ -39,13 +39,14 @@ type TableSurface struct {
 	Table      string
 	Privileges PrivilegeSet
 	Evidence   []Evidence
-	// RequiresAnyWriteLock and its evidence: see
-	// StatementResult.RequiresAnyWriteLock's doc comment (sql.go). Checked
-	// separately from Privileges because Postgres's requirement here is
-	// "at least one of INSERT/UPDATE/DELETE", not a single specific
-	// privilege.
-	RequiresAnyWriteLock bool
-	WriteLockEvidence    []Evidence
+	// LockRequirement is the strictest explicit LOCK TABLE demand on this table,
+	// or nil if it is never LOCKed (or only in ACCESS SHARE mode, which SELECT
+	// alone satisfies). Checked separately from Privileges because Postgres's
+	// demand here is a DISJUNCTION -- any one of a mode-specific set -- not a
+	// single required privilege. See LockRequirement in sql.go for the measured
+	// mode-to-privilege mapping.
+	LockRequirement   *LockRequirement
+	WriteLockEvidence []Evidence
 }
 
 // DynamicSite is a SQL-shaped call (X.Exec/Query/QueryRow/... on a
@@ -100,6 +101,15 @@ type DerivedSurface struct {
 	// field (funcvalue.go), for the same auditability reason Devirtualized
 	// exists: both are deliberately narrow unique-target shortcuts.
 	FuncValueResolved []FuncValueResolvedCallSite
+	// FuncValueConflicts are tainted calls through a function-typed field this
+	// pass refused to resolve (two implementations, or an unresolvable value).
+	// Each is an unanalyzed hole reached by pool-tainted arguments.
+	FuncValueConflicts []FuncValueConflictSite
+	// NameSeedOverrides are places a parameter named after THIS role's pool was
+	// NOT treated as a seed, because its call sites pass a different role's pool.
+	// Reported because it is a correction of a naming convention, and the reader
+	// should know the convention lied rather than assume the surface shrank.
+	NameSeedOverrides []NameSeedOverride
 	UnresolvedTx      []UnresolvedTxSite
 	rootModule        string
 }
@@ -135,6 +145,10 @@ var AllPoolRoles = []PoolRole{RoleDomain, RoleCoordinator}
 // tracing, devirtualization, LOCK-implies-write) applies to both roles because
 // there is only one implementation of each.
 type roleSeeds struct {
+	// role is which pool this set identifies. Carried on the set itself so a
+	// check that consults call-site evidence can ask "was I derived for this
+	// role" without a second parameter threaded to every caller.
+	role PoolRole
 	// fields are SelectorExpr .Sel names of *pgxpool.Pool type, e.g.
 	// `pools.Domain`, `storage.domainPool`, `pools.Coordinator`.
 	fields map[string]bool
@@ -155,11 +169,13 @@ type roleSeeds struct {
 // and make its surface look trivially satisfied.
 var poolRoleSeeds = map[PoolRole]roleSeeds{
 	RoleDomain: {
+		role:    RoleDomain,
 		fields:  map[string]bool{"Domain": true, "domainPool": true},
 		getters: map[string]bool{"DomainPool": true},
 		idents:  map[string]bool{"domainPool": true},
 	},
 	RoleCoordinator: {
+		role:    RoleCoordinator,
 		fields:  map[string]bool{"Coordinator": true, "coordinatorPool": true},
 		getters: map[string]bool{"CoordinatorPool": true},
 		idents:  map[string]bool{"coordinatorPool": true},
@@ -324,6 +340,18 @@ type analyzer struct {
 	funcValueTargets  map[funcValueKey]funcValueTarget
 	funcValueScopes   []funcValueScope
 	funcValueResolved []FuncValueResolvedCallSite
+	// funcValueConflicts records fields deliberately left unresolved, with the
+	// reason; funcValueConflictSites records the tainted CALL SITES that hit one.
+	// Both exist so an exclusion is reported rather than silent -- see
+	// buildFuncValueTargets.
+	funcValueConflicts     map[funcValueKey]string
+	funcValueConflictSites []FuncValueConflictSite
+
+	// poolParamRoles is role-agnostic call-site evidence for pool-typed
+	// parameters; nameSeedOverrides records where it overruled a name-based seed.
+	// See buildPoolParamRoles.
+	poolParamRoles    map[*types.Func]map[int]map[PoolRole]bool
+	nameSeedOverrides []NameSeedOverride
 
 	// txOriginParam[fn][paramIndex] holds the origin ID (a "file:line"
 	// string naming the specific `.Begin(ctx)` call site) of a pgx.Tx-typed
@@ -393,6 +421,39 @@ func Derive(moduleDir string) (*DerivedSurface, error) {
 // field), so labelling it would mean rewriting the fixed point rather than
 // parameterizing it; and separate runs make the two surfaces independently
 // auditable, which is what the bidirectional attribution check compares.
+//
+// # DECISION: reachability is STATIC WIRING, not runtime activation
+//
+// This walks every function that is wired, including code behind a checked-in
+// activation flag that is currently false -- cmd/dev-health-scheduler's
+// `activation.goOwnsMarkers` gate (main.go:126) returns before opening any
+// PostgreSQL client, yet this analyzer still derives the scheduler's coordinator
+// tables and the gate still demands them. That is DELIBERATE, and it is a
+// tradeoff rather than an oversight, so it is recorded here at the seam.
+//
+// Why static wiring wins:
+//
+//   - Grants that are ready BEFORE activation are the entire point. This epic
+//     exists because flipping a flag produced 42501s (CHAOS-3099/3100/3101). If
+//     derivation followed runtime reachability, the gate would read "green,
+//     nothing needed" right up until someone flips the flag and then produce a
+//     pile of CRITICALs at the worst possible moment. Deriving dormant surface is
+//     what lets a flip be a no-op.
+//   - Coverage must not depend on configuration. Otherwise the gate's STRENGTH
+//     varies with a boolean somewhere, a flag flip silently becomes a change to
+//     what CI verifies, and "the gate is green" stops having a fixed meaning.
+//     That is a worse trap than the one it would avoid.
+//   - The error direction is survivable. Deriving dormant code can only ask for
+//     privileges that code will need once activated, so the failure mode is an
+//     OVER-grant. An over-grant is a visible, reviewable row in a posture file;
+//     an under-grant is an outage found in production.
+//
+// The residual risk, stated rather than hidden: a seam that is wired but never
+// activated accretes grants permanently, and nothing here can distinguish "not
+// yet activated" from "abandoned". The mitigation is review pressure -- such rows
+// show up in the misattribution and no-derived-evidence advisories -- not a change
+// to the reachability model. If a seam is truly dead, delete the wiring; that is
+// the signal this analyzer reads.
 func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
 	seeds, ok := poolRoleSeeds[role]
 	if !ok {
@@ -502,6 +563,7 @@ func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
 			"go/packages load likely failed silently", moduleDir)
 	}
 	a.buildImplementers(pkgs)
+	a.buildPoolParamRoles()
 	a.buildFuncValueTargets()
 	a.buildSQLParamConstants()
 	a.buildTxOrigins()
@@ -521,6 +583,8 @@ func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
 		a.seedSeen = map[string]bool{}
 		a.unresolvedTx = nil
 		a.funcValueResolved = nil
+		a.funcValueConflictSites = nil
+		a.nameSeedOverrides = nil
 		for fn, ctx := range a.funcDecls {
 			a.walkFunc(fn, ctx)
 		}
@@ -547,15 +611,17 @@ func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
 	}
 
 	return &DerivedSurface{
-		Role:              role,
-		Tables:            a.tables,
-		Dynamic:           a.dynamic,
-		Unresolved:        a.unresolved,
-		SeedSites:         a.seedSites,
-		Devirtualized:     a.devirt,
-		FuncValueResolved: a.funcValueResolved,
-		UnresolvedTx:      dedupUnresolvedTx(a.unresolvedTx),
-		rootModule:        moduleDir,
+		Role:               role,
+		Tables:             a.tables,
+		Dynamic:            a.dynamic,
+		Unresolved:         a.unresolved,
+		SeedSites:          a.seedSites,
+		Devirtualized:      a.devirt,
+		FuncValueResolved:  a.funcValueResolved,
+		FuncValueConflicts: a.funcValueConflictSites,
+		NameSeedOverrides:  a.nameSeedOverrides,
+		UnresolvedTx:       dedupUnresolvedTx(a.unresolvedTx),
+		rootModule:         moduleDir,
 	}, nil
 }
 
@@ -1186,18 +1252,20 @@ func (a *analyzer) recordSeed(expr ast.Expr) {
 }
 
 func (a *analyzer) walkFunc(fn *types.Func, ctx funcCtx) {
-	a.walkBody(ctx, a.taintedParam[fn])
+	a.walkBody(ctx, a.taintedParam[fn], fn)
 }
 
 // walkFuncLit walks a package-level function literal's body with the taint
 // facts recorded for ITS parameters. See analyzer.funcLits.
 func (a *analyzer) walkFuncLit(lit *ast.FuncLit, ctx funcCtx) {
-	a.walkBody(ctx, a.taintedLitParam[lit])
+	// A literal has no *types.Func, so it has no call-site parameter evidence to
+	// consult; nil disables the name-override check for its body.
+	a.walkBody(ctx, a.taintedLitParam[lit], nil)
 }
 
 // walkBody is the shared walk for both forms. tainted is the caller's
 // already-known per-parameter-index taint for this body.
-func (a *analyzer) walkBody(ctx funcCtx, tainted map[int]bool) {
+func (a *analyzer) walkBody(ctx funcCtx, tainted map[int]bool, fn *types.Func) {
 	sig := ctx.funcType()
 	body := ctx.body()
 	if sig == nil || body == nil {
@@ -1247,6 +1315,14 @@ func (a *analyzer) walkBody(ctx funcCtx, tainted map[int]bool) {
 
 	isTainted := func(expr ast.Expr) bool {
 		if a.isSeedExpr(expr, ctx.info) {
+			// Call-site evidence OUTRANKS the parameter's name. A parameter spelled
+			// like this role's pool but only ever passed another role's pool is not
+			// a seed here -- treating it as one inverts attribution, which is worse
+			// than missing it. See buildPoolParamRoles.
+			if a.nameSeedContradicted(expr, ctx, fn) {
+				a.recordNameSeedOverride(expr, ctx, fn)
+				return a.exprTainted(expr, ctx.info, locals)
+			}
 			a.recordSeed(expr)
 			return true
 		}
@@ -1576,13 +1652,19 @@ func (a *analyzer) recordSQLText(sqlText string, pos token.Position, txGroup str
 			})
 		}
 	}
-	for table := range stmt.RequiresAnyWriteLock {
+	for table, requirement := range stmt.LockRequirements {
 		surface := a.tables[table]
 		if surface == nil {
 			surface = &TableSurface{Table: table}
 			a.tables[table] = surface
 		}
-		surface.RequiresAnyWriteLock = true
+		// Keep the STRICTEST demand across every LOCK site on this table: two
+		// call sites may lock the same table in different modes, and the weaker
+		// one must never mask the stronger one's requirement.
+		if surface.LockRequirement == nil || requirement.rank > surface.LockRequirement.rank {
+			held := requirement
+			surface.LockRequirement = &held
+		}
 		surface.WriteLockEvidence = append(surface.WriteLockEvidence, Evidence{
 			File: a.relFile(pos), Line: pos.Line, Statement: normalized,
 		})

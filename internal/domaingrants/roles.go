@@ -128,6 +128,105 @@ func PartitionKnownOpen(criticals []Finding) (blocking []Finding, accepted []Fin
 	return blocking, accepted, stale, unticketed
 }
 
+// AcknowledgedBlindSpot is one posture-declared (role, table, privilege) that
+// this derivation cannot see, reviewed and accepted with a reason.
+//
+// It is the mechanism that makes enumerated incompleteness a GATE rather than a
+// printout. Before it, the gate reported dozens of stopped wiring hops and
+// several evidence-free posture rows and still passed -- exactly the "silence
+// reads as confirmation" failure the enumeration exists to prevent, since a
+// printout nobody must act on is indistinguishable from having checked.
+//
+// Same three properties as knownOpenCriticals, for the same reason: exact tuple
+// match, a mandatory reason, and a STALE entry fails the gate so the list cannot
+// outlive the blind spot. An unacknowledged evidence-free posture row fails.
+type AcknowledgedBlindSpot struct {
+	Role      PoolRole
+	Table     string
+	Privilege Privilege
+	Why       string
+}
+
+// acknowledgedBlindSpots is the reviewed set. Every entry is a posture row whose
+// justification lives OUTSIDE this tool's reach; each says where.
+var acknowledgedBlindSpots = []AcknowledgedBlindSpot{
+	{
+		Role: RoleDomain, Table: "integration_credentials", Privilege: PrivSelect,
+		Why: "providerfoundation/repository_postgres.go:36 builds its query by runtime string " +
+			"concatenation, so the SQL text is not a compile-time constant and no table can be " +
+			"extracted. The grant is correct -- verified by hand in grant-surface-derivation.md -- " +
+			"and it is the one dynamic-SQL site in the domain surface.",
+	},
+	{
+		Role: RoleCoordinator, Table: "organizations", Privilege: PrivSelect,
+		Why: "the coordinator side is scheduler/fixed/organizations.go's PostgresOrganizationLister, " +
+			"which holds no pool: it receives a pgx.Tx PARAMETER through an OrganizationLister " +
+			"interface, so taint does not reach it from a pool root. The role-partition manifest " +
+			"records organizations as a verified dual-grant.",
+	},
+	{
+		Role: RoleCoordinator, Table: "work_graph_execution_requests", Privilege: PrivSelect,
+		Why: "added to coordinatorPosture by CHAOS-3114 for the fixed engine's work-graph producer. " +
+			"The SQL lives in internal/jobs/workgraph, reached through a producer interface the " +
+			"unique-implementer heuristic cannot resolve (see the Producer.Produce wiring hop).",
+	},
+	{
+		Role: RoleCoordinator, Table: "work_graph_execution_requests", Privilege: PrivInsert,
+		Why: "same producer path as the SELECT above; workgraph/publisher.go:37 does the INSERT.",
+	},
+}
+
+func (a AcknowledgedBlindSpot) matches(role PoolRole, gap PostureGapWithoutEvidence) bool {
+	return a.Role == role && a.Table == gap.Table && a.Privilege == gap.Privilege && !gap.ColumnScoped
+}
+
+// PartitionBlindSpots splits every role's evidence-free posture rows into the
+// acknowledged and the unacknowledged, and reports acknowledgements that no
+// longer correspond to a real gap.
+//
+// Unacknowledged rows FAIL the gate: each is a posture privilege nothing in the
+// analysis justifies, and leaving it unreported is how a wrong row survives.
+// Stale acknowledgements fail too -- the evidence arrived (or the row was
+// removed), so the entry is now suppressing nothing and must go.
+func PartitionBlindSpots(incomplete []IncompleteRoleSurface) (unacknowledged []string, stale []AcknowledgedBlindSpot, unreasoned []AcknowledgedBlindSpot) {
+	seen := make([]bool, len(acknowledgedBlindSpots))
+	for _, surface := range incomplete {
+		for _, gap := range surface.UndeclaredByEvidence {
+			matched := false
+			for i, ack := range acknowledgedBlindSpots {
+				if ack.matches(surface.Role, gap) {
+					seen[i] = true
+					matched = true
+					break
+				}
+			}
+			if matched {
+				continue
+			}
+			// A pair another role DOES have evidence for is already reported as a
+			// misattribution ADVISORY with its own explanation; requiring a second
+			// acknowledgement for it would be duplicate bookkeeping. The dangerous
+			// case -- nobody has evidence -- is what must be acknowledged or fail.
+			if len(gap.OtherRolesWithEvidence) > 0 || gap.ColumnScoped ||
+				gap.ImpliedSelect || gap.JustifiedByLock != "" {
+				continue
+			}
+			unacknowledged = append(unacknowledged,
+				fmt.Sprintf("%s: %s", surface.Role, gap.String()))
+		}
+	}
+	for i, ack := range acknowledgedBlindSpots {
+		if strings.TrimSpace(ack.Why) == "" {
+			unreasoned = append(unreasoned, ack)
+		}
+		if !seen[i] {
+			stale = append(stale, ack)
+		}
+	}
+	sort.Strings(unacknowledged)
+	return unacknowledged, stale, unreasoned
+}
+
 // RoleInput is one role's derived surface paired with the posture it is
 // checked against.
 type RoleInput struct {
@@ -151,11 +250,64 @@ type IncompleteRoleSurface struct {
 	// DynamicSQL are SQL-shaped calls whose statement text is not a
 	// compile-time constant, so no table could be extracted.
 	DynamicSQL []DynamicSite
-	// UndeclaredByEvidence are tables this role's posture declares that the
-	// derivation found NO call site for. Each is either a legitimate
-	// over-declaration or a path inside a blind spot -- this tool cannot tell
-	// which, and says so rather than guessing.
-	UndeclaredByEvidence []string
+	// FuncValueConflicts are tainted calls through a function-typed field the
+	// resolver deliberately refused (two implementations, or an unresolvable
+	// value). These FAIL the gate: pool-tainted arguments cross them and nothing
+	// beyond was analyzed, so they are unanalyzed surface, not a known limit.
+	FuncValueConflicts []FuncValueConflictSite
+	// UndeclaredByEvidence are the (table, privilege) PAIRS this role's posture
+	// declares that this role's derivation found no call site for. Each is either
+	// a legitimate over-declaration or a path inside a blind spot -- this tool
+	// cannot tell which, and says so rather than guessing.
+	//
+	// Pair granularity is load-bearing, not tidiness. A table-level list hides
+	// the case that matters most: if SELECT stays visible while the UPDATE path
+	// becomes unreachable, the table is nonempty, so a table-level list omits it
+	// entirely and the (table, UPDATE) gap disappears from every output.
+	UndeclaredByEvidence []PostureGapWithoutEvidence
+}
+
+// PostureGapWithoutEvidence is one posture-declared privilege with no derived
+// call site for its own role.
+type PostureGapWithoutEvidence struct {
+	Table     string
+	Privilege Privilege
+	// ColumnScoped marks a column-scoped declaration rather than a table row.
+	ColumnScoped bool
+	// ImpliedSelect marks a SELECT that loadPosture synthesized onto a posture row
+	// rather than the posture declaring it, on a table that HAS other derived
+	// evidence. An artifact of the representation, not a blind spot.
+	ImpliedSelect bool
+	// JustifiedByLock names the LOCK mode that already demands this privilege, if
+	// any. A lock's demand is a disjunction, so the per-privilege loop cannot
+	// record it as evidence even though the lock fully justifies the row.
+	JustifiedByLock string
+	// OtherRolesWithEvidence names roles that DO have a proven call site for this
+	// pair. Non-empty means "possible misattribution" (the privilege may belong
+	// to that role instead). EMPTY is the more dangerous case and the one that
+	// used to vanish: nothing anywhere justifies the row, so either it is an
+	// over-declaration or it sits inside a blind spot -- and either way no other
+	// output mentions it.
+	OtherRolesWithEvidence []string
+}
+
+func (g PostureGapWithoutEvidence) String() string {
+	suffix := ""
+	if g.ColumnScoped {
+		suffix = " (column-scoped)"
+	}
+	if g.ImpliedSelect {
+		suffix += " (SELECT implied by the posture model; table has other evidence)"
+	}
+	if g.JustifiedByLock != "" {
+		suffix += " (justified by LOCK IN " + g.JustifiedByLock + " MODE)"
+	}
+	if len(g.OtherRolesWithEvidence) > 0 {
+		suffix += " [evidence exists for: " + strings.Join(g.OtherRolesWithEvidence, "+") + "]"
+	} else {
+		suffix += " [NO role has evidence]"
+	}
+	return g.Table + " " + g.Privilege.String() + suffix
 }
 
 // RoleReport is the multi-role comparison result.
@@ -216,6 +368,87 @@ func evidenceSites(surface *TableSurface, p Privilege) map[string]bool {
 	return out
 }
 
+// lockEvidenceSites returns the distinct "file:line" LOCK TABLE sites for a
+// surface, so two roles' lock evidence can be compared for exclusivity exactly
+// the way per-privilege evidence is.
+func lockEvidenceSites(surface *TableSurface) map[string]bool {
+	out := map[string]bool{}
+	if surface == nil {
+		return out
+	}
+	for _, e := range surface.WriteLockEvidence {
+		out[fmt.Sprintf("%s:%d", e.File, e.Line)] = true
+	}
+	return out
+}
+
+// rolesWithEvidence names the roles OTHER than exclude that have a proven call
+// site for (table, p), sorted.
+func rolesWithEvidence(byRole map[PoolRole]RoleInput, exclude PoolRole, table string, p Privilege) []string {
+	var out []string
+	for role, other := range byRole {
+		if role == exclude {
+			continue
+		}
+		if surface := other.Derived.Tables[table]; surface != nil && surface.Privileges.Has(p) {
+			out = append(out, string(role))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// txGroupSites returns the distinct "file:line" sites contributing evidence to
+// one transaction group in a role's surface, so two roles' claim on the same
+// group can be compared for exclusivity.
+func txGroupSites(derived *DerivedSurface, group string) map[string]bool {
+	out := map[string]bool{}
+	if derived == nil {
+		return out
+	}
+	for _, surface := range derived.Tables {
+		for _, e := range surface.Evidence {
+			if e.TxGroup == group {
+				out[fmt.Sprintf("%s:%d", e.File, e.Line)] = true
+			}
+		}
+	}
+	return out
+}
+
+// exclusiveTo returns the sorted subset of mine that appears in NONE of the
+// other roles' site sets. Shared by the per-privilege and LOCK paths so both get
+// the same shared-evidence downgrade -- a second copy would let one path drift
+// into emitting blocking findings the other correctly downgrades.
+func exclusiveTo(mine map[string]bool, others []map[string]bool) []string {
+	var exclusive []string
+	for site := range mine {
+		shared := false
+		for _, otherSites := range others {
+			if otherSites[site] {
+				shared = true
+				break
+			}
+		}
+		if !shared {
+			exclusive = append(exclusive, site)
+		}
+	}
+	sort.Strings(exclusive)
+	return exclusive
+}
+
+// privilegeSetNames renders a disjunction of privileges for a message.
+func privilegeSetNames(set PrivilegeSet) string {
+	var names []string
+	for p := Privilege(0); p < numPrivileges; p++ {
+		if set.Has(p) {
+			names = append(names, p.String())
+		}
+	}
+	return strings.Join(names, "/")
+}
+
 // CompareRoles cross-checks every role's derived surface against its own
 // posture, and cross-checks the roles against each other. See this file's
 // header for exactly which of those comparisons are proofs and which are
@@ -261,7 +494,7 @@ func CompareRoles(inputs []RoleInput) (*RoleReport, error) {
 			len(in.Derived.Devirtualized), len(in.Derived.FuncValueResolved),
 		))
 		report.Findings = append(report.Findings, compareOneRole(in, byRole, rolesForPair)...)
-		report.Incomplete = append(report.Incomplete, incompleteFor(in))
+		report.Incomplete = append(report.Incomplete, incompleteFor(in, byRole))
 	}
 
 	report.Findings = append(report.Findings, transactionStraddleFindings(inputs, byRole)...)
@@ -334,23 +567,14 @@ func compareOneRole(
 			// by more than one pool, and per-role attribution is beyond this
 			// tool's (type, field) granularity -- advisory, because a hand
 			// derivation is strictly more precise there. See the file header.
-			mine := evidenceSites(surface, p)
-			exclusive := map[string]bool{}
-			for site := range mine {
-				shared := false
-				for role, other := range byRole {
-					if role == in.Role {
-						continue
-					}
-					if evidenceSites(other.Derived.Tables[table], p)[site] {
-						shared = true
-						break
-					}
+			others := make([]map[string]bool, 0, len(byRole))
+			for role, other := range byRole {
+				if role == in.Role {
+					continue
 				}
-				if !shared {
-					exclusive[site] = true
-				}
+				others = append(others, evidenceSites(other.Derived.Tables[table], p))
 			}
+			exclusive := exclusiveTo(evidenceSites(surface, p), others)
 			if len(exclusive) == 0 && len(rolesForPair[key]) > 1 {
 				findings = append(findings, Finding{
 					Severity: Advisory, Table: table, Privilege: p, Role: in.Role,
@@ -361,33 +585,62 @@ func compareOneRole(
 				})
 				continue
 			}
-			sites := make([]string, 0, len(exclusive))
-			for site := range exclusive {
-				sites = append(sites, site)
-			}
-			sort.Strings(sites)
 			findings = append(findings, Finding{
 				Severity: Critical, Table: table, Privilege: p, Role: in.Role,
 				Summary: fmt.Sprintf(
 					"role %s, table %q needs %s, proven by %d call site(s) reachable ONLY through the %s pool (%s), but this role's posture does not authorize it -- a 42501 the moment that path runs",
-					in.Role, table, p, len(exclusive), in.Role, strings.Join(firstN(sites, 3), ", ")),
+					in.Role, table, p, len(exclusive), in.Role, strings.Join(firstN(exclusive, 3), ", ")),
 				Evidence: evidenceFor(surface, p),
 			})
 		}
 
-		if surface.RequiresAnyWriteLock && !columnScoped {
-			// Postgres wants at least ONE of INSERT/UPDATE/DELETE for a LOCK
-			// TABLE mode stricter than ROW EXCLUSIVE -- any one, not a specific
-			// one. Deliberately a different shape from the FOR UPDATE / FOR
-			// SHARE row-lock clauses, which require UPDATE specifically and are
-			// modelled as an ordinary UPDATE requirement above. Both forms are
-			// modelled; do not collapse them.
-			if !required.Has(PrivInsert) && !required.Has(PrivUpdate) && !required.Has(PrivDelete) {
+		// LOCK TABLE. Postgres's demand is a DISJUNCTION over a mode-specific set
+		// (see LockRequirement in sql.go for the measured mapping), so this cannot
+		// be folded into the per-privilege loop above -- and it is a different
+		// shape again from the FOR UPDATE / FOR SHARE row-lock clauses, which
+		// require UPDATE specifically and ARE handled above as ordinary UPDATE
+		// requirements. Three distinct rules; do not collapse them.
+		if surface.LockRequirement != nil && !columnScoped {
+			requirement := *surface.LockRequirement
+			if !lockSatisfiedBy(requirement, required) {
+				// Route through the SAME shared-evidence downgrade the
+				// per-privilege path uses. Without this the lock path could emit a
+				// blocking "grant the coordinator too" for a table whose locking
+				// method only the other role actually invokes -- exactly the
+				// over-widening the downgrade exists to prevent, and the lock path
+				// has no more attribution precision than any other.
+				var otherLockSites []map[string]bool
+				othersLock := false
+				for role, other := range byRole {
+					if role == in.Role {
+						continue
+					}
+					sites := lockEvidenceSites(other.Derived.Tables[table])
+					if len(sites) > 0 {
+						othersLock = true
+					}
+					otherLockSites = append(otherLockSites, sites)
+				}
+				exclusive := exclusiveTo(lockEvidenceSites(surface), otherLockSites)
+
+				severity := Critical
+				attribution := fmt.Sprintf("proven at %d LOCK site(s) reachable ONLY through the %s pool (%s)",
+					len(exclusive), in.Role, strings.Join(firstN(exclusive, 3), ", "))
+				remedy := "a 42501 the moment that path runs"
+				if len(exclusive) == 0 && othersLock {
+					severity = Advisory
+					attribution = "but every LOCK site is SHARED with another role's derivation, so the locking method is reached through a type constructed from more than one pool"
+					remedy = fmt.Sprintf("this tool's (type, field) taint granularity cannot attribute it per role -- DO NOT widen %s's posture on this finding alone", in.Role)
+				}
+				unknown := ""
+				if requirement.Unknown {
+					unknown = " (mode UNRECOGNIZED by this analyzer, so it is assumed to be the strictest tier -- verify it by hand)"
+				}
 				findings = append(findings, Finding{
-					Severity: Critical, Table: table, Role: in.Role,
+					Severity: severity, Table: table, Role: in.Role,
 					Summary: fmt.Sprintf(
-						"role %s, table %q: LOCK TABLE in an exclusive-ish mode requires at least one of INSERT/UPDATE/DELETE, but this role's posture grants none of them",
-						in.Role, table),
+						"role %s, table %q: LOCK TABLE IN %s MODE requires at least one of %s%s, and this role's posture grants none of them; %s -- %s",
+						in.Role, table, requirement.Mode, privilegeSetNames(requirement.Satisfying), unknown, attribution, remedy),
 					Evidence: surface.WriteLockEvidence,
 				})
 			}
@@ -417,6 +670,10 @@ func compareOneRole(
 				}
 			}
 			if len(others) == 0 {
+				// Nobody has evidence for this pair. NOT discarded: it is carried
+				// by IncompleteRoleSurface.UndeclaredByEvidence with
+				// OtherRolesWithEvidence empty, which is the louder of the two
+				// cases and used to vanish from every output.
 				continue
 			}
 			sort.Strings(others)
@@ -493,16 +750,66 @@ func transactionStraddleFindings(inputs []RoleInput, byRole map[PoolRole]RoleInp
 			if len(elsewhere) == 0 {
 				continue
 			}
-			precision := "COARSE same-function-body grouping, so co-residency in one transaction is likely but not proven"
-			if strings.HasPrefix(group, "txorigin:") {
-				precision = "traced to a single unambiguous Begin() call site, so these statements PROVABLY share one transaction"
+
+			// A straddle is only BLOCKING when both of its premises are proven:
+			// that the statements really share one transaction, and that this
+			// transaction really runs on THIS role's pool.
+			//
+			//  - co-residency: a "txorigin:" group was traced to one unambiguous
+			//    Begin(); anything else is the coarse same-function-body fallback,
+			//    which this package's own doc comment calls unproven.
+			//  - attribution: the group's evidence must include at least one site
+			//    the other role does not also have. Otherwise the group is reached
+			//    through a type constructed from more than one pool, and the
+			//    (type, field) taint granularity cannot say whose transaction it
+			//    is -- the same limit the per-privilege and LOCK paths downgrade for.
+			//
+			// Emitting CRITICAL without both would tell maintainers to dual-grant on
+			// the strength of a guess, which is precisely the over-widening this
+			// checker refuses to do by hand.
+			traced := strings.HasPrefix(group, "txorigin:")
+			groupSites := txGroupSites(in.Derived, group)
+			var otherGroupSites []map[string]bool
+			othersHaveGroup := false
+			for role, other := range byRole {
+				if role == in.Role {
+					continue
+				}
+				sites := txGroupSites(other.Derived, group)
+				if len(sites) > 0 {
+					othersHaveGroup = true
+				}
+				otherGroupSites = append(otherGroupSites, sites)
+			}
+			exclusive := exclusiveTo(groupSites, otherGroupSites)
+			attributed := len(exclusive) > 0 || !othersHaveGroup
+
+			severity := Critical
+			var caveat string
+			switch {
+			case !traced && !attributed:
+				severity = Advisory
+				caveat = "DOWNGRADED: co-residency is only the COARSE same-function-body grouping (not proven), AND every evidence site is shared with another role so this tool cannot say whose pool runs it"
+			case !traced:
+				severity = Advisory
+				caveat = "DOWNGRADED: co-residency is only the COARSE same-function-body grouping, so these statements are not proven to share one transaction"
+			case !attributed:
+				severity = Advisory
+				caveat = fmt.Sprintf("DOWNGRADED: the transaction is traced to one Begin(), but every evidence site is SHARED with another role, so attributing it to %s is beyond this tool's (type, field) granularity", in.Role)
+			default:
+				caveat = "traced to a single unambiguous Begin() call site, so these statements PROVABLY share one transaction, and at least one evidence site is reachable only through this role's pool"
+			}
+			remedy := "A transaction cannot span two pools -- either grant these to " + string(in.Role) +
+				" too (dual-grant) or restructure the transaction. This surfaces as a 42501 at runtime, not as a routing error"
+			if severity == Advisory {
+				remedy = "Resolve from the construction site before changing any posture; do NOT dual-grant on this finding alone"
 			}
 			findings = append(findings, Finding{
-				Severity: Critical, Table: strings.Join(tables, ", "), Role: in.Role,
+				Severity: severity, Table: strings.Join(tables, ", "), Role: in.Role,
 				Summary: fmt.Sprintf(
-					"TRANSACTION STRADDLES THE ROLE PARTITION: transaction %s runs on the %s pool and touches %s, but %s not authorized for %s (%s). A transaction cannot span two pools -- either grant these to %s too (dual-grant) or restructure the transaction. This surfaces as a 42501 at runtime, not as a routing error",
+					"TRANSACTION STRADDLES THE ROLE PARTITION: transaction %s runs on the %s pool and touches %s, but %s not authorized for %s (%s). %s",
 					group, in.Role, strings.Join(tables, "+"),
-					strings.Join(elsewhere, "; "), in.Role, precision, in.Role),
+					strings.Join(elsewhere, "; "), in.Role, caveat, remedy),
 			})
 		}
 	}
@@ -525,7 +832,7 @@ func transactionStraddleFindings(inputs []RoleInput, byRole map[PoolRole]RoleInp
 // surface before funcvalue.go, so those are the ones worth a human's eyes.
 // Deduplicated by site, because the fixed point can reach one site by several
 // paths and a repeated line adds no information.
-func incompleteFor(in RoleInput) IncompleteRoleSurface {
+func incompleteFor(in RoleInput, byRole map[PoolRole]RoleInput) IncompleteRoleSurface {
 	out := IncompleteRoleSurface{Role: in.Role}
 	seen := map[string]bool{}
 	for _, u := range in.Derived.Unresolved {
@@ -536,7 +843,13 @@ func incompleteFor(in RoleInput) IncompleteRoleSurface {
 		// interface dispatch; everything else is a third-party sink, not a gap.
 		inModule := strings.HasPrefix(u.Callee, "github.com/full-chaos/dev-health-ops") ||
 			strings.HasPrefix(u.Callee, "(github.com/full-chaos/dev-health-ops")
-		if u.Callee != "" && !inModule {
+		// A BARE name (no package path, no receiver parens) is a call through a
+		// function-typed field or local -- in-module by construction, and the exact
+		// shape that hid the scheduler surface. An earlier version of this filter
+		// kept only empty or module-qualified callees, which dropped those records
+		// because their callee is just the field name.
+		bareName := u.Callee != "" && !strings.ContainsAny(u.Callee, ".(")
+		if u.Callee != "" && !inModule && !bareName {
 			continue
 		}
 		site := fmt.Sprintf("%s:%d", u.File, u.Line)
@@ -547,17 +860,66 @@ func incompleteFor(in RoleInput) IncompleteRoleSurface {
 		out.WiringHops = append(out.WiringHops, u)
 	}
 	out.DynamicSQL = in.Derived.Dynamic
-	for table := range in.Truth.RequiredTablePrivileges {
-		if surface := in.Derived.Tables[table]; surface == nil || surface.Privileges.Empty() {
-			out.UndeclaredByEvidence = append(out.UndeclaredByEvidence, table)
+	for _, conflict := range in.Derived.FuncValueConflicts {
+		// In-module only. Third-party function-typed fields (encoding/json's
+		// scanner.step, pgx's QueuedQuery.Fn) are refused for the same mechanical
+		// reason but say nothing about this repo's wiring, and gating on them would
+		// drown the signal this check exists for.
+		if strings.HasPrefix(conflict.File, "..") || strings.Contains(conflict.File, "/pkg/mod/") {
+			continue
+		}
+		out.FuncValueConflicts = append(out.FuncValueConflicts, conflict)
+	}
+
+	// PAIR-granular, and computed against THIS role's own derivation. A
+	// table-level check would miss the case that matters most: SELECT still
+	// visible while the UPDATE path became unreachable leaves the table nonempty,
+	// so the (table, UPDATE) gap would appear in no output at all.
+	for table, privs := range in.Truth.RequiredTablePrivileges {
+		for p := Privilege(0); p < numPrivileges; p++ {
+			if !privs.Has(p) {
+				continue
+			}
+			surface := in.Derived.Tables[table]
+			if surface != nil && surface.Privileges.Has(p) {
+				continue
+			}
+			gap := PostureGapWithoutEvidence{
+				Table: table, Privilege: p,
+				OtherRolesWithEvidence: rolesWithEvidence(byRole, in.Role, table, p),
+			}
+			// SELECT is SYNTHESIZED onto every posture row by loadPosture, not
+			// declared, so a table the code only writes will always lack derived
+			// SELECT evidence. That is the model implying a privilege, not a blind
+			// spot, and gating it would demand acknowledgements for an artifact of
+			// our own representation. A table with NO evidence at all still counts.
+			if p == PrivSelect && surface != nil && !surface.Privileges.Empty() {
+				gap.ImpliedSelect = true
+			}
+			// A privilege that SATISFIES a derived LOCK requirement is justified by
+			// that lock, even though the per-privilege loop cannot record it (the
+			// lock's demand is a disjunction). coordinator worker_job_outbox UPDATE
+			// is exactly this: it exists for jobroute's SHARE ROW EXCLUSIVE lock.
+			if surface != nil && surface.LockRequirement != nil &&
+				surface.LockRequirement.Satisfying.Has(p) {
+				gap.JustifiedByLock = surface.LockRequirement.Mode
+			}
+			out.UndeclaredByEvidence = append(out.UndeclaredByEvidence, gap)
 		}
 	}
 	for table := range in.Truth.ColumnScopedTables {
 		if surface := in.Derived.Tables[table]; surface == nil || surface.Privileges.Empty() {
-			out.UndeclaredByEvidence = append(out.UndeclaredByEvidence, table+" (column-scoped)")
+			out.UndeclaredByEvidence = append(out.UndeclaredByEvidence, PostureGapWithoutEvidence{
+				Table: table, ColumnScoped: true,
+			})
 		}
 	}
-	sort.Strings(out.UndeclaredByEvidence)
+	sort.Slice(out.UndeclaredByEvidence, func(i, j int) bool {
+		if out.UndeclaredByEvidence[i].Table != out.UndeclaredByEvidence[j].Table {
+			return out.UndeclaredByEvidence[i].Table < out.UndeclaredByEvidence[j].Table
+		}
+		return out.UndeclaredByEvidence[i].Privilege < out.UndeclaredByEvidence[j].Privilege
+	})
 	sort.SliceStable(out.WiringHops, func(i, j int) bool {
 		if out.WiringHops[i].File != out.WiringHops[j].File {
 			return out.WiringHops[i].File < out.WiringHops[j].File

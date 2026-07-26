@@ -72,8 +72,10 @@ func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
 	// never looks the same as a table it checked and approved.
 	for _, gap := range report.Incomplete {
 		t.Logf("INCOMPLETENESS for role %s -- the gate proves NOTHING about the following, and silence here is not confirmation:", gap.Role)
-		t.Logf("    posture tables with no derived call site (%d): %s",
-			len(gap.UndeclaredByEvidence), strings.Join(gap.UndeclaredByEvidence, ", "))
+		t.Logf("    posture (table, privilege) pairs with no derived call site (%d):", len(gap.UndeclaredByEvidence))
+		for _, pair := range gap.UndeclaredByEvidence {
+			t.Logf("        %s", pair.String())
+		}
 		t.Logf("    in-module wiring hops where taint stopped (%d, first 25 shown):", len(gap.WiringHops))
 		for _, hop := range firstNHops(gap.WiringHops, 25) {
 			callee := hop.Callee
@@ -85,6 +87,41 @@ func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
 		t.Logf("    non-constant SQL sites (%d):", len(gap.DynamicSQL))
 		for _, site := range gap.DynamicSQL {
 			t.Logf("        %s:%d %s", site.File, site.Line, site.Reason)
+		}
+	}
+
+	// Incompleteness must GATE, not merely print. A printout nobody is required to
+	// act on is indistinguishable from having checked.
+	//
+	// Deliberately NOT gated on the raw wiring-hop count: most hops are ordinary
+	// interface dispatch that reaches no SQL, so a count threshold would be noise
+	// that gets raised rather than investigated. What IS gated is the set with a
+	// real consequence -- a posture privilege nothing in the analysis justifies,
+	// and a tainted call through a field the resolver refused.
+	unacknowledged, staleAcks, unreasoned := PartitionBlindSpots(report.Incomplete)
+	for _, entry := range unacknowledged {
+		t.Errorf("UNACKNOWLEDGED BLIND SPOT: %s -- this role's posture authorizes a privilege that NO "+
+			"role has a derived call site for. Either it is an over-declaration (remove the row) or it "+
+			"sits inside a blind spot (add it to acknowledgedBlindSpots with the reason and where the "+
+			"justification lives). Leaving it unlisted is how a wrong posture row survives review", entry)
+	}
+	for _, entry := range staleAcks {
+		t.Errorf("STALE acknowledged blind spot: %s/%s %s no longer appears as an evidence-free posture "+
+			"row -- the evidence arrived or the row was removed, so this entry now suppresses nothing. "+
+			"DELETE it, or the gate stops failing if the blind spot returns",
+			entry.Role, entry.Table, entry.Privilege)
+	}
+	for _, entry := range unreasoned {
+		t.Errorf("acknowledged blind spot %s/%s %s has no reason recorded; every entry must say where the "+
+			"justification lives", entry.Role, entry.Table, entry.Privilege)
+	}
+	for _, surface := range report.Incomplete {
+		for _, conflict := range surface.FuncValueConflicts {
+			t.Errorf("UNRESOLVED FUNCTION-VALUE CALL (role %s): %s:%d %s -- %s. Pool-tainted arguments "+
+				"cross this call and NOTHING beyond it was analyzed. Fail-closed resolution is correct, "+
+				"but it must not be silent: give the field a single implementation, or narrow the type so "+
+				"the resolver can see it",
+				surface.Role, conflict.File, conflict.Line, conflict.Field, conflict.Reason)
 		}
 	}
 
@@ -289,6 +326,86 @@ func TestBarrierStopsTaintFromTheOtherRolesPool(t *testing.T) {
 	}
 }
 
+// TestCallSiteEvidenceOutranksParameterSpelling pins the fix for the attribution
+// INVERSION: a parameter spelled like one role's pool but only ever passed
+// another role's pool must NOT be seeded by its name.
+//
+// Why this is the worst failure mode in the package: it does not merely lose
+// surface, it MISDIRECTS it. `build(domainPool *pgxpool.Pool)` called only with
+// the coordinator pool would be seeded by the domain run from its spelling while
+// the coordinator run's barrier discards it, so downstream SQL looks
+// domain-EXCLUSIVE -- and role-exclusive evidence is exactly what this gate
+// escalates to CRITICAL. It would confidently tell a maintainer to grant the
+// privilege to the wrong role, and every "is it granted somewhere" check would
+// still pass.
+func TestCallSiteEvidenceOutranksParameterSpelling(t *testing.T) {
+	poolType := fakePoolType()
+
+	// `func build(domainPool *pgxpool.Pool)` -- one pool-typed parameter, spelled
+	// for the DOMAIN role.
+	param := ast.NewIdent("domainPool")
+	funcType := &ast.FuncType{Params: &ast.FieldList{List: []*ast.Field{{
+		Names: []*ast.Ident{param},
+		Type:  ast.NewIdent("ignored"),
+	}}}}
+	decl := &ast.FuncDecl{Name: ast.NewIdent("build"), Type: funcType, Body: &ast.BlockStmt{}}
+	use := ast.NewIdent("domainPool")
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{use: {Type: poolType}}}
+	ctx := funcCtx{decl: decl, info: info}
+	fn := types.NewFunc(token.NoPos, nil, "build", nil)
+
+	domainSeeds, domainBarrier := seedsFor(RoleDomain)
+
+	// Case 1: call sites pass ONLY the coordinator pool. The domain run must
+	// refuse the name-based seed.
+	contradicted := &analyzer{
+		seeds: domainSeeds, barrier: domainBarrier,
+		poolParamRoles: map[*types.Func]map[int]map[PoolRole]bool{
+			fn: {0: {RoleCoordinator: true}},
+		},
+	}
+	if !contradicted.nameSeedContradicted(use, ctx, fn) {
+		t.Error("a parameter named domainPool that is only ever passed the coordinator pool was still " +
+			"treated as a domain seed -- this is the attribution inversion, and it directs the grant " +
+			"to the wrong role")
+	}
+
+	// Case 2: call sites pass the domain pool too. The name agrees with the
+	// evidence, so it must still seed -- otherwise the fix would delete real
+	// surface rather than correcting a lie.
+	agreeing := &analyzer{
+		seeds: domainSeeds, barrier: domainBarrier,
+		poolParamRoles: map[*types.Func]map[int]map[PoolRole]bool{
+			fn: {0: {RoleDomain: true, RoleCoordinator: true}},
+		},
+	}
+	if agreeing.nameSeedContradicted(use, ctx, fn) {
+		t.Error("call sites DO pass the domain pool, so the domain seed must stand")
+	}
+
+	// Case 3: no resolvable call site. The convention is the only signal left and
+	// dropping it would lose real surface, so the name still applies.
+	noEvidence := &analyzer{
+		seeds: domainSeeds, barrier: domainBarrier,
+		poolParamRoles: map[*types.Func]map[int]map[PoolRole]bool{},
+	}
+	if noEvidence.nameSeedContradicted(use, ctx, fn) {
+		t.Error("with no call-site evidence the name must still seed; suppressing it would trade a " +
+			"false attribution for a false absence")
+	}
+
+	// Case 4: a LOCAL of the same name has no call sites to consult, so the
+	// override must not fire on it (paramIndex < 0).
+	localCtx := funcCtx{
+		decl: &ast.FuncDecl{Name: ast.NewIdent("other"),
+			Type: &ast.FuncType{Params: &ast.FieldList{}}, Body: &ast.BlockStmt{}},
+		info: info,
+	}
+	if contradicted.nameSeedContradicted(use, localCtx, fn) {
+		t.Error("a local variable is not a parameter and has no call sites; the override must not fire")
+	}
+}
+
 // TestFuncValueTargetsResolveTheKnownWiringHops pins the function-value
 // resolution to the specific hops it was built for. Without it the entire
 // scheduler and fixed-engine surface is invisible to the coordinator
@@ -361,75 +478,164 @@ func TestFuncValueTargetsResolveTheKnownWiringHops(t *testing.T) {
 	}
 }
 
-// TestLockTableRequiresAnyWritePrivilege pins the LOCK TABLE rule per role.
+// TestLockTableRequirementIsModeAware pins the LOCK TABLE rule per role, per
+// MODE, against the mapping measured on PostgreSQL 18.4 (see LockRequirement in
+// sql.go for the full table and the probe it came from).
 //
-// This test exists because mutation testing found the rule was NOT covered:
-// deleting the whole check left the repo-wide gate green, since every table this
-// repo LOCKs already holds a write privilege for some other reason. A rule that
-// cannot fail is not a rule, and this one has already shipped a production 42501
-// (CHAOS-3113: workerctl's route rollback runs LOCK worker_job_outbox IN SHARE
-// ROW EXCLUSIVE MODE while the domain role holds only SELECT+INSERT).
+// History worth keeping, because it is two different mistakes:
 //
-// Postgres wants at least ONE of INSERT/UPDATE/DELETE for a LOCK mode stricter
-// than ROW EXCLUSIVE -- any one, not a specific one. That is a DIFFERENT shape
-// from `SELECT ... FOR UPDATE`, which requires UPDATE specifically and is
-// modelled as an ordinary UPDATE requirement. Both halves are asserted so the
-// asymmetry cannot be "simplified" into a single rule later.
-func TestLockTableRequiresAnyWritePrivilege(t *testing.T) {
+//   - Mutation testing found the rule was UNCOVERED: deleting the whole check
+//     left the repo-wide gate green, since every table this repo LOCKs already
+//     holds a satisfying privilege for some other reason.
+//   - The first version of this test then pinned the rule as "any one of
+//     INSERT/UPDATE/DELETE, for every mode", asserting that INSERT alone
+//     SATISFIES a SHARE ROW EXCLUSIVE lock. Measurement says it does not. That
+//     assertion made a wrong rule authoritative, which is worse than the
+//     uncovered rule was -- and it is the CHAOS-3113 defect family exactly
+//     (workerctl's route rollback LOCKs worker_job_outbox IN SHARE ROW EXCLUSIVE
+//     MODE while the domain role holds only SELECT+INSERT).
+//
+// Three distinct rules live in this area and none may be collapsed into another:
+// ACCESS SHARE (SELECT suffices), ROW SHARE / ROW EXCLUSIVE (any of I/U/D), and
+// everything stricter (U/D only). `SELECT ... FOR UPDATE` is a fourth shape,
+// requiring UPDATE specifically, handled as an ordinary privilege elsewhere.
+func TestLockTableRequirementIsModeAware(t *testing.T) {
 	var selectOnly PrivilegeSet
 	selectOnly.add(PrivSelect)
 	var selectInsert PrivilegeSet
 	selectInsert.add(PrivSelect)
 	selectInsert.add(PrivInsert)
+	var selectUpdate PrivilegeSet
+	selectUpdate.add(PrivSelect)
+	selectUpdate.add(PrivUpdate)
+	var selectDelete PrivilegeSet
+	selectDelete.add(PrivSelect)
+	selectDelete.add(PrivDelete)
 
-	lockSurface := func(role PoolRole) *DerivedSurface {
+	lockSurface := func(role PoolRole, mode string) *DerivedSurface {
+		requirement, needsMore := lockRequirementForMode(mode)
 		s := &TableSurface{Table: "outbox"}
 		s.Privileges.add(PrivSelect)
 		s.Evidence = append(s.Evidence, Evidence{
 			File: "internal/jobroute/control.go", Line: 197, Privilege: PrivSelect,
-			Statement: "LOCK TABLE public.outbox IN SHARE ROW EXCLUSIVE MODE", TxGroup: "tx",
+			Statement: "LOCK TABLE public.outbox IN " + mode + " MODE", TxGroup: "tx",
 		})
-		s.RequiresAnyWriteLock = true
+		if needsMore {
+			held := requirement
+			s.LockRequirement = &held
+			s.WriteLockEvidence = append(s.WriteLockEvidence, Evidence{
+				File: "internal/jobroute/control.go", Line: 197,
+				Statement: "LOCK TABLE public.outbox IN " + mode + " MODE",
+			})
+		}
+		return &DerivedSurface{Role: role, Tables: map[string]*TableSurface{"outbox": s}}
+	}
+
+	// One row per (mode, posture) cell of the measured table.
+	cases := []struct {
+		mode        string
+		posture     PrivilegeSet
+		postureName string
+		wantFinding bool
+	}{
+		// ACCESS SHARE: SELECT is enough.
+		{"ACCESS SHARE", selectOnly, "SELECT", false},
+
+		// ROW SHARE and ROW EXCLUSIVE: SELECT alone is NOT enough (the docs say
+		// ROW SHARE needs only SELECT; measurement says otherwise), and INSERT IS.
+		{"ROW SHARE", selectOnly, "SELECT", true},
+		{"ROW SHARE", selectInsert, "SELECT+INSERT", false},
+		{"ROW EXCLUSIVE", selectOnly, "SELECT", true},
+		{"ROW EXCLUSIVE", selectInsert, "SELECT+INSERT", false},
+
+		// Stricter modes: INSERT does NOT satisfy them. This is the row the
+		// previous version of this test got backwards.
+		{"SHARE UPDATE EXCLUSIVE", selectInsert, "SELECT+INSERT", true},
+		{"SHARE", selectInsert, "SELECT+INSERT", true},
+		{"SHARE ROW EXCLUSIVE", selectInsert, "SELECT+INSERT", true},
+		{"EXCLUSIVE", selectInsert, "SELECT+INSERT", true},
+		{"ACCESS EXCLUSIVE", selectInsert, "SELECT+INSERT", true},
+
+		// UPDATE or DELETE satisfies the strictest mode.
+		{"SHARE ROW EXCLUSIVE", selectUpdate, "SELECT+UPDATE", false},
+		{"SHARE ROW EXCLUSIVE", selectDelete, "SELECT+DELETE", false},
+		{"ACCESS EXCLUSIVE", selectUpdate, "SELECT+UPDATE", false},
+
+		// An unrecognized mode must fail CLOSED, not open.
+		{"SOME FUTURE", selectInsert, "SELECT+INSERT", true},
+	}
+
+	for _, tc := range cases {
+		// Only the coordinator locks, so its LOCK evidence is role-exclusive and
+		// the shared-evidence downgrade does not apply.
+		report, err := CompareRoles([]RoleInput{
+			{Role: RoleDomain, Derived: &DerivedSurface{Role: RoleDomain, Tables: map[string]*TableSurface{}},
+				Truth: truthWith(map[string]PrivilegeSet{"unrelated": selectOnly})},
+			{Role: RoleCoordinator, Derived: lockSurface(RoleCoordinator, tc.mode),
+				Truth: truthWith(map[string]PrivilegeSet{"outbox": tc.posture})},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, f := range report.Findings {
+			if f.Severity == Critical && strings.Contains(f.Summary, "LOCK TABLE") {
+				found = true
+			}
+		}
+		if found != tc.wantFinding {
+			verb := "did not report"
+			if found {
+				verb = "reported"
+			}
+			t.Errorf("LOCK IN %s MODE with posture %s: %s a CRITICAL, want wantFinding=%v. "+
+				"The measured PostgreSQL 18.4 mapping is in LockRequirement's doc comment; if this "+
+				"disagrees, re-run the probe rather than adjusting the expectation",
+				tc.mode, tc.postureName, verb, tc.wantFinding)
+		}
+	}
+}
+
+// TestLockTableSharedEvidenceIsDowngraded is the H3 half for the lock path: the
+// shared-evidence downgrade must apply here too. A repository type constructed
+// from both pools has its locking method attributed to both, so a blocking
+// "grant the coordinator too" would be the same over-widening the per-privilege
+// path already refuses.
+func TestLockTableSharedEvidenceIsDowngraded(t *testing.T) {
+	var selectOnly PrivilegeSet
+	selectOnly.add(PrivSelect)
+
+	// The SAME file:line locks the table for BOTH roles.
+	shared := func(role PoolRole) *DerivedSurface {
+		requirement, _ := lockRequirementForMode("SHARE ROW EXCLUSIVE")
+		held := requirement
+		s := &TableSurface{Table: "outbox", LockRequirement: &held}
+		s.Privileges.add(PrivSelect)
 		s.WriteLockEvidence = append(s.WriteLockEvidence, Evidence{
-			File: "internal/jobroute/control.go", Line: 197,
+			File: "internal/shared/repo.go", Line: 42,
 			Statement: "LOCK TABLE public.outbox IN SHARE ROW EXCLUSIVE MODE",
 		})
 		return &DerivedSurface{Role: role, Tables: map[string]*TableSurface{"outbox": s}}
 	}
 
-	// SELECT-only posture: the LOCK is denied at runtime. Must be CRITICAL.
 	report, err := CompareRoles([]RoleInput{
-		{Role: RoleDomain, Derived: &DerivedSurface{Role: RoleDomain, Tables: map[string]*TableSurface{}},
-			Truth: truthWith(map[string]PrivilegeSet{"unrelated": selectOnly})},
-		{Role: RoleCoordinator, Derived: lockSurface(RoleCoordinator),
+		{Role: RoleDomain, Derived: shared(RoleDomain),
 			Truth: truthWith(map[string]PrivilegeSet{"outbox": selectOnly})},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(findingSummaries(report, Critical), "\n")
-	if !strings.Contains(joined, "LOCK TABLE") {
-		t.Fatalf("a LOCK TABLE against a SELECT-only posture was not reported CRITICAL -- that is the "+
-			"CHAOS-3113 defect shape exactly, and it must fail closed:\n%s", joined)
-	}
-
-	// SELECT+INSERT posture: any ONE write privilege satisfies Postgres, so there
-	// must be no finding. This half is what stops the rule degenerating into
-	// "report every table that is ever LOCKed".
-	report, err = CompareRoles([]RoleInput{
-		{Role: RoleDomain, Derived: &DerivedSurface{Role: RoleDomain, Tables: map[string]*TableSurface{}},
-			Truth: truthWith(map[string]PrivilegeSet{"unrelated": selectOnly})},
-		{Role: RoleCoordinator, Derived: lockSurface(RoleCoordinator),
-			Truth: truthWith(map[string]PrivilegeSet{"outbox": selectInsert})},
+		{Role: RoleCoordinator, Derived: shared(RoleCoordinator),
+			Truth: truthWith(map[string]PrivilegeSet{"outbox": selectOnly})},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range report.Findings {
 		if f.Severity == Critical && strings.Contains(f.Summary, "LOCK TABLE") {
-			t.Errorf("INSERT alone should satisfy the LOCK requirement (Postgres accepts any one of "+
-				"INSERT/UPDATE/DELETE), but it was still reported: %s", f.Summary)
+			t.Errorf("a LOCK whose every site is shared between roles was reported CRITICAL, which "+
+				"tells maintainers to widen both postures on evidence that cannot attribute either: %s", f.Summary)
 		}
+	}
+	joined := strings.Join(findingSummaries(report, Advisory), "\n")
+	if !strings.Contains(joined, "SHARED with another role") {
+		t.Errorf("expected the lock path to emit the shared-evidence ADVISORY, got:\n%s", joined)
 	}
 }
 
@@ -646,9 +852,13 @@ func TestIncompletenessNamesUndeclaredPostureTables(t *testing.T) {
 			Role: RoleCoordinator,
 			Derived: &DerivedSurface{Role: RoleCoordinator, Tables: map[string]*TableSurface{},
 				Unresolved: []UnresolvedCallSite{
-					// KEPT: an unnamed function value -- the shape that hid the
-					// whole scheduler surface before funcvalue.go.
-					{File: "cmd/x/dependencies.go", Line: 42, Callee: "", Reason: "function-typed field"},
+					// KEPT: a call through a function-typed field. The callee is the
+					// BARE FIELD NAME, which is what handleCall actually records for
+					// this shape (calleeDisplay = fn.Sel.Name) -- an earlier version
+					// of this test used Callee:"" instead, a state selector calls
+					// never produce, so it exercised a path the analyzer cannot
+					// reach and let the real one regress.
+					{File: "cmd/x/dependencies.go", Line: 42, Callee: "newRepository", Reason: "function-typed field"},
 					// KEPT: in-module interface dispatch with no unique implementer.
 					{File: "internal/x/y.go", Line: 7,
 						Callee: "(github.com/full-chaos/dev-health-ops/internal/x.Thing).Do",
@@ -663,7 +873,7 @@ func TestIncompletenessNamesUndeclaredPostureTables(t *testing.T) {
 					{File: "../../pkg/mod/pgx/conn.go", Line: 1, Callee: "", Reason: "third party"},
 					// DROPPED: duplicate of the first site; the fixed point can
 					// reach one site by several paths.
-					{File: "cmd/x/dependencies.go", Line: 42, Callee: "", Reason: "function-typed field"},
+					{File: "cmd/x/dependencies.go", Line: 42, Callee: "newRepository", Reason: "function-typed field"},
 				}},
 			Truth: truthWith(map[string]PrivilegeSet{"never_seen": selectOnly}),
 		},
@@ -680,18 +890,32 @@ func TestIncompletenessNamesUndeclaredPostureTables(t *testing.T) {
 	if coordinator == nil {
 		t.Fatal("no incompleteness record for the coordinator role")
 	}
-	if len(coordinator.UndeclaredByEvidence) != 1 || coordinator.UndeclaredByEvidence[0] != "never_seen" {
-		t.Errorf("posture table with no derived evidence not enumerated: %v", coordinator.UndeclaredByEvidence)
+	// Pair-granular, and the "nobody has evidence" case must be marked as such --
+	// that is the variant which used to vanish from every output.
+	if len(coordinator.UndeclaredByEvidence) != 1 {
+		t.Fatalf("posture pair with no derived evidence not enumerated: %v", coordinator.UndeclaredByEvidence)
+	}
+	gap := coordinator.UndeclaredByEvidence[0]
+	if gap.Table != "never_seen" || gap.Privilege != PrivSelect {
+		t.Errorf("gap = %+v, want never_seen SELECT", gap)
+	}
+	if len(gap.OtherRolesWithEvidence) != 0 {
+		t.Errorf("no role has evidence for never_seen, so OtherRolesWithEvidence must be empty: %+v", gap)
+	}
+	if !strings.Contains(gap.String(), "NO role has evidence") {
+		t.Errorf("the louder case must say so in its rendering: %q", gap.String())
 	}
 	// Exactly the two signal-bearing hops, deduplicated, with both third-party
 	// kinds filtered out.
 	if len(coordinator.WiringHops) != 2 {
-		t.Fatalf("expected 2 signal hops (unnamed function value + in-module interface dispatch), "+
+		t.Fatalf("expected 2 signal hops (function-typed field call + in-module interface dispatch), "+
 			"with third-party sinks, out-of-module files and the duplicate site filtered: %v",
 			coordinator.WiringHops)
 	}
-	if coordinator.WiringHops[0].File != "cmd/x/dependencies.go" || coordinator.WiringHops[0].Callee != "" {
-		t.Errorf("first hop should be the unnamed function value: %+v", coordinator.WiringHops[0])
+	if coordinator.WiringHops[0].File != "cmd/x/dependencies.go" ||
+		coordinator.WiringHops[0].Callee != "newRepository" {
+		t.Errorf("first hop should be the function-typed field call, kept because a BARE callee name "+
+			"cannot be a third-party method: %+v", coordinator.WiringHops[0])
 	}
 	if !strings.Contains(coordinator.WiringHops[1].Callee, "internal/x.Thing") {
 		t.Errorf("second hop should be the in-module interface dispatch: %+v", coordinator.WiringHops[1])

@@ -236,6 +236,34 @@ def _target_github_processor() -> None:
     used in a `store: GitSyncStore | Any` parameter annotation) must be
     real class OBJECTS, not instances, so Python's `X | Y` union-type
     syntax evaluates without error at `def` time.
+
+    CI incident (CHAOS-3162, after this pair's third review landed):
+    CONNECTORS_AVAILABLE was originally stubbed False, the same way
+    _target_base_git's own doc comment recommends ("keeps the branch from
+    firing, never needs connectors.utils stubbed too"). That is safe for
+    base_git.py, which has no annotation depending on a name from that
+    branch's `else:` fallback -- but github.py's own `else:` branch (fired
+    when CONNECTORS_AVAILABLE is False) sets `RateLimitGate = None` at
+    module scope, and two functions annotate a parameter as
+    `gate: RateLimitGate | None = None` -- `None | None` raises
+    `TypeError: unsupported operand type(s) for |`. This is a bug in
+    processors/github.py's own fallback shape, not something a stub can
+    route around by picking a *different* falsy value -- the only way to
+    avoid it is to take the OTHER branch (CONNECTORS_AVAILABLE = True) and
+    give every name pulled in by the `elif CONNECTORS_AVAILABLE:` import
+    block (below) a real placeholder class instead of the one that
+    actually crashes.
+
+    Why this shipped green locally and only failed in CI: Python 3.14
+    (this loader's own local interpreter) defaults to PEP 649 deferred
+    annotation evaluation -- `gate: RateLimitGate | None` is not actually
+    evaluated at `def` time on 3.14, only the FIRST time something reads
+    `__annotations__` (mypy, `typing.get_type_hints`, or an older,
+    pre-3.14 Python, which is what CI's isolated job runs and evaluates
+    eagerly). `load_live_module` now forces that evaluation immediately
+    after every load (see _force_annotation_evaluation below), specifically
+    so this class of stub-shape bug fails on the very next line locally,
+    on ANY Python version, instead of shipping through a 3.14 blind spot.
     """
     _install_module(
         "dev_health_ops.analytics.complexity",
@@ -308,15 +336,38 @@ def _target_github_processor() -> None:
         "dev_health_ops.providers.usage",
         {"drain_provider_usage": _unsupported_dependency},
     )
+    # CONNECTORS_AVAILABLE = True (not the _target_base_git precedent of
+    # False -- see the module-load CI incident above): this takes
+    # github.py's `elif CONNECTORS_AVAILABLE:` branch instead of its
+    # `else:` fallback, which is what actually needs every name below to
+    # be a real class, not a sentinel.
     _install_module(
         "dev_health_ops.utils",
         {
             "AGGREGATE_STATS_MARKER": "__AGGREGATE__",
             "BATCH_SIZE": 1000,
-            "CONNECTORS_AVAILABLE": False,
+            "CONNECTORS_AVAILABLE": True,
             "is_skippable": _unsupported_dependency,
         },
     )
+    _install_module(
+        "dev_health_ops.connectors",
+        {
+            "BatchResult": object,
+            "ConnectorException": Exception,
+            "GitHubConnector": object,
+        },
+    )
+    _install_module("dev_health_ops.connectors.models", {"Repository": object})
+    _install_module(
+        "dev_health_ops.connectors.utils",
+        {"RateLimitConfig": object, "RateLimitGate": object},
+    )
+    # The third-party PyGithub package (`import github`), not
+    # dev_health_ops -- also only imported inside the
+    # `elif CONNECTORS_AVAILABLE:` branch, and also only needs to be
+    # importable, not functional, for this pair's execution path.
+    _install_module("github", {"RateLimitExceededException": Exception})
 
 
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
@@ -432,6 +483,69 @@ def _load_safe_source(name: str) -> ModuleType:
     return _load_source_module(name, source)
 
 
+def _force_annotation_evaluation(module_name: str, module: ModuleType) -> None:
+    """Force every function/class annotation in a freshly-loaded module to
+    evaluate NOW, deterministically, on whichever Python is running this
+    loader -- rather than lazily, maybe never, depending on interpreter
+    version.
+
+    CHAOS-3162 CI incident (the reason this exists): a stub for
+    processors/github.py supplied `None` for a name used in a
+    `gate: RateLimitGate | None = None` parameter annotation.
+    `None | None` raises `TypeError`. Python 3.14 defaults to PEP 649
+    deferred annotation evaluation -- the broken annotation is not actually
+    evaluated at `def` time, only the first time something reads
+    `__annotations__` -- so `load_live_module` returned successfully on a
+    local 3.14 interpreter, and every test built on top of it passed. CI's
+    isolated `go-storage-integration` job ran an OLDER Python (pre-3.14,
+    eager annotation evaluation by default) and failed immediately on
+    import, on a code path no local run had ever exercised. A stub whose
+    SHAPE is wrong for an annotation (a bare sentinel standing in for a
+    type) is exactly the same class of defect as a stub whose shape is
+    wrong for a value CHAOS-3162 spent two review rounds closing -- the fix
+    here is the same discipline applied to the loader itself: make the
+    broken path the one that always runs, not the one only some future
+    Python (or some future CI image) happens to discover.
+
+    Accessing `member.__annotations__` is sufficient to trigger PEP 649's
+    lazy `__annotate__` call on 3.14+; on older Pythons the annotations
+    were already eager and this is a harmless re-read. Either way, a
+    broken stub now raises HERE, inside load_live_module, on every Python
+    version, not conditionally depending on which one happens to be
+    running.
+    """
+    import inspect
+
+    for name, member in vars(module).items():
+        if inspect.isclass(member) and member.__module__ != module.__name__:
+            continue  # an imported (stub) class, not one this module defines
+        if inspect.isfunction(member) and member.__module__ != module.__name__:
+            continue
+        if not (inspect.isfunction(member) or inspect.isclass(member)):
+            continue
+        try:
+            _ = member.__annotations__
+        except TypeError as exc:
+            raise RuntimeError(
+                f"{module_name}.{name}'s annotations failed to evaluate: {exc} -- "
+                "a stub in this loader's configure() is very likely the wrong "
+                "SHAPE for a name used in an annotation (e.g. a bare None "
+                "standing in for a type, which does not support `X | None`). "
+                "See _force_annotation_evaluation's docstring."
+            ) from exc
+        if inspect.isclass(member):
+            for method_name, method in vars(member).items():
+                if inspect.isfunction(method):
+                    try:
+                        _ = method.__annotations__
+                    except TypeError as exc:
+                        raise RuntimeError(
+                            f"{module_name}.{name}.{method_name}'s annotations "
+                            f"failed to evaluate: {exc} -- see "
+                            "_force_annotation_evaluation's docstring."
+                        ) from exc
+
+
 def load_live_module(source: Path) -> Any:
     """Execute the canonical production module allowlisted for ``source``."""
     expected = source.resolve(strict=True)
@@ -451,4 +565,5 @@ def load_live_module(source: Path) -> Any:
     origin = Path(spec.origin).resolve(strict=True)
     if origin != canonical_source:
         raise RuntimeError(f"oracle imported {origin}, expected {canonical_source}")
+    _force_annotation_evaluation(module_name, module)
     return module

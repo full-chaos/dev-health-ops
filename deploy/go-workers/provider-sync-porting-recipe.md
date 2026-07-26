@@ -320,6 +320,52 @@ question.
       fallback only when there is no seam at all to fake through (no I/O
       boundary, no injectable dependency) — that is a narrower case than it
       first appears.
+    - **REQUIREMENT: the stub path a `load_live_module` target takes must be
+      exercised LOCALLY, not just in whichever CI job happens to be more
+      isolated than your workstation.** `_target_github_processor()`
+      shipped, gated locally, and still broke CI's `go-storage-integration`
+      job on the very next PR push: `TypeError: unsupported operand
+      type(s) for |: 'NoneType' and 'NoneType'`, from
+      `processors/github.py`'s own `gate: RateLimitGate | None = None`
+      parameter annotation, because the stub set `CONNECTORS_AVAILABLE =
+      False` (following `_target_base_git`'s precedent verbatim) which
+      routes github.py into an `else:` branch that sets `RateLimitGate =
+      None` at module scope — and `None | None` is not a valid type union.
+      **Why the local gate did not catch this — the actual mechanism, not
+      just "the environments differ":** Python 3.14 (this loader's local
+      interpreter) defaults to PEP 649 deferred annotation evaluation —
+      `gate: RateLimitGate | None` is not actually evaluated when the `def`
+      statement runs, only the first time something reads
+      `__annotations__`. `load_live_module` never did that, so
+      `exec_module` returned successfully and every local test built on
+      top of it passed. CI's isolated job ran an OLDER Python (pre-3.14,
+      where annotations are still evaluated eagerly at `def` time) and hit
+      the crash immediately on import. This is a real, general trap, not a
+      one-off: a stub whose SHAPE is wrong for a name used in an
+      annotation can pass on 3.14 and fail on anything older (or on
+      anything, any version, that later calls `typing.get_type_hints` or
+      `inspect.signature` on the loaded module — mypy does this too). The
+      fix landed in the SHARED loader, not just this one target:
+      `load_live_module` now calls `_force_annotation_evaluation` on every
+      freshly-loaded module before returning it, which touches
+      `__annotations__` on every function and class the module defines —
+      forcing PEP 649's lazy evaluation to happen NOW, deterministically,
+      on whichever Python is running the loader, so a broken stub fails on
+      the very next line locally, on any Python version, instead of only
+      on whichever CI image or future interpreter happens to evaluate it
+      eagerly. Verified by re-injecting the exact broken stub
+      (`CONNECTORS_AVAILABLE = False`, no `connectors.*` stubs) and
+      confirming `load_live_module` now raises immediately with a message
+      naming the broken annotation — and separately by running the full
+      suite against a real Python 3.13 interpreter (`PYTHON=<3.13 binary>
+      go test ...`), which has eager annotation evaluation and reproduces
+      what CI's older Python actually sees. **Do this for every new
+      `load_live_module` target**: after writing the stub, deliberately
+      break one name it supplies (make it `None`, or drop a needed
+      attribute) and confirm the loader itself — not just some specific
+      test that happens to touch that name — reports the break; if it
+      doesn't, `_force_annotation_evaluation` isn't the whole story for
+      that target and something narrower needs adding.
     - **REQUIREMENT: always run `go test -count=1` (never a bare `go test`)
       when a test exercises a live oracle whose Python source lives outside
       `internal/providersync/testdata/`.** `//go:embed` cannot reach outside

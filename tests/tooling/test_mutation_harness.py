@@ -964,3 +964,31 @@ def test_a_building_mutation_is_still_killed_normally(tree: Path) -> None:
     results, exit_code = run_plan(tree, plan, None, assert_all_killed=True)
     assert results[0].verdict == VERDICT_KILLED
     assert exit_code == 0
+
+
+def test_a_kill_reports_where_it_died(tree: Path) -> None:
+    """A verdict alone cannot distinguish a real kill from an accidental one.
+
+    A mutation killed by a setup precondition, a panic, or a build failure is
+    materially weaker evidence than one killed by the assertion written for it,
+    and that difference is invisible in a boolean.
+    """
+
+    # Passes clean, and on failure prints a file:line the way a test runner does.
+    proof_with_site = [
+        sys.executable,
+        "-c",
+        (
+            "import pathlib,sys;"
+            f"text=pathlib.Path({SOURCE_NAME!r}).read_text();"
+            f"ok={GUARD!r} in text;"
+            "print('' if ok else 'widget_test.go:42: guard assertion failed');"
+            "sys.exit(0 if ok else 1)"
+        ),
+    ]
+    plan = _plan(tree, [_mutation(proof=[proof_with_site])])
+    results, _ = run_plan(tree, plan, None, assert_all_killed=True)
+
+    assert results[0].verdict == VERDICT_KILLED
+    assert "widget_test.go:42" in results[0].detail
+    assert "Confirm it is the assertion this mutation targets" in results[0].detail

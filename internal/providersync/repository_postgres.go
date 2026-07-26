@@ -370,12 +370,29 @@ WHERE unit.id = $1::uuid
       AND run.status NOT IN ('success', 'partial_failed', 'failed')
   )`
 
+// releaseForRetrySQL merges 'error_category' into the existing result
+// document rather than replacing it wholesale (codex H1, second half,
+// CHAOS-3122). The prior blind `result = jsonb_build_object(...)` overwrite
+// deleted the go_effect_ledger_v1 key whenever a unit failed after an
+// earlier attempt had loaded (or begun writing) an effect: the next attempt
+// then found no ledger, forgot the frozen normalizedAt/digest a
+// EffectReadbackRequired effect depends on, and could no longer classify a
+// possibly-landed-but-uncommitted ClickHouse row as exact, absent, or
+// conflict. A capped-pagination failure (see github_prs_route.go) made this
+// newly, deterministically reachable, but the gap itself predates that fix
+// and applies to any Collect failure after a ledger was loaded, on any
+// EffectReadbackRequired pair. A single UPDATE's SET expression reads the
+// current row atomically -- no separate lock is needed the way
+// mutateGenerationJournal's two-round-trip read-modify-write requires.
 const releaseForRetrySQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'dispatching',
     available_at = NULL,
     error = 'provider_unit_retryable',
-    result = jsonb_build_object('error_category', 'provider_unit_retryable'),
+    result = (
+      COALESCE(unit.result::jsonb, '{}'::jsonb) ||
+      jsonb_build_object('error_category', 'provider_unit_retryable')
+    ),
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_heartbeat_at = $3,

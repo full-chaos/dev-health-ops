@@ -67,6 +67,14 @@ combined with the coordinator's `sync` queue: the two clients have disjoint
 handlers. Both queues and all provider routes remain Celery-owned unless a
 reviewed route release says otherwise.
 
+Porting a provider/dataset pair to a `route_ready` Go complete-route handler
+(the `CompleteRouteHandler`/`EffectSink` pattern `launchdarkly/feature-flags`,
+`github/repo-metadata`, and `github/prs` already ship) is a separate,
+code-level recipe, not a deployment-manifest concern — see
+[`provider-sync-porting-recipe.md`](./provider-sync-porting-recipe.md) and
+`contracts/provider-matrix/v1/README.md`'s per-pair "Activation status"
+sections.
+
 ### Coexistence canary
 
 1. Compose runs a fail-closed bootstrap chain before any Go workload:

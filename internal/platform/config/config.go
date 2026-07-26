@@ -108,6 +108,12 @@ type Config struct {
 	// and the executor must agree on the route or a dispatched unit finds no
 	// handler.
 	WorkerGithubRepoMetadataEnabled bool
+	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
+	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
+	// the pair route_ready is the other half; neither alone moves traffic.
+	// Its Python counterpart is ProviderUnitRouteSwitches.github_prs, read
+	// from the same WORKER_GITHUB_PRS_ENABLED name.
+	WorkerGithubPRsEnabled bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -183,6 +189,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_GITHUB_REPO_METADATA_ENABLED",
 			target: &cfg.WorkerGithubRepoMetadataEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_PRS_ENABLED",
+			target: &cfg.WorkerGithubPRsEnabled,
 		},
 	} {
 		*item.target, err = boolEnv(lookup, item.name, false)
@@ -447,6 +457,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 			c.WorkerLaunchDarklyFeatureFlagsEnabled,
 		),
 		slog.Bool("worker_github_repo_metadata_enabled", c.WorkerGithubRepoMetadataEnabled),
+		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),

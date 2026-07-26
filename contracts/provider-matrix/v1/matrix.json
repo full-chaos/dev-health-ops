@@ -201,10 +201,12 @@
       "processor_flags": {
         "sync_prs": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "prs",
-      "route_destinations": [],
+      "route_destinations": [
+        "git_pull_requests"
+      ],
       "route_ready": false,
       "credential_modes": [
         "personal_access_token",

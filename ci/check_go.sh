@@ -15,12 +15,24 @@ DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 
 usage() {
   cat <<'EOF'
-Usage: ci/check_go.sh [fmt|vet|test|race|build|contract|integration-vet|integration-coverage|integration|fast|all]
+Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration|fast|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
   race   Run go test -race ./... in every Go module.
+  live-python-oracles
+         Run `go test -count=1 ./internal/providersync/...` unconditionally
+         (cache lookup disabled by -count=1 itself, not by any assumption
+         about cache state). Separate from `test` because that package
+         executes real production Python files (src/dev_health_ops/**.py)
+         at test time, which `//go:embed` cannot make part of the Go test
+         cache key -- `test`'s bare `go test ./...` can return a stale
+         cached PASS for a real change to one of those files. NOT an
+         optimization opt-out: a run that skips this verb has not tested
+         the oracles at all, so it MUST stay in `all` (and `fast`, since
+         it is cheap) rather than being treated as an extra, skippable
+         step.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -46,11 +58,12 @@ Usage: ci/check_go.sh [fmt|vet|test|race|build|contract|integration-vet|integrat
          Discover and run EVERY integration-tagged package's suite against
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
-  fast   Run fmt, vet, test, build, contract, integration-vet, and
-         integration-coverage checks, then publish the grant advisory report.
-  all    Run fmt, vet, test, race, build, contract, integration-vet, and
-         integration-coverage checks, then publish the grant advisory report
-         (default).
+  fast   Run fmt, vet, test, live-python-oracles, build, contract,
+         integration-vet, and integration-coverage checks, then publish
+         the grant advisory report.
+  all    Run fmt, vet, test, race, live-python-oracles, build, contract,
+         integration-vet, and integration-coverage checks, then publish
+         the grant advisory report (default).
 EOF
 }
 
@@ -174,6 +187,38 @@ check_test() {
 
 check_race() {
   run_in_modules "go test -race" go test -mod=readonly -race ./...
+}
+
+check_live_python_oracles() {
+  # internal/providersync executes REAL production Python files
+  # (src/dev_health_ops/**.py, via testdata/python_oracle_loader.py)
+  # directly at test time -- not test fixtures, the actual functions this
+  # repo ships. `//go:embed` cannot reach outside its own package
+  # directory (verified directly: `go vet` rejects a `../` pattern with
+  # "invalid pattern syntax"), so those Python files are structurally
+  # invisible to Go's test-result cache key. A warm local `go test` cache
+  # can then return a stale PASS for a real, uncommitted change to one of
+  # them -- reproduced empirically (CHAOS-3162, codex adversarial review):
+  # edit a live-oracle Python source with no Go file touched, run a bare
+  # `go test` a second time, get `(cached)` back with no re-execution at
+  # all. check_test's plain `go test ./...` above does not force a fresh
+  # run and is NOT a sufficient gate for this one package on its own --
+  # this step is deliberately separate and always uses -count=1, which
+  # disables cache lookup entirely by design, regardless of what caused
+  # the staleness.
+  #
+  # -count=1 lives HERE, at the verb, and not as something a caller
+  # remembers to pass to `test` -- the whole defect this verb exists to
+  # close is that the cache staleness is invisible from the call site (no
+  # error, no warning, just a silently-stale PASS), so a solution that
+  # depends on the caller already knowing to opt in reproduces the same
+  # failure mode one level up. Do NOT fold this back into check_test "for
+  # tidiness": that would put -count=1 (and its resulting slower, no-cache
+  # `test` run) on every package in the tree instead of only the one that
+  # structurally needs it, and it would make skipping this specific
+  # coverage possible again by construction.
+  printf 'go test -count=1: internal/providersync (live Python oracle sources are outside the Go embed/cache boundary)\n'
+  (cd "${ROOT}" && GOWORK=off go test -mod=readonly -count=1 ./internal/providersync/...)
 }
 
 check_build() {
@@ -424,6 +469,9 @@ case "${1:-all}" in
   race)
     check_race
     ;;
+  live-python-oracles)
+    check_live_python_oracles
+    ;;
   build)
     check_build
     ;;
@@ -446,6 +494,7 @@ case "${1:-all}" in
     check_format
     check_vet
     check_test
+    check_live_python_oracles
     check_build
     check_contract
     check_integration_vet
@@ -457,6 +506,7 @@ case "${1:-all}" in
     check_vet
     check_test
     check_race
+    check_live_python_oracles
     check_build
     check_contract
     check_integration_vet

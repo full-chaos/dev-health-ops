@@ -510,6 +510,18 @@ func valueOr(value, fallback string) string {
 	return fallback
 }
 
+// stringValue mirrors Python's str(value) for the JSON scalar types a
+// provider API can plausibly return in a field a Python caller stringifies
+// unconditionally (e.g. code_client.py::_pull_from_item's
+// `str(user["login"])`). codex M4: an earlier version handled only string
+// and numeric values, so a boolean JSON value (`{"login": true}`) fell
+// through to the "" default -- silently different from Python's
+// `str(True) == "True"`. list/dict/null are intentionally NOT covered: they
+// are not realistic shapes for the fields this function is used on (a
+// GitHub username, a LaunchDarkly flag key), and matching Python's
+// str([...])/str({...}) pixel-for-pixel for those would be effort spent on
+// inputs that cannot occur in practice; null already means "absent" to
+// every caller (Python's own `is not None` guards it the same way).
 func stringValue(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -518,6 +530,13 @@ func stringValue(value any) string {
 		return typed.String()
 	case float64:
 		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case bool:
+		// Python's str(True)/str(False) are capitalized, unlike Go's
+		// strconv.FormatBool("true"/"false").
+		if typed {
+			return "True"
+		}
+		return "False"
 	default:
 		return ""
 	}

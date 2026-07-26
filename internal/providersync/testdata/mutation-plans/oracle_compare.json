@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3162 generic oracle comparator (diffRows)",
+  "build": ["go", "build", "./..."],
+  "mutations": [
+    {
+      "id": "present-in-python-only-clause",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "case pythonHas && !goHas:",
+      "replace": "case false:",
+      "rationale": "a field the Python row has and the Go row lacks must be reported as a divergence, not silently skipped",
+      "proof": [["go", "test", "-run", "^TestDiffRowsClauseCoverage/present_in_Python_only", "./internal/providersync/"]]
+    },
+    {
+      "id": "present-in-go-only-clause",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "case !pythonHas && goHas:",
+      "replace": "case false:",
+      "rationale": "a field the Go row has and the Python row lacks must be reported as a divergence, not silently skipped -- the symmetric case to present-in-python-only, and just as easy to accidentally drop",
+      "proof": [["go", "test", "-run", "^TestDiffRowsClauseCoverage/present_in_Go_only", "./internal/providersync/"]]
+    },
+    {
+      "id": "value-mismatch-clause",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "case !typedValuesEqual(pythonValue, goValue):",
+      "replace": "case false:",
+      "rationale": "two present-on-both-sides values that differ must be reported -- this is the clause every one of the six CHAOS-3162 rediscovery defects that are value mismatches (not present/absent mismatches) actually depends on. Anchor updated (codex fourth review): this used to call reflect.DeepEqual directly; it now calls typedValuesEqual, which falls back to reflect.DeepEqual for everything except float/datetime -- see the typed-value-equality mutations below for that function's own clauses",
+      "proof": [["go", "test", "-run", "^TestDiffRowsClauseCoverage/differing_value", "./internal/providersync/"]]
+    },
+    {
+      "id": "typed-values-equal-float-must-parse-and-compare",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn pythonFloat == goFloat\n\t\t\t}",
+      "replace": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn false\n\t\t\t}",
+      "rationale": "codex fourth review: Python's repr(5.0) is \"5.0\"; Go's strconv.FormatFloat(5.0, 'g', -1, 64) is \"5\" -- same IEEE754 double, different text. Without this clause a genuinely-equal float pair would report a false divergence, and a mutation collapsing it to false would make every equal-float case fail",
+      "proof": [["go", "test", "-run", "^TestTypedValuesEqualCanonicalizesFloatAndDatetimeText/equal_floats", "./internal/providersync/"]]
+    },
+    {
+      "id": "typed-values-equal-datetime-must-parse-and-compare",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn pythonTime.Equal(goTime)\n\t\t\t}",
+      "replace": "if pythonErr == nil && goErr == nil {\n\t\t\t\treturn false\n\t\t\t}",
+      "rationale": "codex fourth review: Python's isoformat() shows a fixed 6-digit microsecond field when non-zero (.123000Z); Go's RFC3339Nano strips trailing zero fractional digits (.123Z) -- same instant, different text",
+      "proof": [["go", "test", "-run", "^TestTypedValuesEqualCanonicalizesFloatAndDatetimeText/equal_instants", "./internal/providersync/"]]
+    },
+    {
+      "id": "python-excluded-fields-must-suppress",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if _, excluded := pythonExcluded[key]; excluded {\n\t\t\tcontinue\n\t\t}",
+      "replace": "if false {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "a field the pair's Python side declares excluded (with a written reason) must not be compared at all -- this is what lets github/pr-reviews-owned fields ship without corrupting github/prs's own comparison",
+      "proof": [["go", "test", "-run", "^TestDiffRowsClauseCoverage/declared_Python-side_exclusion_suppresses_a_value_mismatch$", "./internal/providersync/"]]
+    },
+    {
+      "id": "go-only-fields-must-suppress",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if _, excluded := goOnlyFields[key]; excluded {\n\t\t\tcontinue\n\t\t}",
+      "replace": "if false {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "a field the CALLER declares Go-only (e.g. org_id, last_synced) must not be compared -- the caller-side mirror of python-excluded-fields-must-suppress, and independently mutable since the two exclusion maps are looked up in separate, unrelated statements",
+      "proof": [["go", "test", "-run", "^TestDiffRowsClauseCoverage/declared_Go-only_exclusion_suppresses_a_present-or-absent_divergence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "goOnlyFields-claim-must-be-checked-against-python",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if reason, claimedGoOnly := goOnlyFields[key]; claimedGoOnly {",
+      "replace": "if false {",
+      "rationale": "codex third review: goOnlyFields[key] is a claim that the Python side structurally cannot have this field. If a pair author is wrong, the field IS comparable on the Python side and excluding it hides a real divergence -- this clause is what catches the claim being false",
+      "proof": [["go", "test", "-run", "^TestCheckExclusionIntegrityClauseCoverage/goOnlyFields_key_actually_present_on_the_Python_side", "./internal/providersync/"]]
+    },
+    {
+      "id": "stale-excluded-fields-must-be-flagged",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "for key, reason := range excludedFields {\n\t\tif !usedExclusions[key] {",
+      "replace": "for key, reason := range excludedFields {\n\t\tif false {",
+      "rationale": "codex third review: an excluded_fields entry that never matched a key present in any case's row is either a typo or a stale leftover from a field that was renamed or removed -- silently indistinguishable from a genuine, currently-effective exclusion without this check",
+      "proof": [["go", "test", "-run", "^TestCheckExclusionIntegrityClauseCoverage/excluded_fields_entry_never_matches_anything", "./internal/providersync/"]]
+    },
+    {
+      "id": "stale-goOnlyFields-must-be-flagged",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "for key, reason := range goOnlyFields {\n\t\tif !usedExclusions[\"go:\"+key] {",
+      "replace": "for key, reason := range goOnlyFields {\n\t\tif false {",
+      "rationale": "the caller-side mirror of stale-excluded-fields-must-be-flagged, independently mutable since it is a separate loop over a separate map",
+      "proof": [["go", "test", "-run", "^TestCheckExclusionIntegrityClauseCoverage/goOnlyFields_entry_never_matches_anything", "./internal/providersync/"]]
+    }
+  ]
+}

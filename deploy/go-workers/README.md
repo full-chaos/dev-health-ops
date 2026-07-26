@@ -136,6 +136,17 @@ local Postgres/ClickHouse/Valkey stack. They apply to any compose project
 that starts these services, not to one specific file — see that project's
 own compose file(s) for exactly which services exist and where.
 
+> **`docker compose config` prints every resolved secret in cleartext**,
+> including `SETTINGS_ENCRYPTION_KEY`, database passwords, and any real
+> credential env vars — it resolves and dumps the fully-interpolated
+> compose document, not a redacted one. Do not run it against a real
+> environment's `.env` and paste the output anywhere, including into an
+> agent transcript or a chat log. To check whether a variable is wired at
+> all without revealing its value, grep the rendered `services.<name>` block
+> for the *key* name only, or use `docker compose config --services` /
+> `--format json` piped through `jq 'del(...)'` to strip the fields you
+> don't need before looking at it.
+
 ### One compose project owns one Postgres cluster
 
 Docker Compose tracks container ownership by `(project name, service name)`.
@@ -247,3 +258,100 @@ integrations.credential_id)`, so a credential row that exists but isn't
 linked from `integrations.credential_id` (or the sync run) is invisible to
 a claim even though `PostgresCredentialRepository.ResolveEncrypted` would
 find it directly by `(org_id, provider)`.
+
+### A coordinator (or domain) readiness failure with no stated reason usually means the database is behind on migrations
+
+**Symptom:** `/readyz` reports `{"failed_checks":["coordinator_postgres"], ...}` (or
+`domain_postgres`) and nothing else — no table name, no missing privilege,
+just the check name. There is nothing wrong with the grants your migration
+ran, the role's authentication, or its ownership; every one of those can
+check out individually and the failure still won't clear.
+
+**Why this happens, structurally, and why it isn't a bug:**
+`coordinatorGrantStatements`/`runtimeGrantStatements`
+(`internal/storage/river/migrate.go`) guard every `GRANT` with
+`to_regclass('public.<table>') IS NOT NULL`, by design — a table the current
+Alembic revision hasn't created yet must not fail the whole migration, it
+must just skip that one grant. `CheckRolePosture`
+(`internal/storage/postgres/domain_authorization.go`), the readiness side,
+has no matching leniency: it asserts the FULL declared posture
+(`domainPosture()`/`coordinatorPosture()`) unconditionally, because a table
+that's missing from a production database *is* a real problem to report, not
+one to shrug off. The asymmetry is intentional on both sides individually —
+skip-if-missing on the write side, require-unconditionally on the read side —
+but their combination means: **any database that is behind on Alembic head,
+by even one migration that creates a table either posture requires, gets a
+coordinator or domain readiness check that fails forever, with no stated
+reason, until that specific migration is applied.** This is not a one-off;
+it will recur for the next posture-required table added by a future
+migration, on any database that hasn't caught up yet.
+
+**How to identify it (read-only, safe against a real database):**
+
+```sql
+-- What revision is this database actually at?
+SELECT version_num FROM alembic_version;
+```
+
+Compare that against the highest-numbered file in
+`src/dev_health_ops/alembic/versions/`. If it's behind, check whether any
+migration between the current revision and head creates a table either
+`domainPosture()` or `coordinatorPosture()`
+(`internal/storage/postgres/domain_authorization.go`) requires — grep those
+functions' `RequiredTables`/`ColumnScoped` entries against the pending
+migrations' `op.create_table(...)` calls. You can also confirm a specific
+table directly:
+
+```sql
+SELECT to_regclass('public.<table_name>');  -- NULL means it does not exist
+```
+
+As of CHAOS-3142, `cmd/dev-health-reconciler` logs this automatically: a
+`coordinator_postgres` readiness failure now also emits a redacted ERROR log
+line per unsatisfied requirement — `postgres.DiagnoseRolePosture`, wired at
+`logCoordinatorPostureGaps` — naming the table (and privilege, or
+"table does not exist") without any DSN, host, or credential. Check the
+reconciler's own logs first; the query above is for when you need to trace
+it back to a specific migration yourself.
+
+**Before you reach for `alembic upgrade head` (or the `migrate` service, which
+always goes to head) to fix this: read every pending migration first, not
+just the one that creates the table you need.** "Behind on migrations" and
+"the next migration is inert DDL" are not the same claim, and treating
+`migrate` as a safe, idempotent, always-correct-to-run step because it
+*usually* only adds a column or table is exactly the mistake that cost real
+debugging time while building this ticket — the pending migration on the
+database this was diagnosed against was `0065_add_fixed_schedule_occurrences.py`
+(safe, adds one table), immediately followed by
+`0066_activate_river_worker_job_routes.py` — the CHAOS-3033 Celery-to-River
+cutover migration, which flips checked-in job kinds from `transport='celery'`
+to `transport='river'` and, per its own docstring, requires Go consumers to
+already be running for every affected queue before it commits. Running
+`migrate` to head on a database with no Go workers running yet would have
+silently stopped background processing for every one of those job kinds. If
+a targeted `alembic upgrade <revision>` stopping short of a cutover migration
+is what you need, use that instead of `head`, and confirm first that the
+`api`/`migrate` container actually has your target revision's file available
+(root compose mounts `./ops:/app`, so it does if you're on a branch with that
+migration file; it does not against an unmodified `origin/main` checkout).
+
+### Live landmine: a mounted `ops` checkout is one `migrate` run away from an unattended cutover
+
+Independent of everything else in this document: if the compose project
+running this stack mounts a working copy of this repository into its
+`migrate` service (as the coexistence overlays and CHAOS-3142's own
+repo-root wiring do, so a nested `migrate` target and other Go/Alembic
+artifacts on a feature branch are visible without a rebuild), then **any
+`docker compose up` that (re)starts `migrate`** — not just an explicit,
+reviewed cutover — **applies every pending Alembic migration on that
+checkout, including a cutover migration, unattended, the moment one exists
+in the pending set.** There is no confirmation step, no dry run, and no
+distinction in `migrate`'s own behavior between "add a column" and "flip 23
+job kinds from Celery to River." The migration itself is the only gate, and
+by the time it's pending in a checked-out branch, that gate is one ordinary
+`up` away from being crossed by whoever runs it next, for any reason,
+possibly without realizing a cutover migration is even in the pending set.
+This is a general operational hazard of mounting a live checkout into a
+migration-running service, not specific to CHAOS-3142 or to this migration —
+it deserves review as its own item, independent of the Go execution path
+this document otherwise covers.

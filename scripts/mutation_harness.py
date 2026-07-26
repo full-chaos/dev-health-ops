@@ -130,6 +130,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -708,7 +709,13 @@ def verify(root: Path) -> list[str]:
                 "its mutation yet, so nothing is on disk right now -- but it will "
                 "be, possibly before the caller of this check finishes. No result "
                 "from this tree is trustworthy until the run completes. Wait for "
-                f"pid {live}."
+                f"pid {live}.\n"
+                "    If this does not clear: liveness here is only 'a process with "
+                "that pid exists', and pids are reused, so an unrelated long-lived "
+                f"process that inherited pid {live} blocks this check forever. "
+                f"Check what pid {live} actually is. If it is not the harness, this "
+                "is a stale lock and nothing is applied, so it is safe to break: "
+                f"rm -rf {_state_dir(root) / LOCK_DIRNAME}"
             ]
         return []
 
@@ -732,8 +739,14 @@ def verify(root: Path) -> list[str]:
             "    Caveat: liveness here is 'a process with that pid exists', and "
             "pids are reused. If the harness died and an unrelated process "
             "inherited its pid, this will say IN PROGRESS forever. Check what "
-            f"pid {live} actually is; if it is not the harness, repair with: "
-            "python3 scripts/mutation_harness.py restore --force"
+            f"pid {live} actually is. If it is NOT the harness, break the lock "
+            f"yourself and then restore -- in that order:\n"
+            f"        rm -rf {_state_dir(root) / LOCK_DIRNAME}\n"
+            "        python3 scripts/mutation_harness.py restore\n"
+            "    Not `restore --force`: force is for a lock left by a DEAD pid, "
+            "and it refuses precisely while a process with the recorded pid "
+            "exists -- so against a reused pid it can only ever refuse. Removing "
+            "the lock by hand is the deliberate step that says you checked."
         ]
     return [
         f"mutation {identifier} is still applied to {relative} and NO run is "
@@ -745,17 +758,22 @@ def verify(root: Path) -> list[str]:
         "    If `restore` refuses -- the snapshot is gone, or the file holds "
         "neither the original nor the mutation because it was reconciled by "
         f"hand -- undo the mutation in {relative} yourself, then clear the "
-        "record with: python3 scripts/mutation_harness.py accept --digest "
-        f"$(shasum -a 256 {relative} | cut -d' ' -f1)"
+        f"record with: {_accept_hint(str(relative))}"
     ]
 
 
 def _accept_hint(relative: str) -> str:
-    """The exact command that clears a record after a by-hand repair."""
+    """The exact command that clears a record after a by-hand repair.
+
+    Quoted, because the path comes from the plan and a repo-relative path may
+    legitimately contain a space -- unquoted, the suggested command silently
+    hashes the wrong file or fails, and a recovery instruction that does not run
+    is the dead end this command exists to remove.
+    """
 
     return (
         "python3 scripts/mutation_harness.py accept --digest "
-        f"$(shasum -a 256 {relative} | cut -d' ' -f1)"
+        f"$(shasum -a 256 {shlex.quote(relative)} | cut -d' ' -f1)"
     )
 
 
@@ -827,6 +845,24 @@ def restore(root: Path, force: bool = False) -> str:
                     f"the mutation by hand; the pre-run content is in "
                     f"{STATE_DIRNAME}/{SNAPSHOT_DIRNAME}/{snapshot_name}."
                 )
+        # A record whose two digests agree describes nothing: no mutation this
+        # harness can produce leaves the file identical to the original, because
+        # a no-op replacement is refused before any write. Such a record is
+        # corrupt or hand-crafted, and it must be rejected HERE, because the
+        # content short-circuit below would otherwise clear the record on a digest
+        # that equally names the mutated content -- clearing it with the mutation
+        # still on disk.
+        recorded_mutated = str(applied.get("mutated_sha256") or "")
+        if expected and recorded_mutated and expected == recorded_mutated:
+            raise HarnessError(
+                f"the record for {relative} carries the same digest as both its "
+                f"original and its mutated content ({expected[:12]}). No mutation "
+                "produces that, so this record is corrupt and nothing here can be "
+                "trusted to decide whether the file is repaired. Inspect the tree "
+                f"by hand; the pre-run content, if it survives, is in "
+                f"{STATE_DIRNAME}/{SNAPSHOT_DIRNAME}/{snapshot_name}."
+            )
+
         # Content is examined BEFORE the snapshot is required. A user who has
         # already undone the mutation by hand holds a correct tree, and refusing
         # to clear the record because the snapshot is gone leaves the gate red
@@ -940,17 +976,24 @@ def accept_manual_repair(root: Path, claimed_digest: str) -> str:
          approved;
       2. the file must not hold the recorded mutation byte-for-byte. That state
          is not a repair, it is the leak itself, and `restore` handles it;
-      3. the mutation's own text must be gone from the file: the replacement
-         string absent, and the anchor it replaced back at EVERY site the
-         mutation touched. This is what makes the acceptance a measurement
-         rather than an assertion -- a file that was merely edited near the
-         mutation, or reformatted while still mutated, fails it. The anchor is
-         counted rather than looked for, because `str.replace` rewrites all
-         occurrences and a partial repair would satisfy a presence test. Where
-         one string contains the other the containing direction is skipped,
-         because it cannot discriminate; `find` and `replace` are never equal,
-         so at least one check always applies -- and in each degenerate
-         direction the surviving check is the one that discriminates.
+      3. the mutation's REPLACEMENT text must appear nowhere the record's anchor
+         does not account for. This is what makes the acceptance a measurement
+         rather than an assertion -- a file merely edited near the mutation, or
+         reformatted while still mutated, fails it.
+
+    What (3) deliberately does NOT do is check that the original text came back.
+    An earlier version counted anchor occurrences, and counting is location-blind:
+    with a deleted-clause mutation, two comments containing the anchor satisfy any
+    count while every code site stays mutated. A check the file's own prose can
+    satisfy is not a check. Absence of the replacement is the property that
+    actually answers "is a mutation still applied", so that is the property
+    tested; a file the operator deleted the code out of therefore accepts, which
+    is correct, because no mutation is applied to it.
+
+    The cost is a conservative refusal: the tool cannot tell a surviving mutation
+    from the same text occurring for an unrelated reason, and refuses both. The
+    message says so and names the manual last resort rather than pretending the
+    check is sharper than it is.
 
     Nothing is written to the source. The only effect is removing the record.
     """
@@ -1019,46 +1062,49 @@ def accept_manual_repair(root: Path, claimed_digest: str) -> str:
                 "the mutation text cannot be looked for. Recover by hand."
             ) from exc
 
-        # Skip whichever check cannot discriminate. If `replace` contains `find`
-        # (the `if x:` -> `if False and x:` shape) the anchor is present either
-        # way; if `find` contains `replace` (a deleted clause) the replacement is
-        # present either way. They are never equal, so one check always survives.
-        if replace not in find and replace in text:
+        # The whole question is: does any site still hold the REPLACEMENT? Asked
+        # two ways, because neither alone covers every shape a mutation can take,
+        # and each is skipped where it cannot discriminate. `find` and `replace`
+        # are never equal, so at least one always applies.
+        #
+        # NOT asked by counting occurrences of the anchor. That was the previous
+        # attempt and it is location-blind: with a deleted-clause mutation, two
+        # comments containing the anchor text satisfy any count while both code
+        # sites stay mutated. A check the file's own prose can satisfy is not a
+        # check -- it is the doc-comment failure this harness was built to refuse,
+        # arriving through the command that clears the harness's own record.
+        bare = replace in text if replace not in find else False
+        # Blank every intact anchor first, then look again. Where `replace` is a
+        # substring of `find` -- a DELETED clause, the commonest shape in the
+        # scheduled-reports plan -- a bare `replace in text` matches inside intact
+        # anchors and can never pass. Removing the anchors leaves exactly the
+        # replacements no anchor accounts for, which is the set that matters.
+        unexplained = (
+            replace in text.replace(find, "\x00" * (len(find) + 1))
+            if find not in replace
+            else False
+        )
+        if bare or unexplained:
             raise HarnessError(
                 f"REFUSING TO ACCEPT {relative}: the mutation's replacement text "
-                f"is still in the file -- {replace.strip()[:70]!r}. The mutation "
-                "has not been undone, whatever else has changed around it. Undo "
-                "it first; accepting now would clear a record that is telling the "
-                "truth."
-            )
-        # Counted, not merely present. A mutation with expect_occurrences > 1
-        # rewrites every site, so a partial repair leaves the anchor back at one
-        # site and the mutation live at another -- and where `replace` is a
-        # substring of `find` (a DELETED clause, the commonest shape in the
-        # scheduled-reports plan) the replacement check above is skipped, so a
-        # presence test would be the only guard and it would pass.
-        expected_sites = applied.get("expect_occurrences", 1)
-        if not isinstance(expected_sites, int) or isinstance(expected_sites, bool):
-            expected_sites = 1
-        found_sites = text.count(find)
-        if find not in replace and found_sites < expected_sites:
-            raise HarnessError(
-                f"REFUSING TO ACCEPT {relative}: the text the mutation replaced is "
-                f"back at {found_sites} site(s), but the mutation was applied to "
-                f"{expected_sites} -- {find.strip()[:70]!r}. Either the repair is "
-                "partial and the file is still mutated somewhere, or the file is "
-                "correct for a reason this command cannot see; both leave the "
-                "acceptance unjustified, and an acceptance that cannot be "
-                "justified is worthless. Repair every site, or verify by hand and "
-                f"delete {STATE_DIRNAME}/{STATE_FILENAME} yourself."
+                f"is still in the file -- {replace.strip()[:70]!r} -- at a site no "
+                "intact anchor accounts for. The mutation has not been undone, "
+                "whatever else has changed around it. Undo it first; accepting now "
+                "would clear a record that is telling the truth.\n"
+                "    This refusal is deliberately conservative: the tool cannot "
+                "tell a surviving mutation from that same text occurring in the "
+                "file for an unrelated reason, so it refuses both. If that is your "
+                "case, verify by hand and delete "
+                f"{STATE_DIRNAME}/{STATE_FILENAME} yourself."
             )
 
         identifier = applied.get("mutation_id", "?")
         _write_state(root, None)
         return (
             f"accepted a by-hand repair of {relative} (mutation {identifier}, "
-            f"content {current[:12]}): the replacement text is gone and the "
-            "anchor is back. Cleared the applied record; wrote nothing."
+            f"content {current[:12]}): the replacement text appears nowhere the "
+            "record's anchor does not explain. Cleared the applied record; wrote "
+            "nothing."
         )
     finally:
         release_lock(lock)
@@ -1267,6 +1313,12 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
     if mutation.build is not None:
         baseline_build_code, baseline_build_tail = _run_command(mutation.build, root)
         if baseline_build_code != 0:
+            # Before reporting "nothing was mutated", check that is true. A build
+            # command that edits the target and THEN fails would otherwise leave
+            # changed source, no record, and a clean `verify`, under a message
+            # saying the file was never touched. Every early return out of this
+            # function makes that claim, so every one of them has to earn it.
+            _require_unchanged(target, original_sha, mutation, "the baseline build ran")
             return Result(
                 identifier=mutation.identifier,
                 verdict=VERDICT_BASELINE_FAILED,
@@ -1284,6 +1336,10 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
 
     failing, tail = _proof_outcome(mutation, root)
     if failing is not None:
+        # Same reason as the build path above: this return claims the file was
+        # never touched, and a proof command with a side effect could have made
+        # that false before it failed.
+        _require_unchanged(target, original_sha, mutation, "the baseline proofs ran")
         return Result(
             identifier=mutation.identifier,
             verdict=VERDICT_BASELINE_FAILED,
@@ -1357,11 +1413,6 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
                 # override the acceptance path must not become.
                 "find": mutation.find,
                 "replace": mutation.replace,
-                # How many sites were mutated. `str.replace` rewrites ALL of
-                # them, so a repair that restores only some leaves the anchor
-                # present -- and a presence test would accept a file that is
-                # still mutated everywhere else.
-                "expect_occurrences": mutation.expect_occurrences,
                 "pid": os.getpid(),
             },
         },

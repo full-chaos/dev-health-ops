@@ -57,9 +57,19 @@ than trusted:
 | the file still resolves to the recorded `device:inode` | otherwise the file actually holding the mutation stays broken *and* unrecorded |
 | `--digest` naming the file's **current** content | pins the decision to bytes. If anything writes the file between your inspection and the acceptance, it fails rather than clearing against content nobody approved |
 | the file is **not** the recorded mutation | that state is the leak itself, not a repair. Use `restore` |
-| the replacement text is **gone** and the anchor is **back** | this is what makes it a measurement. A file merely edited near the mutation, or reformatted while still mutated, fails it |
+| the replacement text appears **nowhere an intact anchor explains** | this is what makes it a measurement. A file merely edited near the mutation, or reformatted while still mutated, fails it |
 
 It never writes to your source. The only thing it changes is the record.
+
+**What it deliberately does not check: that the original text came back.** An earlier version
+counted anchor occurrences, and counting is location-blind — with a deleted-clause mutation, two
+*comments* containing the anchor satisfy any count while every code site stays mutated. A check the
+file's own prose can satisfy is not a check; it is the doc-comment failure this harness refuses
+anchors for, arriving through the command that clears the harness's own record. Absence of the
+replacement is what actually answers *is a mutation still applied*, so that is the property tested.
+The cost is a conservative refusal: where the replacement text legitimately occurs elsewhere in the
+file, the tool cannot tell that from a survivor and refuses both, naming the manual last resort
+rather than pretending to be sharper than it is.
 
 ### What `verify` does not prove
 
@@ -156,7 +166,7 @@ python3 scripts/mutation_harness.py run \
   --plan tests/tooling/mutation-plans/mutation_harness.json --assert-all-killed
 ```
 
-**Seventeen guards, seventeen kills, zero `INVALID`** — measured on 2026-07-26 against this tree, not
+**Nineteen guards, nineteen kills, zero `INVALID`** — measured on 2026-07-26 against this tree, not
 claimed. Check the number against a real run rather than trusting this line: a previous version of
 this sentence said eleven while two of its anchors had drifted to match zero lines, so the run
 actually produced nine kills and two `INVALID`. A stale claim about mutation coverage is the same

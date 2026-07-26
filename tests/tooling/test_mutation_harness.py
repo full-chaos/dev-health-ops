@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -530,6 +531,95 @@ def test_verify_distinguishes_a_live_run_from_a_leak(tree: Path) -> None:
     assert "restore" in leaked[0]
 
 
+def test_every_known_pid_message_names_a_repair_that_actually_works(
+    tree: Path,
+) -> None:
+    """Advice the tool's own guards refuse is not advice.
+
+    `verify` used to answer a live-but-unrelated pid with "wait" (forever, if
+    that process is long-lived) and, on the applied path, with
+    `restore --force` -- which refuses BY DESIGN while a process with the
+    recorded pid exists, so following it could only ever fail. Both branches must
+    name the step that works: break the lock by hand, having checked the pid.
+    """
+
+    import shutil
+
+    original = (tree / SOURCE_NAME).read_bytes()
+    lock = tree / ".mutation-harness" / "lock"
+    lock.mkdir(parents=True)
+    # Our own pid is certainly alive. Standing in for a reused pid: a process
+    # exists, and it is not the harness.
+    (lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    # No record: nothing is applied, so breaking the lock is the whole repair.
+    not_applied = verify(tree)
+    assert len(not_applied) == 1
+    assert f"rm -rf {lock}" in not_applied[0]
+
+    _stranded_record(tree, snapshot=True)
+    (lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    applied = verify(tree)
+    assert len(applied) == 1
+    assert f"rm -rf {lock}" in applied[0]
+    assert "mutation_harness.py restore" in applied[0]
+
+    # The old recommendation, followed literally: it cannot work, by design.
+    with pytest.raises(HarnessError, match="--force refused"):
+        restore(tree, force=True)
+    assert verify(tree) != []
+
+    # The current one, followed literally: it works. That is the property --
+    # not which sentence is printed, but whether doing what it says repairs the
+    # tree.
+    shutil.rmtree(lock)
+    assert "restored" in restore(tree)
+    assert (tree / SOURCE_NAME).read_bytes() == original
+    assert verify(tree) == []
+
+
+def test_a_recovery_hint_quotes_a_path_containing_a_space(tree: Path) -> None:
+    """An instruction that does not run is the dead end `accept` exists to close."""
+
+    import scripts.mutation_harness as harness
+
+    hint = harness._accept_hint("src/my guard.py")
+    assert "'src/my guard.py'" in hint
+    # The whole command, run through the shell's own parser, must yield the file
+    # as ONE argument rather than two.
+    inner = hint.split("$(", 1)[1].rsplit(")", 1)[0]
+    assert shlex.split(inner)[:4] == ["shasum", "-a", "256", "src/my guard.py"]
+
+
+def test_a_baseline_build_that_edits_the_target_is_not_reported_as_untouched(
+    tree: Path,
+) -> None:
+    """Every early return claims the file was never touched, so each must earn it.
+
+    A build command that writes the target and then fails would otherwise leave
+    changed source, no record and a clean `verify`, underneath a report saying
+    nothing was mutated.
+    """
+
+    edited = _source(GUARD).replace("doThing()", "doThing() // written by the build")
+    editing_build = [
+        sys.executable,
+        "-c",
+        (
+            "import pathlib;"
+            f"pathlib.Path({SOURCE_NAME!r}).write_text({edited!r});"
+            "raise SystemExit(1)"
+        ),
+    ]
+    plan = _plan(tree, [_mutation(build=editing_build)])
+    with pytest.raises(HarnessError, match="changed while the baseline build ran"):
+        run_plan(tree, plan, None, assert_all_killed=False)
+
+    # The build's write survives -- nothing overwrote it -- and no record was left.
+    assert (tree / SOURCE_NAME).read_text(encoding="utf-8") == edited
+    assert verify(tree) == []
+
+
 def test_a_crash_while_applying_still_leaves_a_record_for_verify(
     tree: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -848,42 +938,136 @@ def test_accept_refuses_when_the_replacement_text_is_still_present(tree: Path) -
     assert DISABLED_GUARD in (tree / SOURCE_NAME).read_text(encoding="utf-8")
 
 
-def test_accept_refuses_when_the_anchor_never_came_back(tree: Path) -> None:
-    """Absence of the mutation is not presence of the original.
+def test_accept_does_not_require_the_original_text_to_be_back(tree: Path) -> None:
+    """A deliberate scope decision, pinned so it cannot drift silently.
 
-    The file was replaced with something else entirely. It holds neither text, so
-    nothing here can show the mutation was undone -- and an acceptance the tool
-    cannot justify is worth nothing.
+    The file was replaced with something else entirely, so the anchor is not
+    back. `accept` still clears the record, because the question the record asks
+    is "is a mutation still applied", and the answer here is no: the replacement
+    text is nowhere in the file. Requiring the original to return would be a
+    different, weaker check -- it was tried, and it was satisfiable by two
+    comments containing the anchor while every code site stayed mutated.
     """
 
     _stranded_record(tree)
     (tree / SOURCE_NAME).write_text("package widget\n", encoding="utf-8")
-    with pytest.raises(HarnessError, match="back at 0 site"):
+    message = accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    assert "accepted a by-hand repair" in message
+    assert verify(tree) == []
+    # And it wrote nothing: acceptance clears a record, it never touches source.
+    assert (tree / SOURCE_NAME).read_text(encoding="utf-8") == "package widget\n"
+
+
+def _deleted_clause_record(tree: Path, find: str, replace: str, original: str) -> str:
+    """Record a mutation of the DELETED-CLAUSE shape and return the mutated text.
+
+    `replace` is a substring of `find`, so a bare "is the replacement present"
+    test matches inside every intact anchor and can never pass. This is the
+    commonest shape in the scheduled-reports plan, and the one where the check
+    has to look at what the anchors do not explain.
+    """
+
+    assert replace in find, "this helper is for the replace-inside-find shape"
+    mutated = original.replace(find, replace)
+    state = tree / ".mutation-harness"
+    (state / "snapshots").mkdir(parents=True)
+    (state / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "applied": {
+                    "mutation_id": "M1",
+                    "file": SOURCE_NAME,
+                    "snapshot": "M1-x.snapshot",
+                    "original_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                    "mutated_sha256": hashlib.sha256(mutated.encode()).hexdigest(),
+                    "find": find,
+                    "replace": replace,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def test_accept_refuses_a_partial_repair_of_a_multi_site_mutation(tree: Path) -> None:
+    """`str.replace` rewrites every site, so a partial repair is still mutated."""
+
+    find = "checkA();checkB()"
+    replace = "checkB()"
+    original = f"package widget\nfunc One() {{ {find} }}\nfunc Two() {{ {find} }}\n"
+    mutated = _deleted_clause_record(tree, find, replace, original)
+
+    partial = mutated.replace(replace, find, 1)
+    (tree / SOURCE_NAME).write_text(partial, encoding="utf-8")
+    assert find in partial, "a presence test for the anchor would pass here"
+    with pytest.raises(HarnessError, match="replacement text is still in the file"):
+        accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
+    assert verify(tree) != []
+
+    # And it is a discriminator, not a blanket refusal: repair the second site
+    # and the same command accepts.
+    (tree / SOURCE_NAME).write_text(original, encoding="utf-8")
+    assert "accepted a by-hand repair" in accept_manual_repair(
+        tree, _digest_of(tree / SOURCE_NAME)
+    )
+    assert verify(tree) == []
+
+
+def test_accept_cannot_be_satisfied_by_the_anchor_appearing_in_prose(
+    tree: Path,
+) -> None:
+    """Counting anchor occurrences is location-blind, and that was a real hole.
+
+    Round 4's reproduction, verbatim: a deleted-clause mutation applied to two
+    sites, both still mutated, plus two COMMENTS containing the original anchor
+    text. Any occurrence count is satisfied -- the anchor really does appear
+    twice -- while every code site stays mutated, and the record would have been
+    cleared with `verify` reporting clean afterwards.
+
+    This is the doc-comment failure the harness refuses anchors for in the first
+    place, arriving through the command that clears the harness's own record. The
+    check now asks what the intact anchors do NOT account for, which prose cannot
+    satisfy: blanking the two comments leaves both bare replacements behind.
+    """
+
+    find = "checkA();checkB()"
+    replace = "checkB()"
+    original = f"package widget\nfunc One() {{ {find} }}\nfunc Two() {{ {find} }}\n"
+    mutated = _deleted_clause_record(tree, find, replace, original)
+
+    spoofed = mutated + f"// explains {find} in prose\n// and again: {find}\n"
+    (tree / SOURCE_NAME).write_text(spoofed, encoding="utf-8")
+    # The old check's premise, asserted so this test cannot quietly stop
+    # exercising the point: the anchor count is fully satisfied.
+    assert spoofed.count(find) == 2
+    # And the file is not the recorded mutation byte-for-byte, so that guard
+    # passes too. Only the unexplained-replacement check is left.
+    assert (
+        _digest_of(tree / SOURCE_NAME) != hashlib.sha256(mutated.encode()).hexdigest()
+    )
+
+    with pytest.raises(HarnessError, match="replacement text is still in the file"):
         accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
     assert verify(tree) != []
 
 
-def test_accept_refuses_a_partial_repair_of_a_multi_site_mutation(tree: Path) -> None:
-    """The anchor is COUNTED, and here counting is the only thing that can work.
+def test_accept_refuses_an_inserted_clause_that_is_still_present(tree: Path) -> None:
+    """The mirror shape: `find` inside `replace`, where blanking anchors blinds.
 
-    This is the shape the replacement check cannot see: a DELETED clause, where
-    `replace` is a substring of `find`, so the replacement is present whether or
-    not the mutation was undone and that check is correctly skipped. It is also
-    the commonest shape in the scheduled-reports plan. `str.replace` rewrote both
-    sites; the operator restored one. A presence test for the anchor passes --
-    the text is genuinely back, at one of two sites -- and the record would be
-    cleared over a file that is still mutated.
+    A pure insertion leaves the mutated site containing the anchor, so removing
+    intact anchors first would erase the evidence -- `foo();bar()` becomes
+    `<blank>;bar()` and the replacement is no longer found. The plain presence
+    test is the one that discriminates here, which is why both are kept and each
+    is skipped only where it cannot work.
     """
 
-    # `checkB()` is a substring of `checkA();checkB()`, so the replacement check
-    # cannot discriminate and is skipped by design.
-    find = "checkA();checkB()"
-    replace = "checkB()"
-    assert replace in find
-
-    original = f"package widget\nfunc One() {{ {find} }}\nfunc Two() {{ {find} }}\n"
+    find = "foo()"
+    replace = "foo();bar()"
+    assert find in replace
+    original = f"package widget\nfunc One() {{ {find} }}\n"
     mutated = original.replace(find, replace)
-    partial = mutated.replace(replace, find, 1)
 
     state = tree / ".mutation-harness"
     (state / "snapshots").mkdir(parents=True)
@@ -899,26 +1083,62 @@ def test_accept_refuses_a_partial_repair_of_a_multi_site_mutation(tree: Path) ->
                     "mutated_sha256": hashlib.sha256(mutated.encode()).hexdigest(),
                     "find": find,
                     "replace": replace,
-                    "expect_occurrences": 2,
                 },
             }
         ),
         encoding="utf-8",
     )
-
-    (tree / SOURCE_NAME).write_text(partial, encoding="utf-8")
-    assert find in partial, "a presence test for the anchor would pass here"
-    with pytest.raises(HarnessError, match="back at 1 site"):
+    # Still mutated, plus an unrelated edit so it is not the recorded digest.
+    (tree / SOURCE_NAME).write_text(mutated + "// touched\n", encoding="utf-8")
+    with pytest.raises(HarnessError, match="replacement text is still in the file"):
         accept_manual_repair(tree, _digest_of(tree / SOURCE_NAME))
     assert verify(tree) != []
 
-    # And the count is a discriminator, not a blanket refusal: repair the second
-    # site and the same command accepts.
-    (tree / SOURCE_NAME).write_text(original, encoding="utf-8")
+    (tree / SOURCE_NAME).write_text(original + "// touched\n", encoding="utf-8")
     assert "accepted a by-hand repair" in accept_manual_repair(
         tree, _digest_of(tree / SOURCE_NAME)
     )
     assert verify(tree) == []
+
+
+def test_restore_refuses_a_record_whose_two_digests_agree(tree: Path) -> None:
+    """A record naming one digest as both original and mutated describes nothing.
+
+    No mutation this harness produces leaves the file identical to the original --
+    a no-op replacement is refused before any write -- so such a record is corrupt.
+    It has to be rejected before the content short-circuit, which would otherwise
+    clear the record on a digest that equally names the MUTATED content, with the
+    mutation still on disk.
+    """
+
+    mutated = _source(DISABLED_GUARD)
+    same = hashlib.sha256(mutated.encode()).hexdigest()
+    state = tree / ".mutation-harness"
+    (state / "snapshots").mkdir(parents=True)
+    (state / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "applied": {
+                    "mutation_id": "M1",
+                    "file": SOURCE_NAME,
+                    "snapshot": "M1-x.snapshot",
+                    "original_sha256": same,
+                    "mutated_sha256": same,
+                    "find": GUARD,
+                    "replace": DISABLED_GUARD,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tree / SOURCE_NAME).write_text(mutated, encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="same digest as both"):
+        restore(tree)
+    # The mutation is still there and the record still stands.
+    assert DISABLED_GUARD in (tree / SOURCE_NAME).read_text(encoding="utf-8")
+    assert verify(tree) != []
 
 
 def test_accept_refuses_a_digest_that_does_not_name_the_current_content(

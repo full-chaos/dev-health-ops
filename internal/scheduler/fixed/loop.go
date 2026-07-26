@@ -308,7 +308,14 @@ func (loop *Loop) record(result WindowResult, now time.Time) {
 		state.handoffs += uint64(schedule.Handoffs)
 		state.skipped += uint64(schedule.Skipped)
 		state.missingFor = schedule.MissingFor
-		state.degraded = schedule.Degraded
+		// Only a window that actually evaluated this schedule may change its
+		// degraded verdict. The loop polls far more often than any schedule is due,
+		// so overwriting unconditionally cleared a live reason on the very next
+		// poll: a permanent fault stayed visible for one poll interval and was
+		// missed by any realistic scrape.
+		if schedule.Evaluated {
+			state.degraded = schedule.Degraded
+		}
 		if schedule.ColdStart {
 			state.coldStarts++
 		}

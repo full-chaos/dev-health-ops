@@ -1,0 +1,231 @@
+package main
+
+import (
+	"errors"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	schedulerfixed "github.com/full-chaos/dev-health-ops/internal/scheduler/fixed"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// testContractRoot is defaultContractRoot resolved from this package directory,
+// which is where `go test` runs. defaultContractRoot is repo-relative because
+// the binary is launched from the repo root.
+const testContractRoot = "../../" + defaultContractRoot
+
+// checkedInUnbuiltSchedules is the complete, reviewed set of fixed schedules
+// this binary declares but cannot execute, with the blocker for each.
+//
+// It exists because ScheduleCoverage does not and cannot catch this. That test
+// proves every legacy Beat entry maps to an owner with a matching cadence, zone
+// and catch-up policy — an OWNERSHIP property. It never constructs a producer,
+// so a schedule whose producer fails every invocation passes it unchanged. Three
+// did, for long enough that their tickets were closed as done.
+//
+// Pinning the set here closes the loophole in both directions: adding a stub, or
+// forgetting to remove one after building the real producer, both fail the
+// build. It is deliberately data rather than a comment so the remaining gap is
+// visible to anyone reading the test output, not only to someone reading
+// buildFixedScheduleProducers.
+var checkedInUnbuiltSchedules = map[string]string{
+	"daily_metrics_fanout": "blocked: repository identity is ClickHouse-only and this process has no " +
+		"ClickHouse connection; discovery must move to internal/jobs/metrics/daily",
+	"scheduled_metrics_dispatch": "blocked on the same ClickHouse-only repository discovery; separately, no " +
+		"code path creates a job_type='metrics' ScheduledJob for it to sweep",
+}
+
+// unconnectedPool is a constructed but never-dialled pool. The stores
+// buildFixedScheduleProducers wires reject a nil pool at construction, and
+// pgxpool opens no connection until first acquire with the default MinConns of
+// zero, so this exercises the real construction path without a database. No test
+// here issues a statement.
+func unconnectedPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	config, err := pgxpool.ParseConfig("postgres://unused:unused@127.0.0.1:1/unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func TestFixedScheduleProducersAreConstructedForEveryDeclaredSchedule(t *testing.T) {
+	registry, err := jobruntime.Load(testContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producers, err := buildFixedScheduleProducers(unconnectedPool(t), registry)
+	if err != nil {
+		t.Fatalf("buildFixedScheduleProducers(): %v", err)
+	}
+	schedules, err := schedulerfixed.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing := producers.Missing(schedules); len(missing) != 0 {
+		t.Fatalf("schedules with no constructed producer: %v", missing)
+	}
+}
+
+// The unbuilt set must equal the checked-in declaration exactly. An added stub
+// is an undeclared regression; a removed one means this table is stale and is
+// still advertising a gap that has been closed.
+func TestUnbuiltFixedScheduleProducersMatchTheCheckedInDeclaration(t *testing.T) {
+	registry, err := jobruntime.Load(testContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producers, err := buildFixedScheduleProducers(unconnectedPool(t), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedules, err := schedulerfixed.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbuilt := producers.Unbuilt(schedules)
+	got := slices.Sorted(maps.Keys(unbuilt))
+	want := slices.Sorted(maps.Keys(checkedInUnbuiltSchedules))
+	if !slices.Equal(got, want) {
+		t.Fatalf("unbuilt schedules = %v, checked-in declaration = %v", got, want)
+	}
+	for id, reason := range checkedInUnbuiltSchedules {
+		if unbuilt[id] != reason {
+			t.Errorf("schedule %s unbuilt reason =\n  %q\nwant\n  %q", id, unbuilt[id], reason)
+		}
+	}
+}
+
+// Every unbuilt producer must still FAIL rather than quietly return no work.
+// This is the property that keeps `fixed_scheduler_loop` readiness honest: a
+// stub that returned an empty outcome would be indistinguishable from a healthy
+// schedule with nothing to do.
+func TestUnbuiltFixedScheduleProducersFailEveryInvocation(t *testing.T) {
+	registry, err := jobruntime.Load(testContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producers, err := buildFixedScheduleProducers(unconnectedPool(t), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedules, err := schedulerfixed.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]schedulerfixed.Schedule, len(schedules))
+	for _, schedule := range schedules {
+		byID[schedule.ID] = schedule
+	}
+	for id := range checkedInUnbuiltSchedules {
+		schedule, ok := byID[id]
+		if !ok {
+			t.Fatalf("checked-in unbuilt schedule %s is not declared", id)
+		}
+		producer, ok := producers.Producer(schedule.ProducerID)
+		if !ok {
+			t.Fatalf("schedule %s has no constructed producer", id)
+		}
+		outcome, err := producer.Produce(
+			t.Context(), nil, schedule,
+			schedulerfixed.Occurrence{ScheduleID: schedule.ID, TargetKind: schedule.TargetKind},
+		)
+		if err == nil {
+			t.Fatalf("unbuilt producer for %s returned %+v instead of failing", id, outcome)
+		}
+	}
+}
+
+// While any declared schedule is unbuilt, the whole fixed-schedule runtime must
+// refuse to construct, so the gap closes readiness at startup rather than up to
+// 24 hours later when a daily stub first fires.
+//
+// The refusal must NAME each schedule and carry its reason: a bare "unavailable"
+// would send an operator to read producer construction code to learn which lane
+// owns the gap, which is the situation this whole change exists to end.
+func TestUnbuiltFixedSchedulesRefuseTheRuntime(t *testing.T) {
+	registry, err := jobruntime.Load(testContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producers, err := buildFixedScheduleProducers(unconnectedPool(t), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedules, err := schedulerfixed.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = refuseUnbuiltFixedSchedules(producers, schedules)
+	if err == nil {
+		t.Fatal("the runtime was accepted while schedules were unbuilt")
+	}
+	if !errors.Is(err, errFixedScheduleUnbuilt) {
+		t.Fatalf("error = %v, want an unbuilt-schedule refusal", err)
+	}
+	for id, reason := range checkedInUnbuiltSchedules {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("refusal does not name unbuilt schedule %s: %v", id, err)
+		}
+		if !strings.Contains(err.Error(), reason) {
+			t.Errorf("refusal does not carry the reason for %s: %v", id, err)
+		}
+	}
+	// A fully built set must be accepted, or the gate would refuse the runtime
+	// forever and could never be satisfied by finishing the work.
+	built, err := schedulerfixed.NewProducerSet(schedulerfixed.NewHeartbeatProducer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := scheduleWithID(t, schedules, "phone_home_heartbeat")
+	if err := refuseUnbuiltFixedSchedules(built, []schedulerfixed.Schedule{heartbeat}); err != nil {
+		t.Fatalf("a fully built schedule set was refused: %v", err)
+	}
+}
+
+func scheduleWithID(
+	t *testing.T,
+	schedules []schedulerfixed.Schedule,
+	id string,
+) schedulerfixed.Schedule {
+	t.Helper()
+	for _, schedule := range schedules {
+		if schedule.ID == id {
+			return schedule
+		}
+	}
+	t.Fatalf("schedule %s is not declared", id)
+	return schedulerfixed.Schedule{}
+}
+
+// scheduled_reports_dispatch must NOT be in the unbuilt set: it is built, and a
+// regression that reverted it to a stub would otherwise only surface as a
+// runtime readiness failure.
+func TestScheduledReportsProducerIsBuilt(t *testing.T) {
+	registry, err := jobruntime.Load(testContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producers, err := buildFixedScheduleProducers(unconnectedPool(t), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedules, err := schedulerfixed.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason, unbuilt := producers.Unbuilt(schedules)["scheduled_reports_dispatch"]; unbuilt {
+		t.Fatalf("scheduled_reports_dispatch reverted to an unbuilt producer: %s", reason)
+	}
+	if _, ok := producers.Producer(schedulerfixed.ProducerScheduledReports); !ok {
+		t.Fatal("the scheduled reports producer is not constructed")
+	}
+}

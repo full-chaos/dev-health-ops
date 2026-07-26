@@ -91,6 +91,21 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 	var shadowBuilt, mutationBuilt bool
 
 	sources := reconcilerSourcesForTest(t, &fakeReconcilerDatabase{})
+	// This test observes WHICH BRANCH the production activation selects. It cannot
+	// observe what production's own buildSyncShadow returns, and that limit is
+	// measured rather than assumed: wrapping the production builder and asserting
+	// on its result was tried and fails on the clean tree, because
+	// syncreconciler.NewShadow needs a real pool and this test runs against a fake
+	// database. Using a real database would make this an integration test, which
+	// changes when and whether it runs -- and an activation pin that CI can skip is
+	// not a pin.
+	//
+	// RESIDUAL RISK, stated because a reader will otherwise assume otherwise:
+	// repoint productionReconcilerDependencySources.buildSyncShadow at an adapter
+	// that returns a MUTATING stepper and this test still passes. The branch is
+	// right and its contents are not checked here. What guards that is
+	// syncreconciler.NewShadow's own tests plus review of that field, not this
+	// file.
 	sources.buildRelay = func(
 		*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry,
 	) (joboutbox.RelayStepper, error) {
@@ -152,8 +167,11 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 	}
 }
 
-// TestReconcilerSpecUsesTheConfigurationThisFilePins closes the chain from `main`
-// to the function the behavioural pin exercises.
+// TestReconcilerSpecUsesTheConfigurationThisFilePins pins ONE LINK of the chain
+// from `main` to the behaviour asserted below. It does not close the chain, and an
+// earlier version of this comment claimed it did while the paragraph below already
+// admitted the gap -- a self-contradiction that shipped. Adversarial review caught
+// it; the honest statement of coverage follows.
 //
 // The behavioural pin calls configureReconcilerDependenciesWithSourcesAndLogger
 // so it can inject fakes. `shell.Main` does not call that directly -- it calls
@@ -162,15 +180,36 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 // test pins both ends of that chain: the spec field points where we think, and the
 // delegate is the function under test.
 //
-// Precisely what IS and IS NOT covered, because the distinction is the whole point
-// of this file: the spec field is asserted here; the ACTIVATION VALUE is asserted
-// by the behavioural pin, because configureReconcilerDependenciesWithSourcesAndLogger
-// is the sole supplier of checkedInReconcilerActivation. What is not asserted is
-// the body of configureReconcilerDependenciesWithLogger beyond its identity -- if
-// someone changed it to pass a different activation, the behavioural pin would not
-// see it, because it enters below that point. That is the residual gap, and the
-// mitigation is that the function is four lines of pure delegation. Do not let it
-// grow logic.
+// PINNED: `reconcilerSpec.ConfigureDependenciesWithLogger` is
+// configureReconcilerDependenciesWithLogger (by code pointer), and
+// ConfigureDependencies is nil so shell.Main cannot take the other field.
+//
+// PINNED: given the checked-in activation, the sources-taking function selects the
+// SHADOW stepper and never the mutation stepper -- asserted by the behavioural test
+// below, which is the sole supplier of checkedInReconcilerActivation.
+//
+// NOT PINNED, and these are real gaps rather than pedantry:
+//
+//   - `main()` calling shell.Main(reconcilerSpec) at all. A test cannot observe
+//     main(); if the binary were rewired to a different spec these tests would not
+//     notice.
+//   - The BODY of configureReconcilerDependenciesWithLogger. Keep its symbol and
+//     change it to supply reconcilerActivation{syncMutation: true}, or to delegate
+//     somewhere else, and both the pointer comparison and the behavioural pin stay
+//     green while the binary mutates. The behavioural pin enters BELOW that
+//     function so it can inject fakes, which is exactly why it cannot see this.
+//     The only mitigation is that the function is four lines of pure delegation:
+//     if it ever grows logic, these pins stop describing production.
+//   - What production's buildSyncShadow actually RETURNS. The behavioural test
+//     substitutes a fake for it, so a mutating stepper behind that field would
+//     pass. Measured, not assumed: wrapping the production builder fails on the
+//     clean tree because it needs a real pool.
+//   - That flipping the seam retains concrete River delivery capability. Set the
+//     flag and the pin together and everything here passes, 42501 and all
+//     (CHAOS-3146).
+//
+// A green run here therefore means "the seam is dormant and changing it is
+// deliberate", never "it is safe to flip".
 func TestReconcilerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
 	if reconcilerSpec.ConfigureDependencies != nil {
 		t.Fatal(

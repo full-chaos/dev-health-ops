@@ -119,8 +119,10 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 	}
 }
 
-// TestSchedulerSpecUsesTheConfigurationThisFilePins closes the last link in the
-// chain from `main` to the assertion above.
+// TestSchedulerSpecUsesTheConfigurationThisFilePins pins the spec-to-function
+// link. It does not close the chain from `main`, and an earlier version of this
+// comment claimed it did -- see the coverage statement below, which review
+// required after the reconciler file made the same overstatement.
 //
 // The behavioural pin calls configureSchedulerDependencies directly. That proves
 // what THAT function does; it does not prove `shell.Main` reaches it. Point
@@ -134,6 +136,16 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 // is also a failure: it would mean the binary has no configuration at all, or
 // that the logger-taking variant is now in use and this pin no longer covers the
 // path production takes.
+//
+// PINNED: the spec field IS configureSchedulerDependencies, and the logger-taking
+// field is nil so shell.Main cannot take the other one. Combined with the
+// behavioural pin above -- which calls that exact function -- the link from the
+// spec to the observed dormant behaviour is covered.
+//
+// NOT PINNED: `main()` calling shell.Main(schedulerSpec). A test cannot observe
+// main(), so a binary rewired to a different spec would not fail here. And, as
+// stated above, neither pin proves that flipping the seam retains the capability
+// the seam guards.
 func TestSchedulerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
 	if schedulerSpec.ConfigureDependenciesWithLogger != nil {
 		t.Fatal(

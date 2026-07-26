@@ -354,8 +354,9 @@ type AdvisoryLine struct {
 //
 // Promoting this to a gate requires the closure argument: a partition of
 // everything the analysis can fail to see, with each cell either failing the
-// check or documented as safe to accept PER SITE. Until that exists, a passing
-// coordinator check is not evidence and must not be read as any.
+// check or documented as safe to accept PER SITE. Tracked as CHAOS-3164. Until
+// that exists, a passing coordinator check is not evidence and must not be read
+// as any.
 //
 // Returning tagged lines from ONE function is also what makes the reporting
 // assertable. When each category was printed by its own loop in the test, a unit

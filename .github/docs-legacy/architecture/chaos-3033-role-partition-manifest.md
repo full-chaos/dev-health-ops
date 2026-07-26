@@ -323,7 +323,31 @@ future role-attribution extension and grants-finisher2's posture manifest
 must both reference — coordinate before either side hard-codes it
 independently.
 
-## The coordinator grant surface is now DERIVED and gated (CHAOS-3033)
+## The coordinator grant surface is DERIVED and ADVISORY (CHAOS-3033)
+
+> **This is a report, not a gate, and that is deliberate.** The coordinator check
+> prints its findings and fails on nothing.
+> `TestDomainGrantSurfaceMatchesQuerySurface` continues to gate the domain role
+> exactly as before. **A passing coordinator run is not evidence that
+> `CoordinatorPosture()` is correct.**
+>
+> Why: three adversarial review rounds each found new places where *the analysis
+> cannot see something and the check passes anyway* — unresolved callees,
+> unresolved interface dispatch, function-valued fields with no single target,
+> dynamic SQL, unparsed statements, non-convergence, unrecognised lock forms,
+> quoted identifiers. Each was fixed where it was found and reappeared elsewhere.
+> That is one defect with many addresses, discovered one review at a time.
+>
+> An advisory tool that is sometimes wrong is useful: it puts derived evidence in
+> front of a reviewer who can weigh it. A **gate** that passes when the analysis is
+> blind is worse than no gate, because it *licenses* the hand-written rows it was
+> built to check — which is how this epic produced green tickets over dormant code
+> in the first place.
+>
+> **Promoting it to a gate requires the blind-spot closure argument**: a partition
+> of everything the analysis can fail to see, with each cell either failing the
+> check or documented as safe to accept **per site** (not per file), and a test per
+> cell demonstrating the failure. Tracked as **CHAOS-3164**.
 
 `TestRoleGrantSurfacesMatchQuerySurfaces` (`internal/domaingrants/role_surface_test.go`)
 derives, per connection pool, which `(table, privilege)` pairs the reachable Go code
@@ -544,28 +568,38 @@ attribution for a false absence. Every override is reported, because it means a
 naming convention lied and the reader should know that rather than assume the
 surface shrank.
 
-### Incompleteness GATES, and is per (table, privilege)
+### Incompleteness is REPORTED, per (table, privilege)
 
-Enumerating what was not verified is not enough — a printout nobody must act on is
-indistinguishable from having checked. Two changes:
+Enumerating what was not verified is the point of the advisory posture — the
+report's value is precisely that it says what it could not see.
 
 - **Pair granularity.** A table-level list hid the case that matters most: if
   SELECT stays visible while an UPDATE path goes dark, the table is nonempty, so a
   table-level list omits it and the exact `(table, UPDATE)` gap appears in *no*
   output at all.
-- **Enforcement.** A posture privilege with no derived call site for its own role
-  must be acknowledged in `acknowledgedBlindSpots` with a reason, or the gate
-  fails; and a stale acknowledgement fails too, so the list cannot outlive the
-  blind spot.
+- **One report, category-tagged.** `AdvisoryReport` returns every line from a
+  single function, tagged by category, and a test asserts every category still
+  emits. When each category was printed by its own loop in the test, a unit test
+  could prove a value reached the data structure while the loop that printed it was
+  deletable with everything still green — and for a tool whose only output is its
+  report, a category that stopped being printed is indistinguishable from one with
+  nothing to say.
+- **`WIRING-HOP` is reported.** It marks where pool taint *stopped*, so any SQL
+  beyond it is invisible. It was collected for three review rounds and never
+  surfaced, which made it the largest unstated hole in the output.
 
-Three exclusions are legitimate and are recorded rather than silently applied:
-SELECT is *synthesized* onto every posture row by `loadPosture`, so its absence on
-a write-only table is a representation artifact; a privilege that satisfies a
-derived LOCK is justified by that lock even though a disjunction cannot be recorded
-as evidence; and third-party function-typed fields (`encoding/json`'s
-`scanner.step`, pgx's `QueuedQuery.Fn`) are filtered out because gating on them
-would be pure noise. Running the enforcement for the first time surfaced all three
-as bugs in the check itself.
+Three exclusions from the "needs acknowledgement" annotation are legitimate and
+recorded rather than silently applied: SELECT is *synthesized* onto every posture
+row by `loadPosture`, so its absence on a write-only table is a representation
+artifact; a privilege that satisfies a derived LOCK is justified by that lock when
+it is the *sole* satisfying privilege held; and third-party function-typed fields
+(`encoding/json`'s `scanner.step`, pgx's `QueuedQuery.Fn`) are filtered out because
+reporting them would be pure noise.
+
+**Known limitation, carried into the closure argument**: dynamic-SQL
+acknowledgements are keyed by FILE, so a new dynamic statement in an already-
+acknowledged file is accepted without review. Per-site acknowledgement is part of
+the partition task (CHAOS-3164), not a patch.
 
 ### Fail-closed must not become fail-SILENT
 
@@ -611,20 +645,24 @@ accretes grants permanently, and nothing here distinguishes "not yet" from
 no-derived-evidence advisories), not by changing the reachability model. If a seam is
 dead, delete the wiring — that is the signal this analyzer reads.
 
-### Known-open findings carry a ticket and expire
+### Known-open findings carry a ticket
 
-`knownOpenCriticals` records CRITICALs accepted as real whose fix belongs to another
-lane. It is not a suppression list: an entry matches exactly one
-`(role, table, privilege)`, every entry must name a ticket, and an entry that **stops
-reproducing fails the gate** ("stale, delete it") so it cannot outlive the fix. Emptying
-it is the goal state.
+`knownOpenCriticals` records CRITICALs accepted as real whose fix belongs to
+another lane. Entries match exactly one `(role, table, privilege)`, must name a
+ticket, and are reported under their own category so "someone is fixing this" is
+never flattened into "unreviewed".
 
-Current entry — found by this gate's first run: **coordinator `sync_dispatch_outbox`
-INSERT** (CHAOS-3079). `syncreconciler.Materializer.Step` runs on the coordinator pool
-(`cmd/dev-health-reconciler/dependencies.go:208`) and executes four
-`INSERT INTO public.sync_dispatch_outbox` (`materializer.go:125/235/345/450`) while
-`coordinatorPosture()` declares `allow_insert=false`. Latent only because
-`checkedInReconcilerActivation.syncMutation` is false today.
+Under the advisory posture its expiry property is **suspended**: nothing fails, so
+a stale entry is reported rather than enforced. Restoring enforcement is part of
+promoting the check to a gate.
+
+Current entry — found by this checker's first run: **coordinator
+`sync_dispatch_outbox` INSERT** (CHAOS-3079). `syncreconciler.Materializer.Step`
+runs on the coordinator pool (`cmd/dev-health-reconciler/dependencies.go:208`) and
+executes four `INSERT INTO public.sync_dispatch_outbox`
+(`materializer.go:125/235/345/450`) while `coordinatorPosture()` declares
+`allow_insert=false`. Latent only because `checkedInReconcilerActivation.syncMutation`
+is false today.
 
 ### Harness consequence of adding a posture row
 

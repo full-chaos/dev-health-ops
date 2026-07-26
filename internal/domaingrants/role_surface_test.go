@@ -34,8 +34,8 @@ import (
 //
 // Promoting this to a gate requires the blind-spot closure argument: a partition
 // of everything the analysis can fail to see, with each cell either failing the
-// check or documented as safe to accept PER SITE (not per file). That is tracked
-// separately as a design task.
+// check or documented as safe to accept PER SITE (not per file). Tracked as
+// CHAOS-3164.
 //
 // The only failures here are TOOL-BROKEN conditions -- the analysis could not run
 // at all. Those are not findings about the code under analysis, and reporting

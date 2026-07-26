@@ -565,6 +565,26 @@ func reconcilerTestLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
+// reconcilerProductionShapedConfig is config.Load's own output for
+// reconcilerSpec.Service with no environment variables set -- not a hand-built
+// config.Config{} literal. Adversarial review found that a hand-picked subset
+// of fields (even one including Service) still isn't what production
+// computes: every field config.Load defaults to a non-empty value with no
+// environment set (cfg.CoordinatorDatabaseRole, for instance) was left zero in
+// a literal, unlike production. Using config.Load directly removes that gap
+// for every field it can populate without a real secret being configured.
+func reconcilerProductionShapedConfig(t *testing.T) config.Config {
+	t.Helper()
+	cfg, err := config.Load(config.Spec{
+		Service:   reconcilerSpec.Service,
+		LookupEnv: func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatalf("loading a production-defaulted config for %q: %v", reconcilerSpec.Service, err)
+	}
+	return cfg
+}
+
 func componentNames(components []lifecycle.Component) []string {
 	names := make([]string, 0, len(components))
 	for _, component := range components {

@@ -156,9 +156,49 @@ func TestKnownOpenLifecycleIsFullyReported(t *testing.T) {
 			"of staleness:\n%s", knownOpen)
 	}
 
-	// Unticketed: must never be presented as ticketed.
-	if !strings.Contains(knownOpen, "NO TICKET") || !strings.Contains(knownOpen, "untracked") {
-		t.Errorf("an entry with no ticket must be reported as untracked, not labelled ticketed:\n%s",
+	// Unticketed: must never be presented as ticketed, and the assertion must be
+	// specific to the DEDICATED unticketed loop.
+	//
+	// An earlier version checked only for "NO TICKET" and "untracked", both of which
+	// the ACCEPTED path also emits (it prints "NO TICKET RECORDED" for a blank ticket
+	// and includes the finding summary). So deleting the dedicated loop entirely left
+	// this test green -- the exact regression it claims to prevent. Asserting text
+	// unique to that loop is what makes it falsifiable.
+	if !strings.Contains(knownOpen, "nothing tracks its fix") {
+		t.Errorf("the DEDICATED unticketed line must appear; matching only on \"NO TICKET\" is "+
+			"satisfied by the accepted path's blank-ticket label, so it cannot detect that loop's "+
+			"removal:\n%s", knownOpen)
+	}
+	if !strings.Contains(knownOpen, "untracked") {
+		t.Errorf("the unticketed entry must be named:\n%s", knownOpen)
+	}
+}
+
+// TestUnticketedEntryWithNoMatchingFindingIsStillReported isolates the dedicated
+// unticketed loop from the accepted path completely: with no finding to match, the
+// accepted path cannot fire at all, so anything reported here comes only from the
+// lifecycle loops.
+func TestUnticketedEntryWithNoMatchingFindingIsStillReported(t *testing.T) {
+	real := knownOpenCriticals
+	t.Cleanup(func() { knownOpenCriticals = real })
+	knownOpenCriticals = []KnownOpenCritical{
+		{Role: RoleDomain, Table: "orphan", Privilege: PrivDelete, Ticket: "", Why: "no owner"},
+	}
+
+	// No findings at all.
+	var knownOpen string
+	for _, line := range AdvisoryReport(&RoleReport{}) {
+		if line.Category == CategoryKnownOpen {
+			knownOpen += line.Text + "\n"
+		}
+	}
+	if !strings.Contains(knownOpen, "nothing tracks its fix") || !strings.Contains(knownOpen, "orphan") {
+		t.Errorf("an unticketed entry must be reported even with no matching finding -- otherwise the "+
+			"only thing exercising that loop is a path that also emits similar text:\n%s", knownOpen)
+	}
+	// It is also stale (nothing reproduces it), and both facts must be said.
+	if !strings.Contains(knownOpen, "STALE") {
+		t.Errorf("an entry with no matching finding is also stale and must be reported as such:\n%s",
 			knownOpen)
 	}
 }

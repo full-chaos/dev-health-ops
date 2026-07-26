@@ -8,8 +8,10 @@ import (
 	"net/url"
 	"time"
 
+	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	valkeygo "github.com/valkey-io/valkey-go"
 )
 
 const (
@@ -107,7 +109,64 @@ func StartClickHouse(ctx context.Context) (*Instance, error) {
 		Host:   host + ":" + mappedPort,
 		Path:   database,
 	}
-	return &Instance{Container: container, URI: uri.String()}, nil
+	instance := &Instance{Container: container, URI: uri.String()}
+
+	// wait.ForListeningPort(port) above proves only that 9000/tcp completed
+	// a TCP handshake, not that the native-protocol handler behind it is
+	// actually answering queries -- the same class of gap fixed for Valkey
+	// below. The HTTP /ping check makes this a much smaller risk in
+	// practice (ClickHouse's HTTP interface is very unlikely to answer
+	// before its native handler is also live), but it is still an
+	// indirect signal for a port every real caller's single-shot
+	// clickhouse.Open->Ping (see internal/storage/clickhouse/factory.go)
+	// depends on directly. Prove it directly instead of by inference, with
+	// the same order-of-magnitude retry budget as the wait above.
+	if err := waitForClickHouseCommandReady(ctx, instance.URI, 90*time.Second); err != nil {
+		_ = instance.Close(ctx)
+		return nil, fmt.Errorf("wait for ClickHouse command readiness: %w", err)
+	}
+	return instance, nil
+}
+
+// waitForClickHouseCommandReady polls uri with real Ping calls against the
+// native protocol port until one succeeds or timeout elapses.
+func waitForClickHouseCommandReady(ctx context.Context, uri string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		lastErr = pingClickHouseOnce(attemptCtx, uri)
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("clickhouse did not answer Ping within %s: %w", timeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// pingClickHouseOnce opens a short-lived native-protocol connection against
+// uri and issues a single Ping. Like pingValkeyOnce, it intentionally does
+// not reuse clickhousestore.Open/Config: production tuning there is meant
+// for an already-healthy server, not a just-started test container.
+func pingClickHouseOnce(ctx context.Context, uri string) error {
+	options, err := clickhousego.ParseDSN(uri)
+	if err != nil {
+		return err
+	}
+	options.DialTimeout = 2 * time.Second
+	conn, err := clickhousego.Open(options)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return conn.Ping(ctx)
 }
 
 func StartValkey(ctx context.Context) (*Instance, error) {
@@ -125,7 +184,80 @@ func StartValkey(ctx context.Context) (*Instance, error) {
 		Host:   host + ":" + mappedPort,
 		Path:   "1",
 	}
-	return &Instance{Container: container, URI: uri.String()}, nil
+	instance := &Instance{Container: container, URI: uri.String()}
+
+	// wait.ForListeningPort only proves the kernel completed a TCP
+	// handshake on the mapped port -- it says nothing about whether the
+	// single-threaded Valkey event loop has actually been scheduled long
+	// enough to answer a command. A listen() backlog can accept a
+	// connection before (or between) the process getting CPU time,
+	// especially once this harness's callers are competing with every
+	// other integration package's own containers for a runner's CPU quota
+	// (23 packages now discovered by ci/check_go.sh's integration job on a
+	// 4-vCPU GitHub-hosted runner; see the ClickHouse dual-port wait above
+	// for the same family of race, and CHAOS-3133 for pgxpool.MaxConns
+	// defaulting to runtime.NumCPU() -- both "worked on every dev machine,
+	// starved on a 4-vCPU runner"). The first application-level command
+	// against a freshly-started Valkey is the PING inside
+	// valkeystore.Open, which uses a 5s DialTimeout -- a *production*
+	// tuning for an already-warm server a few milliseconds away, not for a
+	// container whose TCP handshake just completed under load. Closing
+	// that gap by loosening the production timeout would weaken a value
+	// every real caller relies on; closing it here instead, with a real
+	// PING loop bounded by the same order-of-magnitude startup budget the
+	// Postgres (60s) and ClickHouse (90s) harnesses above already use,
+	// keeps the assertion honest: it still must observe a genuine,
+	// successful PING, so it cannot paper over a Valkey that is actually
+	// broken.
+	if err := waitForValkeyCommandReady(ctx, instance.URI, 60*time.Second); err != nil {
+		_ = instance.Close(ctx)
+		return nil, fmt.Errorf("wait for Valkey command readiness: %w", err)
+	}
+	return instance, nil
+}
+
+// waitForValkeyCommandReady polls uri with real PING commands until one
+// succeeds or timeout elapses, retrying at a fixed short interval so the
+// deadline is the caller's real budget rather than a single dial attempt's.
+func waitForValkeyCommandReady(ctx context.Context, uri string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		lastErr = pingValkeyOnce(attemptCtx, uri)
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("valkey did not answer PING within %s: %w", timeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// pingValkeyOnce opens a short-lived client against uri and issues a single
+// PING. It intentionally does not reuse valkeystore.Open/Config: that
+// package's DefaultConfig is tuned for production traffic against an
+// already-healthy server, and this harness needs its own, longer-lived
+// readiness budget instead of inheriting that tuning.
+func pingValkeyOnce(ctx context.Context, uri string) error {
+	options, err := valkeygo.ParseURL(uri)
+	if err != nil {
+		return err
+	}
+	options.Dialer.Timeout = 2 * time.Second
+	options.ClientSetInfo = valkeygo.DisableClientSetInfo
+	client, err := valkeygo.NewClient(options)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Do(ctx, client.B().Ping().Build()).Error()
 }
 
 func start(

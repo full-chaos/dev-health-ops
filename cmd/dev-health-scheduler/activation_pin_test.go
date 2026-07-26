@@ -171,12 +171,17 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 // comparisons would agree and still miss the same case. This is a limit of
 // what reflection can prove, not a gap this file chose to leave open.
 //
-// NOT PINNED: `main()` calling shell.Main(schedulerSpec) at runtime -- a running
-// test cannot observe process startup. TestSchedulerMainInvokesShellMainWithThePinnedSpec
-// below closes the practical version of this gap by parsing main.go's committed
-// source instead of trying to observe its execution. And, as stated above,
-// neither pin proves that flipping the seam retains the capability the seam
-// guards.
+// NOT PINNED (closed at the source level, not the runtime level): `main()`
+// calling shell.Main(schedulerSpec). A running test cannot observe process
+// startup. TestSchedulerMainInvokesShellMainWithThePinnedSpec below covers the
+// half of this that a source parse can: that main.go's committed body is
+// exactly the one call. It does NOT cover a second, still-open half: a future
+// activation route added inside shell.Main/Execute itself -- reading an
+// environment variable directly, or dispatching on something other than the
+// spec's configure fields -- would bypass every pin in this file the same way
+// a rewired main() would, and no test here would notice, because none of them
+// exercise shell.Main/Execute's own internals. And, as stated above, neither
+// pin proves that flipping the seam retains the capability the seam guards.
 func TestSchedulerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
 	if schedulerSpec.ConfigureDependenciesWithLogger != nil {
 		t.Fatal(
@@ -376,6 +381,14 @@ func TestSchedulerActivationPinIsNotVacuous(t *testing.T) {
 // one call, fails the test. A future legitimate change to main() must update
 // this test in the same commit, which is the point -- that change becomes
 // visible instead of silently falling outside every other pin's reach.
+//
+// The brittleness is intentional, not a defect to fix later: this WILL fail
+// the day someone adds a legitimate second statement to main() (a defer, a
+// flag parse, anything). The correct response to that red is to re-review
+// what the new statement does to activation and rewrite this test to match --
+// never to loosen the assertion to something like "contains a call to
+// shell.Main", which would silently reopen the exact gap this test exists to
+// close.
 func TestSchedulerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, "main.go", nil, 0)

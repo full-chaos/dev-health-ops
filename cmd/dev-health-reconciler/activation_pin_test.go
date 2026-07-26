@@ -177,14 +177,16 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 	}
 }
 
-// TestReconcilerSpecInvokesTheReviewedActivation closes the gap named in the
-// test above's residual-risk statement, and in this file's other comments:
-// that the behavioural pin enters through
-// configureReconcilerDependenciesWithSourcesAndLogger, one level below the
-// production wrapper, so keeping the configureReconcilerDependenciesWithLogger
-// symbol but rewriting its body to supply reconcilerActivation{syncMutation:
-// true}, or to delegate somewhere else, would leave every other pin in this
-// file green.
+// TestReconcilerSpecInvokesTheReviewedActivation closes a DIFFERENT gap than
+// the test above's residual-risk statement (that one -- production's
+// buildSyncShadow return value -- is closed below by
+// TestProductionSyncShadowBuilderReturnsTheShadowStepper, not by this test).
+// This one closes the wrapper-body-bypass gap: the behavioural pin above
+// enters through configureReconcilerDependenciesWithSourcesAndLogger, one
+// level below the production wrapper, so keeping the
+// configureReconcilerDependenciesWithLogger symbol but rewriting its body to
+// supply reconcilerActivation{syncMutation: true}, or to delegate somewhere
+// else, would leave every other pin in this file green.
 //
 // This closes that specific route: it swaps fakes into the PACKAGE VARIABLE
 // productionReconcilerDependencySources -- what
@@ -358,7 +360,13 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 //   - `main()` calling shell.Main(reconcilerSpec) at runtime. A running test
 //     cannot observe process startup.
 //     TestReconcilerMainInvokesShellMainWithThePinnedSpec, below, closes the
-//     practical version of this by parsing main.go's committed source instead.
+//     half of this a source parse can: that main.go's committed body is
+//     exactly that one call. It does NOT close a second, still-open half: a
+//     future activation route added inside shell.Main/Execute itself -- an
+//     environment variable read directly, or a dispatch on something other
+//     than the spec's configure fields -- would bypass every pin in this file
+//     the same way a rewired main() would, and nothing here exercises
+//     shell.Main/Execute's own internals to catch it.
 //   - That flipping the seam retains concrete River delivery capability. Set the
 //     flag and the pin together and everything here passes, 42501 and all
 //     (CHAOS-3146).
@@ -550,6 +558,14 @@ func TestReconcilerActivationPinIsNotVacuous(t *testing.T) {
 // one call, fails the test. A future legitimate change to main() must update
 // this test in the same commit, which is the point -- that change becomes
 // visible instead of silently falling outside every other pin's reach.
+//
+// The brittleness is intentional, not a defect to fix later: this WILL fail
+// the day someone adds a legitimate second statement to main() (a defer, a
+// flag parse, anything). The correct response to that red is to re-review
+// what the new statement does to activation and rewrite this test to match --
+// never to loosen the assertion to something like "contains a call to
+// shell.Main", which would silently reopen the exact gap this test exists to
+// close.
 func TestReconcilerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, "main.go", nil, 0)

@@ -63,6 +63,14 @@ func TestReportCoordinatorGrantSurface(t *testing.T) {
 		t.Fatalf("CompareRoles: %v", err)
 	}
 
+	// The disclaimer goes FIRST as well as last. With -v this output can run to
+	// hundreds of lines, and a note only at the bottom is a note most readers never
+	// reach -- while `go test` without -v prints nothing but "ok", which is the
+	// single most misreadable outcome this check can produce.
+	t.Log("### ADVISORY REPORT -- THIS TEST GATES NOTHING. Everything below is reported, not " +
+		"asserted. A passing run is NOT evidence that CoordinatorPosture() is correct. See this " +
+		"test's doc comment, and CHAOS-3164 for what promoting it to a gate requires. ###")
+
 	byCategory := map[AdvisoryCategory][]string{}
 	for _, line := range AdvisoryReport(report) {
 		byCategory[line.Category] = append(byCategory[line.Category], line.Text)

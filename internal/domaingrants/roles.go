@@ -53,16 +53,26 @@ import (
 // ticket, and is being fixed by a lane that does not own this checker.
 //
 // This is not a suppression list and must not be used as one. It exists because
-// the gate's first run found a genuine latent 42501 whose fix is a posture edit
-// in another lane, and a gate that cannot be landed until someone else's commit
-// merges never gets landed at all. The three properties that keep it honest:
+// the checker's first run found a genuine latent 42501 whose fix is a posture edit
+// in another lane.
 //
-//  1. It matches EXACTLY one (role, table, privilege). Any other CRITICAL fails
-//     the gate, including a different privilege on the same table.
-//  2. An entry that STOPS reproducing fails the gate too ("stale entry, delete
-//     it"). So it cannot outlive the fix, which is what turns allowlists into
-//     permanent blindness.
-//  3. Every entry names a ticket. An entry without one fails the gate.
+// # ENFORCEMENT IS SUSPENDED under the advisory posture
+//
+// The coordinator check REPORTS and gates nothing (see AdvisoryReport), so none of
+// the three properties below currently FAIL anything -- they are reported instead.
+// That suspension is a consequence of the advisory decision, and it is written
+// here deliberately rather than left to be inferred from the absence of a
+// consumer: a comment claiming enforcement that no longer happens is worse than no
+// comment, because a reader trusts it. RESTORING these three is part of promoting
+// the check to a gate, tracked in CHAOS-3164.
+//
+// The three properties, all currently REPORTED rather than enforced:
+//
+//  1. An entry matches EXACTLY one (role, table, privilege), so a different
+//     privilege on the same table is not absorbed by it.
+//  2. An entry that STOPS reproducing is flagged stale, so it cannot outlive the
+//     fix -- which is what turns allowlists into permanent blindness.
+//  3. Every entry names a ticket.
 //
 // Emptying this list is the goal state, not a special case.
 type KnownOpenCritical struct {
@@ -96,10 +106,14 @@ func (k KnownOpenCritical) matches(f Finding) bool {
 }
 
 // PartitionKnownOpen splits criticals into the ones already accepted-and-ticketed
-// and the ones that must fail the gate, and separately reports allowlist entries
-// that no longer reproduce. A stale entry is itself a failure: it means the fix
-// landed and the gate is now carrying a blind spot for a defect that no longer
-// exists, which is exactly how a list like this rots into permanent suppression.
+// and the ones that would block, and separately reports allowlist entries that no
+// longer reproduce.
+//
+// Under the advisory posture NOTHING here fails; the four results are reported by
+// AdvisoryReport. A stale entry still MATTERS -- it means the fix landed and the
+// list is now carrying an exemption for a defect that no longer exists, which is
+// how a list like this rots into permanent suppression -- but saying so is
+// currently all this does. Enforcement returns with CHAOS-3164.
 func PartitionKnownOpen(criticals []Finding) (blocking []Finding, accepted []Finding, stale []KnownOpenCritical, unticketed []KnownOpenCritical) {
 	seen := make([]bool, len(knownOpenCriticals))
 	for _, f := range criticals {
@@ -131,15 +145,21 @@ func PartitionKnownOpen(criticals []Finding) (blocking []Finding, accepted []Fin
 // AcknowledgedBlindSpot is one posture-declared (role, table, privilege) that
 // this derivation cannot see, reviewed and accepted with a reason.
 //
-// It is the mechanism that makes enumerated incompleteness a GATE rather than a
-// printout. Before it, the gate reported dozens of stopped wiring hops and
-// several evidence-free posture rows and still passed -- exactly the "silence
-// reads as confirmation" failure the enumeration exists to prevent, since a
-// printout nobody must act on is indistinguishable from having checked.
+// It records which evidence-free posture rows a human has actually looked at, and
+// why each is safe to accept. Same three properties as knownOpenCriticals: exact
+// tuple match, a mandatory reason, and a stale entry flagged so the list cannot
+// outlive the blind spot it excuses.
 //
-// Same three properties as knownOpenCriticals, for the same reason: exact tuple
-// match, a mandatory reason, and a STALE entry fails the gate so the list cannot
-// outlive the blind spot. An unacknowledged evidence-free posture row fails.
+// ENFORCEMENT IS SUSPENDED under the advisory posture -- an unacknowledged row is
+// REPORTED, not failed. The distinction still earns its keep as documentation:
+// an acknowledged row carries a traceable reason, an unacknowledged one is a row
+// nobody has examined, and the report says which is which. Enforcement returns
+// with CHAOS-3164.
+//
+// Known limitation carried into that ticket: acknowledgements here are keyed by
+// (role, table, privilege), but the DYNAMIC-SQL equivalent is keyed by FILE, so a
+// new dynamic statement in an already-acknowledged file is accepted without
+// review. Per-site acceptance is part of the partition work.
 type AcknowledgedBlindSpot struct {
 	Role      PoolRole
 	Table     string
@@ -316,6 +336,7 @@ const (
 	CategoryFuncValue        AdvisoryCategory = "UNRESOLVED-FUNCTION-VALUE"
 	CategoryWiringHop        AdvisoryCategory = "WIRING-HOP"
 	CategoryNameSeedOverride AdvisoryCategory = "NAME-SEED-OVERRIDE"
+	CategoryUnresolvedTx     AdvisoryCategory = "UNRESOLVED-TX-ORIGIN"
 	CategoryAcknowledgement  AdvisoryCategory = "ACKNOWLEDGEMENT"
 	CategoryStats            AdvisoryCategory = "STATS"
 )
@@ -324,7 +345,8 @@ const (
 var AllAdvisoryCategories = []AdvisoryCategory{
 	CategoryStats, CategoryCritical, CategoryKnownOpen, CategoryAdvisory,
 	CategorySharedPair, CategoryNoEvidence, CategoryDynamicSQL, CategoryUnparsedLock,
-	CategoryFuncValue, CategoryWiringHop, CategoryNameSeedOverride, CategoryAcknowledgement,
+	CategoryFuncValue, CategoryWiringHop, CategoryNameSeedOverride, CategoryUnresolvedTx,
+	CategoryAcknowledgement,
 }
 
 // AdvisoryLine is one reportable statement, tagged with its category.
@@ -419,6 +441,14 @@ func AdvisoryReport(report *RoleReport) []AdvisoryLine {
 					"invisible to this analysis. First: %s",
 				surface.Role, len(surface.WiringHops), describeHops(surface.WiringHops, 5)))
 		}
+		if len(surface.UnresolvedTx) > 0 {
+			add(CategoryUnresolvedTx, fmt.Sprintf(
+				"role %s: %d SQL site(s) run through a pgx.Tx parameter whose Begin() could NOT be "+
+					"traced to a single origin, so their transaction grouping fell back to the coarse "+
+					"function-scoped fallback -- any transaction-shaped reading of these is incomplete, "+
+					"not a clean no-conflict signal. First: %s",
+				surface.Role, len(surface.UnresolvedTx), describeTxSites(surface.UnresolvedTx, 5)))
+		}
 		for _, override := range surface.NameSeedOverrides {
 			add(CategoryNameSeedOverride, fmt.Sprintf(
 				"role %s: %s:%d parameter %q in %s is spelled for this role but its call sites pass %v "+
@@ -463,6 +493,18 @@ func AdvisoryReport(report *RoleReport) []AdvisoryLine {
 	}
 
 	return lines
+}
+
+func describeTxSites(sites []UnresolvedTxSite, n int) string {
+	var parts []string
+	for i, site := range sites {
+		if i >= n {
+			parts = append(parts, "...")
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d in %s", site.File, site.Line, site.Function))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func describeHops(hops []UnresolvedCallSite, n int) string {
@@ -528,6 +570,11 @@ type IncompleteRoleSurface struct {
 	// spelling. Carried here so the advisory report has ONE source for everything
 	// it prints.
 	NameSeedOverrides []NameSeedOverride
+	// UnresolvedTx are SQL sites issued through a pgx.Tx PARAMETER whose origin
+	// could not be traced to a single Begin(). Their TxGroup fell back to the
+	// coarse function-scoped grouping, so any transaction-shaped observation
+	// involving them is incomplete rather than a clean "no conflict" signal.
+	UnresolvedTx []UnresolvedTxSite
 	// UndeclaredByEvidence are the (table, privilege) PAIRS this role's posture
 	// declares that this role's derivation found no call site for. Each is either
 	// a legitimate over-declaration or a path inside a blind spot -- this tool
@@ -1166,6 +1213,7 @@ func incompleteFor(in RoleInput, byRole map[PoolRole]RoleInput) IncompleteRoleSu
 	}
 	out.UnparsedLocks = in.Derived.UnparsedLocks
 	out.NameSeedOverrides = in.Derived.NameSeedOverrides
+	out.UnresolvedTx = in.Derived.UnresolvedTx
 
 	// PAIR-granular, and computed against THIS role's own derivation. A
 	// table-level check would miss the case that matters most: SELECT still

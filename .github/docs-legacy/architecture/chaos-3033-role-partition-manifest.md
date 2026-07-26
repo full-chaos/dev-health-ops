@@ -669,9 +669,40 @@ is false today.
 `rolePostureQuery` asserts `count(required_tables) = count(required_table_privileges)`
 with **no leniency** (`domain_authorization.go:194`), and `required_tables` JOINs
 `pg_class`. The GRANT side is `to_regclass`-guarded and skips a missing table silently.
-So a posture row for a table the test database does not create makes the readiness check
-fail while the grant reports success. Adding a new table to either posture therefore
-requires a matching `CREATE TABLE` in **two** places — `startGrantHarness`
-(`internal/storage/postgres/domain_grant_reconciliation_integration_test.go:209`, shared
-by all 22 in-package grant tests) and `cmd/dev-health-workerctl/main_integration_test.go`,
-which builds its own.
+So a posture row for a table the test database does not create makes the readiness
+check fail while the grant reports success.
+
+**Adding a table to either posture requires a matching `CREATE TABLE` in THREE
+places.** An earlier revision of this section said two; that was wrong, and the
+correction matters because the third is the coordinator-exclusive one:
+
+1. `reconciliationTables()` **or** the inline DDL block in `startGrantHarness`
+   (`domain_grant_reconciliation_integration_test.go`) — the domain/shared tables.
+2. `coordinatorExclusiveDDL()`
+   (`coordinator_statement_privileges_integration_test.go`) — coordinator-exclusive
+   tables. **This is the one the earlier count missed**, by grepping literal
+   `CREATE TABLE public.` in a single file.
+3. `cmd/dev-health-workerctl/main_integration_test.go`, which builds its own harness.
+
+Across sources 1 and 2 the harness creates **42 distinct relations**.
+
+#### And a fourth place that needs no edit, which is the more interesting gap
+
+`role_posture_integration_test.go` does **not** use `startGrantHarness` at all. Its
+four tests each start their own container and create their own roles with synthetic
+names. Three of them use synthetic postures and are unaffected by a real posture
+row. The fourth,
+`TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest`, builds
+its table set as the **union of both real postures**, so a new posture row is picked
+up automatically with a generic column shape and needs no edit.
+
+That auto-adaptation is worth understanding rather than trusting: it derives grants
+through a local `grantStatementsForPosture()` helper, **not** through
+`runtimeGrantStatements` or the real migration path. So it cannot notice a grant the
+real migration fails to issue — it proves the posture is self-consistent, not that
+the migration provisions it.
+
+The shape to recognise: **coverage that exists somewhere, asserted as coverage
+everywhere.** A posture row is exercised against the real migration path only via
+sources 1–3; the test that adapts automatically is the one testing something else.
+That is the same failure family that made the coordinator checker advisory.

@@ -55,6 +55,7 @@ func TestAdvisoryReportCoversEveryCategory(t *testing.T) {
 			FuncValueConflicts:   []FuncValueConflictSite{{File: "cmd/x/deps.go", Line: 7, Field: "sources.newThing", Reason: "two implementations"}},
 			WiringHops:           []UnresolvedCallSite{{File: "internal/x/y.go", Line: 11, Callee: "", Reason: "function value"}},
 			NameSeedOverrides:    []NameSeedOverride{{File: "cmd/x/deps.go", Line: 5, Name: "domainPool", Function: "build", ObservedRoles: []string{"coordinator"}}},
+			UnresolvedTx:         []UnresolvedTxSite{{File: "internal/x/y.go", Line: 13, Function: "Repo.Step"}},
 		}},
 	}
 

@@ -57,11 +57,12 @@ func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
 		t.Log(line)
 	}
 
-	// The derived dual-grant set, printed so it is reviewable. This replaces the
-	// hand-maintained shared-table whitelist the role-partition manifest used to
-	// carry: a table needed by two roles is now a computed property of the
-	// evidence rather than a list someone must remember to update.
-	t.Logf("derived shared (dual-grant) pairs -- proven call sites on more than one pool, so legitimately in more than one posture (%d):", len(report.SharedPairs))
+	// The derived shared set, printed so it is reviewable. It makes the dual-grant
+	// question checkable rather than purely asserted, but it is NOT authoritative
+	// on its own and does not replace the role-partition manifest's whitelist --
+	// see RoleReport.SharedPairs for the three reasons (pair-level vs table-level,
+	// dual-constructed-type artifacts, and inherited blind spots).
+	t.Logf("derived shared pairs -- proven call sites on more than one pool (%d). Reviewable signal, not authoritative; see RoleReport.SharedPairs:", len(report.SharedPairs))
 	for _, pair := range report.SharedPairs {
 		t.Logf("    %s", pair)
 	}

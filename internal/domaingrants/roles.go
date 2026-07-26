@@ -17,13 +17,13 @@ import (
 // would license exactly the hand-written rows the gate exists to adjudicate:
 //
 //   - PROVABLE, and reported CRITICAL: real code on role R's pool executes a
-//     statement R's posture does not authorize. Under-approximation cuts the
-//     other way here -- if the analyzer sees the call site, the call site is
-//     real.
-//   - PROVABLE, and reported CRITICAL: a (table, privilege) with evidence on
-//     BOTH pools that is missing from EITHER posture. This is the derived
-//     dual-grant check, and it replaces a hand-maintained shared-table
-//     whitelist with a computed property of the evidence.
+//     statement R's posture does not authorize, where at least one proving call
+//     site is reachable ONLY through R's pool. Under-approximation cuts the safe
+//     way here -- if the analyzer sees the call site, the call site is real.
+//   - NOT PROVABLE, reported ADVISORY: a (table, privilege) missing from a
+//     posture whose every proving site is SHARED with another role. See the
+//     granularity note below -- this is the one place a finding can be wrong in
+//     the WIDENING direction, so it must not be a CRITICAL.
 //   - NOT PROVABLE HERE, reported ADVISORY: "role B must not hold X." The
 //     derivation is a sound-but-INCOMPLETE under-approximation, so "B has no
 //     evidence for X" never implies "B does not need X" -- it may simply be a
@@ -162,10 +162,25 @@ type IncompleteRoleSurface struct {
 type RoleReport struct {
 	Findings   []Finding
 	Incomplete []IncompleteRoleSurface
-	// SharedPairs are the (table, privilege) pairs with proven call sites on
-	// more than one pool -- the DERIVED dual-grant set. Every one of these
-	// legitimately appears in more than one posture and must not be read as a
-	// leak.
+	// SharedPairs are the (table, privilege) pairs with proven call sites on more
+	// than one pool. It is a REVIEWABLE SIGNAL, deliberately not a drop-in
+	// replacement for the role-partition manifest's hand-maintained dual-grant
+	// whitelist, and three differences matter before anyone treats it as one:
+	//
+	//  1. It is PAIR-level, the whitelist is TABLE-level. A table granted to both
+	//     roles with DIFFERENT privileges (sync_dispatch_transport_routes: domain
+	//     SELECT, coordinator UPDATE) is a shared TABLE but has no shared PAIR, so
+	//     it does not appear here.
+	//  2. It cannot distinguish a genuine dual-grant from a dual-constructed-type
+	//     artifact. remaining_metric_runs/partitions appear here only because
+	//     PostgresStore.pool is fed both pools, not because both roles run every
+	//     statement -- see the granularity note in this file's header.
+	//  3. It inherits the derivation's blind spots. `organizations` is a real
+	//     dual-grant that does NOT appear here, because the coordinator side has no
+	//     derived evidence (it is in IncompleteRoleSurface instead).
+	//
+	// So: useful for review, and it makes the shared set visible and checkable
+	// rather than purely asserted. Not authoritative on its own.
 	SharedPairs []string
 	Stats       []string
 }

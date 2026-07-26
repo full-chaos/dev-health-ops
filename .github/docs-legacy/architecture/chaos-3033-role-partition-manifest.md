@@ -310,3 +310,144 @@ this table." This is the whitelist `TestDomainGrantSurfaceMatchesQuerySurface`'s
 future role-attribution extension and grants-finisher2's posture manifest
 must both reference — coordinate before either side hard-codes it
 independently.
+
+## The coordinator grant surface is now DERIVED and gated (CHAOS-3033)
+
+`TestRoleGrantSurfacesMatchQuerySurfaces` (`internal/domaingrants/role_surface_test.go`)
+derives, per connection pool, which `(table, privilege)` pairs the reachable Go code
+needs, and checks each against that role's own posture. It runs alongside
+`TestDomainGrantSurfaceMatchesQuerySurface`, which keeps its distinct job: the
+domain role's *two* hand-maintained artefacts (`runtimeGrantStatements` and
+`DomainPosture`) drifted from the code while agreeing with each other. Neither gate
+replaces the other.
+
+**The coordinator has only ONE list, so its failure surface is different.**
+`coordinatorGrantStatements` (`internal/storage/river/migrate.go`) is parameterized on
+`options.CoordinatorGrants`, and the only production caller —
+`cmd/dev-health-worker-migrate/main.go:198 coordinatorGrants()` — projects
+`CoordinatorPosture()` field-for-field. A list-vs-list disagreement is therefore
+structurally impossible for the coordinator, and `GroundTruth.Grants` is left nil for
+it rather than synthesized from the posture and compared against itself.
+
+### One deriver, parameterized per role — not a second copy
+
+`DeriveForRole(root, role)` runs the same analyzer with a different syntactic seed set
+(`poolRoleSeeds`). Both pools are wired through the same three shapes (a
+`*pgxpool.Pool` field, a getter, a bare identifier), so the entire role-specific part
+of the analysis is a name table. Every hardening pass — interprocedural SQL constant
+folding, cross-function `pgx.Tx` origin tracing, unique-implementer devirtualization,
+LOCK-implies-write — applies to both roles because there is one implementation of each.
+
+A **taint barrier** stops the other role's pool root before `exprTainted`'s permissive
+fall-throughs (a selector off a tainted base is tainted; a receiver with any tainted
+field is tainted). Without it, `pools.Coordinator = coordinatorPool` taints the
+`RuntimePools` field, the receiver heuristic taints `p` in every method, and `p.Domain`
+comes back coordinator-tainted purely for being selected off a tainted base. Measured:
+the barrier changes nothing on the current tree. It is kept as a guard and pinned by
+`TestBarrierStopsTaintFromTheOtherRolesPool`, because its absence only becomes harmful
+the moment someone adds a multi-pool struct that reaches a SQL sink.
+
+### The blind spot that made the coordinator surface untrustworthy, and its fix
+
+Taint died at calls through **function-typed struct fields** — this repo's DI idiom (a
+composition struct of `func` fields, filled by a package-level `var`, invoked through
+the field). `info.Selections` yields a `*types.Var`, not a `*types.Func`, so callee
+resolution failed and everything downstream was invisible.
+
+That hid the **entire scheduler and fixed-engine surface — 8 of `CoordinatorPosture()`'s
+19 tables** (`scheduled_jobs`, `scheduled_sync_occurrences`,
+`fixed_schedule_occurrences`, `organizations`, `sync_configurations`,
+`remaining_metric_runs`, `remaining_metric_partitions`,
+`work_graph_execution_requests`). The reconciler's equivalent hops only *appeared* to
+work because `buildSyncMutationPipeline` happens to name its parameter
+`coordinatorPool` and re-seeds by convention. **A gate whose completeness rests on a
+parameter name is not a gate** — the three scheduler hops are the proof: they carried
+the coordinator pool with their parameter named `pool` and nothing caught it.
+
+`internal/domaingrants/funcvalue.go` resolves both forms (a named function reference,
+and a function literal — the latter requiring package-level literals to be registered
+as pseudo-functions, since nothing else walks them), fail-closed when a field has two
+distinct targets. Coordinator surface: **11 → 18 tables**. Domain surface: **unchanged
+at 32 tables with identical advisories**, verified before and after — which is luck
+about this tree's parameter naming, not a property of the design.
+
+`TestFuncValueTargetsResolveTheKnownWiringHops` pins the resolved **target** per field
+rather than a count, precisely so a future `pool` → `coordinatorPool` rename cannot
+make the test keep passing while the mechanism it exists to pin has stopped working.
+
+### Attribution: what is proven, and what is deliberately advisory
+
+A two-role posture has a failure mode one role does not — a privilege granted to the
+**wrong** role, which every "is it granted somewhere" check passes.
+
+- **CRITICAL** only where at least one proving call site is reachable **only** through
+  that role's pool. Real code, real 42501.
+- **ADVISORY** where every proving site is **shared** with the other role. Taint is
+  tracked per `(type, field)`, not per construction site, so a repository type
+  constructed from both pools has its whole method surface attributed to both.
+  `internal/jobs/metrics/remaining` is the live instance: the tool derives UPDATE for
+  the coordinator, and `coordinatorPosture()`'s hand-derived `{S,I}` is correctly
+  **narrower**. **Do not widen a posture on a shared-evidence finding** — a hand
+  derivation from the construction site is more precise there.
+- **ADVISORY**, never silent: a posture row this role has no evidence for while another
+  role does — a misattribution candidate. The negative direction ("role B must not hold
+  X") is *not* statically provable against an under-approximation; it is proven at
+  runtime by the union of each role calling `CheckRolePosture` against its own manifest,
+  whose catch-all inspects the calling role. See that function's doc comment.
+
+**On the dual-grant whitelist above:** `RoleReport.SharedPairs` makes the shared set
+visible and checkable, but it is *not* a drop-in replacement for the table-level
+whitelist. It is pair-level (so `sync_dispatch_transport_routes`, shared with different
+privileges per role, has no shared pair); it cannot distinguish a genuine dual-grant
+from a dual-constructed-type artifact (`remaining_metric_*`); and it inherits the
+derivation's blind spots (`organizations` is a real dual-grant with no derived
+coordinator evidence). Treat it as review input, and keep the manifest authoritative.
+
+### Silence is not confirmation
+
+`IncompleteRoleSurface` is first-class output: posture tables with no derived call site,
+in-module wiring hops where taint stopped, and non-constant SQL sites, per role. A table
+this tool cannot analyze must never look identical to one it checked and approved — that
+equivalence is what licenses hand-written rows.
+
+Still unverified on the coordinator side: **`organizations`** and
+**`work_graph_execution_requests`** have posture rows with no derived evidence. If it
+turns out no coordinator path touches them, that is a posture *over*-declaration and a
+separate finding — route it to the posture lane rather than tightening it here, since a
+wrong tightening fails closed in production.
+
+### Transaction-span veto
+
+A transaction cannot span two pools, so every table one touches must be authorized for
+the single role whose pool runs it. `transactionStraddleFindings` reports a group whose
+tables land on opposite sides of the partition, distinguishing a `txorigin:`-traced
+group (provably one transaction) from the coarse same-function-body fallback. This is
+the check that catches a straddle before it becomes a runtime 42501 rather than
+presenting as a routing problem.
+
+### Known-open findings carry a ticket and expire
+
+`knownOpenCriticals` records CRITICALs accepted as real whose fix belongs to another
+lane. It is not a suppression list: an entry matches exactly one
+`(role, table, privilege)`, every entry must name a ticket, and an entry that **stops
+reproducing fails the gate** ("stale, delete it") so it cannot outlive the fix. Emptying
+it is the goal state.
+
+Current entry — found by this gate's first run: **coordinator `sync_dispatch_outbox`
+INSERT** (CHAOS-3079). `syncreconciler.Materializer.Step` runs on the coordinator pool
+(`cmd/dev-health-reconciler/dependencies.go:208`) and executes four
+`INSERT INTO public.sync_dispatch_outbox` (`materializer.go:125/235/345/450`) while
+`coordinatorPosture()` declares `allow_insert=false`. Latent only because
+`checkedInReconcilerActivation.syncMutation` is false today.
+
+### Harness consequence of adding a posture row
+
+`rolePostureQuery` asserts `count(required_tables) = count(required_table_privileges)`
+with **no leniency** (`domain_authorization.go:194`), and `required_tables` JOINs
+`pg_class`. The GRANT side is `to_regclass`-guarded and skips a missing table silently.
+So a posture row for a table the test database does not create makes the readiness check
+fail while the grant reports success. Adding a new table to either posture therefore
+requires a matching `CREATE TABLE` in **two** places — `startGrantHarness`
+(`internal/storage/postgres/domain_grant_reconciliation_integration_test.go:209`, shared
+by all 22 in-package grant tests) and `cmd/dev-health-workerctl/main_integration_test.go`,
+which builds its own.

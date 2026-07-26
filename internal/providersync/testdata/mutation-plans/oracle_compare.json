@@ -42,6 +42,30 @@
       "replace": "if false {\n\t\t\tcontinue\n\t\t}",
       "rationale": "a field the CALLER declares Go-only (e.g. org_id, last_synced) must not be compared -- the caller-side mirror of python-excluded-fields-must-suppress, and independently mutable since the two exclusion maps are looked up in separate, unrelated statements",
       "proof": [["go", "test", "-run", "^TestDiffRowsClauseCoverage/declared_Go-only_exclusion_suppresses_a_present-or-absent_divergence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "goOnlyFields-claim-must-be-checked-against-python",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "if reason, claimedGoOnly := goOnlyFields[key]; claimedGoOnly {",
+      "replace": "if false {",
+      "rationale": "codex third review: goOnlyFields[key] is a claim that the Python side structurally cannot have this field. If a pair author is wrong, the field IS comparable on the Python side and excluding it hides a real divergence -- this clause is what catches the claim being false",
+      "proof": [["go", "test", "-run", "^TestCheckExclusionIntegrityClauseCoverage/goOnlyFields_key_actually_present_on_the_Python_side", "./internal/providersync/"]]
+    },
+    {
+      "id": "stale-excluded-fields-must-be-flagged",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "for key, reason := range excludedFields {\n\t\tif !usedExclusions[key] {",
+      "replace": "for key, reason := range excludedFields {\n\t\tif false {",
+      "rationale": "codex third review: an excluded_fields entry that never matched a key present in any case's row is either a typo or a stale leftover from a field that was renamed or removed -- silently indistinguishable from a genuine, currently-effective exclusion without this check",
+      "proof": [["go", "test", "-run", "^TestCheckExclusionIntegrityClauseCoverage/excluded_fields_entry_never_matches_anything", "./internal/providersync/"]]
+    },
+    {
+      "id": "stale-goOnlyFields-must-be-flagged",
+      "file": "internal/providersync/oracle_compare_test.go",
+      "find": "for key, reason := range goOnlyFields {\n\t\tif !usedExclusions[\"go:\"+key] {",
+      "replace": "for key, reason := range goOnlyFields {\n\t\tif false {",
+      "rationale": "the caller-side mirror of stale-excluded-fields-must-be-flagged, independently mutable since it is a separate loop over a separate map",
+      "proof": [["go", "test", "-run", "^TestCheckExclusionIntegrityClauseCoverage/goOnlyFields_entry_never_matches_anything", "./internal/providersync/"]]
     }
   ]
 }

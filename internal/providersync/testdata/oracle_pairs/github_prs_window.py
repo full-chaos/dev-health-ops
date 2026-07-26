@@ -6,33 +6,58 @@ updated_at plus a claim's since/until, decide whether
 would fetch-and-keep it (excluded=False), skip only it (excluded=True,
 stop=False), or stop the whole listing early (excluded=True, stop=True).
 
-Scope note, documented rather than silently glossed over: unlike
-github_prs_row.py, this pair does NOT execute the real, live
-`_collect_github_pr_objects`. That function is async, needs a real
-GitHubCodeClient, and processors/github.py's module-level imports pull in
-the complexity scanner, testops ingestion, and half a dozen other
-subsystems -- stubbing all of it, the way python_oracle_loader.py stubs
-code_client.py's few httpx-adjacent imports, would mean writing and
-maintaining a large surface of placeholder modules for a three-line
-decision, with every stub itself a place this "live" oracle could quietly
-diverge from reality. That trade was judged not worth it for a decision
-this small.
+CODEX FINDING #5 (CHAOS-3162, third adversarial review): this pair
+previously did NOT execute the real, live `_collect_github_pr_objects` --
+it ran a hand-pinned COPY of the two `if` blocks that make the decision,
+guarded by an unordered substring-presence check over a ~3,000-byte slice
+of the real source. That guard was too weak to trust: deleting the SECOND
+`isinstance(updated_at, datetime)` guard (a real, plausible regression --
+it is what H3's original bug looked like) would still leave every pinned
+substring present elsewhere in the slice, so the pin would report "still
+matches" while actually being stale.
 
-Instead, _decide below is a byte-for-byte PINNED COPY of the two `if`
-blocks that make this decision (processors/github.py, currently lines
-630-644, inside `_collect_github_pr_objects`), and
-_assert_pin_still_matches_source() reads the actual current source of that
-function and hard-fails (raising, not warning) if the pinned significant
-substrings are no longer present -- so drift is a loud, immediate test
-failure at the next run, not a silent divergence. This is a deliberately
-weaker guarantee than github_prs_row.py's live-execution oracle, and is
-labelled as such everywhere it is used.
+This version executes the REAL, unmodified `_collect_github_pr_objects`
+instead, via the SAME isolation technique python_oracle_loader.py already
+uses for code_client.py/base_git.py: stub every module-level import the
+file needs to satisfy at LOAD time (python_oracle_loader.py's
+_target_github_processor), then monkeypatch the one MODULE-LEVEL
+dependency seam the function actually calls through at RUN time
+(`_github_code_client_from_connector`) with a fake client whose
+`get_pull_detail` raises a distinguishing sentinel the INSTANT it is
+called. Since the real function's `try/finally` has no `except` clause,
+the sentinel propagates cleanly out through `finally` (which the fake
+client's `drain_usage_observations`/`close` satisfy) to this harness,
+which reads off exactly how far the real loop's `continue`/`break`
+control flow got:
+
+  - sentinel raised for item A (the item under test) -> included
+    (excluded=False, stop=False): the loop reached `get_pull_detail` for
+    it directly, meaning NEITHER window check fired.
+  - sentinel raised for item B (a second, fixed, unconditionally-included
+    marker item placed right after item A -- its own `updated_at=None`
+    means neither comparison can ever fire for it, regardless of the
+    case's own since/until) -> item A was excluded via `continue` (skip
+    this one, keep going): the loop reached item B, meaning item A's
+    `until` check fired but its `since` check did not (or there was no
+    `since`).
+  - no sentinel at all (the call returns normally) -> item A triggered
+    `break`: the loop never reached item B, so `get_pull_detail` was never
+    called for anyone.
+
+This is genuinely live execution, not a copy: the two `if` blocks that
+decide inclusion are the REAL function's own bytecode running, with only
+its external I/O boundary (the client) faked -- editing that logic in
+processors/github.py changes what this oracle observes, with no separate
+pin to keep in sync and no way for a change to go unnoticed the way a
+substring-presence check could miss one.
 """
 
 from __future__ import annotations
 
+import asyncio
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 from internal.providersync.testdata import oracle_registry
@@ -40,107 +65,104 @@ from internal.providersync.testdata.field_reflection import (
     RETURN_LITERAL,
     dict_literal_keys,
 )
+from internal.providersync.testdata.python_oracle_loader import load_live_module
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
-_SOURCE_FILE = REPO_ROOT / "src/dev_health_ops/processors/github.py"
+_GITHUB_PROCESSOR_SOURCE = REPO_ROOT / "src/dev_health_ops/processors/github.py"
 _THIS_FILE = pathlib.Path(__file__)
 
-
-def _reflected_fields() -> frozenset[str]:
-    """The complete field set _decide's own `return {...}` literal is
-    capable of emitting (codex finding #1, CHAOS-3162). Since this pair's
-    "production" function is itself a pinned copy (see module docstring),
-    this at least guarantees a caller cannot silently compare against a
-    narrower subset of _decide's OWN two fields than _decide actually
-    returns -- it cannot, by construction, validate the pin's fidelity to
-    the real processors/github.py function, which is exactly what
-    _assert_pin_still_matches_source is for."""
-    return dict_literal_keys(_THIS_FILE.read_text(), "_decide", (RETURN_LITERAL,))
+_ITEM_A_NUMBER = 1
+_ITEM_B_NUMBER = 2
 
 
-# Every one of these must appear, verbatim, inside _collect_github_pr_objects
-# in the current source. If a future edit to the real function changes any
-# of these fragments, this pin is stale and MUST be re-derived from the new
-# source before this oracle can be trusted again.
-_PINNED_SIGNIFICANT_FRAGMENTS = (
-    "if until is not None:",
-    'updated_at = getattr(listed_pr, "updated_at", None)',
-    "isinstance(updated_at, datetime)",
-    "updated_at.astimezone(timezone.utc) > until",
-    "continue",
-    "if since is not None:",
-    "updated_at.astimezone(timezone.utc) < since",
-    "break",
-)
+class _ReachedFetch(Exception):
+    """Raised by _FakeGitHubCodeClient.get_pull_detail the instant
+    _collect_github_pr_objects's REAL loop reaches it for a given listed
+    item's number -- see module docstring for how the harness reads three
+    distinct outcomes off of this."""
+
+    def __init__(self, number: int) -> None:
+        super().__init__(f"reached get_pull_detail for #{number}")
+        self.number = number
 
 
-def _assert_pin_still_matches_source() -> None:
-    source = _SOURCE_FILE.read_text()
-    start = source.find("async def _collect_github_pr_objects(")
-    if start == -1:
-        raise AssertionError(
-            f"{_SOURCE_FILE}: _collect_github_pr_objects not found -- "
-            "github_prs_window_decision.py's pinned copy of its window-"
-            "decision logic can no longer be verified against the real "
-            "source and must be re-derived by hand"
-        )
-    # The two decision blocks are within the first ~50 lines of the
-    # function body; a generous slice avoids false negatives from
-    # unrelated later code reusing similar words.
-    body = source[start : start + 3000]
-    missing = [
-        fragment for fragment in _PINNED_SIGNIFICANT_FRAGMENTS if fragment not in body
-    ]
-    if missing:
-        raise AssertionError(
-            f"{_SOURCE_FILE}: _collect_github_pr_objects no longer contains "
-            f"the pinned window-decision fragment(s) {missing!r} -- "
-            "github_prs_window_decision.py's _decide is a manually pinned "
-            "copy of this logic (see module docstring for why) and must be "
-            "updated to match before this oracle can be trusted"
-        )
+class _FakeGitHubCodeClient:
+    """The one dependency seam _collect_github_pr_objects calls through:
+    `_github_code_client_from_connector(connector)`. Everything else in
+    the function body is real, unmodified processors/github.py code."""
+
+    def __init__(self, items: list[SimpleNamespace]) -> None:
+        self._items = items
+
+    async def iter_pulls(self, *_args: Any, **_kwargs: Any) -> list[SimpleNamespace]:
+        return self._items
+
+    async def get_pull_detail(self, _owner: str, _repo: str, number: int) -> Any:
+        raise _ReachedFetch(number)
+
+    def drain_usage_observations(self) -> list[Any]:
+        return []
+
+    async def close(self) -> None:
+        return None
+
+
+def _parse(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _decide(case: dict[str, Any]) -> dict[str, Any]:
-    _assert_pin_still_matches_source()
+    module = load_live_module(_GITHUB_PROCESSOR_SOURCE)
 
-    def parse(value: str | None) -> datetime | None:
-        if value is None:
-            return None
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    updated_at = _parse(case.get("updated_at"))
+    since = _parse(case.get("since"))
+    until = _parse(case.get("until"))
 
-    updated_at = parse(case.get("updated_at"))
-    since = parse(case.get("since"))
-    until = parse(case.get("until"))
+    item_a = SimpleNamespace(number=_ITEM_A_NUMBER, updated_at=updated_at)
+    item_b = SimpleNamespace(number=_ITEM_B_NUMBER, updated_at=None)
+    fake_client = _FakeGitHubCodeClient([item_a, item_b])
+    # _collect_github_pr_objects looks this name up as a module global at
+    # CALL time, so reassigning it on the freshly-loaded module object
+    # (not the source file) redirects exactly one dependency seam without
+    # touching anything else the real function does.
+    module._github_code_client_from_connector = lambda _connector: fake_client
 
-    excluded = False
-    stop = False
+    async def run() -> int | None:
+        try:
+            await module._collect_github_pr_objects(
+                connector=None,
+                owner="o",
+                repo_name="r",
+                repo_id="00000000-0000-0000-0000-000000000000",
+                state="all",
+                since=since,
+                until=until,
+                usage_sink=None,
+            )
+        except _ReachedFetch as reached:
+            return reached.number
+        return None
 
-    # --- pinned copy of processors/github.py::_collect_github_pr_objects,
-    # currently lines 630-644 (verified above). updated_at is already either
-    # None or a real datetime (parse() above), which is what the real
-    # function's `getattr(listed_pr, "updated_at", None)` also always
-    # produces in practice -- the isinstance guard is kept here anyway
-    # because it is part of the pinned fragment, not because this mirror
-    # can observe a non-datetime value. ---
-    if until is not None:
-        if (
-            isinstance(updated_at, datetime)
-            and updated_at.astimezone(timezone.utc) > until
-        ):
-            excluded = True
+    reached_number = asyncio.run(run())
 
-    if not excluded:
-        if since is not None:
-            if (
-                isinstance(updated_at, datetime)
-                and updated_at.astimezone(timezone.utc) < since
-            ):
-                excluded = True
-                stop = True
-    # --- end pinned copy ---
+    if reached_number == _ITEM_A_NUMBER:
+        return {"excluded": False, "stop": False}
+    if reached_number == _ITEM_B_NUMBER:
+        return {"excluded": True, "stop": False}
+    if reached_number is None:
+        return {"excluded": True, "stop": True}
+    raise AssertionError(f"unexpected sentinel number {reached_number!r}")
 
-    return {"excluded": excluded, "stop": stop}
+
+def _reflected_fields() -> frozenset[str]:
+    """The complete field set _decide's own `return {...}` literals are
+    capable of emitting (codex finding #1). _decide has four return
+    statements (one per outcome); dict_literal_keys unions the keys across
+    all of them via ast.walk, so this stays correct even though no single
+    return statement is the "whole" story on its own."""
+    return dict_literal_keys(_THIS_FILE.read_text(), "_decide", (RETURN_LITERAL,))
 
 
 oracle_registry.register(

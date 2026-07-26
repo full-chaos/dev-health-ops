@@ -217,6 +217,108 @@ def _target_github_code_client() -> None:
     )
 
 
+_GITHUB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/github.py")
+
+
+def _target_github_processor() -> None:
+    """Stub processors/github.py's heavy, unrelated imports (CHAOS-3162).
+
+    _collect_github_pr_objects's list-inclusion decision (the `if until is
+    not None: ... continue` / `if since is not None: ... break` pair) is
+    the ONLY logic github_prs_window.py's live-execution harness exercises
+    -- it substitutes a fake client (via a monkeypatched
+    _github_code_client_from_connector) whose get_pull_detail raises a
+    sentinel the instant it is called, so the harness never reaches
+    build_git_pull_request or any of the other names this module imports.
+    Every stub below only needs to satisfy the *name* at module-load time,
+    exactly like _target_base_git's -- github.py does not carry `from
+    __future__ import annotations`, so a handful of these (GitSyncStore,
+    used in a `store: GitSyncStore | Any` parameter annotation) must be
+    real class OBJECTS, not instances, so Python's `X | Y` union-type
+    syntax evaluates without error at `def` time.
+    """
+    _install_module(
+        "dev_health_ops.analytics.complexity",
+        {"DEFAULT_COMPLEXITY_CONFIG_PATH": None, "ComplexityScanner": object},
+    )
+    _install_module("dev_health_ops.credentials.types", {"GitHubCredentials": object})
+    _install_module("dev_health_ops.exceptions", {"RateLimitException": Exception})
+    _install_module("dev_health_ops.metrics.sinks.ingestion", {"IngestionSink": object})
+    _install_module(
+        "dev_health_ops.models.git",
+        {
+            "CiPipelineRun": object,
+            "Deployment": object,
+            "GitBlame": object,
+            "GitCommit": object,
+            "GitCommitStat": object,
+            "GitPullRequest": object,
+            "GitPullRequestReview": object,
+            "Repo": object,
+        },
+    )
+    _install_module(
+        "dev_health_ops.processors.base_git",
+        {
+            "BaseGitProcessor": object,
+            "backfill_file_records": _unsupported_dependency,
+            "blame_backfill_needed": _unsupported_dependency,
+            "build_ci_pipeline_run": _unsupported_dependency,
+            "build_deployment": _unsupported_dependency,
+            "build_git_pull_request": _unsupported_dependency,
+            "check_backfill_needs": _unsupported_dependency,
+            "historical_backfill_day": _unsupported_dependency,
+            "resolve_commit_stats_limit": _unsupported_dependency,
+            "select_unblamed_paths": _unsupported_dependency,
+            "write_historical_complexity": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.processors.fetch_utils",
+        {
+            "AsyncBatchCollector": object,
+            "SyncBatchCollector": object,
+            "safe_parse_datetime": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.processors.release_ref",
+        {"get_release_ref_enrichment": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.processors.storage_protocol", {"GitSyncStore": object}
+    )
+    _install_module(
+        "dev_health_ops.processors.testops_ingest",
+        {
+            "MAX_ARTIFACTS_PER_RUN": 0,
+            "MAX_RUNS_PER_SYNC": 0,
+            "ingest_report_members": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers.github.client",
+        {"GitHubAuth": object, "GitHubWorkClient": object},
+    )
+    _install_module(
+        "dev_health_ops.providers.pr_state",
+        {"normalize_pr_state": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.usage",
+        {"drain_provider_usage": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.utils",
+        {
+            "AGGREGATE_STATS_MARKER": "__AGGREGATE__",
+            "BATCH_SIZE": 1000,
+            "CONNECTORS_AVAILABLE": False,
+            "is_skippable": _unsupported_dependency,
+        },
+    )
+
+
 ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",
@@ -227,6 +329,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.github.code_client",
         _GITHUB_CODE_CLIENT_SOURCE,
         _target_github_code_client,
+    ),
+    _GITHUB_PROCESSOR_SOURCE: (
+        "dev_health_ops.processors.github",
+        _GITHUB_PROCESSOR_SOURCE,
+        _target_github_processor,
     ),
     _LAUNCHDARKLY_PROCESSOR_SOURCE: (
         "dev_health_ops.processors.launchdarkly",

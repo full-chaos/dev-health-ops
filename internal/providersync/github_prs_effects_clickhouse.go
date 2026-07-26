@@ -172,6 +172,27 @@ func (sink GitHubPullRequestClickHouseEffects) inspectPullRequest(
 	ctx context.Context,
 	expected pullRequestRow,
 ) (EffectInspection, error) {
+	actual, err := sink.scanWinningPullRequestVersion(
+		ctx, expected.OrgID, expected.RepoID, expected.Number,
+	)
+	if err != nil {
+		return EffectConflict, err
+	}
+	return comparePullRequestVersion(expected, actual), nil
+}
+
+// scanWinningPullRequestVersion runs the actual production FINAL
+// point-lookup query and scan (codex H2's fix) and returns the winning
+// ReplacingMergeTree version for (org_id, repo_id, number). Extracted from
+// inspectPullRequest (CHAOS-3162 codex finding #3) so
+// oracle_readback_integration_test.go's readback pair can call this SAME
+// production code directly instead of maintaining its own copy of the
+// query -- a copy is a second source of truth that can drift from this one
+// silently, which is exactly the class of defect this framework exists to
+// catch, not commit.
+func (sink GitHubPullRequestClickHouseEffects) scanWinningPullRequestVersion(
+	ctx context.Context, orgID, repoID string, number int,
+) (pullRequestVersion, error) {
 	rows, err := sink.Conn.Query(ctx, `
 SELECT
   title, body, state, author_name, author_email, created_at, merged_at,
@@ -180,18 +201,18 @@ SELECT
   comments_count, source_id, org_id, last_synced
 FROM git_pull_requests FINAL
 WHERE org_id = ? AND repo_id = ? AND number = ?`,
-		expected.OrgID, expected.RepoID, expected.Number,
+		orgID, repoID, number,
 	)
 	if err != nil {
-		return EffectConflict, err
+		return pullRequestVersion{}, err
 	}
 	defer rows.Close()
 	var (
-		actual     pullRequestRow
-		sourceID   *string
-		orgID      string
-		lastSynced time.Time
-		found      bool
+		actual      pullRequestRow
+		sourceID    *string
+		actualOrgID string
+		lastSynced  time.Time
+		found       bool
 	)
 	for rows.Next() {
 		// additions/deletions/changed_files/comments_count/
@@ -206,9 +227,9 @@ WHERE org_id = ? AND repo_id = ? AND number = ?`,
 			&additions, &deletions, &changedFiles,
 			&actual.FirstReviewAt, &actual.FirstCommentAt,
 			&changesRequestedCount, &reviewsCount, &commentsCount,
-			&sourceID, &orgID, &lastSynced,
+			&sourceID, &actualOrgID, &lastSynced,
 		); err != nil {
-			return EffectConflict, err
+			return pullRequestVersion{}, err
 		}
 		actual.Additions, actual.Deletions = int(additions), int(deletions)
 		actual.ChangedFiles, actual.CommentsCount = int(changedFiles), int(commentsCount)
@@ -217,12 +238,12 @@ WHERE org_id = ? AND repo_id = ? AND number = ?`,
 		found = true
 	}
 	if err := rows.Err(); err != nil {
-		return EffectConflict, err
+		return pullRequestVersion{}, err
 	}
-	return comparePullRequestVersion(expected, pullRequestVersion{
-		Row: actual, SourceID: sourceID, OrgID: orgID,
+	return pullRequestVersion{
+		Row: actual, SourceID: sourceID, OrgID: actualOrgID,
 		LastSynced: lastSynced, Found: found,
-	}), nil
+	}, nil
 }
 
 // pullRequestVersion is the winning ReplacingMergeTree version for a key, as

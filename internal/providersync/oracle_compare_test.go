@@ -72,31 +72,52 @@ func compareRowsAgainstPythonOracle[T any](
 ) {
 	t.Helper()
 	wrapped := func(t *testing.T, input map[string]any) any { return goRowBuilder(t, input) }
+	// One shellout for the WHOLE batch, not one per case: codex findings
+	// (third review) about a stale/unused declared exclusion, and a
+	// goOnlyFields entry that turns out to appear on the Python side after
+	// all, are properties of the BATCH ("did this exclusion ever match
+	// anything across every case"), not of any single case in isolation --
+	// they cannot be checked correctly if each case only ever sees itself.
+	// oracleDivergences returns messages case-prefixed by
+	// caseDivergencePrefix; anything that doesn't match any case's prefix
+	// is a batch-level finding, surfaced in its own subtest below.
+	all := oracleDivergences(t, pairID, cases, wrapped, goOnlyFields)
+	attributed := make(map[string]bool, len(all))
 	for _, testCase := range cases {
 		testCase := testCase
+		prefix := caseDivergencePrefix(testCase.ID)
 		t.Run(testCase.ID, func(t *testing.T) {
 			t.Helper()
-			for _, message := range oracleDivergencesForCase(t, pairID, testCase, wrapped, goOnlyFields) {
+			for _, message := range all {
+				if strings.HasPrefix(message, prefix) {
+					attributed[message] = true
+					t.Error(message)
+				}
+			}
+		})
+	}
+	var batchLevel []string
+	for _, message := range all {
+		if !attributed[message] {
+			batchLevel = append(batchLevel, message)
+		}
+	}
+	if len(batchLevel) > 0 {
+		t.Run("exclusion integrity", func(t *testing.T) {
+			t.Helper()
+			for _, message := range batchLevel {
 				t.Error(message)
 			}
 		})
 	}
 }
 
-// oracleDivergencesForCase runs ONE case through oracleDivergences. Kept
-// separate so compareRowsAgainstPythonOracle can still get one t.Run per
-// case (clear per-case pass/fail in `go test -v` output) while probes that
-// need every case in a single Python subprocess call use oracleDivergences
-// directly.
-func oracleDivergencesForCase(
-	t *testing.T,
-	pairID string,
-	testCase oracleCase,
-	goRowBuilder func(t *testing.T, input map[string]any) any,
-	goOnlyFields map[string]string,
-) []string {
-	t.Helper()
-	return oracleDivergences(t, pairID, []oracleCase{testCase}, goRowBuilder, goOnlyFields)
+// caseDivergencePrefix is the exact prefix diffRows's per-field messages
+// start with -- used to attribute a flat message list back to the case it
+// concerns for per-case subtests. %q's own closing quote plus the trailing
+// comma keeps "foo" from matching a message about "foobar".
+func caseDivergencePrefix(caseID string) string {
+	return fmt.Sprintf("case %q,", caseID)
 }
 
 // oracleDivergences is the reusable core: it does the Python shellout, the
@@ -216,6 +237,8 @@ func oracleDivergences(
 		pythonRows[entry.ID] = entry.Row
 	}
 
+	pythonRowsByCase := make(map[string]map[string]any, len(cases))
+	goRowsByCase := make(map[string]map[string]any, len(cases))
 	var messages []string
 	for _, testCase := range cases {
 		pythonRow, ok := pythonRows[testCase.ID]
@@ -227,10 +250,101 @@ func oracleDivergences(
 		if !ok {
 			t.Fatalf("case %q: Go row builder must return a struct or map, got %T", testCase.ID, goValue)
 		}
+		pythonRowsByCase[testCase.ID] = pythonRow
+		goRowsByCase[testCase.ID] = goRow
 		messages = append(messages, diffRows(
 			testCase.ID, pythonRow, goRow, decoded.ExcludedFields, goOnlyFields,
 		)...)
 	}
+	messages = append(messages, checkExclusionIntegrity(
+		pythonRowsByCase, goRowsByCase, decoded.ExcludedFields, goOnlyFields,
+	)...)
+	return messages
+}
+
+// checkExclusionIntegrity is CHAOS-3162's third-review fix: a declared
+// exclusion is a CLAIM, and nothing previously checked either claim
+// against what the batch's rows actually contained.
+//
+//  1. goOnlyFields[key] asserts "the Python side structurally cannot have
+//     this field". If key shows up in ANY case's Python row anyway, that
+//     assertion is false: the field IS present and comparable on the
+//     Python side, and excluding it hides a real, comparable value --
+//     exactly the undeclared-divergence risk this whole framework exists
+//     to rule out, smuggled in through the exclusion mechanism meant to
+//     prevent it.
+//  2. A declared exclusion (either map) that never matches a key present
+//     in ANY case's row, across the whole batch, is stale: a typo, a
+//     field renamed/removed without updating the pair, or one that was
+//     never real. Silent either way, and indistinguishable from a
+//     genuine, currently-effective exclusion without this check.
+//
+// Both are necessarily BATCH-level properties (checkable only once every
+// case's rows are known), not per-case ones, which is why this takes the
+// whole case-keyed map rather than being folded into diffRows.
+//
+// This is a pure function precisely so it can be unit-tested with
+// synthetic data (TestCheckExclusionIntegrityClauseCoverage) without a
+// Python subprocess -- the same reason diffRows is pure and
+// TestDiffRowsClauseCoverage exists.
+func checkExclusionIntegrity(
+	pythonRowsByCase, goRowsByCase map[string]map[string]any,
+	excludedFields, goOnlyFields map[string]string,
+) []string {
+	// usedExclusions tracks, across the WHOLE batch, which declared
+	// exclusions actually matched a key present in at least one case's
+	// Python or Go row. A "go:" prefix disambiguates a goOnlyFields key
+	// from a same-named excludedFields key, since the two maps are
+	// independent declarations that happen to share a namespace.
+	usedExclusions := map[string]bool{}
+	caseIDs := make([]string, 0, len(pythonRowsByCase))
+	for caseID := range pythonRowsByCase {
+		caseIDs = append(caseIDs, caseID)
+	}
+	sort.Strings(caseIDs)
+
+	var messages []string
+	for _, caseID := range caseIDs {
+		pythonRow, goRow := pythonRowsByCase[caseID], goRowsByCase[caseID]
+		for key := range pythonRow {
+			if reason, claimedGoOnly := goOnlyFields[key]; claimedGoOnly {
+				messages = append(messages, fmt.Sprintf(
+					"goOnlyFields[%q] (declared: %q) claims this field never appears on "+
+						"the Python side, but case %q's Python row has it -- this field is "+
+						"NOT actually Go-only, and excluding it hides a real, comparable value",
+					key, reason, caseID))
+			}
+			if _, declared := excludedFields[key]; declared {
+				usedExclusions[key] = true
+			}
+		}
+		for key := range goRow {
+			if _, declared := excludedFields[key]; declared {
+				usedExclusions[key] = true
+			}
+			if _, declared := goOnlyFields[key]; declared {
+				usedExclusions["go:"+key] = true
+			}
+		}
+	}
+
+	for key, reason := range excludedFields {
+		if !usedExclusions[key] {
+			messages = append(messages, fmt.Sprintf(
+				"excluded_fields[%q] (declared: %q) never matched a key present in any "+
+					"case's Python or Go row across this batch -- a stale exclusion, not "+
+					"a currently-effective one", key, reason))
+		}
+	}
+	for key, reason := range goOnlyFields {
+		if !usedExclusions["go:"+key] {
+			messages = append(messages, fmt.Sprintf(
+				"goOnlyFields[%q] (declared: %q) never matched a key present in any "+
+					"case's Go row across this batch -- a stale exclusion, not a "+
+					"currently-effective one", key, reason))
+		}
+	}
+	sort.Strings(messages)
 	return messages
 }
 
@@ -564,6 +678,72 @@ func TestDiffRowsClauseCoverage(t *testing.T) {
 			if tt.wantSubstring != "" {
 				if len(messages) == 0 || !strings.Contains(messages[0], tt.wantSubstring) {
 					t.Fatalf("diffRows() = %v, want a message containing %q", messages, tt.wantSubstring)
+				}
+			}
+		})
+	}
+}
+
+// TestCheckExclusionIntegrityClauseCoverage is a fast, synthetic-data unit
+// test of checkExclusionIntegrity's own logic (codex finding, third
+// review): isolating "a goOnlyFields key actually appears on the Python
+// side" and "a declared exclusion never matches anything in the batch"
+// (for both exclusion maps) as their own cases, plus a clean case proving
+// neither check fires on legitimate, currently-effective declarations.
+func TestCheckExclusionIntegrityClauseCoverage(t *testing.T) {
+	tests := []struct {
+		name           string
+		pythonRows     map[string]map[string]any
+		goRows         map[string]map[string]any
+		excludedFields map[string]string
+		goOnlyFields   map[string]string
+		wantMessages   int
+		wantSubstring  string
+	}{
+		{
+			name:           "legitimate exclusions, both used: no violation",
+			pythonRows:     map[string]map[string]any{"c1": {"state": "open"}},
+			goRows:         map[string]map[string]any{"c1": {"state": "open", "reviews_count": 0, "org_id": "x"}},
+			excludedFields: map[string]string{"reviews_count": "owned by pr-reviews"},
+			goOnlyFields:   map[string]string{"org_id": "Go-side bookkeeping"},
+			wantMessages:   0,
+		},
+		{
+			name:          "goOnlyFields key actually present on the Python side: violation",
+			pythonRows:    map[string]map[string]any{"c1": {"state": "open", "org_id": "leaked"}},
+			goRows:        map[string]map[string]any{"c1": {"state": "open", "org_id": "x"}},
+			goOnlyFields:  map[string]string{"org_id": "Go-side bookkeeping"},
+			wantMessages:  1,
+			wantSubstring: "claims this field never appears on the Python side",
+		},
+		{
+			name:           "excluded_fields entry never matches anything: stale",
+			pythonRows:     map[string]map[string]any{"c1": {"state": "open"}},
+			goRows:         map[string]map[string]any{"c1": {"state": "open"}},
+			excludedFields: map[string]string{"never_seen": "supposedly owned elsewhere"},
+			wantMessages:   1,
+			wantSubstring:  `excluded_fields["never_seen"]`,
+		},
+		{
+			name:          "goOnlyFields entry never matches anything: stale",
+			pythonRows:    map[string]map[string]any{"c1": {"state": "open"}},
+			goRows:        map[string]map[string]any{"c1": {"state": "open"}},
+			goOnlyFields:  map[string]string{"never_seen": "supposedly Go-only"},
+			wantMessages:  1,
+			wantSubstring: `goOnlyFields["never_seen"]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := checkExclusionIntegrity(tt.pythonRows, tt.goRows, tt.excludedFields, tt.goOnlyFields)
+			if len(messages) != tt.wantMessages {
+				t.Fatalf("checkExclusionIntegrity() = %d message(s) %v, want %d",
+					len(messages), messages, tt.wantMessages)
+			}
+			if tt.wantSubstring != "" {
+				if len(messages) == 0 || !strings.Contains(messages[0], tt.wantSubstring) {
+					t.Fatalf("checkExclusionIntegrity() = %v, want a message containing %q",
+						messages, tt.wantSubstring)
 				}
 			}
 		})

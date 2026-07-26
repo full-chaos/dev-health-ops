@@ -68,30 +68,47 @@ var pullRequestReadbackComparisonExclusions = map[string]string{
 	"number":      "part of the lookup key (WHERE clause), not a value the SELECT list is being tested on",
 }
 
-// readPullRequestRowCorrectly is the CURRENT, production readback query
-// (verbatim copy of inspectPullRequest's SELECT, minus the
-// bookkeeping/lookup-key columns pullRequestReadbackComparisonExclusions
-// declares out of scope): a FINAL point lookup, which resolves the winning
-// physical ReplacingMergeTree version by reading ONE consistent row.
+// readPullRequestRowCorrectly is the CURRENT, production readback path:
+// calls GitHubPullRequestClickHouseEffects.scanWinningPullRequestVersion
+// DIRECTLY (github_prs_effects_clickhouse.go) -- the same function
+// InspectEffect itself calls -- rather than a test-local copy of its query
+// (codex finding #3, CHAOS-3162 second adversarial review: a copied query
+// goes stale silently the moment the real one changes, which is the exact
+// class of defect this framework exists to catch, not commit). The two
+// BUGGY variants below (readPullRequestRowOmittingStateColumn,
+// readPullRequestRowViaPerColumnArgMax) necessarily stay test-local SQL --
+// there is no production function for a bug being deliberately
+// reintroduced to compare against -- exactly mirroring how the
+// row-construction pair's buggy Go builders are test-local copies while
+// its baseline calls production directly.
 func readPullRequestRowCorrectly(
 	ctx context.Context, t *testing.T, harness *pullRequestReadbackHarness, repoID string, number int,
 ) map[string]any {
 	t.Helper()
-	rows, err := harness.conn.Query(ctx, `
-SELECT
-  title, body, state, author_name, author_email, created_at, merged_at,
-  closed_at, head_branch, base_branch, additions, deletions, changed_files,
-  first_review_at, first_comment_at, changes_requested_count, reviews_count,
-  comments_count
-FROM git_pull_requests FINAL
-WHERE org_id = ? AND repo_id = ? AND number = ?`,
-		harness.claim.OrgID, repoID, number,
-	)
+	version, err := harness.sink.scanWinningPullRequestVersion(ctx, harness.claim.OrgID, repoID, number)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	return scanPullRequestReadbackRow(t, rows, true)
+	if !version.Found {
+		t.Fatalf("scanWinningPullRequestVersion: no row found for repo_id=%s number=%d", repoID, number)
+	}
+	full, ok := typedEncode(t, reflect.ValueOf(version.Row)).(map[string]any)
+	if !ok {
+		t.Fatalf("typedEncode(pullRequestRow) did not return a map")
+	}
+	// scanWinningPullRequestVersion returns the FULL pullRequestRow
+	// (including org_id/last_synced/source_id, which live on
+	// pullRequestVersion's own fields, not Row -- so Row itself never
+	// carries them from this path -- and repo_id/number, which it DOES
+	// carry). pullRequestReadbackComparisonExclusions already covers all
+	// five as lookup-key/bookkeeping fields out of scope for this
+	// SELECT-completeness comparison; trim them the same way
+	// expectedPullRequestRowMap does so both sides of diffRows see the
+	// identical key set.
+	for excluded := range pullRequestReadbackComparisonExclusions {
+		delete(full, excluded)
+	}
+	return full
 }
 
 // readPullRequestRowOmittingStateColumn reproduces "the omitted readback

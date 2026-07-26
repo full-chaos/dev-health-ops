@@ -286,21 +286,101 @@ question.
       `oracleDivergences` directly instead and assert on its returned slice
       (see `requireOracleRediscovers` and
       `TestGenericOracleRediscoversRowConstructionDefects`).
-    - Not every crossing can reasonably execute the real, live Python
-      function — `github_prs_window.py`'s pair documents the scope call
-      made when it couldn't: `_collect_github_pr_objects`'s list-inclusion
-      decision is three lines embedded in an async function whose module
-      pulls in the complexity scanner, testops ingestion, and half a dozen
-      other subsystems, too much stubbing surface for a decision this
-      small to be worth the maintenance risk of the stubs themselves
-      drifting from reality. The fallback used there — a byte-for-byte
-      PINNED copy of the exact source lines, with a freshness check that
-      hard-fails if those lines stop matching the live source — is weaker
-      than live execution and is labelled as such in the pair's own
-      docstring, not left for a reader to discover. Prefer live execution;
-      reach for a pinned-and-guarded fallback only when the import cost is
-      genuinely disproportionate to the decision being tested, and say so
-      in writing.
+    - **Prefer live execution over a pinned copy even when the import chain
+      looks disproportionate — a monkeypatched dependency seam plus a
+      sentinel exception usually gets you there.** `github_prs_window.py`
+      originally shipped as a byte-for-byte PINNED copy of
+      `_collect_github_pr_objects`'s two decision `if` blocks, reasoned to
+      be "too much stubbing surface for a decision this small." Codex's
+      third review correctly rejected that: an unordered substring-presence
+      check over a multi-thousand-byte slice cannot detect a mutation that
+      keeps every pinned fragment present but changes what they mean (e.g.
+      deleting the SECOND `isinstance(updated_at, datetime)` guard leaves
+      the string `"isinstance(updated_at, datetime)"` still present
+      elsewhere in the slice — the pin reports "still matches" while being
+      stale). The fix was live execution after all: `python_oracle_loader.py`
+      gained `_target_github_processor()`, stubbing every module-level name
+      `processors/github.py` needs to IMPORT (analytics.complexity,
+      credentials.types, models.git, base_git, fetch_utils, release_ref,
+      storage_protocol, testops_ingest, providers.github.client, pr_state,
+      providers.usage, utils — none of them need to be FUNCTIONAL, only
+      importable, since the harness's execution path never reaches them),
+      then the pair itself monkeypatches the ONE dependency seam the
+      function actually calls through at run time
+      (`module._github_code_client_from_connector`) with a fake client
+      whose `get_pull_detail` raises a distinguishing sentinel exception
+      the INSTANT it's called. Since the real function's `try/finally` has
+      no `except`, the sentinel propagates cleanly to the harness, which
+      reads off exactly how far the loop's real `continue`/`break` control
+      flow got by which of two list items (or neither) reached the fetch
+      step. Verified empirically: reproducing H3's original bug in the REAL
+      `processors/github.py` (not the oracle) crashed the live oracle
+      immediately, which the byte-for-byte pin would only sometimes have
+      caught depending on the exact edit shape. Reach for a pinned/digested
+      fallback only when there is no seam at all to fake through (no I/O
+      boundary, no injectable dependency) — that is a narrower case than it
+      first appears.
+    - **`//go:embed` cannot reach outside its own package directory.** The
+      cache-busting fix above only covers files under
+      `internal/providersync/testdata/` (the framework's own registry,
+      loader, runner, and pair files) — it structurally CANNOT also embed
+      the production `src/dev_health_ops/**.py` files a live oracle
+      executes (Go's embed patterns reject any `../` component; verified
+      directly — `go vet` rejects it with "invalid pattern syntax"). This
+      means editing `processors/base_git.py`, `code_client.py`,
+      `pr_state.py`, or `processors/github.py` alone can STILL produce a
+      stale cached PASS from a warm `go test` cache with no `-count=1` --
+      exactly the class of bug `//go:embed` was built to close, just for a
+      file set it cannot reach. There is no known full fix for this
+      specific gap; the existing "always use `-count=1` when iterating on
+      a production Python file a live oracle depends on" discipline is
+      still load-bearing, not superseded by the embed fix.
+    - **A shared mutation harness proof command with no cache-bypass can
+      report a false SURVIVED (or, worse, a false KILLED) depending on
+      unrelated prior `go test` invocations in the same session** —
+      discovered empirically while re-verifying an EXISTING (already-KILLED)
+      mutation after refactoring the function it targets: the harness's
+      `_run_command` does not pass `-count=1`, and a warm test cache
+      returned a stale `(cached)` PASS for a proof command run against a
+      manually re-applied version of the SAME mutation, even though the
+      underlying `.go` file's content had genuinely changed. `go clean
+      -testcache` immediately before a `run` fixed it; a fresh, un-warmed
+      cache does not exhibit the bug. This is a real reliability gap in
+      `scripts/mutation_harness.py` itself (unmerged
+      `chaos-3155-shared-mutation-harness` branch) — until it passes
+      `-count=1` (or an equivalent cache-bypass) in its own proof-command
+      invocation, **always run `go clean -testcache` immediately before any
+      `mutation_harness.py run`**, and do not trust a lone SURVIVED or
+      KILLED verdict produced against a warm cache without that step.
+    - **A declared exclusion is a claim, and claims need enforcing, not just
+      writing down.** `goOnlyFields[key]` asserts "the Python side
+      structurally cannot have this field"; nothing checked that assertion
+      against what Python actually sent until codex's third review named
+      it. `oracleDivergences` now checks it on every case: if a
+      `goOnlyFields` key shows up in the Python row anyway, that is a hard
+      divergence in its own right (the field is not actually Go-only, and
+      excluding it hides a real, comparable value) — see the "exclusion
+      integrity" subtest `compareRowsAgainstPythonOracle` adds alongside
+      the per-case ones. The same pass also flags a declared exclusion
+      (either map) that never matched ANY key across the whole batch of
+      cases as stale. Both checks are necessarily BATCH-level, not
+      per-case — `compareRowsAgainstPythonOracle` now shells out to Python
+      ONCE for the whole case list (it used to shell out once per case)
+      specifically so this is checkable at all. Of the five defects named
+      in that review round (empty `cases`, duplicate case IDs, Python `{}`
+      equalling a nil Go map, exclusions silently unenforced, and
+      `goOnlyFields` not verified as actually Go-only): the first two were
+      already fixed the prior round; "Python `{}` equalling a nil Go map"
+      turned out to already be DEAD by construction once builders return
+      concrete struct types — a literal Go `nil` fails the
+      `map[string]any` type assertion outright (hard `t.Fatalf`, not a
+      silent pass), and two non-nil-but-genuinely-empty maps are already
+      caught by `diffRows`'s existing "both rows are empty" guard; the
+      other two needed the fix described above. This staleness/enforcement
+      check is scoped to `oracleDivergences` callers (the row-construction
+      and window-decision pairs) — the readback pair calls `diffRows`
+      directly with hand-verified, static exclusions and is not yet
+      covered by it.
     - This does NOT retroactively apply to the five oracles that predate
       CHAOS-3162 (`python_launchdarkly_normalization_oracle.py` and
       friends, including this pair's own OWN existing

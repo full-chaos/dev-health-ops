@@ -207,17 +207,17 @@ hand, not grant blind.
 
 ## Privilege-implication rule: locking clauses need no write statement
 
-> **This section was right, and the checker disagreed with it for a while.** The
-> rule below (verified on Postgres 16) says a role holding only `SELECT`+`INSERT`
-> is denied a `SHARE ROW EXCLUSIVE` lock. `internal/domaingrants` nonetheless
-> modelled every mode above `ACCESS SHARE` as "any one of INSERT/UPDATE/DELETE",
-> and a test later asserted that as correct — contradicting this document. Both are
-> now fixed and re-measured on Postgres 18.4, which **agrees** with the rule below
-> and additionally pins `ROW SHARE`/`ROW EXCLUSIVE`, which this section does not
-> cover. See "LOCK TABLE privilege requirements are MODE-dependent" for the full
-> measured table. Lesson: when the analyzer and this manifest disagree, the
-> manifest was derived from measurement and the analyzer may be carrying a
-> documented-but-unmodelled approximation.
+> **This section was right, and the checker disagreed with it through three
+> successive wrong models.** The rule below (verified on Postgres 16) says a role
+> holding only `SELECT`+`INSERT` is denied a `SHARE ROW EXCLUSIVE` lock.
+> `internal/domaingrants` nonetheless modelled every mode above `ACCESS SHARE` as
+> "any one of INSERT/UPDATE/DELETE", and a test later asserted that as correct —
+> contradicting this document. It is now derived from `LockTableAclCheck` directly;
+> see "LOCK privilege requirements: one OR-mask per mode" below for the structure,
+> the full measured table, and the additional correction that the demand is a
+> DISJUNCTION rather than a conjunction with SELECT. Lesson: when the analyzer and
+> this manifest disagree, the manifest was derived from measurement and the
+> analyzer may be carrying a documented-but-unmodelled approximation.
 
 A DML-verb grep (`INSERT|UPDATE|DELETE`) undercounts required privileges.
 Two Postgres locking constructs imply write-level grants with no write verb
@@ -428,57 +428,105 @@ turns out no coordinator path touches them, that is a posture *over*-declaration
 separate finding — route it to the posture lane rather than tightening it here, since a
 wrong tightening fails closed in production.
 
-### LOCK TABLE privilege requirements are MODE-dependent (measured, not documented)
+### LOCK privilege requirements: one OR-mask per mode, derived from the backend
 
-The first version of this gate modelled `LOCK TABLE` as "any one of
-INSERT/UPDATE/DELETE" for every mode above `ACCESS SHARE`, and a test asserted that
-INSERT alone satisfies a `SHARE ROW EXCLUSIVE` lock. **Both were wrong**, and the
-test was the worse half: the pre-existing analyzer had *documented* this
-imprecision as a known gap, and the test converted it into an authoritative rule.
+Three attempts at this rule produced three different wrong answers, each a
+different KIND of wrong. That pattern — not any single defect — is why the model
+was finally re-derived from `LockTableAclCheck`
+(`src/backend/commands/lockcmds.c`) rather than reconstructed from prose again:
 
-Measured against PostgreSQL 18.4, one grant set per candidate privilege, one query
-per mode, **with the controls that isolate each denial to the lock clause** — an
-empty transaction, and the identical read with only the lock removed. Without those
-controls a `DENIED` result is a denial plus a guess about its cause.
+```
+aclmask =  (mode == AccessShareLock)  ? ACL_SELECT
+        : ((mode <= RowExclusiveLock) ? ACL_INSERT : 0)
+aclmask |= ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_MAINTAIN
+pg_class_aclcheck(rel, user, aclmask)     // ANY bit suffices
+```
 
-| statement | SELECT | +INSERT | +UPDATE | +DELETE |
-|---|---|---|---|---|
-| C1 empty transaction (control) | ok | ok | ok | ok |
-| C2 read, **no lock** (control) | ok | ok | ok | ok |
-| `ACCESS SHARE` | ok | ok | ok | ok |
-| `ROW SHARE` | DENIED | ok | ok | ok |
-| `ROW EXCLUSIVE` | DENIED | ok | ok | ok |
-| `SHARE UPDATE EXCLUSIVE` | DENIED | DENIED | ok | ok |
-| `SHARE` | DENIED | DENIED | ok | ok |
-| `SHARE ROW EXCLUSIVE` | DENIED | DENIED | ok | ok |
-| `EXCLUSIVE` | DENIED | DENIED | ok | ok |
-| `ACCESS EXCLUSIVE` | DENIED | DENIED | ok | ok |
+**It is ONE disjunction per mode.** Not "SELECT and a write privilege". A
+lock-only path authorized by `UPDATE` alone needs no `SELECT`, and asserting one
+over-grants — the exact failure the two-role split exists to prevent.
 
-Three tiers, not two. **INSERT satisfies `ROW SHARE` and `ROW EXCLUSIVE` and
-nothing stricter.** And `ROW SHARE` requires a write privilege even though the
-PostgreSQL `LOCK` documentation says it needs only SELECT — measured, so the table
-above wins over the docs.
+Measured on PostgreSQL 18.4 with each privilege granted **alone** and the `LOCK`
+executed as the only statement in its transaction:
 
-`LockRequirement` records the demand as a **disjunction** (any one of a
-mode-specific set) rather than a `PrivilegeSet` entry, because every `PrivilegeSet`
-member is an independent requirement and folding UPDATE in produced a real false
-positive on jobroute's SELECT+INSERT grant. Unrecognized modes fail **closed** at
-the strictest tier: both predecessors of this rule failed *open*.
+| mode (lock only) | NONE | SELECT | INSERT | UPDATE | DELETE | TRUNCATE | MAINTAIN | REFERENCES | TRIGGER |
+|---|---|---|---|---|---|---|---|---|---|
+| `ACCESS SHARE` | DENIED | ok | ok | ok | ok | ok | ok | DENIED | DENIED |
+| `ROW SHARE` | DENIED | DENIED | ok | ok | ok | ok | ok | DENIED | DENIED |
+| `ROW EXCLUSIVE` | DENIED | DENIED | ok | ok | ok | ok | ok | DENIED | DENIED |
+| `SHARE UPDATE EXCLUSIVE` … `ACCESS EXCLUSIVE` | DENIED | DENIED | DENIED | ok | ok | ok | ok | DENIED | DENIED |
+| **mode omitted** | DENIED | DENIED | DENIED | ok | ok | ok | ok | DENIED | DENIED |
 
-There are now four distinct rules in this area and none may be collapsed into
-another: `ACCESS SHARE` (SELECT), `ROW SHARE`/`ROW EXCLUSIVE` (any of I/U/D),
-stricter modes (U/D only), and `SELECT ... FOR UPDATE` (UPDATE specifically,
-handled as an ordinary privilege).
+**Correction to a claim previously recorded here (and amplified in review): the
+PostgreSQL documentation is NOT wrong about `ROW SHARE`.** The docs say the
+INSERT-class applies to "ROW EXCLUSIVE **or a less-conflicting mode**", which
+*includes* `ROW SHARE` — matching the measurement exactly. The earlier note
+asserting the docs were wrong was a misreading of the docs, not a finding. A wrong
+"the docs are wrong" note is worse than the original confusion, because it teaches
+the next reader to distrust the correct source.
 
-**Generalisation worth carrying:** this was a privilege requirement attributed to
-the wrong clause of a compound statement. The same error shape appeared the same
-day in the reports lane — `INSERT ... ON CONFLICT DO NOTHING RETURNING x` needs
-SELECT because of the **`RETURNING`**, not the conflict arbiter. For any claim of
-the form "clause X implies privilege Y", split the clauses and measure each variant
-against a role holding exactly the privilege under test, with a control that
-removes only the suspect clause.
+#### Two measurement confounds, both of which hid the wrong operator
+
+The earlier probe got the *tiers* right and the *operator* wrong, and could not
+have caught it:
+
+1. **Every grant set began with `SELECT`.** A conjunction and a disjunction
+   containing SELECT are then indistinguishable. Adding SELECT to every fixture
+   made the conjunction unfalsifiable.
+2. **The probe appended a read after the `LOCK`.** So no grant set *without*
+   SELECT could ever reach the lock's own ACL check.
+
+The method (control rows isolating the denial to the clause under test) was right;
+the fixtures defeated it. The general form: **when testing whether X is required,
+no fixture may hold X for an unrelated reason.**
+
+#### The grammar was a fail-open
+
+The previous regex recognised `LOCK TABLE <one target> IN <mode> MODE` and
+silently derived **nothing** for the other eight shapes PostgreSQL accepts —
+optional `TABLE`, multiple comma-separated targets, `ONLY`, a trailing `*`, an
+omitted mode (defaulting to `ACCESS EXCLUSIVE`), `NOWAIT`, arbitrary whitespace.
+`LOCK public.a, public.b` in coordinator-only code would derive neither table nor
+privilege, CI would pass, and production would return 42501.
+
+A parser that ignores what it cannot recognise is the worst possible shape for a
+fail-closed tool. `parseLockStatements` now handles all nine forms, and **a LOCK
+it cannot fully read is a recorded fact that FAILS the gate** — its target may
+never enter the derived surface at all, so an absence is not a safe default.
+
+#### Unknown modes now genuinely fail closed
+
+The previous version gave an unrecognised mode a *guessed* strict privilege set
+and called that fail-closed. It was not: the comparator only reported the mode when
+the **guess** was unsatisfied, so a role already holding `UPDATE` passed silently
+with no manual-verification finding. **A guess that happens to be satisfied is
+indistinguishable from knowledge.** An unrecognised mode is now refused and
+reported.
+
+### Transaction straddles are ADVISORY — co-residency is inferred, never proven
+
+A `txorigin:` group means every statement's `pgx.Tx` traced back to the same
+`Begin()` **source position**. That is a fact about where the handle came from, not
+about what executes: `buildTxOrigins` performs no control-flow analysis, so two
+**mutually exclusive branches** after one `Begin` — an `if`/`else`, an early
+return, a `switch` — carry the same origin and were reported as a single
+transaction touching both sides of the partition.
+
+Calling that "proven" was wrong, and a premise labelled proven is worse than one
+labelled inferred, because nobody re-checks it.
+
+**Decision: downgrade rather than do the path analysis.** A straddle finding can
+only push a posture *wider* (dual-grant these tables), and an over-grant emitted
+on an inference is precisely what the two-role split exists to prevent — the same
+reasoning that makes the `remaining_metric_*` over-approximation advisory. The
+blocking signal is not lost: a table genuinely missing from the executing role's
+posture still produces its own per-privilege CRITICAL when its evidence is
+role-exclusive. What becomes advisory is the transaction *framing*, which is a
+review aid. The traced/coarse distinction is still reported, because it tells a
+reader how much weight the grouping carries.
 
 ### Attribution can be INVERTED by a parameter name, not just incomplete
+
 
 A pool-typed parameter is a seed root by **spelling** (`domainPool`,
 `coordinatorPool`), and spelling can contradict reality. `build(domainPool *pgxpool.Pool)`
@@ -530,21 +578,16 @@ also keeps bare callee names, which cannot be third-party by construction.
 
 ### Transaction-span veto
 
-A transaction cannot span two pools, so every table one touches must be authorized for
-the single role whose pool runs it. `transactionStraddleFindings` reports a group whose
-tables land on opposite sides of the partition.
+A transaction cannot span two pools, so every table one touches must be authorized
+for the single role whose pool runs it. `transactionStraddleFindings` reports a
+group whose tables land on opposite sides of the partition — **always as an
+ADVISORY**, for the reason given in "Transaction straddles are ADVISORY" above:
+co-residency is inferred at both precisions, and a finding that can only widen a
+posture must not block on an inference.
 
-It is **blocking only when both premises are proven**: that the statements really share
-one transaction (a `txorigin:`-traced group, not the coarse same-function-body fallback
-this package's own comment calls unproven), and that the transaction really runs on that
-role's pool (at least one evidence site the other role does not also have). Either
-premise missing downgrades it to advisory — emitting CRITICAL on a guess would tell
-maintainers to dual-grant, which is the same over-widening the per-privilege path
-already refuses.
-
-The lock path routes through that identical downgrade, via one shared `exclusiveTo`
-helper rather than a copy: a copy is how one path ends up still accepting what the
-other rejects.
+The lock path routes through the identical shared-evidence downgrade, via one
+`exclusiveTo` helper rather than a copy: a copy is how one path ends up still
+accepting what the other rejects.
 
 ### Reachability is static wiring, not runtime activation (decision)
 

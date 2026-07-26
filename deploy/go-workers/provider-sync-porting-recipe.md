@@ -320,21 +320,25 @@ question.
       fallback only when there is no seam at all to fake through (no I/O
       boundary, no injectable dependency) — that is a narrower case than it
       first appears.
-    - **`//go:embed` cannot reach outside its own package directory.** The
-      cache-busting fix above only covers files under
-      `internal/providersync/testdata/` (the framework's own registry,
-      loader, runner, and pair files) — it structurally CANNOT also embed
-      the production `src/dev_health_ops/**.py` files a live oracle
-      executes (Go's embed patterns reject any `../` component; verified
-      directly — `go vet` rejects it with "invalid pattern syntax"). This
-      means editing `processors/base_git.py`, `code_client.py`,
-      `pr_state.py`, or `processors/github.py` alone can STILL produce a
-      stale cached PASS from a warm `go test` cache with no `-count=1` --
-      exactly the class of bug `//go:embed` was built to close, just for a
-      file set it cannot reach. There is no known full fix for this
-      specific gap; the existing "always use `-count=1` when iterating on
-      a production Python file a live oracle depends on" discipline is
-      still load-bearing, not superseded by the embed fix.
+    - **REQUIREMENT: always run `go test -count=1` (never a bare `go test`)
+      when a test exercises a live oracle whose Python source lives outside
+      `internal/providersync/testdata/`.** `//go:embed` cannot reach outside
+      its own package directory — Go's embed patterns reject any `../`
+      component (verified directly: `go vet` rejects such a pattern with
+      "invalid pattern syntax") — so the `//go:embed` cache-busting fix
+      above can ONLY cover files under `internal/providersync/testdata/`
+      (the framework's own registry, loader, runner, and pair files). It
+      structurally CANNOT also embed the production
+      `src/dev_health_ops/**.py` files a live oracle executes
+      (`processors/base_git.py`, `code_client.py`, `pr_state.py`,
+      `processors/github.py`, and every future one). Editing any of those
+      alone, with no Go file changed, can leave `go test` unable to tell
+      the difference from the last run and return a stale cached PASS. This
+      is the same class of trap as the mutation-harness caching bug below,
+      in a place the tooling literally cannot reach — treat `-count=1` as a
+      hard requirement for these tests, not a nice-to-have, and say so at
+      the top of any new oracle pair file that reaches outside
+      `testdata/`.
     - **A shared mutation harness proof command with no cache-bypass can
       report a false SURVIVED (or, worse, a false KILLED) depending on
       unrelated prior `go test` invocations in the same session** —
@@ -343,15 +347,44 @@ question.
       `_run_command` does not pass `-count=1`, and a warm test cache
       returned a stale `(cached)` PASS for a proof command run against a
       manually re-applied version of the SAME mutation, even though the
-      underlying `.go` file's content had genuinely changed. `go clean
-      -testcache` immediately before a `run` fixed it; a fresh, un-warmed
-      cache does not exhibit the bug. This is a real reliability gap in
-      `scripts/mutation_harness.py` itself (unmerged
-      `chaos-3155-shared-mutation-harness` branch) — until it passes
-      `-count=1` (or an equivalent cache-bypass) in its own proof-command
-      invocation, **always run `go clean -testcache` immediately before any
-      `mutation_harness.py run`**, and do not trust a lone SURVIVED or
-      KILLED verdict produced against a warm cache without that step.
+      underlying `.go` file's content had genuinely changed.
+      **Why this is surprising, and worth stating precisely rather than
+      waving at "caching flakiness":** Go's test-result cache key is
+      supposed to be content-addressed — the compiled test binary's action
+      ID is a hash of its package's source, so editing a `.go` file changes
+      that hash and should force a cache miss on its own, with no
+      `-count=1` needed. That is true in a fully serial reproduction: a
+      `go clean -testcache`, one baseline run, one mutation, one re-run —
+      by itself — reliably shows the correct re-execution every time this
+      was tried in isolation. The stale hit was reproduced twice, and both
+      times it was in a session with SEVERAL concurrent `go build`/`go
+      test`/`go vet` invocations in flight against the same package at
+      once (parallel background gate scripts, plus `gopls`'s own
+      continuous background compilation, all sharing one `GOCACHE`) — and
+      it did NOT reproduce in later, deliberately serial retries, including
+      one that added a background contention loop (`go build`/`go vet`
+      looped 40 times) around the same mutate-and-test sequence without
+      catching it again. That pattern — content-addressing correct in
+      isolation, failure only under concurrent load against a shared cache
+      directory — points at a timing-dependent interaction with a
+      concurrent writer, not a flaw in the content hash itself, but this
+      was NOT pinned down to an exact interleaving; treat it as the
+      best-supported hypothesis from the evidence gathered, not a proven
+      root cause. What IS certain, independent of whichever exact
+      mechanism is responsible: `go test -count=1` disables cache lookup
+      entirely by design (documented Go behavior, not a workaround), so it
+      closes this hole regardless of what is ultimately causing it. Until
+      `scripts/mutation_harness.py` passes `-count=1` (or an equivalent
+      cache-bypass) in its own proof-command invocation, **always run `go
+      clean -testcache` immediately before any `mutation_harness.py run`**
+      — a full cache clear reliably reproduced the correct KILLED verdict
+      every single time it was tried, unlike `-count=1` on a single proof
+      command in isolation which was not separately re-verified against a
+      confirmed-concurrent-load reproduction of the bug. Do not trust a
+      lone SURVIVED or KILLED verdict produced against a warm cache without
+      that step, and if you run a mutation plan while other `go`
+      invocations are active in the same environment, clear the cache
+      again afterward before trusting the result.
     - **A declared exclusion is a claim, and claims need enforcing, not just
       writing down.** `goOnlyFields[key]` asserts "the Python side
       structurally cannot have this field"; nothing checked that assertion

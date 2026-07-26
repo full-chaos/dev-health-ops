@@ -50,6 +50,16 @@ its external I/O boundary (the client) faked -- editing that logic in
 processors/github.py changes what this oracle observes, with no separate
 pin to keep in sync and no way for a change to go unnoticed the way a
 substring-presence check could miss one.
+
+REQUIREMENT, not a caveat: any Go test that exercises this pair MUST be
+run with `go test -count=1`, never a bare `go test`. processors/github.py
+lives under src/dev_health_ops/, outside
+internal/providersync/testdata/ -- `//go:embed` cannot reach across that
+package-directory boundary (Go rejects a `../` pattern outright), so
+oracle_compare_test.go's cache-busting fix cannot see edits to it. A bare
+`go test` can then return a stale cached PASS for a real regression in
+the live function this pair exists to catch. See the recipe doc's
+defect-class list for the full explanation.
 """
 
 from __future__ import annotations

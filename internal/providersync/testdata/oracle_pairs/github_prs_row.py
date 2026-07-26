@@ -11,6 +11,17 @@ chosen subset.
 
 Importing this module is the only action needed to register the pair;
 nothing in oracle_registry.py or python_generic_row_oracle.py changes.
+
+REQUIREMENT, not a caveat: any Go test that exercises this pair (directly
+or via compareRowsAgainstPythonOracle/oracleDivergences) MUST be run with
+`go test -count=1`, never a bare `go test`. code_client.py/base_git.py/
+pr_state.py live under src/dev_health_ops/, outside
+internal/providersync/testdata/ -- `//go:embed` cannot reach across that
+package-directory boundary (Go rejects a `../` pattern outright), so
+oracle_compare_test.go's cache-busting fix cannot see edits to these
+files. A bare `go test` can then return a stale cached PASS for a real
+change to one of them. See the recipe doc's defect-class list for the
+full explanation.
 """
 
 from __future__ import annotations

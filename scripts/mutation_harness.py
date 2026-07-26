@@ -81,7 +81,10 @@ only be cleared by a successful restore, so the gate stayed red with nothing
 left to do. A safe path that dead-ends teaches people to take the unsafe one. It
 is not an override: it re-checks the file's identity, requires the caller to pin
 the content by digest, refuses while the recorded mutation is still on disk, and
-requires the mutation's replacement text to be absent and its anchor present.
+-- the load-bearing part -- requires the mutation's own PROOF COMMANDS to pass on
+the repaired tree. No text search can decide whether a mutation is still in
+effect, because the effect survives respelling; the proofs are a behavioural
+answer to a behavioural question. See ``accept_manual_repair``.
 
 ``verify`` is the gate: it belongs in the local validation script so that a
 green gate cannot be reported from a tree with a mutation still applied.
@@ -600,7 +603,9 @@ def acquire_lock(root: Path) -> Path:
             owner = pid_file.read_text(encoding="utf-8").strip() or owner
         raise HarnessError(
             f"another mutation run holds {lock} (pid {owner}). If that process "
-            f"is gone this is a stale lock: remove it with 'rm -rf {lock}', then "
+            f"is gone this is a stale lock. Remove it with:\n"
+            f"        rm -rf {shlex.quote(str(lock))}\n"
+            "    Then "
             "run 'verify' BEFORE anything else -- a killed run can leave both a "
             "stale lock and an applied mutation, and the lock is the harmless "
             "half."
@@ -670,7 +675,7 @@ def _unknown_holder_advice(root: Path) -> str:
         "or -- far more likely, if nothing is running -- a run that was killed "
         "inside it. There is no pid to wait for. Check for a live "
         "'mutation_harness.py run' process; if there is none, this is a STALE "
-        f"lock: break it with 'rm -rf {lock}'."
+        f"lock. Break it with:\n        rm -rf {shlex.quote(str(lock))}"
     )
 
 
@@ -715,7 +720,7 @@ def verify(root: Path) -> list[str]:
                 f"process that inherited pid {live} blocks this check forever. "
                 f"Check what pid {live} actually is. If it is not the harness, this "
                 "is a stale lock and nothing is applied, so it is safe to break: "
-                f"rm -rf {_state_dir(root) / LOCK_DIRNAME}"
+                f"rm -rf {shlex.quote(str(_state_dir(root) / LOCK_DIRNAME))}"
             ]
         return []
 
@@ -741,7 +746,7 @@ def verify(root: Path) -> list[str]:
             "inherited its pid, this will say IN PROGRESS forever. Check what "
             f"pid {live} actually is. If it is NOT the harness, break the lock "
             f"yourself and then restore -- in that order:\n"
-            f"        rm -rf {_state_dir(root) / LOCK_DIRNAME}\n"
+            f"        rm -rf {shlex.quote(str(_state_dir(root) / LOCK_DIRNAME))}\n"
             "        python3 scripts/mutation_harness.py restore\n"
             "    Not `restore --force`: force is for a lock left by a DEAD pid, "
             "and it refuses precisely while a process with the recorded pid "
@@ -765,15 +770,16 @@ def verify(root: Path) -> list[str]:
 def _accept_hint(relative: str) -> str:
     """The exact command that clears a record after a by-hand repair.
 
-    Quoted, because the path comes from the plan and a repo-relative path may
-    legitimately contain a space -- unquoted, the suggested command silently
-    hashes the wrong file or fails, and a recovery instruction that does not run
-    is the dead end this command exists to remove.
+    Quoted, and preceded by ``--``, because the path comes from the plan: a
+    repo-relative path may legitimately contain a space, and one beginning with a
+    dash is read as options by every tool that has any. Unquoted, the suggested
+    command silently hashes the wrong file or fails -- and a recovery instruction
+    that does not run is the dead end this command exists to remove.
     """
 
     return (
         "python3 scripts/mutation_harness.py accept --digest "
-        f"$(shasum -a 256 {shlex.quote(relative)} | cut -d' ' -f1)"
+        f"$(shasum -a 256 -- {shlex.quote(relative)} | cut -d' ' -f1)"
     )
 
 
@@ -796,9 +802,14 @@ def restore(root: Path, force: bool = False) -> str:
             raise HarnessError(
                 f"a mutation run holds the lock (pid {live}); refusing to restore "
                 "underneath it, because clearing the applied record now would let "
-                "that run leave a mutation nothing knows about. Wait for it. If "
-                f"pid {live} is not really the harness -- pids get reused -- "
-                "re-run with --force."
+                "that run leave a mutation nothing knows about. Wait for it.\n"
+                f"    If pid {live} is not really the harness -- pids get reused, "
+                "and an unrelated long-lived process that inherited it blocks this "
+                "forever -- break the lock yourself and re-run WITHOUT --force:\n"
+                f"        rm -rf {shlex.quote(str(_state_dir(root) / LOCK_DIRNAME))}\n"
+                "    Not --force: it is for a lock left by a DEAD pid, and it "
+                "refuses precisely while a process with the recorded pid exists, "
+                "so against a reused pid it can only ever refuse."
             ) from None
         if not force:
             raise
@@ -812,8 +823,9 @@ def restore(root: Path, force: bool = False) -> str:
                 f"--force refused: pid {live} is alive and holds the lock. Force "
                 "is for a lock left by a DEAD run. Confirm that pid is not the "
                 "harness and that it has exited, then re-run. If you are certain "
-                f"it is unrelated, remove the lock yourself with 'rm -rf "
-                f"{_state_dir(root) / LOCK_DIRNAME}' and re-run without --force."
+                "it is unrelated, remove the lock yourself and re-run without "
+                f"--force:\n        rm -rf "
+                f"{shlex.quote(str(_state_dir(root) / LOCK_DIRNAME))}"
             ) from None
 
     try:
@@ -951,6 +963,34 @@ def restore(root: Path, force: bool = False) -> str:
             release_lock(_state_dir(root) / LOCK_DIRNAME)
 
 
+def _recorded_proof(applied: dict[str, Any], relative: str) -> list[tuple[str, ...]]:
+    """The proof commands from the applied record, validated as argv arrays."""
+
+    raw = applied.get("proof")
+    if not isinstance(raw, list) or not raw:
+        raise HarnessError(
+            f"REFUSING TO ACCEPT {relative}: the record carries no proof commands, "
+            "so there is nothing that can show this tree behaves like a repaired "
+            "one -- and an acceptance backed by nothing is the blanket override "
+            "this command must not be. The record predates this field. Verify by "
+            f"hand and, only once you are certain, delete {STATE_DIRNAME}/"
+            f"{STATE_FILENAME} yourself."
+        )
+    commands: list[tuple[str, ...]] = []
+    for command in raw:
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(word, str) and word for word in command)
+        ):
+            raise HarnessError(
+                f"REFUSING TO ACCEPT {relative}: the record's proof commands are "
+                f"malformed ({command!r}). Recover by hand."
+            )
+        commands.append(tuple(command))
+    return commands
+
+
 def accept_manual_repair(root: Path, claimed_digest: str) -> str:
     """Clear an applied record after the mutation was undone BY HAND.
 
@@ -976,24 +1016,39 @@ def accept_manual_repair(root: Path, claimed_digest: str) -> str:
          approved;
       2. the file must not hold the recorded mutation byte-for-byte. That state
          is not a repair, it is the leak itself, and `restore` handles it;
-      3. the mutation's REPLACEMENT text must appear nowhere the record's anchor
-         does not account for. This is what makes the acceptance a measurement
-         rather than an assertion -- a file merely edited near the mutation, or
-         reformatted while still mutated, fails it.
+      3. the mutation's own PROOF COMMANDS must pass on the tree as it now
+         stands.
 
-    What (3) deliberately does NOT do is check that the original text came back.
-    An earlier version counted anchor occurrences, and counting is location-blind:
-    with a deleted-clause mutation, two comments containing the anchor satisfy any
-    count while every code site stays mutated. A check the file's own prose can
-    satisfy is not a check. Absence of the replacement is the property that
-    actually answers "is a mutation still applied", so that is the property
-    tested; a file the operator deleted the code out of therefore accepts, which
-    is correct, because no mutation is applied to it.
+    (3) is the whole design, and it is here because three successive attempts to
+    answer the question by SEARCHING THE FILE were each wrong in a new way:
+    counting anchor occurrences was satisfied by two comments while every code
+    site stayed mutated; blanking intact anchors before searching was defeated by
+    overlapping occurrences; and any exact-string test at all is defeated by
+    reformatting, because the same disabled guard can be spelled a different way.
 
-    The cost is a conservative refusal: the tool cannot tell a surviving mutation
-    from the same text occurring for an unrelated reason, and refuses both. The
-    message says so and names the manual last resort rather than pretending the
-    check is sharper than it is.
+    Those are not three bugs, they are one: *no test that reads only the current
+    text can decide whether a mutation is still in effect*, because the effect
+    survives arbitrary respelling. Patching the search a fourth time would have
+    been answering the wrong question more carefully.
+
+    So `accept` asks the question this harness already answers everywhere else --
+    the same one step 7 of the run protocol asks, for the same reason. A plan
+    declares, per mutation, the commands that NOTICE it. Those commands passed on
+    the clean tree before the mutation was applied. If they pass now, the tree
+    behaves as an unmutated one on exactly the property the mutation was written
+    to break -- and that is immune to spelling, formatting, overlap, and every
+    other textual accident, because it is not a textual claim.
+
+    The residue, stated rather than left to be discovered: a mutation NO proof
+    command can observe -- a survivor -- is accepted on proofs that would have
+    passed either way. That is real, and it is not fixable here: such a mutation
+    is by construction invisible to the only evidence the plan supplies, so no
+    check this tool could run would see it. It is the same limit that makes a
+    SURVIVED verdict a matter for the operator's judgement.
+
+    A cheap text tripwire still runs first, because a plainly-still-present
+    replacement deserves a better message than a failing test. It can only
+    REFUSE; passing it proves nothing and decides nothing.
 
     Nothing is written to the source. The only effect is removing the record.
     """
@@ -1043,67 +1098,52 @@ def accept_manual_repair(root: Path, claimed_digest: str) -> str:
                 "python3 scripts/mutation_harness.py restore"
             )
 
+        # A cheap, one-directional TRIPWIRE, not the evidence. Refusing when the
+        # replacement text is plainly still there costs nothing and gives a much
+        # better message than a failing proof would. It is skipped where it
+        # cannot discriminate, and it is only ever a reason to REFUSE -- passing
+        # it means nothing at all, which is why it decides nothing below.
         find = applied.get("find")
         replace = applied.get("replace")
-        if not isinstance(find, str) or not isinstance(replace, str):
-            raise HarnessError(
-                f"REFUSING TO ACCEPT {relative}: the record does not carry the "
-                "mutation's text, so there is no way to check the mutation is "
-                "actually gone -- and an acceptance that checks nothing is the "
-                "blanket override this command must not be. The record predates "
-                "this field. Verify the file by hand and, only once you are "
-                f"certain, delete {STATE_DIRNAME}/{STATE_FILENAME} yourself."
-            )
-        try:
-            text = current_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise HarnessError(
-                f"REFUSING TO ACCEPT {relative}: it is not valid UTF-8 ({exc}), so "
-                "the mutation text cannot be looked for. Recover by hand."
-            ) from exc
+        if isinstance(find, str) and isinstance(replace, str) and replace not in find:
+            try:
+                text = current_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                text = ""
+            if replace in text:
+                raise HarnessError(
+                    f"REFUSING TO ACCEPT {relative}: the mutation's replacement "
+                    f"text is still in the file -- {replace.strip()[:70]!r}. Undo "
+                    "it first; accepting now would clear a record that is telling "
+                    "the truth."
+                )
 
-        # The whole question is: does any site still hold the REPLACEMENT? Asked
-        # two ways, because neither alone covers every shape a mutation can take,
-        # and each is skipped where it cannot discriminate. `find` and `replace`
-        # are never equal, so at least one always applies.
-        #
-        # NOT asked by counting occurrences of the anchor. That was the previous
-        # attempt and it is location-blind: with a deleted-clause mutation, two
-        # comments containing the anchor text satisfy any count while both code
-        # sites stay mutated. A check the file's own prose can satisfy is not a
-        # check -- it is the doc-comment failure this harness was built to refuse,
-        # arriving through the command that clears the harness's own record.
-        bare = replace in text if replace not in find else False
-        # Blank every intact anchor first, then look again. Where `replace` is a
-        # substring of `find` -- a DELETED clause, the commonest shape in the
-        # scheduled-reports plan -- a bare `replace in text` matches inside intact
-        # anchors and can never pass. Removing the anchors leaves exactly the
-        # replacements no anchor accounts for, which is the set that matters.
-        unexplained = (
-            replace in text.replace(find, "\x00" * (len(find) + 1))
-            if find not in replace
-            else False
-        )
-        if bare or unexplained:
-            raise HarnessError(
-                f"REFUSING TO ACCEPT {relative}: the mutation's replacement text "
-                f"is still in the file -- {replace.strip()[:70]!r} -- at a site no "
-                "intact anchor accounts for. The mutation has not been undone, "
-                "whatever else has changed around it. Undo it first; accepting now "
-                "would clear a record that is telling the truth.\n"
-                "    This refusal is deliberately conservative: the tool cannot "
-                "tell a surviving mutation from that same text occurring in the "
-                "file for an unrelated reason, so it refuses both. If that is your "
-                "case, verify by hand and delete "
-                f"{STATE_DIRNAME}/{STATE_FILENAME} yourself."
-            )
+        commands = _recorded_proof(applied, relative)
+        for command in commands:
+            code, tail = _run_command(command, root)
+            if code != 0:
+                raise HarnessError(
+                    f"REFUSING TO ACCEPT {relative}: the mutation's own proof "
+                    f"command still fails on this tree.\n    "
+                    f"{_format_command(command)}\n{tail.strip()[-1200:]}\n"
+                    "    This is the command the plan declared as the thing that "
+                    "notices this mutation, and it passed on the clean tree before "
+                    "the mutation was applied. Failing now, it is saying the tree "
+                    "does not yet behave like a repaired one. Either the mutation "
+                    "is still in effect, or something else is broken -- and while "
+                    "this cannot pass, no acceptance here would mean anything.\n"
+                    "    If the failure is genuinely unrelated and you have "
+                    f"verified {relative} by hand, delete {STATE_DIRNAME}/"
+                    f"{STATE_FILENAME} yourself; that is a deliberate override, "
+                    "and it should look like one."
+                )
 
         identifier = applied.get("mutation_id", "?")
         _write_state(root, None)
         return (
             f"accepted a by-hand repair of {relative} (mutation {identifier}, "
-            f"content {current[:12]}): the replacement text appears nowhere the "
-            "record's anchor does not explain. Cleared the applied record; wrote "
+            f"content {current[:12]}): all {len(commands)} recorded proof "
+            "command(s) pass on this tree. Cleared the applied record; wrote "
             "nothing."
         )
     finally:
@@ -1413,6 +1453,11 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
                 # override the acceptance path must not become.
                 "find": mutation.find,
                 "replace": mutation.replace,
+                # The commands that NOTICE this mutation. `accept` re-runs them
+                # to decide whether a by-hand repair may clear this record: a
+                # behavioural question, because no textual one can be answered
+                # soundly. See accept_manual_repair.
+                "proof": [list(command) for command in mutation.proof],
                 "pid": os.getpid(),
             },
         },
@@ -1609,8 +1654,9 @@ def main(argv: list[str] | None = None) -> int:
     restore_parser.add_argument(
         "--force",
         action="store_true",
-        help="restore even when a lock is held (use only after confirming the "
-        "recorded pid is not really the harness; pids are reused)",
+        help="restore when a lock was left by a DEAD run. It deliberately "
+        "refuses while a process with the recorded pid exists, so for a REUSED "
+        "pid remove the lock directory by hand and restore without this flag",
     )
     accept_parser = sub.add_parser(
         "accept",

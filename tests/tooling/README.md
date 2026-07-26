@@ -57,19 +57,39 @@ than trusted:
 | the file still resolves to the recorded `device:inode` | otherwise the file actually holding the mutation stays broken *and* unrecorded |
 | `--digest` naming the file's **current** content | pins the decision to bytes. If anything writes the file between your inspection and the acceptance, it fails rather than clearing against content nobody approved |
 | the file is **not** the recorded mutation | that state is the leak itself, not a repair. Use `restore` |
-| the replacement text appears **nowhere an intact anchor explains** | this is what makes it a measurement. A file merely edited near the mutation, or reformatted while still mutated, fails it |
+| the mutation's own **`proof` commands pass** on the tree as it now stands | this is the load-bearing one, and the only sound one — see below |
 
 It never writes to your source. The only thing it changes is the record.
 
-**What it deliberately does not check: that the original text came back.** An earlier version
-counted anchor occurrences, and counting is location-blind — with a deleted-clause mutation, two
-*comments* containing the anchor satisfy any count while every code site stays mutated. A check the
-file's own prose can satisfy is not a check; it is the doc-comment failure this harness refuses
-anchors for, arriving through the command that clears the harness's own record. Absence of the
-replacement is what actually answers *is a mutation still applied*, so that is the property tested.
-The cost is a conservative refusal: where the replacement text legitimately occurs elsewhere in the
-file, the tool cannot tell that from a survivor and refuses both, naming the manual last resort
-rather than pretending to be sharper than it is.
+### Why the check is behavioural, not textual
+
+Three review rounds each defeated a *textual* answer to "is the mutation gone", and each time by a
+new route:
+
+- counting occurrences of the anchor — satisfied by two **comments** containing the anchor while
+  every code site stayed mutated;
+- blanking intact anchors and then searching for the replacement — defeated by **overlapping**
+  occurrences, which erased the evidence;
+- any exact-string test at all — defeated by **reformatting**, since the same disabled guard can be
+  spelled another way.
+
+Those are not three bugs. They are one: **no test that reads only the current text can decide
+whether a mutation is still in effect, because the effect survives being respelled.** Patching the
+search a fourth time would have been answering the wrong question more carefully.
+
+So `accept` asks the question this harness already answers everywhere else — the same one step 7 of
+the run protocol asks, and for the same reason. A plan declares, per mutation, the commands that
+*notice* it; those commands passed on the clean tree before the mutation was applied. If they pass
+now, the tree behaves as an unmutated one on exactly the property the mutation was written to break,
+and that is immune to spelling, formatting and overlap because it is not a textual claim.
+
+**The residue, stated rather than left to be found:** a mutation that *no* proof command can observe
+— a survivor — is accepted on proofs that would have passed either way. That is real and it is not
+fixable here: such a mutation is by construction invisible to the only evidence the plan supplies,
+so no check this tool could run would see it. It is the same limit that makes a `SURVIVED` verdict a
+matter for your judgement. A cheap text tripwire still runs first, because a plainly still-present
+replacement deserves a better message than a failing test — it can only refuse, and it decides
+nothing.
 
 ### What `verify` does not prove
 
@@ -166,7 +186,7 @@ python3 scripts/mutation_harness.py run \
   --plan tests/tooling/mutation-plans/mutation_harness.json --assert-all-killed
 ```
 
-**Nineteen guards, nineteen kills, zero `INVALID`** — measured on 2026-07-26 against this tree, not
+**Twenty guards, twenty kills, zero `INVALID`** — measured on 2026-07-26 against this tree, not
 claimed. Check the number against a real run rather than trusting this line: a previous version of
 this sentence said eleven while two of its anchors had drifted to match zero lines, so the run
 actually produced nine kills and two `INVALID`. A stale claim about mutation coverage is the same

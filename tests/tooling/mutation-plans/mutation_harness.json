@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "name": "mutation harness self-check",
+  "$comment": "The harness's own guards, mutated by the harness. Each entry disables one guard and names the test that must go red. A guard whose test has never been observed failing is the same class of false pass the harness exists to catch, so this plan is how the contract tests earn their keep. Safe to run against the harness itself: Python has already loaded the module by the time it mutates the file, and each proof command is a fresh pytest subprocess that imports the mutated copy. Run with: python3 scripts/mutation_harness.py run --plan tests/tooling/mutation-plans/mutation_harness.json --assert-all-killed",
+  "$limitation": "NOT covered by this plan, stated here rather than left as an assumed pass. (1) The record-before-apply ORDERING that makes a crash mid-apply detectable: an ordering property is not reachable by a single find/replace, so test_a_crash_while_applying_still_leaves_a_record_for_verify pins it. (2) The restored-byte digest comparison in the run's finally block \u2014 disabling it leaves every mutation here green, because none of them exercises a partial restore. Pinned only by contract test, and the weakest guard in the tool. (3) The lock itself, the plan-schema validators, and the atomic-write temp-and-rename: contract tests only.",
+  "mutations": [
+    {
+      "id": "H1",
+      "file": "scripts/mutation_harness.py",
+      "find": "    if occurrences != mutation.expect_occurrences:",
+      "replace": "    if False and occurrences != mutation.expect_occurrences:",
+      "expect_occurrences": 1,
+      "rationale": "An anchor that matches a different number of times than declared must be refused. Without this, a mutation that lands in a doc comment reads exactly like a coverage gap -- the real 2026-07-26 incident.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_an_anchor_matching_twice_is_refused",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H2",
+      "file": "scripts/mutation_harness.py",
+      "find": "    if not mutation.allow_comment_anchor and stripped.startswith(COMMENT_PREFIXES):",
+      "replace": "    if False and stripped.startswith(COMMENT_PREFIXES):",
+      "expect_occurrences": 1,
+      "rationale": "Mutating a comment cannot change behaviour, so it must be refused rather than reported as SURVIVED.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_an_anchor_on_a_comment_line_is_refused",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H3",
+      "file": "scripts/mutation_harness.py",
+      "find": "    failing, tail = _proof_outcome(mutation, root)\n    if failing is not None:\n        return Result(",
+      "replace": "    failing, tail = _proof_outcome(mutation, root)\n    if False and failing is not None:\n        return Result(",
+      "expect_occurrences": 1,
+      "rationale": "A mutation measured against an already-red proof proves nothing, and mutating the file anyway risks compounding the failure. BASELINE_FAILED must short-circuit before the file is touched.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_red_baseline_is_reported_and_the_file_is_never_mutated",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H4",
+      "file": "scripts/mutation_harness.py",
+      "find": "    if expected and _digest(original) != expected:",
+      "replace": "    if False and _digest(original) != expected:",
+      "expect_occurrences": 1,
+      "rationale": "A tampered or mismatched snapshot must never be written over real source. Restoring the wrong bytes is worse than refusing to restore.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_restore_refuses_a_snapshot_that_does_not_match_its_digest",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H5",
+      "file": "scripts/mutation_harness.py",
+      "find": "    post_failing, post_tail = _proof_outcome(mutation, root)\n    if post_failing is not None:",
+      "replace": "    post_failing, post_tail = _proof_outcome(mutation, root)\n    if False and post_failing is not None:",
+      "expect_occurrences": 1,
+      "rationale": "Byte-identity is necessary but not sufficient: if the proof does not pass again on the restored tree, something changed underneath the run and every result is void. This is the check a `go build` cannot perform.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_proof_that_stops_passing_after_the_restore_aborts_the_run",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H6",
+      "file": "scripts/mutation_harness.py",
+      "find": "    blockers = verify(root)\n    if blockers:\n        raise HarnessError(\"refusing to run: \" + \"; \".join(blockers))",
+      "replace": "    blockers = verify(root)\n    if False and blockers:\n        raise HarnessError(\"refusing to run: \" + \"; \".join(blockers))",
+      "expect_occurrences": 1,
+      "rationale": "A run must refuse to start while a mutation from an earlier fault is still applied, or it measures every subsequent mutation against a broken tree.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_leftover_mutation_blocks_verify_and_refuses_a_new_run",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H7",
+      "file": "scripts/mutation_harness.py",
+      "find": "    if current == expected_sha:\n        return",
+      "replace": "    if True:\n        return",
+      "expect_occurrences": 1,
+      "rationale": "The freshness check before every write. Without it a stale snapshot is written over a change saved during the baseline, silently destroying a developer's work \u2014 the worst defect this tool could have, and a worse failure than any it detects.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_file_edited_during_the_baseline_is_never_overwritten",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H8",
+      "file": "scripts/mutation_harness.py",
+      "find": "        elif current_sha != mutated_sha:",
+      "replace": "        elif False and current_sha != mutated_sha:",
+      "expect_occurrences": 1,
+      "rationale": "When the target holds neither the mutation nor the original after OBSERVE, a third party wrote it and restoring either version loses that write. Must refuse and touch nothing.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_file_replaced_during_observe_is_left_exactly_as_found",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H9",
+      "file": "scripts/mutation_harness.py",
+      "find": "        if live is not None and not force:",
+      "replace": "        if False:",
+      "expect_occurrences": 1,
+      "rationale": "restore must not race a live run: clearing the record before that run applies its mutation leaves a mutation nothing knows about, so verify would report clean. A hole reachable through this tool's own repair path.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_restore_refuses_while_a_live_run_holds_the_lock",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H10",
+      "file": "scripts/mutation_harness.py",
+      "find": "        if _sanitised_identifier(identifier) is None:",
+      "replace": "        if False:",
+      "expect_occurrences": 1,
+      "rationale": "A mutation id is embedded in a snapshot filename. Unvalidated, `../../x` writes outside the state directory and a pre-created symlink at the predictable name turns that into an arbitrary overwrite.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_a_mutation_id_that_is_not_a_plain_name_is_rejected",
+          "-q"
+        ]
+      ]
+    },
+    {
+      "id": "H11",
+      "file": "scripts/mutation_harness.py",
+      "find": "        result.verdict in {VERDICT_BASELINE_FAILED, VERDICT_INVALID}",
+      "replace": "        result.verdict in {VERDICT_BASELINE_FAILED}",
+      "expect_occurrences": 1,
+      "rationale": "An INVALID mutation measured nothing, so exiting 0 reports a plan as verified while part of it never ran. This exact false pass shipped in the first version.",
+      "proof": [
+        [
+          ".venv/bin/python",
+          "-m",
+          "pytest",
+          "tests/tooling/test_mutation_harness.py::test_an_invalid_mutation_fails_the_run",
+          "-q"
+        ]
+      ]
+    }
+  ]
+}

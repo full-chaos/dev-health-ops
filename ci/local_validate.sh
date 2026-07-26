@@ -211,6 +211,13 @@ gate_lint_check()  { "${RUFF}" check .; }
 gate_typecheck()   { "${MYPY}" --install-types --non-interactive .; }
 gate_go_fast()     { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
+# Runs FIRST, and deliberately so: a mutation left applied by an interrupted
+# mutation-testing run makes every result below it meaningless, and it is
+# invisible to the tools that would otherwise be trusted to notice. `go build`
+# and `go vet` both pass on `if false && (guard)`, and `git diff` reports an
+# UNTRACKED file clean no matter what it contains — so neither the Go gate nor a
+# git check can substitute for this one. See scripts/mutation_harness.py.
+gate_no_active_mutation() { "${PYBIN}" "${ROOT}/scripts/mutation_harness.py" verify; }
 
 # --- The FULL unit suite — the CHAOS-2604 fix. NOT a file subset. ------------------
 # Byte-for-byte the marker filter + ignores of ci/run_tests.sh unit_tests().
@@ -407,6 +414,7 @@ print_summary() {
 main() {
   preflight
 
+  run_stage "mutation harness: no mutation applied" gate_no_active_mutation
   run_stage "lint: ruff format --check"  gate_lint_format
   run_stage "lint: ruff check"           gate_lint_check
   run_stage "typecheck: mypy"            gate_typecheck

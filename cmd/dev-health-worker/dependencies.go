@@ -417,16 +417,27 @@ func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error
 	return result, nil
 }
 
-func providerRouteSwitchesReady(
-	cfg config.Config,
-	runtimeConstructed *bool,
-) health.CheckFunc {
-	switches := providersync.CompleteRouteSwitches{
+// workerRouteSwitches is the single translation from process configuration to
+// route switches. The readiness check below and the handler that actually
+// executes claims (buildProviderSyncHandler) both read it, so a route can
+// never be reported ready against one switch set while being served under
+// another — the drift that a hardcoded `LaunchDarklyFeatureFlags: true` in the
+// handler used to permit (CHAOS-3123).
+func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
+	return providersync.CompleteRouteSwitches{
 		LinearWorkItems:          cfg.WorkerLinearWorkItemsEnabled,
 		JiraWorkItems:            cfg.WorkerJiraWorkItemsEnabled,
 		JiraIncidents:            cfg.WorkerJiraIncidentsEnabled,
 		LaunchDarklyFeatureFlags: cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
+		GithubRepoMetadata:       cfg.WorkerGithubRepoMetadataEnabled,
 	}
+}
+
+func providerRouteSwitchesReady(
+	cfg config.Config,
+	runtimeConstructed *bool,
+) health.CheckFunc {
+	switches := workerRouteSwitches(cfg)
 	routes := []struct {
 		provider string
 		dataset  string
@@ -436,6 +447,7 @@ func providerRouteSwitchesReady(
 		{"jira", "work-items", cfg.WorkerJiraWorkItemsEnabled},
 		{"jira", "incidents", cfg.WorkerJiraIncidentsEnabled},
 		{"launchdarkly", "feature-flags", cfg.WorkerLaunchDarklyFeatureFlagsEnabled},
+		{"github", "repo-metadata", cfg.WorkerGithubRepoMetadataEnabled},
 	}
 	return func(context.Context) error {
 		for _, route := range routes {
@@ -446,8 +458,14 @@ func providerRouteSwitchesReady(
 			if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
 				return errWorkerDependencyUnavailable
 			}
-			if route.provider == "launchdarkly" &&
-				(runtimeConstructed == nil || !*runtimeConstructed) {
+			// Any enabled route implies the provider-sync runtime must have
+			// been constructed: buildProviderSyncWorker builds the family when
+			// ANY route switch is on, so an enabled switch with no runtime
+			// behind it means units are being dispatched at a process that
+			// registered no handler for them. This was previously checked for
+			// launchdarkly alone, which was correct only while it was the sole
+			// switch that could construct the family (CHAOS-3123).
+			if runtimeConstructed == nil || !*runtimeConstructed {
 				return errWorkerDependencyUnavailable
 			}
 		}

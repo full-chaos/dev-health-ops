@@ -58,6 +58,74 @@ def test_invalid_switch_fails_closed_without_echoing_value() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-3123: the (github, repo-metadata) producer-side switch. Its Go
+# counterpart is config.Config.WorkerGithubRepoMetadataEnabled, read from the
+# same WORKER_GITHUB_REPO_METADATA_ENABLED name.
+# ---------------------------------------------------------------------------
+
+
+def test_github_repo_metadata_defaults_to_false() -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "true"}
+    )
+    assert switches.github_repo_metadata is False
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._TRUE))
+def test_github_repo_metadata_parses_true_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_REPO_METADATA_ENABLED": value}
+    )
+    assert switches.github_repo_metadata is True
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._FALSE))
+def test_github_repo_metadata_parses_false_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_REPO_METADATA_ENABLED": value}
+    )
+    assert switches.github_repo_metadata is False
+
+
+def test_github_repo_metadata_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_REPO_METADATA_ENABLED": "sometimes"}
+        )
+
+
+def test_github_repo_metadata_switch_is_the_second_required_key() -> None:
+    """(github, repo-metadata) is route_ready in the checked-in matrix, but
+    readiness alone must never move traffic -- routes_to_river only returns
+    True once the GithubRepoMetadata switch is ALSO on. This is the half that
+    matters: it proves the checked-in matrix cannot move traffic on its own.
+    """
+
+    assert ProviderUnitRouteSwitches.is_route_ready("github", "repo-metadata")
+
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert not off.routes_to_river("github", "repo-metadata")
+
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_REPO_METADATA_ENABLED": "true"}
+    )
+    assert on.routes_to_river("github", "repo-metadata")
+
+
+def test_github_repo_metadata_switch_does_not_open_gitlab_repo_metadata() -> None:
+    """Mirrors the Go-side TestGithubRepoMetadataSwitchDoesNotOpenGitLab:
+    gitlab/repo-metadata shares the repo-metadata dataset name but has no
+    native handler and stays route_ready=false in the matrix, so turning on
+    the github switch must never widen gitlab's route open."""
+
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_REPO_METADATA_ENABLED": "true"}
+    )
+    assert not ProviderUnitRouteSwitches.is_route_ready("gitlab", "repo-metadata")
+    assert not switches.routes_to_river("gitlab", "repo-metadata")
+
+
+# ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.
 # ---------------------------------------------------------------------------

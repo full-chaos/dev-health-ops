@@ -100,6 +100,14 @@ type Config struct {
 	WorkerJiraWorkItemsEnabled            bool
 	WorkerJiraIncidentsEnabled            bool
 	WorkerLaunchDarklyFeatureFlagsEnabled bool
+	// WorkerGithubRepoMetadataEnabled is the (github, repo-metadata) half of
+	// the two-key route gate (CHAOS-3123). The matrix marking the pair
+	// route_ready is the other half; neither alone moves traffic. Its Python
+	// counterpart is ProviderUnitRouteSwitches.github_repo_metadata, read from
+	// the same WORKER_GITHUB_REPO_METADATA_ENABLED name, because the producer
+	// and the executor must agree on the route or a dispatched unit finds no
+	// handler.
+	WorkerGithubRepoMetadataEnabled bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -171,6 +179,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
 			target: &cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_REPO_METADATA_ENABLED",
+			target: &cfg.WorkerGithubRepoMetadataEnabled,
 		},
 	} {
 		*item.target, err = boolEnv(lookup, item.name, false)
@@ -434,6 +446,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 			"worker_launchdarkly_feature_flags_enabled",
 			c.WorkerLaunchDarklyFeatureFlagsEnabled,
 		),
+		slog.Bool("worker_github_repo_metadata_enabled", c.WorkerGithubRepoMetadataEnabled),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),

@@ -113,6 +113,11 @@ type CompleteRouteSwitches struct {
 	JiraWorkItems            bool
 	JiraIncidents            bool
 	LaunchDarklyFeatureFlags bool
+	// GithubRepoMetadata gates (github, repo-metadata) only. It must never
+	// gate gitlab/repo-metadata: GitLab has fixture fetch code only and no
+	// CompleteRouteHandler, so it stays RouteReady=false regardless of this
+	// field (see Descriptor's separate gitlab case below).
+	GithubRepoMetadata bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -150,11 +155,26 @@ func (switches CompleteRouteSwitches) Descriptor(
 		descriptor.Destinations = launchDarklyRouteDestinations()
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.LaunchDarklyFeatureFlags
-	case (provider == "github" || provider == "gitlab") && dataset == "repo-metadata":
-		// GitHub has a native complete-route handler and a repos effect sink,
-		// but the route stays closed until live non-empty parity evidence
-		// exists (plan §9 CUT-09 acceptance). GitLab has fixture fetch code
-		// only and no complete-route handler at all.
+	case provider == "github" && dataset == "repo-metadata":
+		// GitHub has a native complete-route handler
+		// (GitHubRepositoryRouteHandler) and a repos effect sink
+		// (GitHubRepositoryClickHouseEffects). CHAOS-3123 cleared this to
+		// RouteReady=true on fixture-level field parity evidence against the
+		// production Python collector (_repo_from_item /
+		// get_repo_uuid_from_repo / normalized_operational_provider_instance
+		// / processors/github.py's settings-dict construction) — canary
+		// staging and live-traffic parity are waived for this program (no
+		// production users yet; see plan). RouteEnabled still requires the
+		// GithubRepoMetadata switch, which every existing wiring leaves off
+		// by default, so this change alone moves no live traffic.
+		descriptor.Destinations = []string{"repos"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubRepoMetadata
+	case provider == "gitlab" && dataset == "repo-metadata":
+		// GitLab has fixture fetch code only and no CompleteRouteHandler, so
+		// it stays behind the shadow-only stage. Do not fold this back into
+		// the github case above: doing so would make GithubRepoMetadata
+		// enable a route with no handler behind it.
 		descriptor.Destinations = []string{"repos"}
 	}
 	return descriptor, true

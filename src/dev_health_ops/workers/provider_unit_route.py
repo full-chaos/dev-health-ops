@@ -119,6 +119,12 @@ class ProviderUnitRouteSwitches:
     jira_work_items: bool = False
     jira_incidents: bool = False
     launchdarkly_feature_flags: bool = False
+    # github_repo_metadata is the producer half of the (github, repo-metadata)
+    # gate (CHAOS-3123). Its Go counterpart is
+    # config.Config.WorkerGithubRepoMetadataEnabled, read from the same
+    # environment name, because a unit this gate routes to River is only
+    # executed if the worker's CompleteRouteSwitches also enables the pair.
+    github_repo_metadata: bool = False
 
     @classmethod
     def from_environment(
@@ -132,6 +138,7 @@ class ProviderUnitRouteSwitches:
             launchdarkly_feature_flags=_flag(
                 source, "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED"
             ),
+            github_repo_metadata=_flag(source, "WORKER_GITHUB_REPO_METADATA_ENABLED"),
         )
         switches.require_complete_routes()
         return switches

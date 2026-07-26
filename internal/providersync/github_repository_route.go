@@ -61,9 +61,15 @@ type gitHubRepositoryPayload struct {
 // through the effect ledger, keeps Go as the only lease owner, and honours the
 // dataset's WatermarkNone contract by never advancing a watermark.
 //
-// The pair is still RouteReady=false. Fixture parity is covered here; live
-// non-empty parity (plan §9 CUT-09 acceptance) has not been captured, and
-// capability metadata is not execution evidence (TRD §10.1).
+// The pair is RouteReady=true as of CHAOS-3123 (canary staging and live
+// traffic parity are waived for this program; fixture-level field parity
+// against the Python collector is the acceptance bar — see
+// TestGitHubRepositoryRouteEmitsOneBoundedReposEffect and
+// TestRepositoryIdentityMatchesPythonDerivation). Live non-empty parity
+// against a real credentialed GitHub repository has NOT been captured; that
+// remains open (TestGitHubRepositoryLiveParityHarness) and, along with the
+// GithubRepoMetadata switch, is what still stands between this pair and live
+// traffic. Capability metadata is not execution evidence (TRD §10.1).
 type GitHubRepositoryRouteHandler struct{ Now func() time.Time }
 
 func (handler GitHubRepositoryRouteHandler) now() time.Time {

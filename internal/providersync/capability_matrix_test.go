@@ -3,7 +3,9 @@ package providersync
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -53,10 +55,23 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 	}
 }
 
-// TestProviderMatrixKeepsEveryRouteClosedExceptLaunchDarkly is the freeze
-// guard: adding descriptors for github, gitlab, and pagerduty in CUT-08 must
-// not widen the routable surface.
-func TestProviderMatrixKeepsEveryRouteClosedExceptLaunchDarkly(t *testing.T) {
+// routeReadyPairs is the complete, explicitly enumerated set of pairs that may
+// carry live traffic. Every entry needs its own parity evidence; adding one
+// here without it is the failure this guard exists to prevent.
+//
+//   - launchdarkly/feature-flags: CUT-08, native handler + live parity.
+//   - github/repo-metadata: CHAOS-3123, fixture-level field parity against the
+//     Python collector (TestGitHubRepositoryRouteEmitsOneBoundedReposEffect).
+//     Canary staging and live-traffic parity are waived for this program.
+var routeReadyPairs = map[string]struct{}{
+	"launchdarkly/feature-flags": {},
+	"github/repo-metadata":       {},
+}
+
+// TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
+// descriptors exist for github, gitlab, and pagerduty since CUT-08, and having
+// a descriptor must never by itself widen the routable surface.
+func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	t.Parallel()
 	ready := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {
@@ -64,29 +79,48 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptLaunchDarkly(t *testing.T) {
 			ready[pair.Provider+"/"+pair.Dataset] = struct{}{}
 		}
 	}
-	if len(ready) != 1 {
-		t.Fatalf("route-ready pairs=%v", ready)
+	if !maps.Equal(ready, routeReadyPairs) {
+		t.Fatalf("route-ready pairs=%v want %v", ready, routeReadyPairs)
 	}
-	if _, ok := ready["launchdarkly/feature-flags"]; !ok {
-		t.Fatalf("route-ready pairs=%v", ready)
-	}
-	// Enabling every switch may not make an unready pair routable.
+	// Enabling every declared switch may not make an unready pair routable.
+	// The literal below must name every field of CompleteRouteSwitches: a new
+	// switch left out of it would leave its pair unexercised here.
 	all := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
-		LaunchDarklyFeatureFlags: true,
+		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
+	}
+	if reflect.TypeOf(all).NumField() != 5 {
+		t.Fatalf(
+			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
+				"pair is exercised, then update this count",
+		)
 	}
 	for _, pair := range BuildProviderMatrix().Pairs {
+		key := pair.Provider + "/" + pair.Dataset
 		descriptor, ok := all.Descriptor(pair.Provider, pair.Dataset)
 		if !ok {
-			t.Fatalf("%s/%s has no descriptor", pair.Provider, pair.Dataset)
+			t.Fatalf("%s has no descriptor", key)
 		}
-		routable := descriptor.RouteReady && descriptor.RouteEnabled
-		if routable != (pair.Provider == "launchdarkly") {
-			t.Fatalf(
-				"%s/%s routable=%v descriptor=%+v",
-				pair.Provider, pair.Dataset, routable, descriptor,
-			)
+		_, wantRoutable := routeReadyPairs[key]
+		if routable := descriptor.RouteReady && descriptor.RouteEnabled; routable != wantRoutable {
+			t.Fatalf("%s routable=%v want %v descriptor=%+v", key, routable, wantRoutable, descriptor)
 		}
+	}
+}
+
+// TestGithubRepoMetadataSwitchDoesNotOpenGitLab pins the split that
+// CHAOS-3123 introduced: gitlab/repo-metadata shares repo-metadata's
+// destination manifest but has no CompleteRouteHandler, so folding it back
+// into github's case would let one switch open a route with nothing behind it.
+func TestGithubRepoMetadataSwitchDoesNotOpenGitLab(t *testing.T) {
+	t.Parallel()
+	switches := CompleteRouteSwitches{GithubRepoMetadata: true}
+	descriptor, ok := switches.Descriptor("gitlab", "repo-metadata")
+	if !ok {
+		t.Fatal("gitlab/repo-metadata has no descriptor")
+	}
+	if descriptor.RouteReady || descriptor.RouteEnabled {
+		t.Fatalf("gitlab/repo-metadata descriptor=%+v", descriptor)
 	}
 }
 

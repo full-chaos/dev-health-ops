@@ -126,6 +126,7 @@ type providerSyncRepository interface {
 // this ticket exists to eliminate, must fail that test.
 func buildProviderSyncHandler(
 	repository providerSyncRepository,
+	switches providersync.CompleteRouteSwitches,
 	decryptor providerfoundation.CredentialDecryptor,
 	clickhouseConnection driver.Conn,
 	valkeyClient valkeygo.Client,
@@ -142,9 +143,11 @@ func buildProviderSyncHandler(
 	providerMetrics := providerfoundation.NewMetrics()
 	handler := &providerunit.Handler{
 		Repository: repository,
-		Switches: providersync.CompleteRouteSwitches{
-			LaunchDarklyFeatureFlags: true,
-		},
+		// Derived from process configuration, not hardcoded. A hardcoded
+		// switch set makes the handler serve a route the readiness check says
+		// is off (or refuse one it says is on); both sides now read
+		// workerRouteSwitches (CHAOS-3123).
+		Switches:      switches,
 		LeaseDuration: providerUnitLeaseDuration,
 		Heartbeat:     providerUnitHeartbeat,
 		// LeaseMetrics observes worker_sync_lease_expired_total. Only claims
@@ -178,8 +181,51 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			sink := providersync.LaunchDarklyClickHouseEffects{
-				Conn: clickhouseConnection, Lease: session,
+			// Two route-ready pairs can reach this closure today
+			// (launchdarkly/feature-flags, github/repo-metadata — see
+			// CompleteRouteSwitches.Descriptor), and each has its own
+			// CompleteRouteHandler and effect sink. session.Claim is already
+			// known here — providerunit.Handler.Work only calls BuildExecutor
+			// after its own descriptor gate passed for THIS claim's
+			// provider/dataset — so select by claim rather than hardcoding
+			// one pair. A hardcoded Handler was exactly the CHAOS-3123 gap:
+			// it would compile, satisfy every other test, and still fail
+			// every github/repo-metadata claim (LaunchDarklyRouteHandler.Collect
+			// fails closed on claim.Provider != "launchdarkly") the moment the
+			// switch was flipped on.
+			var (
+				routeHandler providersync.CompleteRouteHandler
+				sink         providersync.EffectSink
+				readback     providersync.EffectReadback
+			)
+			switch {
+			case session.Claim.Provider == "launchdarkly" &&
+				session.Claim.Dataset == "feature-flags":
+				ldSink := providersync.LaunchDarklyClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.LaunchDarklyRouteHandler{
+					CodeReferences: providersync.LaunchDarklyClickHouseReferences{
+						Conn: clickhouseConnection, Lease: session,
+					},
+				}
+				sink, readback = ldSink, ldSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "repo-metadata":
+				ghSink := providersync.GitHubRepositoryClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubRepositoryRouteHandler{}
+				sink, readback = ghSink, ghSink
+			default:
+				// Unreachable in production: providerunit.Handler.Work only
+				// invokes BuildExecutor for a claim whose descriptor already
+				// reported RouteReady && RouteEnabled, and those two cases
+				// above are the only pairs CompleteRouteSwitches.Descriptor
+				// ever marks RouteReady. Fail closed rather than construct an
+				// executor with a nil Handler.
+				return providersync.CompleteRouteExecutor{},
+					errWorkerDependencyUnavailable
 			}
 			return providersync.CompleteRouteExecutor{
 				Credentials: providerfoundation.CredentialResolver{
@@ -218,15 +264,11 @@ func buildProviderSyncHandler(
 				// This is the exact seam the mutation test targets: Metrics
 				// must stay the shared providerMetrics closed over above, not
 				// a fresh providerfoundation.NewMetrics() built per call.
-				Metrics: providerMetrics,
-				Handler: providersync.LaunchDarklyRouteHandler{
-					CodeReferences: providersync.LaunchDarklyClickHouseReferences{
-						Conn: clickhouseConnection, Lease: session,
-					},
-				},
+				Metrics:    providerMetrics,
+				Handler:    routeHandler,
 				Comparator: providersync.ProductionContractComparator{},
 				Committer: providersync.EffectCommitter{
-					Ledger: repository, Sink: sink, Readback: sink,
+					Ledger: repository, Sink: sink, Readback: readback,
 				},
 				HeartbeatInterval: providerUnitHeartbeat,
 			}, nil
@@ -243,7 +285,12 @@ func buildProviderSyncWorker(
 	observer jobruntime.Observer,
 	logger *slog.Logger,
 ) (workerFamily, error) {
-	if cfg.Profile != "sync" || !cfg.WorkerLaunchDarklyFeatureFlagsEnabled {
+	// Construct the family when ANY route switch is on, not launchdarkly's
+	// alone: (github, repo-metadata) became routable in CHAOS-3123, and a
+	// process that dispatches github units while refusing to build the handler
+	// for them would strand every unit at a worker with nothing registered.
+	if cfg.Profile != "sync" ||
+		(!cfg.WorkerLaunchDarklyFeatureFlagsEnabled && !cfg.WorkerGithubRepoMetadataEnabled) {
 		return workerFamily{}, nil
 	}
 	if registry == nil || observer == nil || logger == nil ||
@@ -297,8 +344,8 @@ func buildProviderSyncWorker(
 	// such as a test double.
 	collector, _ := observer.(*jobruntime.MetricsCollector)
 	handler, providerMetrics := buildProviderSyncHandler(
-		repository, decryptor, clickhouseConnection, valkeyClient,
-		postgresDatabase.pools.Domain, collector, logger,
+		repository, workerRouteSwitches(cfg), decryptor, clickhouseConnection,
+		valkeyClient, postgresDatabase.pools.Domain, collector, logger,
 	)
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](
 		registry, spec, handler, jobruntime.Dependencies{

@@ -445,27 +445,52 @@ isolated project — never on shared infrastructure:
 
 ### Not proven
 
-A ClickHouse `repos` row. This needs a real GitHub PAT, which was
-unavailable throughout — nobody working this ticket had one, and none was
-requested from the user. `worker_sync_lease_expired_total` also never
-carried a non-zero series in any run: this is expected and **not a
-regression signal** — that metric only increments on a claim that itself
-recovered an *expired* lease (`providerunit.Handler.observeLeaseRecovery`
-checks `claim.Recovered`, a no-op for an ordinary first-attempt claim), and
-nothing in this proof deliberately expired and re-claimed a lease.
+A ClickHouse `repos` row, on either stack. `worker_sync_lease_expired_total`
+also never carried a non-zero series in any run: this is expected and
+**not a regression signal** — that metric only increments on a claim that
+itself recovered an *expired* lease
+(`providerunit.Handler.observeLeaseRecovery` checks `claim.Recovered`, a
+no-op for an ordinary first-attempt claim), and nothing in this proof
+deliberately expired and re-claimed a lease.
+
+**Correction (this section originally overstated the credential blocker —
+see below):** the isolated project's synthetic org needed a fake PAT
+because its Postgres volume was fresh and empty; that limitation does not
+carry over to a stack with real data, and an earlier version of this report
+wrongly transplanted it onto the real shared stack without checking. On the
+real stack the blocker is routing, not credentials — see the next section.
 
 ### Not attempted against the real shared stack, and why
 
-Both the durable route flip (`worker_job_routes.transport` for
-`sync.provider_unit` → `river_canary`) and the Python producer switch
-(`WORKER_GITHUB_REPO_METADATA_ENABLED=true` on `dev-health-worker-1`/`api`/
-`beat`) were considered and explicitly not done, for two compounding
-reasons:
+**Blocked on a deliberate routing decision, not on credential
+availability.** A working, decryptable, correctly-shaped github credential
+already exists on the real shared stack — this was checked directly rather
+than assumed:
+
+- `integrations`: 16 rows with `provider='github'`, 7 with a `credential_id`
+  set.
+- `integration_credentials` for `provider='github'`: 3 active rows, all
+  `last_test_success = true`, most recently tested 2026-07-05.
+- All three decrypt successfully today, using the app's own `decrypt_value`
+  with the **current** `SETTINGS_ENCRYPTION_KEY` (run inside the
+  `dev-health-api-1` container) — which also confirms that key is the one
+  they were encrypted with. Two decrypt to a JSON object with keys
+  `app_id`, `base_url`, `installation_id`, `org`, `private_key`, `token` —
+  a real `token`, in the JSON-object shape `complete_route.go` requires,
+  not a bare string (see "Provider credentials" below). The third is
+  app-only: `app_id`, `installation_id`, `private_key`.
+
+So credential availability and shape are not what stands between this stack
+and a real ClickHouse `repos` row. What does, and was deliberately not
+touched, is the two-key routing interlock, both halves of which were
+considered and explicitly left alone:
 
 1. **They are not independent, and the order matters.** Flipping the
-   durable route alone, with the Python switch still off, is not a smaller,
-   safer version of flipping both — it actively raises. `dispatch_sync_run`
-   (`src/dev_health_ops/workers/sync_units.py`) consults
+   durable route (`worker_job_routes.transport` for `sync.provider_unit`,
+   currently `celery`, would need `river_canary`) alone, with the Python
+   producer switch (`WORKER_GITHUB_REPO_METADATA_ENABLED`) still off, is not
+   a smaller, safer version of flipping both — it actively raises.
+   `dispatch_sync_run` (`src/dev_health_ops/workers/sync_units.py`) consults
    `ProviderUnitRouteSwitches.is_route_ready(provider, dataset)` (matrix-only,
    unconditional) BEFORE consulting the switch. If the matrix says a pair is
    route-ready and the durable route already points at River, but the
@@ -486,14 +511,24 @@ reasons:
    real Celery worker actively processing real organizations' real sync
    traffic — with new environment. That is a materially different, and
    materially bigger, ask than one reversible `UPDATE` on a single
-   `worker_job_routes` row, and it was not authorized.
+   `worker_job_routes` row, and it was not authorized. The user re-decided
+   with the corrected facts above (credentials exist; the blocker is purely
+   the routing interlock) and still chose to stop here — this is a
+   deliberate scope decision, not a missing capability.
 
-The marginal evidence a full route flip would have bought was also small:
-the proof already reached the real GitHub-API boundary in the isolated
-project (see above), so completing the durable-route path on the shared
-stack would have re-verified the same mechanism against a different compose
-file, not produced new information — not worth a live Celery worker
-recreate on someone's real environment for that.
+### Reachability: what completing the chain would actually take
+
+With both interlock halves flipped, the chain **can** complete to a real
+ClickHouse `repos` row using one of the three existing credentials above —
+no GitHub PAT needs to be obtained or seeded. Whoever picks this up needs
+only:
+
+1. `UPDATE worker_job_routes SET transport='river_canary', generation=generation+1, updated_at=now() WHERE job_kind='sync.provider_unit'` — matches the already-checked-in policy in `contracts/jobs/v1/migration-state.json` (`"route": "river_canary"`, from CHAOS-3123), not a new state.
+2. `WORKER_GITHUB_REPO_METADATA_ENABLED=true` on `dev-health-worker-1` (and anywhere else `dispatch_sync_run` runs), which requires recreating that container with the new environment — wire the variable into the repo-root `compose.yml`'s Python service blocks first, the same way it's already wired for `go-worker`.
+3. `go-worker` running and ready (see the crash-loop section above for what that needs).
+
+Revert both (1) and (2) back to `celery`/`false` afterward — this is a
+canary capability being exercised on demand, not a standing cutover.
 
 ### Credential shape, restated for this report
 

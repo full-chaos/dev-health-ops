@@ -1,72 +1,176 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"sort"
 	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
+// This file pins the scheduler's activation seam two ways, and the order matters
+// because only the first one is about the binary.
+//
+// The BEHAVIOURAL pin below calls the PRODUCTION entry point --
+// configureSchedulerDependencies, the function shell.Main reaches -- and asserts
+// what the process actually does. That is the property worth having: it holds no
+// matter where the activation value comes from, so constructing a second
+// activation literal, assigning one at init time, or introducing a parallel
+// activation type cannot slip past it.
+//
+// The STRUCTURAL pin is secondary. It compares the checked-in activation value's
+// fields against a reviewed map, which catches a flipped flag and an added seam
+// early and with a precise message -- but it only describes that one variable. An
+// earlier version of this file had ONLY the structural pin and claimed it made
+// the seam's intent "enforceable". That was the same mistake this epic keeps
+// producing: it verified the property its author was thinking about (the
+// variable) rather than the one that mattered (what the binary activates).
+// Adversarial review showed a production value constructed elsewhere passes it
+// silently. Keep both, and do not let the structural one grow claims about the
+// binary.
+//
+// What NEITHER pin can do, stated so nobody infers otherwise: they cannot prove
+// that flipping a seam retains the delivery capability the seam exists to guard.
+// Pinning goOwnsMarkers false says the process is dormant; it says nothing about
+// whether a materializer exists once it is true. That evidence is a human's job
+// at review time, and CHAOS-3145 is where the requirement lives.
+
 // checkedInSchedulerActivationPin is the reviewed expectation for every field of
-// schedulerActivation. It exists so that flipping an activation seam is a
-// deliberate act recorded in the same change that flips it.
-//
-// Why a pin rather than trusting review: schedulerActivation is the seam that
-// decides whether this process owns periodic work. Flipping goOwnsMarkers to
-// true takes the binary from "opens no PostgreSQL pool at all" to "writes
-// scheduler markers", and nothing in CI previously noticed that one-character
-// change. CHAOS-3033 closed 19 issues Done over dormant code precisely because
-// activation state was invisible to every gate; the plan of record's section 5
-// names "a capability listed in the registry but not constructed by a binary" as
-// a false pass, and an unpinned activation flag is how that state arises without
-// anyone deciding to arrive there.
-//
-// Updating this map is the intended way to activate a seam. Do it in the same
-// commit that flips the flag, with the evidence for the flip in the commit
-// message: for goOwnsMarkers that means a constructed materializer, because
-// flipping it alone yields a scheduler that writes but is permanently not-ready
-// (see main.go's own doc comment and CHAOS-3145).
+// schedulerActivation. Update it in the SAME commit that flips a flag, with the
+// evidence for the flip in the commit message.
 var checkedInSchedulerActivationPin = map[string]bool{
 	"goOwnsMarkers": false,
 }
 
-// TestCheckedInSchedulerActivationMatchesItsPin fails on three distinct
-// mistakes, not one.
-//
-// The obvious one is a flipped value. The two that matter more are structural:
-// ADDING a field, and REMOVING one. A test that only compared the struct against
-// its zero value would pass when a new dormant seam was added -- the new field
-// defaults to false, the comparison still holds, and an unreviewed activation
-// switch enters the tree already invisible. Enumerating the fields by reflection
-// and requiring the field SET to match exactly is what makes the pin
-// bidirectional: a new seam must be declared here to compile-and-pass, and a
-// deleted seam must be removed from here.
-func TestCheckedInSchedulerActivationMatchesItsPin(t *testing.T) {
-	value := reflect.ValueOf(checkedInSchedulerActivation)
-	structType := value.Type()
+// schedulerReadinessNamesClosedWhenDormant are the readiness names the dormant
+// path must register as unavailable. Hard-coded rather than read from the
+// production call, because a test that asks the code under test what it should
+// have done proves nothing.
+var schedulerReadinessNamesClosedWhenDormant = []string{
+	"domain_postgres",
+	"queue_postgres",
+	"coordinator_postgres",
+	"river_schema",
+	"scheduler_loop",
+}
 
-	actual := make(map[string]bool, structType.NumField())
-	for index := 0; index < structType.NumField(); index++ {
-		field := structType.Field(index)
-		if field.Type.Kind() != reflect.Bool {
-			// Not pedantry: the pin can only compare what it can read, and
-			// reflect.Value.Bool is the accessor that works on an unexported
-			// field. A non-bool seam is a real possibility (an enum, a count),
-			// and it must force a deliberate extension of this test rather than
-			// being silently skipped and left unpinned.
-			t.Fatalf(
-				"schedulerActivation.%s is %s, not bool: extend this pin to cover "+
-					"the new kind before adding it, or the seam ships unpinned",
-				field.Name, field.Type.Kind(),
-			)
-		}
-		actual[field.Name] = value.Field(index).Bool()
+// TestProductionSchedulerConfigurationIsDormant asserts the state the process
+// reaches, not the value of a variable.
+//
+// This is the pin that survives a second activation literal, an init-time
+// assignment, a parallel activation type, and a test-only reset of the global:
+// it goes through the production wrapper and checks the outcome. If someone
+// activates the scheduler by any route, this test fails.
+func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+
+	components, err := configureSchedulerDependencies(
+		context.Background(), config.Config{}, registry,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"the production scheduler configuration returned an error (%v). The "+
+				"dormant path is expected to register closed readiness and return "+
+				"nil error; an error here means this test can no longer tell "+
+				"dormant from activated, so fix the test before trusting it.",
+			err,
+		)
+	}
+	if len(components) != 0 {
+		t.Fatalf(
+			"the production scheduler configuration built %d lifecycle "+
+				"component(s). A dormant scheduler must build none and must not "+
+				"open a PostgreSQL pool. If activation is intended, that is a "+
+				"reviewed source change: update the pin in this file, record the "+
+				"evidence, and expect this test to need rewriting.",
+			len(components),
+		)
 	}
 
+	// SetReady is what a started process does; do it here so Readiness reports
+	// the per-name checks rather than short-circuiting on "runtime".
+	registry.SetReady(true)
+	readiness := registry.Readiness(context.Background())
+	if readiness.Ready {
+		t.Fatal(
+			"the dormant production configuration reports READY. Every externally " +
+				"visible name must stay closed while the scheduler owns nothing, or " +
+				"an operator sees a healthy scheduler that schedules nothing.",
+		)
+	}
+	failed := make(map[string]bool, len(readiness.Failed))
+	for _, name := range readiness.Failed {
+		failed[name] = true
+	}
+	for _, name := range schedulerReadinessNamesClosedWhenDormant {
+		if !failed[name] {
+			t.Errorf(
+				"readiness name %q is not among the failing checks %v. The dormant "+
+					"path must register every one of these as unavailable; a name that "+
+					"is simply absent is worse than one that fails, because /readyz "+
+					"cannot report on a check nobody registered.",
+				name, readiness.Failed,
+			)
+		}
+	}
+}
+
+// TestCheckedInSchedulerActivationMatchesItsPin is the structural pin: a flipped
+// value, an added field, and a removed field each fail.
+//
+// The two structural halves matter as much as the value. A test comparing the
+// struct against its zero value would PASS when a new seam was added, because a
+// new bool defaults to false -- so an unreviewed switch could enter the tree
+// already invisible. Requiring the field SET to match is what makes this
+// bidirectional for this variable.
+func TestCheckedInSchedulerActivationMatchesItsPin(t *testing.T) {
+	actual := activationFlagsOf(t, checkedInSchedulerActivation, "schedulerActivation")
 	assertPinnedFlags(t, "schedulerActivation", checkedInSchedulerActivationPin, actual)
 }
 
-// assertPinnedFlags reports every disagreement rather than the first, so a
-// reviewer sees the whole delta in one run instead of re-running per field.
+// activationFlagsOf reads every direct field of an activation struct by name.
+//
+// Blank fields are rejected rather than collected: two `_ bool` fields collapse
+// into one map key, so the second would be added without failing the exact-set
+// check. A blank field cannot be a usable activation seam anyway, so refusing
+// them keeps the exact-set claim literally true instead of nearly true.
+func activationFlagsOf(t *testing.T, value any, name string) map[string]bool {
+	t.Helper()
+
+	reflected := reflect.ValueOf(value)
+	structType := reflected.Type()
+	flags := make(map[string]bool, structType.NumField())
+	for index := 0; index < structType.NumField(); index++ {
+		field := structType.Field(index)
+		if field.Name == "_" {
+			t.Fatalf(
+				"%s has a blank field at index %d. Blank fields collapse into one "+
+					"map key, which would let a second one be added without failing "+
+					"the exact-set check -- and a blank field cannot be a seam.",
+				name, index,
+			)
+		}
+		if field.Type.Kind() != reflect.Bool {
+			// reflect.Value.Bool is the accessor that works on an unexported
+			// field; Interface() panics. A non-bool seam must force a deliberate
+			// extension of this test rather than be silently skipped.
+			t.Fatalf(
+				"%s.%s is %s, not bool: extend this pin to cover the new kind "+
+					"before adding it, or the seam ships unpinned",
+				name, field.Name, field.Type.Kind(),
+			)
+		}
+		flags[field.Name] = reflected.Field(index).Bool()
+	}
+	return flags
+}
+
+// assertPinnedFlags reports every disagreement rather than the first, so one run
+// shows the whole delta.
 func assertPinnedFlags(t *testing.T, name string, pinned, actual map[string]bool) {
 	t.Helper()
 
@@ -74,9 +178,9 @@ func assertPinnedFlags(t *testing.T, name string, pinned, actual map[string]bool
 		expected, declared := pinned[field]
 		if !declared {
 			t.Errorf(
-				"%s.%s exists in the struct but is not pinned. Add it to the pin "+
-					"with its reviewed value; a new activation seam must not enter "+
-					"the tree unpinned.",
+				"%s.%s exists in the struct but is not pinned. Add it with its "+
+					"reviewed value; a new activation seam must not enter the tree "+
+					"unpinned.",
 				name, field,
 			)
 			continue
@@ -84,8 +188,8 @@ func assertPinnedFlags(t *testing.T, name string, pinned, actual map[string]bool
 		if actual[field] != expected {
 			t.Errorf(
 				"%s.%s is %t, pinned as %t. If this flip is intended, change the "+
-					"pin in THIS commit and record the evidence for the flip; if it "+
-					"is not, revert it -- this seam changes what the process owns.",
+					"pin in THIS commit and record the evidence; if it is not, "+
+					"revert it -- this seam changes what the process owns.",
 				name, field, actual[field], expected,
 			)
 		}
@@ -112,15 +216,49 @@ func sortedKeys(source map[string]bool) []string {
 	return keys
 }
 
-// TestSchedulerActivationPinIsNotVacuous guards the guard.
+// TestAssertPinnedFlagsFailsOnEveryDisagreement exercises the helper's failure
+// branches directly.
 //
-// A pin that compared an empty set against an empty set would pass forever while
-// proving nothing, and that failure mode is invisible in a green run. This
-// asserts the pin actually covers at least one field, and that its keys are the
-// struct's real field names rather than strings that merely look like them -- a
-// typo in a pinned key would otherwise present as "field exists but is not
-// pinned" plus "pinned but no longer exists", which is recoverable, but a pin
-// that silently covered nothing would not be.
+// Without this, the helper is only ever called with a matching singleton, so
+// deleting either of its two loops during maintenance leaves the suite green
+// while one binary silently loses its guard -- the duplicate copy in
+// dev-health-reconciler makes that asymmetry easy to miss. Each case below fails
+// if and only if the corresponding loop exists.
+func TestAssertPinnedFlagsFailsOnEveryDisagreement(t *testing.T) {
+	cases := map[string]struct {
+		pinned map[string]bool
+		actual map[string]bool
+	}{
+		"flipped value":     {map[string]bool{"a": false}, map[string]bool{"a": true}},
+		"field not pinned":  {map[string]bool{}, map[string]bool{"a": false}},
+		"pin without field": {map[string]bool{"a": false}, map[string]bool{}},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			probe := &testing.T{}
+			assertPinnedFlags(probe, "probe", testCase.pinned, testCase.actual)
+			if !probe.Failed() {
+				t.Fatalf(
+					"assertPinnedFlags accepted %q. One of its two traversals is "+
+						"missing, so a real %s would pass unnoticed.",
+					name, name,
+				)
+			}
+		})
+	}
+
+	probe := &testing.T{}
+	assertPinnedFlags(
+		probe, "probe", map[string]bool{"a": false}, map[string]bool{"a": false},
+	)
+	if probe.Failed() {
+		t.Fatal("assertPinnedFlags rejected a matching pin: it is too strict to use")
+	}
+}
+
+// TestSchedulerActivationPinIsNotVacuous guards the guard: a pin comparing an
+// empty set against an empty set passes forever while proving nothing, and that
+// is invisible in a green run.
 func TestSchedulerActivationPinIsNotVacuous(t *testing.T) {
 	if len(checkedInSchedulerActivationPin) == 0 {
 		t.Fatal("the activation pin is empty, so it cannot fail: it proves nothing")

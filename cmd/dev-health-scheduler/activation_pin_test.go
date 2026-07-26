@@ -119,6 +119,50 @@ func TestProductionSchedulerConfigurationIsDormant(t *testing.T) {
 	}
 }
 
+// TestSchedulerSpecUsesTheConfigurationThisFilePins closes the last link in the
+// chain from `main` to the assertion above.
+//
+// The behavioural pin calls configureSchedulerDependencies directly. That proves
+// what THAT function does; it does not prove `shell.Main` reaches it. Point
+// schedulerSpec at a different configure function and the pin keeps passing while
+// the binary runs something else entirely -- the same defeat as the original
+// version of this file, one level further out. Comparing the spec's function
+// pointer to the function under test makes the chain complete:
+// main -> shell.Main(schedulerSpec) -> this field -> the tested function.
+//
+// Function values are not comparable in Go, so compare code pointers. A nil field
+// is also a failure: it would mean the binary has no configuration at all, or
+// that the logger-taking variant is now in use and this pin no longer covers the
+// path production takes.
+func TestSchedulerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
+	if schedulerSpec.ConfigureDependenciesWithLogger != nil {
+		t.Fatal(
+			"schedulerSpec now sets ConfigureDependenciesWithLogger. shell.Main may " +
+				"call that instead of ConfigureDependencies, so the behavioural pin " +
+				"below no longer proves anything about the production path. Retarget " +
+				"the pin at whichever field shell.Main actually invokes.",
+		)
+	}
+	if schedulerSpec.ConfigureDependencies == nil {
+		t.Fatal(
+			"schedulerSpec.ConfigureDependencies is nil, so this pin covers nothing " +
+				"that production runs",
+		)
+	}
+
+	pinned := reflect.ValueOf(configureSchedulerDependencies).Pointer()
+	wired := reflect.ValueOf(schedulerSpec.ConfigureDependencies).Pointer()
+	if pinned != wired {
+		t.Fatal(
+			"schedulerSpec.ConfigureDependencies is NOT " +
+				"configureSchedulerDependencies. The behavioural pin therefore tests a " +
+				"function the binary does not call, and activation could ship green. " +
+				"Either restore the wiring or retarget the pin at the function " +
+				"shell.Main really invokes -- do not delete this test.",
+		)
+	}
+}
+
 // TestCheckedInSchedulerActivationMatchesItsPin is the structural pin: a flipped
 // value, an added field, and a removed field each fail.
 //

@@ -27,8 +27,15 @@ import (
 // means the flip itself is a one-character change with production consequences
 // and nothing previously noticed it. dependencies.go states the intent directly:
 // "changing from observation to mutation must retain concrete River delivery
-// capabilities in the same reviewed source change." This test is what makes that
-// sentence enforceable rather than aspirational.
+// capabilities in the same reviewed source change."
+//
+// These tests enforce the FIRST half of that sentence and not the second. They
+// make the flip visible and deliberate -- it cannot happen without editing a pin
+// in the same commit. They cannot verify that concrete delivery capability is
+// retained: set the flag and the pin together and everything here passes, 42501
+// and all. A reviewer supplies that evidence; see CHAOS-3146. Reviewed twice now
+// because the original wording claimed the whole sentence, and an overstated
+// comment is how a green test becomes read as permission to flip.
 //
 // Flipping syncMutation today also ships a known 42501: the Materializer runs on
 // the coordinator pool and inserts into public.sync_dispatch_outbox, which
@@ -141,6 +148,53 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 				"test can no longer tell observation from mutation. Fix the test " +
 				"before trusting it: a pin that cannot reach the branch it guards is " +
 				"worse than no pin, because it reports success.",
+		)
+	}
+}
+
+// TestReconcilerSpecUsesTheConfigurationThisFilePins closes the chain from `main`
+// to the function the behavioural pin exercises.
+//
+// The behavioural pin calls configureReconcilerDependenciesWithSourcesAndLogger
+// so it can inject fakes. `shell.Main` does not call that directly -- it calls
+// whatever reconcilerSpec names, which is configureReconcilerDependenciesWithLogger,
+// which delegates to the sources-taking function with production sources. This
+// test pins both ends of that chain: the spec field points where we think, and the
+// delegate is the function under test.
+//
+// Precisely what IS and IS NOT covered, because the distinction is the whole point
+// of this file: the spec field is asserted here; the ACTIVATION VALUE is asserted
+// by the behavioural pin, because configureReconcilerDependenciesWithSourcesAndLogger
+// is the sole supplier of checkedInReconcilerActivation. What is not asserted is
+// the body of configureReconcilerDependenciesWithLogger beyond its identity -- if
+// someone changed it to pass a different activation, the behavioural pin would not
+// see it, because it enters below that point. That is the residual gap, and the
+// mitigation is that the function is four lines of pure delegation. Do not let it
+// grow logic.
+func TestReconcilerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
+	if reconcilerSpec.ConfigureDependencies != nil {
+		t.Fatal(
+			"reconcilerSpec now sets ConfigureDependencies. shell.Main may call that " +
+				"instead of ConfigureDependenciesWithLogger, so the pins here no longer " +
+				"cover the production path. Retarget them.",
+		)
+	}
+	if reconcilerSpec.ConfigureDependenciesWithLogger == nil {
+		t.Fatal(
+			"reconcilerSpec.ConfigureDependenciesWithLogger is nil, so these pins " +
+				"cover nothing that production runs",
+		)
+	}
+
+	// Function values are not comparable in Go; compare code pointers.
+	pinned := reflect.ValueOf(configureReconcilerDependenciesWithLogger).Pointer()
+	wired := reflect.ValueOf(reconcilerSpec.ConfigureDependenciesWithLogger).Pointer()
+	if pinned != wired {
+		t.Fatal(
+			"reconcilerSpec.ConfigureDependenciesWithLogger is NOT " +
+				"configureReconcilerDependenciesWithLogger. The pins therefore describe " +
+				"a function the binary does not call, and activation could ship green. " +
+				"Restore the wiring or retarget the pins -- do not delete this test.",
 		)
 	}
 }

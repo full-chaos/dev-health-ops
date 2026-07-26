@@ -147,6 +147,78 @@ type AcknowledgedBlindSpot struct {
 	Why       string
 }
 
+// AcknowledgedDynamicSQL is one SQL-execution site whose statement text is not a
+// compile-time constant, reviewed and accepted.
+//
+// These must be gated, not merely logged. PartitionBlindSpots only inspects
+// privileges ALREADY in a posture, so a runtime-built query that starts writing a
+// table absent from every posture produces no derived pair AND no posture-gap
+// tuple -- nothing anywhere reports it, and the gate stays green until a 42501.
+// The set is small and slow-changing, so acknowledging each one by site is
+// tractable; a NEW dynamic-SQL site fails until someone looks at it.
+type AcknowledgedDynamicSQL struct {
+	File string
+	Why  string
+}
+
+// acknowledgedDynamicSQL is the reviewed set, keyed by file because line numbers
+// move for unrelated reasons and a churning acknowledgement gets ignored.
+var acknowledgedDynamicSQL = []AcknowledgedDynamicSQL{
+	{
+		File: "internal/providerfoundation/repository_postgres.go",
+		Why: "builds its integration_credentials query by runtime string concatenation " +
+			"(`query := literal; if ... { query += ... }`). Hand-traced in " +
+			"grant-surface-derivation.md: the reachable variants read integration_credentials " +
+			"only, which the domain posture already grants SELECT on.",
+	},
+	{
+		File: "internal/scheduler/sync/transaction.go",
+		Why: "assembles the handoff statement from named constants chosen by ownership policy. " +
+			"Both variants target scheduled_jobs/scheduled_sync_occurrences/sync_configurations, " +
+			"which the coordinator posture already declares (and which the non-dynamic sites in " +
+			"the same package independently prove).",
+	},
+	{
+		File: "internal/syncroute/control.go",
+		Why: "builds a route-record read whose column list varies. Its table, " +
+			"sync_dispatch_transport_routes, is proven by the constant-SQL sites in the same " +
+			"controller, so the dynamic variant adds no new table.",
+	},
+}
+
+// PartitionDynamicSQL splits dynamic-SQL sites into acknowledged and not, and
+// reports acknowledgements that no longer correspond to a real site. Same
+// self-cleaning discipline as the other two lists.
+func PartitionDynamicSQL(incomplete []IncompleteRoleSurface) (unacknowledged []string, stale []AcknowledgedDynamicSQL, unreasoned []AcknowledgedDynamicSQL) {
+	seen := make([]bool, len(acknowledgedDynamicSQL))
+	for _, surface := range incomplete {
+		for _, site := range surface.DynamicSQL {
+			matched := false
+			for i, ack := range acknowledgedDynamicSQL {
+				if ack.File == site.File {
+					seen[i] = true
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				unacknowledged = append(unacknowledged,
+					fmt.Sprintf("%s: %s:%d %s", surface.Role, site.File, site.Line, site.Reason))
+			}
+		}
+	}
+	for i, ack := range acknowledgedDynamicSQL {
+		if strings.TrimSpace(ack.Why) == "" {
+			unreasoned = append(unreasoned, ack)
+		}
+		if !seen[i] {
+			stale = append(stale, ack)
+		}
+	}
+	sort.Strings(unacknowledged)
+	return unacknowledged, stale, unreasoned
+}
+
 // acknowledgedBlindSpots is the reviewed set. Every entry is a posture row whose
 // justification lives OUTSIDE this tool's reach; each says where.
 var acknowledgedBlindSpots = []AcknowledgedBlindSpot{
@@ -225,6 +297,78 @@ func PartitionBlindSpots(incomplete []IncompleteRoleSurface) (unacknowledged []s
 	}
 	sort.Strings(unacknowledged)
 	return unacknowledged, stale, unreasoned
+}
+
+// GateFailures returns every reason this report must FAIL the gate, as ready-to-
+// print messages. Empty means the enforced properties all hold.
+//
+// It exists as a function rather than a sequence of t.Errorf loops in the test
+// because those loops were untestable: a unit test could prove a conflict reached
+// IncompleteRoleSurface, but deleting the loop that reported it left every test
+// green. The enforcement and the thing being enforced have to be reachable from
+// one assertion, or "it is gated" is a claim about test source rather than about
+// behaviour.
+func GateFailures(report *RoleReport) []string {
+	var failures []string
+
+	unacknowledged, staleAcks, unreasoned := PartitionBlindSpots(report.Incomplete)
+	for _, entry := range unacknowledged {
+		failures = append(failures, "UNACKNOWLEDGED BLIND SPOT: "+entry+
+			" -- this role's posture authorizes a privilege that NO role has a derived call site for. "+
+			"Either it is an over-declaration (remove the row) or it sits inside a blind spot (add it to "+
+			"acknowledgedBlindSpots with the reason and where the justification lives). Leaving it "+
+			"unlisted is how a wrong posture row survives review")
+	}
+	for _, entry := range staleAcks {
+		failures = append(failures, fmt.Sprintf(
+			"STALE acknowledged blind spot: %s/%s %s no longer appears as an evidence-free posture row -- "+
+				"the evidence arrived or the row was removed, so this entry now suppresses nothing. DELETE "+
+				"it, or the gate stops failing if the blind spot returns",
+			entry.Role, entry.Table, entry.Privilege))
+	}
+	for _, entry := range unreasoned {
+		failures = append(failures, fmt.Sprintf(
+			"acknowledged blind spot %s/%s %s has no reason recorded; every entry must say where the "+
+				"justification lives", entry.Role, entry.Table, entry.Privilege))
+	}
+
+	unackDynamic, staleDynamic, unreasonedDynamic := PartitionDynamicSQL(report.Incomplete)
+	for _, entry := range unackDynamic {
+		failures = append(failures, "UNACKNOWLEDGED DYNAMIC SQL: "+entry+
+			" -- this statement's text is not a compile-time constant, so NO table or privilege was "+
+			"derived from it. Hand-trace which tables it can reach and add it to acknowledgedDynamicSQL "+
+			"with that reasoning, or make the SQL constant. Leaving it unlisted means a write to an "+
+			"unlisted table is invisible to every check here")
+	}
+	for _, entry := range staleDynamic {
+		failures = append(failures, "STALE acknowledged dynamic SQL: "+entry.File+
+			" no longer has a dynamic site -- the SQL became constant or the file moved, so DELETE this "+
+			"entry rather than letting it excuse a future one")
+	}
+	for _, entry := range unreasonedDynamic {
+		failures = append(failures, "acknowledged dynamic SQL "+entry.File+" has no reasoning recorded")
+	}
+
+	for _, surface := range report.Incomplete {
+		for _, lock := range surface.UnparsedLocks {
+			failures = append(failures, fmt.Sprintf(
+				"UNPARSED LOCK (role %s): %s:%d %q -- this analyzer could not fully understand a LOCK "+
+					"statement, so the privilege it demands was NOT derived and its target may not appear "+
+					"in the surface at all. PostgreSQL accepts an optional TABLE keyword, multiple "+
+					"comma-separated targets, ONLY, a trailing *, an omitted mode (defaulting to ACCESS "+
+					"EXCLUSIVE) and NOWAIT; extend parseLockStatements rather than letting it pass as an absence",
+				surface.Role, lock.File, lock.Line, lock.Statement))
+		}
+		for _, conflict := range surface.FuncValueConflicts {
+			failures = append(failures, fmt.Sprintf(
+				"UNRESOLVED FUNCTION-VALUE CALL (role %s): %s:%d %s -- %s. Pool-tainted arguments cross "+
+					"this call and NOTHING beyond it was analyzed. Fail-closed resolution is correct, but "+
+					"it must not be silent: give the field a single implementation, or narrow the type so "+
+					"the resolver can see it",
+				surface.Role, conflict.File, conflict.Line, conflict.Field, conflict.Reason))
+		}
+	}
+	return failures
 }
 
 // RoleInput is one role's derived surface paired with the posture it is
@@ -767,6 +911,29 @@ func transactionStraddleFindings(inputs []RoleInput, byRole map[PoolRole]RoleInp
 			// Emitting CRITICAL without both would tell maintainers to dual-grant on
 			// the strength of a guess, which is precisely the over-widening this
 			// checker refuses to do by hand.
+			// DECISION: a straddle is never BLOCKING, because co-residency is
+			// inferred rather than proven at either precision.
+			//
+			// A "txorigin:" group means every statement's pgx.Tx traced back to the
+			// same Begin() SOURCE POSITION. That is a fact about where the handle
+			// came from, not about what executes: buildTxOrigins does no
+			// control-flow analysis, so two MUTUALLY EXCLUSIVE branches after one
+			// Begin -- an if/else, an early return, a switch -- carry the same
+			// origin and are reported as one transaction touching both sides of the
+			// partition. Calling that "proven" was wrong, and a premise labelled
+			// proven is worse than one labelled inferred because nobody re-checks it.
+			//
+			// Downgrading rather than doing the path analysis, for the same reason
+			// the remaining_metric_* over-approximation is advisory: this finding
+			// can only push a posture WIDER (dual-grant these tables), and an
+			// over-grant emitted on an inference is exactly what the two-role split
+			// exists to prevent. The blocking signal is not lost -- a table genuinely
+			// missing from the executing role's posture still produces its own
+			// per-privilege CRITICAL when its evidence is role-exclusive. What is
+			// lost is only the transaction FRAMING, which is a review aid.
+			//
+			// The traced/coarse distinction is still reported, because it tells a
+			// reader how much weight the grouping carries.
 			traced := strings.HasPrefix(group, "txorigin:")
 			groupSites := txGroupSites(in.Derived, group)
 			var otherGroupSites []map[string]bool
@@ -787,32 +954,31 @@ func transactionStraddleFindings(inputs []RoleInput, byRole map[PoolRole]RoleInp
 			exclusive := exclusiveTo(groupSites, otherGroupSites)
 			attributed := len(exclusive) > 0
 
-			severity := Critical
-			var caveat string
-			switch {
-			case !traced && !attributed:
-				severity = Advisory
-				caveat = "DOWNGRADED: co-residency is only the COARSE same-function-body grouping (not proven), AND every evidence site is shared with another role so this tool cannot say whose pool runs it"
-			case !traced:
-				severity = Advisory
-				caveat = "DOWNGRADED: co-residency is only the COARSE same-function-body grouping, so these statements are not proven to share one transaction"
-			case !attributed:
-				severity = Advisory
-				caveat = fmt.Sprintf("DOWNGRADED: the transaction is traced to one Begin(), but every evidence site is SHARED with another role, so attributing it to %s is beyond this tool's (type, field) granularity", in.Role)
-			default:
-				caveat = "traced to a single unambiguous Begin() call site, so these statements PROVABLY share one transaction, and at least one evidence site is reachable only through this role's pool"
+			// ALWAYS Advisory. The two axes below describe how much the grouping is
+			// worth, not whether it blocks.
+			var coResidency string
+			if traced {
+				coResidency = "every statement's pgx.Tx traced to the same Begin() SOURCE POSITION -- " +
+					"which is where the handle came from, NOT proof that these statements co-execute: " +
+					"mutually exclusive branches after one Begin share this origin"
+			} else {
+				coResidency = "grouped only by the COARSE same-function-body fallback, so co-residency is a guess"
 			}
-			remedy := "A transaction cannot span two pools -- either grant these to " + string(in.Role) +
-				" too (dual-grant) or restructure the transaction. This surfaces as a 42501 at runtime, not as a routing error"
-			if severity == Advisory {
-				remedy = "Resolve from the construction site before changing any posture; do NOT dual-grant on this finding alone"
+			attribution := "at least one evidence site is reachable only through this role's pool"
+			if !attributed {
+				attribution = fmt.Sprintf("every evidence site is SHARED with another role, so attributing "+
+					"the transaction to %s is beyond this tool's (type, field) granularity", in.Role)
 			}
 			findings = append(findings, Finding{
-				Severity: severity, Table: strings.Join(tables, ", "), Role: in.Role,
+				Severity: Advisory, Table: strings.Join(tables, ", "), Role: in.Role,
 				Summary: fmt.Sprintf(
-					"TRANSACTION STRADDLES THE ROLE PARTITION: transaction %s runs on the %s pool and touches %s, but %s not authorized for %s (%s). %s",
+					"POSSIBLE TRANSACTION STRADDLE (advisory -- co-residency is inferred, never proven): group %s "+
+						"appears to run on the %s pool and touch %s, but %s not authorized for %s. Co-residency: %s. "+
+						"Attribution: %s. A transaction cannot span two pools, so IF these really do co-execute the "+
+						"options are dual-grant or restructure -- but confirm from the source before changing any "+
+						"posture, because this finding can only widen one",
 					group, in.Role, strings.Join(tables, "+"),
-					strings.Join(elsewhere, "; "), in.Role, caveat, remedy),
+					strings.Join(elsewhere, "; "), in.Role, coResidency, attribution),
 			})
 		}
 	}
@@ -900,13 +1066,28 @@ func incompleteFor(in RoleInput, byRole map[PoolRole]RoleInput) IncompleteRoleSu
 			if p == PrivSelect && surface != nil && !surface.Privileges.Empty() {
 				gap.ImpliedSelect = true
 			}
-			// A privilege that SATISFIES a derived LOCK requirement is justified by
-			// that lock, even though the per-privilege loop cannot record it (the
-			// lock's demand is a disjunction). coordinator worker_job_outbox UPDATE
-			// is exactly this: it exists for jobroute's SHARE ROW EXCLUSIVE lock.
+			// A privilege that SATISFIES a derived LOCK is justified by that lock,
+			// even though the per-privilege loop cannot record it (the demand is a
+			// disjunction). coordinator worker_job_outbox UPDATE is exactly this: it
+			// exists for jobroute's SHARE ROW EXCLUSIVE lock.
+			//
+			// But ONLY when it is the SOLE satisfying privilege the posture holds. A
+			// disjunction needs exactly one member; if the posture grants two, one of
+			// them is redundant. Excusing every satisfying privilege -- as an earlier
+			// version did -- meant a posture holding both UPDATE and DELETE had BOTH
+			// evidence-free gaps waved through, preserving a redundant over-grant
+			// that nothing else would ever report.
 			if surface != nil && surface.LockRequirement != nil &&
 				surface.LockRequirement.Satisfying.Has(p) {
-				gap.JustifiedByLock = surface.LockRequirement.Mode
+				held := 0
+				for q := Privilege(0); q < numPrivileges; q++ {
+					if surface.LockRequirement.Satisfying.Has(q) && privs.Has(q) {
+						held++
+					}
+				}
+				if held == 1 {
+					gap.JustifiedByLock = surface.LockRequirement.Mode
+				}
 			}
 			out.UndeclaredByEvidence = append(out.UndeclaredByEvidence, gap)
 		}

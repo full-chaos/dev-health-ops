@@ -67,8 +67,9 @@ import (
 // is suppressed for that run (see nameSeedContradicted). When no call site can be
 // resolved, the name still applies -- the convention is the only signal left, and
 // dropping it would lose real surface.
-func (a *analyzer) buildPoolParamRoles() {
+func (a *analyzer) buildPoolParamRoles() error {
 	a.poolParamRoles = map[*types.Func]map[int]map[PoolRole]bool{}
+	a.poolParamIncomplete = map[*types.Func]map[int]bool{}
 
 	// roleOfExpr answers "which role's pool is this expression, syntactically?"
 	// for every role at once.
@@ -93,6 +94,17 @@ func (a *analyzer) buildPoolParamRoles() {
 		return out
 	}
 
+	markIncomplete := func(fn *types.Func, idx int) bool {
+		if a.poolParamIncomplete[fn] == nil {
+			a.poolParamIncomplete[fn] = map[int]bool{}
+		}
+		if a.poolParamIncomplete[fn][idx] {
+			return false
+		}
+		a.poolParamIncomplete[fn][idx] = true
+		return true
+	}
+
 	record := func(fn *types.Func, idx int, roles []PoolRole) bool {
 		if len(roles) == 0 {
 			return false
@@ -113,8 +125,7 @@ func (a *analyzer) buildPoolParamRoles() {
 		return changed
 	}
 
-	const maxIterations = 12
-	for iter := 0; iter < maxIterations; iter++ {
+	for iter := 0; iter < poolParamMaxIterations; iter++ {
 		changed := false
 		for _, ctx := range a.funcDecls {
 			var currentFn *types.Func
@@ -141,11 +152,32 @@ func (a *analyzer) buildPoolParamRoles() {
 					roles := roleOfExpr(arg, ctx.info)
 					// Forward the enclosing function's own parameter roles, so a
 					// pool threaded through several hops keeps its provenance.
+					forwarded := false
 					if id, isIdent := arg.(*ast.Ident); isIdent && currentFn != nil {
 						if idx := paramIndex(ctx.funcType(), id.Name); idx >= 0 {
+							if a.poolParamIncomplete[currentFn][idx] {
+								// The source parameter's own evidence is partial, so
+								// anything forwarded from it is partial too.
+								if markIncomplete(callee, i) {
+									changed = true
+								}
+							}
 							for role := range a.poolParamRoles[currentFn][idx] {
 								roles = append(roles, role)
+								forwarded = true
 							}
+						}
+					}
+					// An argument this pass cannot classify makes the parameter's
+					// evidence INCOMPLETE. Silently skipping it was the defect: a
+					// partial set then looked authoritative, and a parameter reached
+					// by one recognised coordinator call and one unrecognised domain
+					// call recorded only {coordinator} -- suppressing the correct
+					// domain seed and making its SQL disappear. A false ABSENCE,
+					// which is the failure this whole mechanism was meant to avoid.
+					if len(roles) == 0 && !forwarded {
+						if markIncomplete(callee, i) {
+							changed = true
 						}
 					}
 					if record(callee, i, roles) {
@@ -156,10 +188,20 @@ func (a *analyzer) buildPoolParamRoles() {
 			})
 		}
 		if !changed {
-			break
+			return nil
 		}
 	}
+	// Exhausting the iteration cap means the facts were still growing when the
+	// loop stopped, so the recorded evidence is a partial snapshot of unknown
+	// completeness -- and partial evidence here silently overrides parameter
+	// names. Stopping quietly is the same swallow-don't-report shape as the LOCK
+	// parser's, so this is an error rather than a truncation.
+	return fmt.Errorf("domaingrants: pool-parameter role propagation did not converge within %d iterations; "+
+		"the collected call-site evidence is incomplete and must not be used to override seed names", poolParamMaxIterations)
 }
+
+// poolParamMaxIterations bounds the call-site role fixed point.
+const poolParamMaxIterations = 12
 
 // resolveTargetConflict is the fail-closed decision for one function-typed
 // field: given what was already recorded and one more observed assignment,
@@ -234,6 +276,15 @@ func (a *analyzer) nameSeedContradicted(expr ast.Expr, ctx funcCtx, fn *types.Fu
 	idx := paramIndex(ctx.funcType(), id.Name)
 	if idx < 0 {
 		return false // a local, not a parameter: no call sites to consult
+	}
+	if a.poolParamIncomplete[fn][idx] {
+		// At least one call site passed an argument this pass could not classify,
+		// so the observed set is a LOWER BOUND, not the full picture. A lower
+		// bound must never override the name: `build(domainPool)` reached by one
+		// direct coordinator call and one domain call through an alias would
+		// otherwise record only {coordinator}, suppress the domain seed, and make
+		// that SQL vanish from the domain surface entirely.
+		return false
 	}
 	observed := a.poolParamRoles[fn][idx]
 	if len(observed) == 0 {

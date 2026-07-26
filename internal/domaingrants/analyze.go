@@ -354,9 +354,13 @@ type analyzer struct {
 	// poolParamRoles is role-agnostic call-site evidence for pool-typed
 	// parameters; nameSeedOverrides records where it overruled a name-based seed.
 	// See buildPoolParamRoles.
-	poolParamRoles    map[*types.Func]map[int]map[PoolRole]bool
-	nameSeedOverrides []NameSeedOverride
-	unparsedLocks     []UnparsedLockSite
+	poolParamRoles map[*types.Func]map[int]map[PoolRole]bool
+	// poolParamIncomplete marks parameters whose call-site evidence is a LOWER
+	// BOUND (some argument could not be classified). Such evidence must never
+	// override a seed name -- see nameSeedContradicted.
+	poolParamIncomplete map[*types.Func]map[int]bool
+	nameSeedOverrides   []NameSeedOverride
+	unparsedLocks       []UnparsedLockSite
 
 	// txOriginParam[fn][paramIndex] holds the origin ID (a "file:line"
 	// string naming the specific `.Begin(ctx)` call site) of a pgx.Tx-typed
@@ -577,7 +581,9 @@ func DeriveForRole(moduleDir string, role PoolRole) (*DerivedSurface, error) {
 			"go/packages load likely failed silently", moduleDir)
 	}
 	a.buildImplementers(pkgs)
-	a.buildPoolParamRoles()
+	if err := a.buildPoolParamRoles(); err != nil {
+		return nil, err
+	}
 	a.buildFuncValueTargets()
 	a.buildSQLParamConstants()
 	a.buildTxOrigins()

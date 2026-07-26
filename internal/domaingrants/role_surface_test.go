@@ -57,6 +57,19 @@ func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
 		t.Log(line)
 	}
 
+	// Name-seed overrides: places where call-site evidence overruled a parameter's
+	// spelling. Reported because it means a naming convention LIED, and the reader
+	// should know that rather than assume the surface shrank on its own. This was
+	// collected but never printed or gated, so the "the override is reported"
+	// property did not actually exist.
+	for _, in := range inputs {
+		for _, override := range in.Derived.NameSeedOverrides {
+			t.Logf("NAME-SEED OVERRIDE (role %s): %s:%d parameter %q in %s is spelled for this role but "+
+				"its call sites pass %v -- call-site evidence wins, and the parameter name is misleading",
+				in.Role, override.File, override.Line, override.Name, override.Function, override.ObservedRoles)
+		}
+	}
+
 	// The derived shared set, printed so it is reviewable. It makes the dual-grant
 	// question checkable rather than purely asserted, but it is NOT authoritative
 	// on its own and does not replace the role-partition manifest's whitelist --
@@ -93,45 +106,19 @@ func TestRoleGrantSurfacesMatchQuerySurfaces(t *testing.T) {
 	// Incompleteness must GATE, not merely print. A printout nobody is required to
 	// act on is indistinguishable from having checked.
 	//
+	// The enforcement lives in GateFailures rather than in loops here, because
+	// loops here were untestable: a unit test could prove a conflict reached
+	// IncompleteRoleSurface while deleting the loop that reported it left every
+	// test green.
+	//
 	// Deliberately NOT gated on the raw wiring-hop count: most hops are ordinary
 	// interface dispatch that reaches no SQL, so a count threshold would be noise
 	// that gets raised rather than investigated. What IS gated is the set with a
-	// real consequence -- a posture privilege nothing in the analysis justifies,
-	// and a tainted call through a field the resolver refused.
-	unacknowledged, staleAcks, unreasoned := PartitionBlindSpots(report.Incomplete)
-	for _, entry := range unacknowledged {
-		t.Errorf("UNACKNOWLEDGED BLIND SPOT: %s -- this role's posture authorizes a privilege that NO "+
-			"role has a derived call site for. Either it is an over-declaration (remove the row) or it "+
-			"sits inside a blind spot (add it to acknowledgedBlindSpots with the reason and where the "+
-			"justification lives). Leaving it unlisted is how a wrong posture row survives review", entry)
-	}
-	for _, entry := range staleAcks {
-		t.Errorf("STALE acknowledged blind spot: %s/%s %s no longer appears as an evidence-free posture "+
-			"row -- the evidence arrived or the row was removed, so this entry now suppresses nothing. "+
-			"DELETE it, or the gate stops failing if the blind spot returns",
-			entry.Role, entry.Table, entry.Privilege)
-	}
-	for _, entry := range unreasoned {
-		t.Errorf("acknowledged blind spot %s/%s %s has no reason recorded; every entry must say where the "+
-			"justification lives", entry.Role, entry.Table, entry.Privilege)
-	}
-	for _, surface := range report.Incomplete {
-		for _, lock := range surface.UnparsedLocks {
-			t.Errorf("UNPARSED LOCK (role %s): %s:%d %q -- this analyzer could not fully understand a "+
-				"LOCK statement, so the privilege it demands was NOT derived and its target may not "+
-				"appear in the surface at all. PostgreSQL accepts an optional TABLE keyword, multiple "+
-				"comma-separated targets, ONLY, a trailing *, an omitted mode (defaulting to ACCESS "+
-				"EXCLUSIVE) and NOWAIT; extend parseLockStatements to cover this shape rather than "+
-				"letting it pass as an absence",
-				surface.Role, lock.File, lock.Line, lock.Statement)
-		}
-		for _, conflict := range surface.FuncValueConflicts {
-			t.Errorf("UNRESOLVED FUNCTION-VALUE CALL (role %s): %s:%d %s -- %s. Pool-tainted arguments "+
-				"cross this call and NOTHING beyond it was analyzed. Fail-closed resolution is correct, "+
-				"but it must not be silent: give the field a single implementation, or narrow the type so "+
-				"the resolver can see it",
-				surface.Role, conflict.File, conflict.Line, conflict.Field, conflict.Reason)
-		}
+	// real consequence -- a posture privilege nothing justifies, a tainted call
+	// through a field the resolver refused, a LOCK the parser could not read, and
+	// a non-constant SQL site nobody has traced.
+	for _, failure := range GateFailures(report) {
+		t.Error(failure)
 	}
 
 	var critical, advisory []Finding
@@ -808,12 +795,22 @@ func TestTransactionStraddleIsCritical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(findingSummaries(report, Critical), "\n")
-	if !strings.Contains(joined, "TRANSACTION STRADDLES THE ROLE PARTITION") {
-		t.Fatalf("straddling transaction was not reported CRITICAL:\n%s", joined)
+	// ADVISORY by decision, never Critical: co-residency is INFERRED at both
+	// precisions. A "txorigin" group means the pgx.Tx traced to one Begin() source
+	// POSITION -- buildTxOrigins does no control-flow analysis, so mutually
+	// exclusive branches after that Begin carry the same origin and would be
+	// reported as one transaction. This finding can only widen a posture, so it
+	// must not block on an inference.
+	if criticals := strings.Join(findingSummaries(report, Critical), "\n"); strings.Contains(criticals, "STRADDLE") {
+		t.Fatalf("a straddle must never be CRITICAL -- co-residency is inferred, and a blocking "+
+			"finding here would tell maintainers to dual-grant on a guess:\n%s", criticals)
 	}
-	if !strings.Contains(joined, "PROVABLY share one transaction") {
-		t.Errorf("straddle finding did not distinguish a traced tx origin from the coarse fallback: %s", joined)
+	joined := strings.Join(findingSummaries(report, Advisory), "\n")
+	if !strings.Contains(joined, "POSSIBLE TRANSACTION STRADDLE") {
+		t.Fatalf("straddling transaction was not reported at all:\n%s", joined)
+	}
+	if !strings.Contains(joined, "NOT proof that these statements co-execute") {
+		t.Errorf("the traced-origin finding must state what the tracing does and does not prove: %s", joined)
 	}
 }
 

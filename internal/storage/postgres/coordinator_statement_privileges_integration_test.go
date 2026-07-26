@@ -41,12 +41,17 @@ import (
 // statement attached, whereas a posture-versus-grant-list comparison cannot
 // see it, because neither artefact mentions locking at all.
 //
-// Deliberately out of scope: the fixed-schedule engine's scheduler statements
-// (scheduled_jobs / fixed_schedule_occurrences). Those cannot be settled by a
-// role-privilege test, because that engine commits coordinator-exclusive and
-// domain-exclusive writes in ONE transaction and therefore has no correct
-// single role at all. That is CHAOS-3114, an architecture question, and
-// asserting a privilege shape for it here would imply it has a privilege fix.
+// The fixed-schedule engine's statements used to be deliberately out of scope
+// here, on the grounds that an engine committing coordinator-exclusive and
+// domain-exclusive writes in ONE transaction had no correct single role at
+// all. CHAOS-3114 settled that architecture question — the coordinator role
+// was widened to cover the whole runOccurrence transaction, rather than the
+// transaction being split or the domain role being widened — so those
+// statements now have a privilege shape worth pinning. They live in
+// fixed_engine_statement_privileges_integration_test.go, which reuses this
+// file's harness, and NOT in coordinatorStatements() below: most of them run
+// against tables the domain role legitimately holds too, so they are not
+// "denied to domain" statements and belong in their own suite.
 
 const (
 	grantCoordinatorRole = "grant_coordinator_runtime"
@@ -99,7 +104,25 @@ func coordinatorExclusiveDDL() []string {
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, sync_run_id uuid NOT NULL)",
 		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_sync_occurrences (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.fixed_schedule_occurrences (id uuid PRIMARY KEY)",
+		// Production column shape (internal/scheduler/fixed/ledger.go), because
+		// fixed_engine_statement_privileges_integration_test.go executes the
+		// real ledger statements against it and a stub would raise 42703 during
+		// parse analysis, before the permission check it means to measure.
+		`CREATE TABLE public.fixed_schedule_occurrences (
+			occurrence_key text PRIMARY KEY,
+			identity_version text NOT NULL,
+			schedule_id text NOT NULL,
+			target_kind text NOT NULL,
+			scheduled_for timestamptz NOT NULL,
+			observed_at timestamptz NOT NULL,
+			status text NOT NULL,
+			handoff_count integer NOT NULL,
+			skip_reason text,
+			completed_at timestamptz,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (schedule_id, scheduled_for)
+		)`,
 	}
 }
 

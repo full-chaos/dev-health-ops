@@ -46,6 +46,24 @@ type TableGrant struct {
 	AllowDelete bool
 }
 
+// ColumnGrant declares one column-scoped privilege for a runtime role on a
+// relation that is deliberately NOT granted table-wide. It exists for the same
+// reason postgres.ColumnPrivilege does: worker_job_completion_fences.
+// completed_at is server-owned, so a table-wide grant would let a runtime role
+// forge a fence retention never reaps. A relation may appear in ColumnGrants
+// or in TableGrants, never in both — a table-wide privilege on a
+// column-scoped relation is exactly what the readiness posture check refuses.
+//
+// Privilege is one of SELECT, INSERT, UPDATE, REFERENCES: the four PostgreSQL
+// column-grantable privileges. It is validated against that closed set rather
+// than sanitized, because a privilege keyword cannot be quoted as an
+// identifier.
+type ColumnGrant struct {
+	TableName  string
+	ColumnName string
+	Privilege  string
+}
+
 type MigrationOptions struct {
 	Schema     string
 	DomainRole string
@@ -57,7 +75,20 @@ type MigrationOptions struct {
 	// so an empty grant set is rejected rather than applied.
 	CoordinatorRole   string
 	CoordinatorGrants []TableGrant
-	Logger            *slog.Logger
+	// CoordinatorColumnGrants is the column-scoped half of the same injected
+	// posture. It is optional even when CoordinatorRole is set, because a
+	// posture with no column-scoped privileges is legitimate; what is NOT
+	// legitimate is supplying it without a role, which is rejected alongside
+	// CoordinatorGrants for the same reason.
+	CoordinatorColumnGrants []ColumnGrant
+	Logger                  *slog.Logger
+}
+
+// columnGrantablePrivileges is PostgreSQL's closed set of column-level
+// privileges. DELETE and TRUNCATE are not column-grantable at all, so a caller
+// asking for either is a construction bug rather than a tightening.
+var columnGrantablePrivileges = map[string]struct{}{
+	"SELECT": {}, "INSERT": {}, "UPDATE": {}, "REFERENCES": {},
 }
 
 type MigrationResult struct {
@@ -235,7 +266,7 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		// No coordinator provisioning requested. Grants supplied without a role
 		// are a caller bug, not a no-op: it would silently skip the grants the
 		// caller believed it was applying.
-		if len(options.CoordinatorGrants) != 0 {
+		if len(options.CoordinatorGrants) != 0 || len(options.CoordinatorColumnGrants) != 0 {
 			return ErrMigrationConfiguration
 		}
 		return nil
@@ -257,6 +288,27 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 			return ErrMigrationConfiguration
 		}
 		seen[grant.TableName] = struct{}{}
+	}
+	seenColumns := make(map[string]struct{}, len(options.CoordinatorColumnGrants))
+	for _, grant := range options.CoordinatorColumnGrants {
+		if !validIdentifier(grant.TableName) || !validIdentifier(grant.ColumnName) {
+			return ErrMigrationConfiguration
+		}
+		if _, grantable := columnGrantablePrivileges[grant.Privilege]; !grantable {
+			return ErrMigrationConfiguration
+		}
+		// A relation granted table-wide AND column-scoped fails the readiness
+		// posture check outright (it forbids any table-wide privilege on a
+		// column-scoped relation), so applying both here would provision a
+		// role that can never report ready.
+		if _, tableWide := seen[grant.TableName]; tableWide {
+			return ErrMigrationConfiguration
+		}
+		key := grant.TableName + "." + grant.ColumnName + ":" + grant.Privilege
+		if _, duplicate := seenColumns[key]; duplicate {
+			return ErrMigrationConfiguration
+		}
+		seenColumns[key] = struct{}{}
 	}
 	return nil
 }
@@ -446,6 +498,22 @@ func coordinatorGrantStatements(options MigrationOptions) []string {
 		statements = append(statements,
 			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT "+
 				privileges+" ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
+				" TO "+coordinatorRole+"; END IF; END $$",
+		)
+	}
+	// Column-scoped grants are emitted after the table-wide ones and never
+	// instead of them: the two sets are disjoint by construction
+	// (ValidateMigrationOptions rejects a relation appearing in both), so
+	// order carries no meaning beyond keeping the statement list stable and
+	// diffable. The privilege keyword is taken from the validated closed set
+	// above rather than sanitized, because it is a keyword and not an
+	// identifier; the table and column are sanitized identifiers.
+	for _, grant := range options.CoordinatorColumnGrants {
+		qualified := "public." + grant.TableName
+		statements = append(statements,
+			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT "+
+				grant.Privilege+" ("+pgx.Identifier{grant.ColumnName}.Sanitize()+
+				") ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
 				" TO "+coordinatorRole+"; END IF; END $$",
 		)
 	}

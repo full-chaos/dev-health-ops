@@ -147,6 +147,18 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 	if err := ValidateMigrationOptions(base); err != nil {
 		t.Fatalf("ValidateMigrationOptions(no coordinator) error = %v", err)
 	}
+	// A column-scoped grant on a relation held table-wide by nobody else in
+	// this option set is the shape CHAOS-3114 introduced, and it must be
+	// accepted -- otherwise the coordinator posture could not be provisioned
+	// at all.
+	withColumns := valid
+	withColumns.CoordinatorColumnGrants = []ColumnGrant{
+		{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "SELECT"},
+		{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
+	}
+	if err := ValidateMigrationOptions(withColumns); err != nil {
+		t.Fatalf("ValidateMigrationOptions(column-scoped coordinator) error = %v", err)
+	}
 
 	tests := []struct {
 		name   string
@@ -166,6 +178,48 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 			o.CoordinatorGrants = []TableGrant{
 				{TableName: "worker_job_routes", AllowUpdate: true},
 				{TableName: "worker_job_routes"},
+			}
+		}},
+		// The column-scoped half (CHAOS-3114) is validated with the same
+		// strictness. Every rejection below would otherwise provision a role
+		// whose readiness check can never pass, or a statement with an
+		// unsanitizable fragment in it.
+		{"column grants without role", func(o *MigrationOptions) {
+			o.CoordinatorRole = ""
+			o.CoordinatorGrants = nil
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
+			}
+		}},
+		{"unsafe column identifier", func(o *MigrationOptions) {
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "key\"; DROP TABLE x", Privilege: "INSERT"},
+			}
+		}},
+		{"privilege that is not column grantable", func(o *MigrationOptions) {
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "DELETE"},
+			}
+		}},
+		{"privilege carrying trailing SQL", func(o *MigrationOptions) {
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT, UPDATE"},
+			}
+		}},
+		{"duplicate column grant", func(o *MigrationOptions) {
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
+			}
+		}},
+		// Table-wide AND column-scoped on one relation is the combination the
+		// readiness posture check refuses outright, so the migration refuses to
+		// create it.
+		{"relation granted both table-wide and column-scoped", func(o *MigrationOptions) {
+			o.CoordinatorGrants = append(o.CoordinatorGrants,
+				TableGrant{TableName: "worker_job_completion_fences"})
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
 			}
 		}},
 	}
@@ -200,6 +254,10 @@ func TestCoordinatorGrantStatementsDeriveFromTheInjectedPosture(t *testing.T) {
 			{TableName: "worker_operator_audits", AllowInsert: true, AllowUpdate: true},
 			{TableName: "sync_run_post_dispatches"},
 		},
+		CoordinatorColumnGrants: []ColumnGrant{
+			{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "SELECT"},
+			{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
+		},
 	})
 	joined := strings.Join(statements, "\n")
 
@@ -220,13 +278,25 @@ func TestCoordinatorGrantStatementsDeriveFromTheInjectedPosture(t *testing.T) {
 		"IF to_regclass('public.worker_job_routes') IS NOT NULL THEN",
 		// The coordinator is a public-schema control-plane role only.
 		"REVOKE ALL PRIVILEGES ON SCHEMA \"river\" FROM \"coordinator_runtime\"",
+		// Column-scoped grants carry the column, are sanitized as identifiers,
+		// and are guarded the same way (CHAOS-3114).
+		"GRANT SELECT (\"completion_key\") ON TABLE \"public\".\"worker_job_completion_fences\" TO \"coordinator_runtime\"",
+		"GRANT INSERT (\"completion_key\") ON TABLE \"public\".\"worker_job_completion_fences\" TO \"coordinator_runtime\"",
+		"IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("coordinator grants missing %q:\n%s", expected, joined)
 		}
 	}
-	// No privilege the posture never allowed may appear.
-	for _, forbidden := range []string{"DELETE ON TABLE \"public\".\"worker_job_routes\"", "TRUNCATE", "TRIGGER", "REFERENCES"} {
+	// No privilege the posture never allowed may appear. The column-scoped
+	// relation must never acquire a table-wide privilege either: that is what
+	// would let the coordinator forge the server-owned completed_at, and the
+	// readiness check refuses it outright.
+	for _, forbidden := range []string{
+		"DELETE ON TABLE \"public\".\"worker_job_routes\"", "TRUNCATE", "TRIGGER", "REFERENCES",
+		"SELECT ON TABLE \"public\".\"worker_job_completion_fences\"",
+		"INSERT ON TABLE \"public\".\"worker_job_completion_fences\"",
+	} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("coordinator grants unexpectedly include %q:\n%s", forbidden, joined)
 		}

@@ -412,6 +412,15 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	for _, column := range domain.ColumnScoped {
 		tableNames[column.TableName] = struct{}{}
 	}
+	// The coordinator's column-scoped half is unioned in too. Today it names
+	// the same relation the domain side does (worker_job_completion_fences,
+	// CHAOS-3114), so omitting it would pass by coincidence rather than by
+	// construction — and a future coordinator-only column-scoped relation would
+	// have failed this test with an undefined table instead of an attribution
+	// result.
+	for _, column := range coordinator.ColumnScoped {
+		tableNames[column.TableName] = struct{}{}
+	}
 
 	setup := []string{
 		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",

@@ -48,7 +48,7 @@ func TestSchedulerSpecConfiguresFailClosedDependencies(t *testing.T) {
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	want := []string{"domain_postgres", "queue_postgres", "river_schema", "scheduler_loop"}
+	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "river_schema", "scheduler_loop"}
 	status := registry.Readiness(context.Background())
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
@@ -62,7 +62,7 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 		context.Background(),
 		config.Config{},
 		registry,
-		schedulerActivation{goOwnsMarkers: true, coordinatorPolicyParity: true},
+		schedulerActivation{goOwnsMarkers: true},
 		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error) {
 			called = true
 			return schedulerTestComponent{}, nil
@@ -75,9 +75,9 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 	registry = health.NewRegistry(100 * time.Millisecond)
 	_, err = configureSchedulerDependenciesWithSources(
 		context.Background(), config.Config{}, registry,
-		schedulerActivation{goOwnsMarkers: true},
+		schedulerActivation{},
 		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error) {
-			t.Fatal("activation without coordinator parity invoked the loop factory")
+			t.Fatal("activation without goOwnsMarkers invoked the loop factory")
 			return nil, nil
 		}},
 	)
@@ -88,12 +88,12 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Contains(status.Failed, "scheduler_loop") {
-		t.Fatalf("non-parity readiness = %#v", status)
+		t.Fatalf("non-activated readiness = %#v", status)
 	}
 
 	_, err = configureSchedulerDependenciesWithSources(
 		context.Background(), config.Config{}, health.NewRegistry(time.Second),
-		schedulerActivation{goOwnsMarkers: true, coordinatorPolicyParity: true},
+		schedulerActivation{goOwnsMarkers: true},
 		schedulerDependencySources{buildLoop: func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error) {
 			return nil, errors.New("private factory failure")
 		}},

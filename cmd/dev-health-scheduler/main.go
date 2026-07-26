@@ -30,30 +30,24 @@ var schedulerSpec = shell.Spec{
 // policy the binary runs with, not a decorative check.
 //
 // Obtaining this policy does NOT make the binary write anything: it still
-// requires checkedInSchedulerActivation's goOwnsMarkers and
-// coordinatorPolicyParity to both be true before this process opens a
-// database pool at all (see below), and at minimum three further
-// preconditions this change does not attempt to satisfy:
+// requires checkedInSchedulerActivation.goOwnsMarkers to be true before this
+// process opens a database pool at all (see below), and at minimum one
+// further precondition this change does not attempt to satisfy:
 //
-//  1. coordinatorPolicyParity has no defined bar anywhere in this repository
-//     today -- no test, doc, or checklist states what "the coordinator
-//     behaves equivalently to the Python one" means well enough to prove.
-//     Setting it true without that definition would defeat the purpose of a
-//     source-reviewed gate.
-//  2. This binary has never been given a coordinator PostgreSQL pool (see
-//     .github/docs-legacy/architecture/chaos-3033-coordinator-pool-activation.md,
-//     "scheduler | not repointed -- blocked on CHAOS-3114"), and
-//     schedulersync.NewMutationRepository/NewOccurrenceCoordinator/
-//     NewOccurrenceReconciler's SQL (scheduled_jobs, sync_configurations
-//     UPDATE, scheduled_sync_occurrences) is coordinator-exclusive per
-//     internal/storage/postgres/domain_authorization.go's coordinatorPosture.
-//     dependencies.go still hands them database.DomainPool(); flipping
-//     activation without repointing that call site would 42501 on the first
-//     real handoff.
-//  3. sources.newOccurrences below still composes
+//   - sources.newOccurrences below still composes
 //     schedulersync.NewUnavailableMaterializer(): the native sync planner is
 //     CUT-09/CUT-10 work, not this change. Activating today would durably
 //     record occurrences Go can never materialize.
+//
+// CHAOS-3114 repointed every database call site in dependencies.go onto the
+// coordinator pool: first the sync-path repository and occurrence reconciler
+// (schedulersync.NewMutationRepository/NewOccurrenceCoordinator/
+// NewOccurrenceReconciler's SQL -- scheduled_jobs, sync_configurations
+// UPDATE, scheduled_sync_occurrences), then the fixed maintenance engine,
+// whose runOccurrence transaction is now covered end to end by
+// coordinatorPosture (internal/storage/postgres/domain_authorization.go). No
+// 42501 precondition remains. The unavailable materializer above is the sole
+// remaining blocker on goOwnsMarkers.
 var schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
 
 var errSchedulerActivationUnavailable = errors.New("scheduler activation is unavailable")
@@ -61,21 +55,31 @@ var errSchedulerActivationUnavailable = errors.New("scheduler activation is unav
 // schedulerActivation is a source-reviewed, package-private composition seam.
 // It deliberately cannot be influenced by process environment or deployment
 // profile. The production loop factory is retained but remains unreachable
-// until a future change proves coordinator policy parity and sets both gates
-// true.
+// until a future change sets goOwnsMarkers true.
+//
+// coordinatorPolicyParity was removed deliberately (program-owner decision,
+// CHAOS-3114) rather than left at false: it was a bare bool with a prose
+// comment and no test, checklist, or document anywhere in this repository
+// defining what "the coordinator behaves equivalently to the Python one"
+// means or how it would be proven. A gate whose precondition is undefined
+// cannot honestly gate anything -- it only blocks indefinitely while
+// implying a rigour that does not exist. Do not re-add a field like this as
+// a placeholder; if a coordinator-parity gate is ever needed again, it must
+// ship together with the test/checklist/document that defines what it
+// proves.
 //
 // CHAOS-3128 transferred marker-mutation ownership itself (schedulerOwnership
-// above) but deliberately leaves both gates false: coordinatorPolicyParity
-// has no defined bar to prove yet, this binary's sync-path repository and
-// occurrence constructors still run on the domain pool rather than the
-// coordinator pool their SQL requires, and the occurrence materializer is
-// still the CUT-09/CUT-10 stub. See schedulerOwnership's doc comment for the
-// full list. Flipping goOwnsMarkers to true without also resolving those
-// would ship a database permission failure or a stranded-occurrence backlog
-// on the first real due schedule, not a working scheduler.
+// above) but deliberately leaves goOwnsMarkers false, and CHAOS-3114 leaves it
+// false too: this binary's occurrence materializer is still the CUT-09/CUT-10
+// stub (see schedulerOwnership's doc comment). Flipping goOwnsMarkers to true
+// without also resolving that would ship a stranded-occurrence backlog on the
+// first real due schedule, not a working scheduler. The binary therefore stays
+// dormant -- it opens no database pool at all -- and the privilege work in
+// CHAOS-3114 changes nothing about that; it only means the composition this
+// gate guards would no longer fail on a privilege error once the materializer
+// exists.
 type schedulerActivation struct {
-	goOwnsMarkers           bool
-	coordinatorPolicyParity bool
+	goOwnsMarkers bool
 }
 
 var checkedInSchedulerActivation = schedulerActivation{}
@@ -119,14 +123,15 @@ func configureSchedulerDependenciesWithSources(
 	if registry == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
-	if !activation.goOwnsMarkers || !activation.coordinatorPolicyParity {
-		// schedulerOwnership alone (CHAOS-3128) is not activation: until both
-		// gates are true this process must not even open a PostgreSQL client.
+	if !activation.goOwnsMarkers {
+		// schedulerOwnership alone (CHAOS-3128) is not activation: until this
+		// gate is true this process must not even open a PostgreSQL client.
 		// Keep all externally visible readiness names closed.
 		return nil, processreadiness.RegisterUnavailable(
 			registry,
 			"domain_postgres",
 			"queue_postgres",
+			"coordinator_postgres",
 			"river_schema",
 			"scheduler_loop",
 		)

@@ -17,29 +17,48 @@ import (
 type schedulerDatabase interface {
 	DomainReady(context.Context) error
 	QueueReady(context.Context) error
+	CoordinatorReady(context.Context) error
 	RiverSchemaReady(context.Context, string) error
 	DomainPool() *pgxpool.Pool
+	CoordinatorPool() (*pgxpool.Pool, error)
 	Close()
 }
 
 type postgresSchedulerDatabase struct {
-	pools       *postgres.RuntimePools
-	domainRole  string
-	queueRole   string
-	riverSchema string
+	pools           *postgres.RuntimePools
+	domainRole      string
+	queueRole       string
+	coordinatorRole string
+	riverSchema     string
 }
 
+// openSchedulerDatabase opts into the coordinator boundary via
+// WithCoordinator: CHAOS-3114 repoints the sync repository, the occurrence
+// reconciler AND the fixed maintenance engine onto the coordinator pool.
+// sync_configurations, scheduled_jobs, scheduled_sync_occurrences and
+// fixed_schedule_occurrences are coordinator-exclusive per
+// internal/storage/postgres/domain_authorization.go, and
+// internal/scheduler/sync/transaction.go's `FOR UPDATE OF config, job
+// SKIP LOCKED` requires UPDATE on those rows even though it writes nothing
+// else. deploy/go-workers/profiles.json already budgets
+// coordinator_max_connections: 2 for the "scheduler" process, and both loops
+// are single-transaction-at-a-time (the sync loop hands off then reconciles
+// sequentially; the fixed engine runs one occurrence transaction at a time),
+// so peak concurrent demand is one connection per loop -- exactly the
+// budgeted 2, with no change to the connection footprint the deployment
+// contract already accounts for.
 func openSchedulerDatabase(ctx context.Context, cfg config.Config) (schedulerDatabase, error) {
-	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg)
+	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg).WithCoordinator()
 	pools, err := postgres.NewRuntimePools(ctx, runtimeConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &postgresSchedulerDatabase{
-		pools:       pools,
-		domainRole:  runtimeConfig.DomainRole,
-		queueRole:   runtimeConfig.QueueRole,
-		riverSchema: runtimeConfig.RiverSchema,
+		pools:           pools,
+		domainRole:      runtimeConfig.DomainRole,
+		queueRole:       runtimeConfig.QueueRole,
+		coordinatorRole: runtimeConfig.CoordinatorRole,
+		riverSchema:     runtimeConfig.RiverSchema,
 	}, nil
 }
 
@@ -67,6 +86,22 @@ func (database *postgresSchedulerDatabase) QueueReady(ctx context.Context) error
 	)
 }
 
+// CoordinatorReady proves the coordinator login holds exactly
+// coordinatorPosture. It is a separate readiness gate from DomainReady on
+// purpose: cross-role attribution is distributed, so only the coordinator's
+// own check can catch a privilege wrongly granted to the coordinator role.
+func (database *postgresSchedulerDatabase) CoordinatorReady(ctx context.Context) error {
+	if database == nil || database.pools == nil || database.pools.Coordinator == nil {
+		return errSchedulerActivationUnavailable
+	}
+	return postgres.CheckCoordinatorAuthorization(
+		ctx,
+		database.pools.Coordinator,
+		database.coordinatorRole,
+		database.riverSchema,
+	)
+}
+
 func (database *postgresSchedulerDatabase) RiverSchemaReady(
 	ctx context.Context,
 	schema string,
@@ -78,11 +113,31 @@ func (database *postgresSchedulerDatabase) RiverSchemaReady(
 	return err
 }
 
+// DomainPool exists for the readiness identity, not for composition: since
+// CHAOS-3114 repointed the fixed engine, no loop in this process is built on
+// the domain pool at all. The pool is still opened and still gated by
+// DomainReady, because the process's own domain login must be proven to hold
+// exactly domainPosture -- cross-role attribution is distributed, so a
+// privilege wrongly granted to the domain login is caught only by the domain
+// login's own check. Anything wired onto this pool again would need its own
+// justification against coordinatorPosture first.
 func (database *postgresSchedulerDatabase) DomainPool() *pgxpool.Pool {
 	if database == nil || database.pools == nil {
 		return nil
 	}
 	return database.pools.Domain
+}
+
+// CoordinatorPool never falls back to the domain pool. RuntimePools.
+// CoordinatorPool fails closed with postgres.ErrUnavailable when the
+// coordinator pool was never opened, which is the intended behaviour: a
+// coordinator call site silently running on the domain role is exactly the
+// CHAOS-3113/CHAOS-3114 defect this split removes.
+func (database *postgresSchedulerDatabase) CoordinatorPool() (*pgxpool.Pool, error) {
+	if database == nil || database.pools == nil {
+		return nil, errSchedulerActivationUnavailable
+	}
+	return database.pools.CoordinatorPool()
 }
 
 func (database *postgresSchedulerDatabase) Close() {
@@ -188,7 +243,10 @@ type schedulerRuntimeSources struct {
 	) (*schedulersync.Loop, error)
 	// newFixedLoop builds the fixed maintenance schedule runtime that replaces
 	// Celery Beat's non-product entries. It shares this process because two
-	// processes must never both believe they own periodic work.
+	// processes must never both believe they own periodic work, and since
+	// CHAOS-3114 it takes the COORDINATOR pool: its occurrence ledger is
+	// coordinator-exclusive and commits with the producers' domain rows in one
+	// transaction.
 	newFixedLoop func(*pgxpool.Pool, *health.Registry) (fixedScheduleRuntime, error)
 	// newOccurrences builds the consumer for the occurrences the sync loop
 	// hands off. It is constructed in the same process for the same reason:
@@ -268,6 +326,9 @@ func buildSchedulerLoopWithSources(
 	if err := registry.RegisterRequired("queue_postgres", database.QueueReady); err != nil {
 		return nil, err
 	}
+	if err := registry.RegisterRequired("coordinator_postgres", database.CoordinatorReady); err != nil {
+		return nil, err
+	}
 	if err := registry.RegisterRequired(
 		"river_schema",
 		func(ctx context.Context) error {
@@ -276,7 +337,21 @@ func buildSchedulerLoopWithSources(
 	); err != nil {
 		return nil, err
 	}
-	repository, err := sources.newRepository(database.DomainPool())
+	// CHAOS-3114: the sync handoff repository and occurrence reconciler run
+	// on the coordinator pool, not the domain pool. sync_configurations,
+	// scheduled_jobs, and scheduled_sync_occurrences are coordinator-exclusive
+	// (internal/storage/postgres/domain_authorization.go), and
+	// schedulerHandoffCandidatesSQL's `FOR UPDATE OF config, job SKIP LOCKED`
+	// requires UPDATE on the locked rows purely to take the lock, even though
+	// it writes nothing else -- handing this call site the domain pool fails
+	// every handoff with SQLSTATE 42501 (insufficient_privilege). There is
+	// deliberately no fallback to the domain pool: CoordinatorPool fails
+	// closed with postgres.ErrUnavailable instead.
+	coordinatorPool, err := database.CoordinatorPool()
+	if err != nil || coordinatorPool == nil {
+		return nil, errSchedulerActivationUnavailable
+	}
+	repository, err := sources.newRepository(coordinatorPool)
 	if err != nil || repository == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
@@ -284,7 +359,7 @@ func buildSchedulerLoopWithSources(
 	if coordinator == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
-	occurrences, err := sources.newOccurrences(database.DomainPool())
+	occurrences, err := sources.newOccurrences(coordinatorPool)
 	if err != nil || occurrences == nil {
 		return nil, errSchedulerActivationUnavailable
 	}
@@ -313,7 +388,21 @@ func buildSchedulerLoopWithSources(
 	if err := registry.RegisterRequired("fixed_schedule_coverage", gate.coverage); err != nil {
 		return nil, err
 	}
-	fixedLoop, err := sources.newFixedLoop(database.DomainPool(), registry)
+	// CHAOS-3114 (second half): the fixed maintenance engine runs on the
+	// coordinator pool too, on the same fail-closed coordinatorPool obtained
+	// above -- there is no domain-pool fallback here either. runOccurrence
+	// commits fixed_schedule_occurrences (coordinator-exclusive) together with
+	// remaining_metric_runs, remaining_metric_partitions,
+	// work_graph_execution_requests, worker_job_outbox and the completion
+	// fence in ONE transaction, and the atomicity is what makes "occurrence
+	// recorded => work enqueued" exactly-once. Splitting it outbox-style would
+	// let a fixed schedule double-run or silently skip, so the coordinator
+	// posture was widened to cover the whole statement set instead
+	// (internal/storage/postgres/domain_authorization.go coordinatorPosture).
+	// The domain role deliberately did NOT gain fixed_schedule_occurrences:
+	// widening the login that provider-sync workers use is what the partition
+	// exists to prevent.
+	fixedLoop, err := sources.newFixedLoop(coordinatorPool, registry)
 	if err != nil || fixedLoop == nil {
 		// The gate stays unattached, so both names report unavailable while the
 		// product loop below runs normally.

@@ -95,12 +95,14 @@ func execute(
 	if value, present := lookup("RIVER_COORDINATOR_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {
 		coordinatorRole = value
 	}
+	coordinatorTableGrants, coordinatorColumnGrants := coordinatorGrants()
 	migrationOptions := riverstore.MigrationOptions{
-		Schema:            schema,
-		DomainRole:        domainRole,
-		QueueRole:         queueRole,
-		CoordinatorRole:   coordinatorRole,
-		CoordinatorGrants: coordinatorGrants(),
+		Schema:                  schema,
+		DomainRole:              domainRole,
+		QueueRole:               queueRole,
+		CoordinatorRole:         coordinatorRole,
+		CoordinatorGrants:       coordinatorTableGrants,
+		CoordinatorColumnGrants: coordinatorColumnGrants,
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
 		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {
@@ -184,15 +186,17 @@ func requiredSecret(
 // types, because internal/storage/river cannot import internal/storage/postgres
 // (that direction is an import cycle).
 //
-// Column-scoped privileges are intentionally not translated: coordinatorPosture
-// declares none, and silently dropping any that appeared later would be exactly
-// the grants/assertion drift this indirection exists to prevent — so a future
-// coordinator ColumnScoped entry must fail loudly here instead.
-func coordinatorGrants() []riverstore.TableGrant {
+// Column-scoped privileges are translated too, and both halves come from the
+// same posture. An earlier revision returned nil the moment ColumnScoped was
+// non-empty, so that a coordinator column privilege would fail the migration
+// loudly rather than being silently dropped. CHAOS-3114 added the first such
+// entry (worker_job_completion_fences.completion_key, reached transitively
+// from the fixed-schedule engine's replay arms), so the guard has served its
+// purpose and is replaced by the real translation: dropping a declared column
+// privilege here would leave readiness demanding a grant the migration never
+// emitted, which is precisely the drift this indirection exists to prevent.
+func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant) {
 	posture := postgresstore.CoordinatorPosture()
-	if len(posture.ColumnScoped) != 0 {
-		return nil
-	}
 	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
 	for _, table := range posture.RequiredTables {
 		grants = append(grants, riverstore.TableGrant{
@@ -202,5 +206,13 @@ func coordinatorGrants() []riverstore.TableGrant {
 			AllowDelete: table.AllowDelete,
 		})
 	}
-	return grants
+	columns := make([]riverstore.ColumnGrant, 0, len(posture.ColumnScoped))
+	for _, column := range posture.ColumnScoped {
+		columns = append(columns, riverstore.ColumnGrant{
+			TableName:  column.TableName,
+			ColumnName: column.ColumnName,
+			Privilege:  column.Privilege,
+		})
+	}
+	return grants, columns
 }

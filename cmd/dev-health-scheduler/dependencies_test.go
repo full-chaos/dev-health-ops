@@ -31,11 +31,13 @@ func (function schedulerHandoffStepperFunc) HandoffDueResult(
 }
 
 type fakeSchedulerDatabase struct {
-	pool        *pgxpool.Pool
-	domainCalls atomic.Int64
-	queueCalls  atomic.Int64
-	schemaCalls atomic.Int64
-	closed      atomic.Bool
+	pool             *pgxpool.Pool
+	coordinatorPool  *pgxpool.Pool
+	domainCalls      atomic.Int64
+	queueCalls       atomic.Int64
+	coordinatorCalls atomic.Int64
+	schemaCalls      atomic.Int64
+	closed           atomic.Bool
 }
 
 func (database *fakeSchedulerDatabase) DomainReady(context.Context) error {
@@ -48,13 +50,29 @@ func (database *fakeSchedulerDatabase) QueueReady(context.Context) error {
 	return nil
 }
 
+func (database *fakeSchedulerDatabase) CoordinatorReady(context.Context) error {
+	database.coordinatorCalls.Add(1)
+	return nil
+}
+
 func (database *fakeSchedulerDatabase) RiverSchemaReady(context.Context, string) error {
 	database.schemaCalls.Add(1)
 	return nil
 }
 
 func (database *fakeSchedulerDatabase) DomainPool() *pgxpool.Pool { return database.pool }
-func (database *fakeSchedulerDatabase) Close()                    { database.closed.Store(true) }
+
+// CoordinatorPool mirrors postgres.RuntimePools.CoordinatorPool's fail-closed
+// contract: a fake with no coordinatorPool configured reports ErrUnavailable
+// rather than silently handing back the domain pool.
+func (database *fakeSchedulerDatabase) CoordinatorPool() (*pgxpool.Pool, error) {
+	if database.coordinatorPool == nil {
+		return nil, errSchedulerActivationUnavailable
+	}
+	return database.coordinatorPool, nil
+}
+
+func (database *fakeSchedulerDatabase) Close() { database.closed.Store(true) }
 
 // stubOccurrenceStepper stands in for the pending-occurrence consumer the
 // scheduler loop now requires.
@@ -131,7 +149,7 @@ func TestProductionSchedulerRuntimeSourcesRepositoryFollowsSchedulerOwnership(t 
 }
 
 func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
-	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
 	fixedLoop := &fakeFixedLoop{}
 	steps := atomic.Int64{}
 	sources := schedulerRuntimeSources{
@@ -139,8 +157,12 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			return database, nil
 		},
 		newRepository: func(pool *pgxpool.Pool) (schedulersync.HandoffStepper, error) {
-			if pool != database.pool {
-				t.Fatal("repository received the wrong domain pool")
+			// CHAOS-3114: the handoff repository must run on the coordinator
+			// pool, not the domain pool -- sync_configurations and
+			// scheduled_jobs are coordinator-exclusive and the handoff's
+			// `FOR UPDATE OF config, job` requires UPDATE on both.
+			if pool != database.coordinatorPool {
+				t.Fatal("repository received the wrong pool; want the coordinator pool")
 			}
 			return schedulerHandoffStepperFunc(func(
 				context.Context,
@@ -161,11 +183,24 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 				return nil
 			})
 		},
-		newLoop:        schedulersync.NewLoop,
-		newOccurrences: stubOccurrenceSource,
+		newLoop: schedulersync.NewLoop,
+		newOccurrences: func(pool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+			// CHAOS-3114: scheduled_sync_occurrences is coordinator-exclusive,
+			// so the reconciler must also run on the coordinator pool.
+			if pool != database.coordinatorPool {
+				t.Fatal("occurrence reconciler received the wrong pool; want the coordinator pool")
+			}
+			return stubOccurrenceSource(pool)
+		},
 		newFixedLoop: func(pool *pgxpool.Pool, _ *health.Registry) (fixedScheduleRuntime, error) {
-			if pool != database.pool {
-				t.Fatal("fixed schedule loop received the wrong domain pool")
+			// CHAOS-3114 (second half): the fixed engine runs on the
+			// coordinator pool as well. runOccurrence commits the
+			// coordinator-exclusive occurrence ledger together with the
+			// producers' domain rows in one transaction, and coordinatorPosture
+			// is what covers that whole statement set -- handing this call site
+			// the domain pool fails the ledger claim with SQLSTATE 42501.
+			if pool != database.coordinatorPool {
+				t.Fatal("fixed schedule loop received the wrong pool; want the coordinator pool")
 			}
 			return fixedLoop, nil
 		},
@@ -193,12 +228,14 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 		t.Fatalf("readiness = %#v", status)
 	}
 	if steps.Load() != 1 || database.domainCalls.Load() == 0 ||
-		database.queueCalls.Load() == 0 || database.schemaCalls.Load() == 0 {
+		database.queueCalls.Load() == 0 || database.coordinatorCalls.Load() == 0 ||
+		database.schemaCalls.Load() == 0 {
 		t.Fatalf(
-			"steps=%d readiness_calls=(%d,%d,%d)",
+			"steps=%d readiness_calls=(%d,%d,%d,%d)",
 			steps.Load(),
 			database.domainCalls.Load(),
 			database.queueCalls.Load(),
+			database.coordinatorCalls.Load(),
 			database.schemaCalls.Load(),
 		)
 	}
@@ -217,7 +254,7 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 }
 
 func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing.T) {
-	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
 	_, err := buildSchedulerLoopWithSources(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -248,7 +285,7 @@ func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing
 // Beat's maintenance replacement would turn a maintenance outage into
 // permanently unprocessed product work.
 func TestSyncLoopAndOccurrenceReconcilerRunWithoutTheFixedScheduler(t *testing.T) {
-	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
 	steps := atomic.Int64{}
 	registry := health.NewRegistry(100 * time.Millisecond)
 	component, err := buildSchedulerLoopWithSources(
@@ -305,7 +342,7 @@ func TestSyncLoopAndOccurrenceReconcilerRunWithoutTheFixedScheduler(t *testing.T
 // A fixed loop that constructs but fails to START must also not take the
 // product loop down with it.
 func TestFixedSchedulerStartFailureDoesNotStopTheSyncLoop(t *testing.T) {
-	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
 	fixedLoop := &fakeFixedLoop{startErr: errors.New("fixed loop cannot start")}
 	component, err := buildSchedulerLoopWithSources(
 		context.Background(),
@@ -358,7 +395,7 @@ func TestFixedSchedulerStartFailureDoesNotStopTheSyncLoop(t *testing.T) {
 // names, so the attempts fail here instead. Either way the constructor returns
 // an error, and the property under test is that composition survives it.
 func TestFixedLoopConstructorFailureAfterClaimingReadinessNamesStillStartsTheSyncLoop(t *testing.T) {
-	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}}
+	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
 	steps := atomic.Int64{}
 	registry := health.NewRegistry(100 * time.Millisecond)
 	var readinessAttempts, readinessRejected int

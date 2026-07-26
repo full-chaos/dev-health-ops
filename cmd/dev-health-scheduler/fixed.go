@@ -77,6 +77,14 @@ func buildFixedScheduleProducers(
 // buildFixedScheduleLoop constructs the fixed maintenance schedule runtime. It
 // shares the scheduler process because the two schedulers must never disagree
 // about which process owns periodic work.
+//
+// The pool is the COORDINATOR pool (CHAOS-3114). Everything constructed here
+// runs inside Engine.runOccurrence's single transaction, so one pool has to
+// serve the whole statement set: the occurrence ledger
+// (coordinator-exclusive), the remaining-metrics store and its partition
+// publisher, the work-graph request writer, and the outbox publisher. The
+// stores are handed the same pool only so their non-transactional methods have
+// one; the fixed engine never calls those.
 func buildFixedScheduleLoop(
 	pool *pgxpool.Pool,
 	registry *health.Registry,

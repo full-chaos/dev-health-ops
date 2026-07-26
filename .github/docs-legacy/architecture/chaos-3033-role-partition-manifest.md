@@ -77,6 +77,52 @@ was always in principle traceable and the earlier `unverified-shape` tag
 on `organizations`' coordinator side was more conservative than it needed
 to be.
 
+### Fourth round (CHAOS-3114): the sweep's package boundary was the blind spot
+
+The closure-typed-field sweep below concluded "`sync_configurations` was the
+only miss ... Nothing else to add." That conclusion was scoped to SQL written
+**inside** `internal/scheduler/{sync,fixed}`, and the fixed-schedule engine's
+transaction is not confined to those packages: `Engine.runOccurrence` hands its
+`pgx.Tx` to producers that call into `internal/jobs/metrics/remaining`,
+`internal/jobs/workgraph` and `internal/joboutbox`. A grep bounded by package
+therefore cannot see the coordinator's full statement set — the same class of
+error as the closure-typed field, one level up. The trace that closes it
+follows the `tx` across package boundaries, not the file tree:
+
+| table | role | privileges | confidence | evidence |
+|---|---|---|---|---|
+| remaining_metric_runs | **both** | coordinator: SELECT, INSERT | verified | `internal/jobs/metrics/remaining/postgres.go` `StartRunTx` (INSERT ... ON CONFLICT DO NOTHING) + `loadStartedRun` (replay read), reached from `internal/scheduler/fixed/producers.go` `RemainingMetricsFanoutProducer.Produce`. **No UPDATE**: every status transition is handler-side (domain). |
+| remaining_metric_partitions | **both** | coordinator: SELECT, INSERT | verified | same `StartRunTx`, plus `verifyStartedPartitions`. No UPDATE, same reason. |
+| work_graph_execution_requests | **both** | coordinator: SELECT, INSERT | verified | `internal/jobs/workgraph/publisher.go` `WriteTx` (INSERT ... ON CONFLICT (id) DO NOTHING + identity re-read), reached from `producers.go startGraphBuild`. No UPDATE: `Claim`/`transition` are handler-side. |
+| worker_job_outbox | **both** (three roles) | coordinator: + INSERT | verified | `internal/joboutbox/producer.go` `publish`, reached from every fixed-schedule handoff. The coordinator's UPDATE was already recorded (LOCK-implied); INSERT is the addition. |
+| worker_job_completion_fences | **both** | coordinator: `completion_key` SELECT + INSERT, column-scoped | verified | `internal/joboutbox/completion.go` `MarkCompletionTx`, reached transitively from `StartRunTx` and `WriteTx` on their already-succeeded replay arms. |
+
+Two corrections to the rows below, both from reading the code rather than
+relaying:
+
+- The `worker_job_completion_fences | coordinator? | possible 2nd reacher,
+  unresolved` row was **right**. A later revision of
+  `internal/storage/postgres/domain_authorization.go` dismissed it as a false
+  positive because a grep across `internal/scheduler/fixed` for
+  `MarkCompletionTx` found nothing — but `producers.go:462` calling
+  `joboutbox.CompletionKey` is not the reach; `StartRunTx`/`WriteTx` calling
+  `MarkCompletionTx` is. The row is now `verified`, with a shape: SELECT as
+  well as INSERT, because `INSERT ... ON CONFLICT (completion_key) DO NOTHING`
+  needs SELECT on the arbiter column (verified empirically against a live
+  server). It stays column-scoped — `completed_at` is server-owned.
+- `work_graph_execution_ledger` is **domain-only** and is NOT part of the fixed
+  engine's transaction. `WriteTx` never touches it; it belongs to the
+  handler-side `Claim`. `.github/docs-legacy/architecture/chaos-3033-coordinator-pool-activation.md`
+  previously listed it among the tables `runOccurrence` commits. It does not.
+
+The dual-grant ("both") whitelist at the end of this document therefore grows
+from 8 tables to 11: `remaining_metric_runs`, `remaining_metric_partitions` and
+`work_graph_execution_requests` join it (`worker_job_outbox` was already on it).
+`worker_job_completion_fences` is dual-held too but is not a table-wide
+whitelist entry — `RolePosture.ColumnScoped` carries it for both roles. In each
+of the three new entries the coordinator holds strictly LESS than the domain
+role.
+
 ## Prior dispute (from commit `95c589722`, kept for the record)
 
 Five earlier retags (`organizations`, `org_licenses`, `tier_limits`,

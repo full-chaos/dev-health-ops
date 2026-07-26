@@ -244,6 +244,24 @@ func TestLockRequirementForMode(t *testing.T) {
 		if !requirement.Satisfying.Has(PrivUpdate) || !requirement.Satisfying.Has(PrivDelete) {
 			t.Errorf("%s must accept UPDATE and DELETE", mode)
 		}
+		// Dropping a mode from the recognized list still lands it in the strictest
+		// tier via the fail-closed default, so the privilege SET would not change --
+		// only the message, which would start calling a known mode unrecognized.
+		// Asserting the flag catches that degradation; without it the mutation is
+		// merely equivalent rather than caught.
+		if requirement.Unknown {
+			t.Errorf("%s is a known PostgreSQL lock mode and must not be flagged Unknown: it has "+
+				"fallen through to the fail-closed default, which still denies correctly but reports "+
+				"the mode as unrecognized", mode)
+		}
+	}
+
+	// Same for the any-write tier, where falling through to the default WOULD
+	// change behaviour -- INSERT would stop satisfying.
+	for _, mode := range []string{"ROW SHARE", "ROW EXCLUSIVE"} {
+		if requirement, _ := lockRequirementForMode(mode); requirement.Unknown {
+			t.Errorf("%s must be recognized, not treated as an unknown strict mode", mode)
+		}
 	}
 
 	// An unknown mode must fail CLOSED: strictest tier, and flagged so a human

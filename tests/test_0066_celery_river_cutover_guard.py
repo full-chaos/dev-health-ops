@@ -69,6 +69,15 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
         "pytest -q tests/test_0066_celery_river_cutover_postgres.py"
     )
 
+    unit_step = next(
+        step
+        for step in workflow["jobs"]["test-matrix"]["steps"]
+        if step.get("name") == "Run parallel unit test contract"
+    )
+    assert unit_step["env"]["PYTEST_ADDOPTS"] == (
+        "--ignore=tests/test_0066_celery_river_cutover_postgres.py"
+    )
+
 
 def test_live_e2e_allows_the_disposable_cutover_migration() -> None:
     workflow = yaml.safe_load(

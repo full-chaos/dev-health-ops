@@ -116,6 +116,7 @@ jobs:
           # 4 vCPUs, so this matches `-n auto` there while staying predictable on
           # larger runners. Override PYTEST_XDIST_WORKERS to tune.
           PYTEST_XDIST_WORKERS: "4"
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs

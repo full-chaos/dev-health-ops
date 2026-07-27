@@ -63,6 +63,8 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //   - github/repo-metadata: CHAOS-3123, fixture-level field parity against the
 //     Python collector (TestGitHubRepositoryRouteEmitsOneBoundedReposEffect).
 //     Canary staging and live-traffic parity are waived for this program.
+//   - github/cicd: CHAOS-3172, differential row parity against the live Python
+//     normalizer and builder plus readback-fenced ClickHouse effects.
 //
 // github/prs (CHAOS-3122) is deliberately NOT in this set despite having a
 // real CompleteRouteHandler and passing fixture-level parity evidence: codex
@@ -79,6 +81,7 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 var routeReadyPairs = map[string]struct{}{
 	"launchdarkly/feature-flags": {},
 	"github/repo-metadata":       {},
+	"github/cicd":                {},
 }
 
 // TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
@@ -101,9 +104,9 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	all := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
-		GithubPRs: true,
+		GithubPRs: true, GithubCICD: true,
 	}
-	if reflect.TypeOf(all).NumField() != 6 {
+	if reflect.TypeOf(all).NumField() != 7 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -212,6 +215,7 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"launchdarkly/feature-flags": LaunchDarklyRouteHandler{},
 		"github/repo-metadata":       GitHubRepositoryRouteHandler{},
 		"github/prs":                 GitHubPullRequestRouteHandler{},
+		"github/cicd":                GitHubCICDRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

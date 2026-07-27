@@ -181,9 +181,9 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Three route-ready pairs can reach this closure today
-			// (launchdarkly/feature-flags, github/repo-metadata,
-			// github/prs — see CompleteRouteSwitches.Descriptor), and each
+			// Four route-ready pairs can reach this closure today
+			// (launchdarkly/feature-flags, github/repo-metadata, github/prs,
+			// github/cicd — see CompleteRouteSwitches.Descriptor), and each
 			// has its own CompleteRouteHandler and effect sink. session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -225,6 +225,13 @@ func buildProviderSyncHandler(
 				}
 				routeHandler = providersync.GitHubPullRequestRouteHandler{}
 				sink, readback = ghPRSink, ghPRSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "cicd":
+				ghCICDSink := providersync.GitHubCICDClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitHubCICDRouteHandler{}
+				sink, readback = ghCICDSink, ghCICDSink
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -300,7 +307,8 @@ func buildProviderSyncWorker(
 	// a worker with nothing registered.
 	if cfg.Profile != "sync" ||
 		(!cfg.WorkerLaunchDarklyFeatureFlagsEnabled &&
-			!cfg.WorkerGithubRepoMetadataEnabled && !cfg.WorkerGithubPRsEnabled) {
+			!cfg.WorkerGithubRepoMetadataEnabled && !cfg.WorkerGithubPRsEnabled &&
+			!cfg.WorkerGithubCICDEnabled) {
 		return workerFamily{}, nil
 	}
 	if registry == nil || observer == nil || logger == nil ||

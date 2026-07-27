@@ -224,10 +224,11 @@ func disjointHandlerSets(left, right map[string]struct{}) bool {
 func TestProviderSyncHandlerSwitchesFollowConfiguration(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]providersync.CompleteRouteSwitches{
-		"none":       {},
-		"github":     {GithubRepoMetadata: true},
-		"github_prs": {GithubPRs: true},
-		"both":       {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
+		"none":        {},
+		"github":      {GithubRepoMetadata: true},
+		"github_prs":  {GithubPRs: true},
+		"github_cicd": {GithubCICD: true},
+		"both":        {GithubRepoMetadata: true, LaunchDarklyFeatureFlags: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -268,6 +269,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 			cfg:  config.Config{WorkerGithubPRsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubPRs: true},
 		},
+		"github_cicd": {
+			cfg:  config.Config{WorkerGithubCICDEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubCICD: true},
+		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
 			want: providersync.CompleteRouteSwitches{LinearWorkItems: true},
@@ -287,5 +292,30 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 				t.Fatalf("workerRouteSwitches = %+v, want %+v", got, probe.want)
 			}
 		})
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitHubCICDCapability(t *testing.T) {
+	handler, _ := buildProviderSyncHandler(
+		nil,
+		providersync.CompleteRouteSwitches{GithubCICD: true},
+		nil, nil, nil, nil, nil, slog.Default(),
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "github", Dataset: "cicd",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.Handler.(providersync.GitHubCICDRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitHubCICDClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
 	}
 }

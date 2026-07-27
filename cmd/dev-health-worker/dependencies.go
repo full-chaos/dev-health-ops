@@ -431,6 +431,7 @@ func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
 		LaunchDarklyFeatureFlags: cfg.WorkerLaunchDarklyFeatureFlagsEnabled,
 		GithubRepoMetadata:       cfg.WorkerGithubRepoMetadataEnabled,
 		GithubPRs:                cfg.WorkerGithubPRsEnabled,
+		GithubCICD:               cfg.WorkerGithubCICDEnabled,
 	}
 }
 
@@ -450,6 +451,7 @@ func providerRouteSwitchesReady(
 		{"launchdarkly", "feature-flags", cfg.WorkerLaunchDarklyFeatureFlagsEnabled},
 		{"github", "repo-metadata", cfg.WorkerGithubRepoMetadataEnabled},
 		{"github", "prs", cfg.WorkerGithubPRsEnabled},
+		{"github", "cicd", cfg.WorkerGithubCICDEnabled},
 	}
 	return func(context.Context) error {
 		for _, route := range routes {

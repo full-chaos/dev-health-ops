@@ -130,6 +130,7 @@ class ProviderUnitRouteSwitches:
     # config.Config.WorkerGithubPRsEnabled, read from the same
     # WORKER_GITHUB_PRS_ENABLED environment name.
     github_prs: bool = False
+    github_cicd: bool = False
 
     @classmethod
     def from_environment(
@@ -145,6 +146,7 @@ class ProviderUnitRouteSwitches:
             ),
             github_repo_metadata=_flag(source, "WORKER_GITHUB_REPO_METADATA_ENABLED"),
             github_prs=_flag(source, "WORKER_GITHUB_PRS_ENABLED"),
+            github_cicd=_flag(source, "WORKER_GITHUB_CICD_ENABLED"),
         )
         switches.require_complete_routes()
         return switches

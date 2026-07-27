@@ -116,11 +116,17 @@ jobs:
           # 4 vCPUs, so this matches `-n auto` there while staying predictable on
           # larger runners. Override PYTEST_XDIST_WORKERS to tune.
           PYTEST_XDIST_WORKERS: "4"
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
           set -o pipefail
           ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}.log
+
+      - name: Run PostgreSQL 0066 migration tests
+        env:
+          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        run: pytest -q tests/test_0066_celery_river_cutover_postgres.py
 
       - name: Upload junit test reports
         if: always()

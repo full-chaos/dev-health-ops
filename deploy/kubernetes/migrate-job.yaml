@@ -69,6 +69,13 @@ spec:
                 name: dev-health-config
             - secretRef:
                 name: dev-health-migration-secrets
+          env:
+            - name: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
+              valueFrom:
+                secretKeyRef:
+                  name: dev-health-migration-secrets
+                  key: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
+                  optional: true
           resources:
             requests:
               memory: "256Mi"

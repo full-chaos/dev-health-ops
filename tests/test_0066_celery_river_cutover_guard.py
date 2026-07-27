@@ -57,13 +57,16 @@ def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
     workflow = yaml.safe_load(
         (_REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
     )
-    unit_step = next(
+    postgres_step = next(
         step
         for step in workflow["jobs"]["test-matrix"]["steps"]
-        if step.get("name") == "Run parallel unit test contract"
+        if step.get("name") == "Run PostgreSQL 0066 migration tests"
     )
-    assert unit_step["env"][_POSTGRES_TEST_URI_ENV] == (
+    assert postgres_step["env"][_POSTGRES_TEST_URI_ENV] == (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+    assert postgres_step["run"] == (
+        "pytest -q tests/test_0066_celery_river_cutover_postgres.py"
     )
 
 

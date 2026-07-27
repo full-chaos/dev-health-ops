@@ -106,7 +106,6 @@ jobs:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           # No OTLP collector runs in CI; with OTEL on, the exporter retries to
           # localhost:4317 with backoff on every span/metric, flooding logs and
@@ -122,6 +121,11 @@ jobs:
           mkdir -p test-results/logs
           set -o pipefail
           ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}.log
+
+      - name: Run PostgreSQL 0066 migration tests
+        env:
+          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        run: pytest -q tests/test_0066_celery_river_cutover_postgres.py
 
       - name: Upload junit test reports
         if: always()

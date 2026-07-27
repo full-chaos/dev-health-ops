@@ -106,6 +106,7 @@ jobs:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           # No OTLP collector runs in CI; with OTEL on, the exporter retries to
           # localhost:4317 with backoff on every span/metric, flooding logs and

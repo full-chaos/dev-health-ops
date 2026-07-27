@@ -105,6 +105,7 @@ jobs:
           DATABASE_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
           REDIS_URL: redis://localhost:6379/0
           LIVE_E2E_FIXTURE_SEED: "20260219"
           LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log

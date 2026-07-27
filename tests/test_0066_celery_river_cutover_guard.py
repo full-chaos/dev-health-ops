@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
+import pytest
 import yaml
 
 _CUTOVER_ENV = "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
 _REPO_ROOT = Path(__file__).parents[1]
+_POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 
 
 def test_migration_deployments_pass_the_cutover_opt_in_to_alembic() -> None:
@@ -48,3 +51,44 @@ def test_gitlab_unit_job_enables_real_postgres_migration_tests() -> None:
     assert pipeline["test"]["variables"]["DEV_HEALTH_POSTGRES_TEST_URI"] == (
         "postgresql+asyncpg://postgres:postgres@postgres:5432/test_db"
     )
+
+
+def test_github_unit_job_enables_real_postgres_migration_tests() -> None:
+    workflow = yaml.safe_load(
+        (_REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    )
+    unit_step = next(
+        step
+        for step in workflow["jobs"]["test-matrix"]["steps"]
+        if step.get("name") == "Run parallel unit test contract"
+    )
+    assert unit_step["env"][_POSTGRES_TEST_URI_ENV] == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db"
+    )
+
+
+def test_live_e2e_allows_the_disposable_cutover_migration() -> None:
+    workflow = yaml.safe_load(
+        (_REPO_ROOT / ".github" / "workflows" / "live-e2e.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    live_e2e_step = next(
+        step
+        for step in workflow["jobs"]["live-e2e"]["steps"]
+        if step.get("name") == "Run live-e2e tier"
+    )
+    assert live_e2e_step["env"][_CUTOVER_ENV] == "1"
+
+
+def test_missing_postgres_test_uri_fails_in_ci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    postgres_tests = importlib.import_module(
+        "tests.test_0066_celery_river_cutover_postgres"
+    )
+    monkeypatch.delenv(_POSTGRES_TEST_URI_ENV, raising=False)
+    monkeypatch.setenv("CI", "true")
+
+    with pytest.raises(pytest.fail.Exception, match=_POSTGRES_TEST_URI_ENV):
+        postgres_tests._require_postgres_test_uri()

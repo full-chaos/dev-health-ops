@@ -40,6 +40,21 @@ def _migration() -> ModuleType:
     return importlib.import_module(_MODULE)
 
 
+def _require_postgres_test_uri() -> None:
+    if os.getenv(_POSTGRES_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(
+            f"{_POSTGRES_URI_ENV} must be configured for PostgreSQL migration tests"
+        )
+    pytest.skip(f"requires {_POSTGRES_URI_ENV}")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
+
+
 @pytest.fixture
 def migrated_to_0065(
     monkeypatch: pytest.MonkeyPatch,
@@ -116,10 +131,6 @@ def _routes(engine: Engine, migration: ModuleType) -> list[tuple[str, str, bool,
         return [(str(row[0]), str(row[1]), bool(row[2]), int(row[3])) for row in rows]
 
 
-@pytest.mark.skipif(
-    not os.getenv(_POSTGRES_URI_ENV),
-    reason=f"requires {_POSTGRES_URI_ENV}",
-)
 def test_0066_real_postgres_refuses_without_opt_in_without_advancing_revision(
     migrated_to_0065: PostgresMigrationHarness,
     monkeypatch: pytest.MonkeyPatch,
@@ -135,10 +146,6 @@ def test_0066_real_postgres_refuses_without_opt_in_without_advancing_revision(
     assert _routes(migrated_to_0065.engine, migration) == before
 
 
-@pytest.mark.skipif(
-    not os.getenv(_POSTGRES_URI_ENV),
-    reason=f"requires {_POSTGRES_URI_ENV}",
-)
 def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     migrated_to_0065: PostgresMigrationHarness,
     monkeypatch: pytest.MonkeyPatch,
@@ -161,10 +168,6 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     ]
 
 
-@pytest.mark.skipif(
-    not os.getenv(_POSTGRES_URI_ENV),
-    reason=f"requires {_POSTGRES_URI_ENV}",
-)
 def test_0066_real_postgres_locks_routes_before_retargeting(
     migrated_to_0065: PostgresMigrationHarness,
     monkeypatch: pytest.MonkeyPatch,

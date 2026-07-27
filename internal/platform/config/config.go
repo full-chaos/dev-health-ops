@@ -114,6 +114,8 @@ type Config struct {
 	// Its Python counterpart is ProviderUnitRouteSwitches.github_prs, read
 	// from the same WORKER_GITHUB_PRS_ENABLED name.
 	WorkerGithubPRsEnabled bool
+	// WorkerGithubCICDEnabled gates the isolated (github, cicd) route.
+	WorkerGithubCICDEnabled bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -193,6 +195,10 @@ func Load(spec Spec) (Config, error) {
 		{
 			name:   "WORKER_GITHUB_PRS_ENABLED",
 			target: &cfg.WorkerGithubPRsEnabled,
+		},
+		{
+			name:   "WORKER_GITHUB_CICD_ENABLED",
+			target: &cfg.WorkerGithubCICDEnabled,
 		},
 	} {
 		*item.target, err = boolEnv(lookup, item.name, false)

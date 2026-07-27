@@ -131,7 +131,11 @@ def _target_base_git() -> None:
     _install_module(
         "dev_health_ops.models.git",
         {
-            "CiPipelineRun": object,
+            "CiPipelineRun": type(
+                "CiPipelineRun",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            ),
             "Deployment": object,
             "GitBlame": object,
             "GitCommitStat": object,

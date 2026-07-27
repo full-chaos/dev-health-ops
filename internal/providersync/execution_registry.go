@@ -34,6 +34,7 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"launchdarkly/feature-flags": ExecutorNativeGo,
 	"github/repo-metadata":       ExecutorNativeGo,
 	"github/prs":                 ExecutorNativeGo,
+	"github/cicd":                ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -129,6 +130,8 @@ type CompleteRouteSwitches struct {
 	// left for github/pr-reviews, which needs its own GraphQL fetch — see
 	// deploy/go-workers/provider-sync-porting-recipe.md.
 	GithubPRs bool
+	// GithubCICD gates the isolated ci_pipeline_runs writer only.
+	GithubCICD bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -219,6 +222,10 @@ func (switches CompleteRouteSwitches) Descriptor(
 		// is a no-op today and a one-line flip later, not new plumbing.
 		descriptor.Destinations = []string{"git_pull_requests"}
 		descriptor.RouteEnabled = switches.GithubPRs
+	case provider == "github" && dataset == "cicd":
+		descriptor.Destinations = []string{"ci_pipeline_runs"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GithubCICD
 	}
 	return descriptor, true
 }

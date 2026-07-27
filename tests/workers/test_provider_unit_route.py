@@ -195,6 +195,38 @@ def test_github_prs_switch_does_not_open_pr_reviews_or_pr_comments() -> None:
         assert not switches.routes_to_river("github", dataset)
 
 
+def test_github_cicd_defaults_to_false() -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "true"}
+    )
+    assert switches.github_cicd is False
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._TRUE))
+def test_github_cicd_parses_true_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_CICD_ENABLED": value}
+    )
+    assert switches.github_cicd is True
+    assert switches.routes_to_river("github", "cicd")
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._FALSE))
+def test_github_cicd_parses_false_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_CICD_ENABLED": value}
+    )
+    assert switches.github_cicd is False
+    assert not switches.routes_to_river("github", "cicd")
+
+
+def test_github_cicd_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_CICD_ENABLED": "sometimes"}
+        )
+
+
 # ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.

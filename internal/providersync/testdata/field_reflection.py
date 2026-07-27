@@ -97,3 +97,26 @@ def dict_literal_keys(
             "not silently returning an empty/stale set"
         )
     return frozenset(keys)
+
+
+def class_annotated_field_names(source: str, class_name: str) -> frozenset[str]:
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        fields = {
+            statement.target.id
+            for statement in node.body
+            if isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and not statement.target.id.startswith("_")
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Name)
+            and statement.value.func.id == "mapped_column"
+        }
+        if fields:
+            return frozenset(fields)
+        break
+    raise ValueError(
+        f"class_annotated_field_names: no annotated public fields found for {class_name!r}"
+    )

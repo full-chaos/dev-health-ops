@@ -42,7 +42,9 @@ to every check here.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
+from typing import Final
 
 import sqlalchemy as sa
 from alembic import op
@@ -57,6 +59,8 @@ depends_on = None
 _RIVER_TRANSPORT = "river"
 _ROLLBACK_TRANSPORT = "celery"
 _PROMOTABLE_TRANSPORTS = frozenset({_ROLLBACK_TRANSPORT})
+_CUTOVER_OPT_IN_ENV: Final = "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
+_CUTOVER_OPT_IN_VALUE: Final = "1"
 
 # sync.provider_unit is deliberately NOT migrated here and keeps the
 # river_canary row that 0061 seeded.
@@ -133,7 +137,9 @@ def _existing_rows(routes: TableClause) -> dict[str, RowMapping]:
                 routes.c.transport,
                 routes.c.paused,
                 routes.c.generation,
-            ).where(routes.c.job_kind.in_(_KINDS))
+            )
+            .where(routes.c.job_kind.in_(_KINDS))
+            .with_for_update()
         ).mappings()
     }
 
@@ -186,7 +192,16 @@ def _retarget(target: str, accepted: frozenset[str]) -> None:
     )
 
 
+def _cutover_is_authorized() -> bool:
+    return os.getenv(_CUTOVER_OPT_IN_ENV) == _CUTOVER_OPT_IN_VALUE
+
+
 def upgrade() -> None:
+    if not _cutover_is_authorized():
+        raise RuntimeError(
+            f"refusing the Celery-to-River cutover; set {_CUTOVER_OPT_IN_ENV}=1 "
+            "only after every retargeted job kind has route-readiness and parity evidence"
+        )
     _retarget(_RIVER_TRANSPORT, _PROMOTABLE_TRANSPORTS)
 
 

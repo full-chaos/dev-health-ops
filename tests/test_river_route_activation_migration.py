@@ -15,6 +15,11 @@ def _migration() -> ModuleType:
     return importlib.import_module(_MODULE)
 
 
+@pytest.fixture
+def _cutover_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", "1")
+
+
 def _create_schema(connection: sa.Connection) -> None:
     connection.execute(
         sa.text(
@@ -67,7 +72,9 @@ def _routes(connection: sa.Connection) -> dict[str, tuple[str, int, int]]:
     }
 
 
-def test_upgrade_moves_every_checked_in_kind_to_river_and_is_idempotent() -> None:
+def test_upgrade_moves_every_checked_in_kind_to_river_and_is_idempotent(
+    _cutover_opt_in: None,
+) -> None:
     migration = _migration()
     engine = sa.create_engine("sqlite:///:memory:")
     try:
@@ -103,7 +110,9 @@ def test_upgrade_moves_every_checked_in_kind_to_river_and_is_idempotent() -> Non
         engine.dispose()
 
 
-def test_downgrade_restores_the_declared_celery_rollback_route() -> None:
+def test_downgrade_restores_the_declared_celery_rollback_route(
+    _cutover_opt_in: None,
+) -> None:
     migration = _migration()
     engine = sa.create_engine("sqlite:///:memory:")
     try:
@@ -122,7 +131,9 @@ def test_downgrade_restores_the_declared_celery_rollback_route() -> None:
         engine.dispose()
 
 
-def test_upgrade_refuses_to_run_when_a_route_row_is_missing() -> None:
+def test_upgrade_refuses_to_run_when_a_route_row_is_missing(
+    _cutover_opt_in: None,
+) -> None:
     migration = _migration()
     engine = sa.create_engine("sqlite:///:memory:")
     try:
@@ -140,7 +151,9 @@ def test_upgrade_refuses_to_run_when_a_route_row_is_missing() -> None:
         engine.dispose()
 
 
-def test_upgrade_refuses_an_unexpected_transport_without_writing() -> None:
+def test_upgrade_refuses_an_unexpected_transport_without_writing(
+    _cutover_opt_in: None,
+) -> None:
     migration = _migration()
     engine = sa.create_engine("sqlite:///:memory:")
     try:

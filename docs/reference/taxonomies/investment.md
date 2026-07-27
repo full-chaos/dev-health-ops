@@ -42,7 +42,7 @@ This page follows `src/dev_health_ops/investment_taxonomy.py`. Taxonomy drift ch
 
 ## Generated keys
 
-The block below is generated from `investment_taxonomy.py`; run `make docs:generate-taxonomy` after changing the registry. Do not edit it by hand.
+The block below is generated from `src/dev_health_ops/investment_taxonomy.py`; run `make docs:generate-taxonomy` after changing the registry. Do not edit it by hand.
 
 <!-- BEGIN GENERATED TAXONOMY -->
 ```text

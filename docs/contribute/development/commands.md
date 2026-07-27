@@ -214,10 +214,17 @@ Cloudflare-shaped local preview:
 make docs:preview
 ```
 
-Full reader-critical validation:
+Full validation, equivalent to what CI enforces. Run this before pushing:
 
 ```bash
-make docs:check-v2
+make docs:check
+```
+
+While editing, a faster subset catches taxonomy drift and broken relative links and
+anchors without a full site build. It is not sufficient on its own:
+
+```bash
+make docs:check-fast
 ```
 
 Production documentation deployment is intentionally separate:

@@ -22,11 +22,11 @@ const defaultContractRoot = "contracts/jobs/v1"
 // honestly execute.
 //
 // The full account of which schedules execute, which do not, and the exact
-// blocker for each lives in
-// .github/docs-legacy/architecture/fixed-schedule-producers.md. Read it before
-// changing anything below: the reason strings here are deliberately specific
-// because their vague predecessors let two of these gaps stay invisible while
-// their tickets were closed.
+// blocker for each lived in the fixed-schedule-producers design doc
+// (removed in e23ede618; see git history). Read it before changing anything
+// below: the reason strings here are deliberately specific because their
+// vague predecessors let two of these gaps stay invisible while their
+// tickets were closed.
 //
 // The two producers still registered as NewNotImplementedProducer below are
 // declared but not built. Registering a stub that quietly produced nothing would

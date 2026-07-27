@@ -1100,9 +1100,7 @@ def build_capture(args: argparse.Namespace) -> dict[str, Any]:
 
 def default_output() -> Path:
     root = Path(__file__).resolve().parents[2]
-    return root / (
-        ".github/docs-legacy/architecture/evidence/go-worker-migration/v0-celery-baseline/capture.json"
-    )
+    return root / ("ci/evidence/go-worker-migration/v0-celery-baseline/capture.json")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -51,8 +51,8 @@ type domainTable struct {
 func reconciliationTables() []domainTable {
 	return []domainTable{
 		{
-			// Tightened under the Option B two-role split
-			// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @
+			// Tightened under the Option B two-role split (role-partition
+			// manifest, removed in e23ede618; see git history at
 			// eda2d6b91): the domain-side call
 			// (internal/syncdispatchruntime/native_post_sync.go:263) is a
 			// plain SELECT with no lock clause. The FOR UPDATE row-locking

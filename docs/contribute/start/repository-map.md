@@ -78,7 +78,9 @@ A job or route change that updates code without the matching contract is incompl
 
 ## Documentation boundary
 
-Canonical public documentation lives under `docs/`. The former documentation corpus is preserved under `.github/docs-legacy/` as source evidence and history; it is not part of the public build. Move verified current material into one canonical page rather than creating parallel public truth.
+Canonical public documentation lives under `docs/`; it is the only documentation tree. The former corpus was retired and is available in git history rather than in the working tree. Move verified current material into one canonical page rather than creating parallel public truth.
+
+Documentation tooling inputs that are not themselves published — information-architecture tables, redirects, the search-acceptance set, and the generated inventory — live under `docs-data/`, outside the built site.
 
 Planning records, benchmark captures, issue-specific evidence, and internal rollout notes remain source material unless they describe a durable supported contract.
 

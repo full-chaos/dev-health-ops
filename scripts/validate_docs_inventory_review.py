@@ -66,8 +66,8 @@ EXPLICIT_NONPUBLIC = {
     "retain-internal",
     "archive-or-recapture",
 }
-REVIEWED_DISPOSITION_ROWS = 449
-REVIEWED_OPS_ROWS = 313
+REVIEWED_DISPOSITION_ROWS = 439
+REVIEWED_OPS_ROWS = 303
 REVIEWED_WEB_ROWS = 136
 
 
@@ -287,12 +287,12 @@ def main() -> int:
     parser.add_argument(
         "--inventory-dir",
         type=Path,
-        default=Path(".github/documentation-program/inventory"),
+        default=Path("docs-data/inventory"),
     )
     parser.add_argument(
         "--ia-dir",
         type=Path,
-        default=Path(".github/documentation-program/ia"),
+        default=Path("docs-data/ia"),
     )
     args = parser.parse_args()
     validate(args.generated_json, args.inventory_dir, args.ia_dir)

@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import csv
-import json
-import posixpath
 import re
 import sys
 from collections import Counter
@@ -17,15 +15,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "mkdocs.yml"
-PHASE9 = ROOT / ".github" / "documentation-program" / "phase-9"
-IA_DIR = ROOT / ".github" / "documentation-program" / "ia"
-MIGRATED_SOURCE_MAP_PATH = (
-    ROOT
-    / ".github"
-    / "documentation-program"
-    / "content"
-    / "migrated-source-pages.json"
-)
+DOCS_DATA = ROOT / "docs-data"
+REDIRECTS_PATH = DOCS_DATA / "redirects.tsv"
+IA_DIR = DOCS_DATA / "ia"
 BUILD = ROOT / ".build"
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 FRONT_MATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -34,13 +26,6 @@ FRONT_MATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 def _load_yaml(path: Path) -> dict[str, Any]:
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     return loaded if isinstance(loaded, dict) else {}
-
-
-def _load_json_map(path: Path) -> dict[str, str]:
-    loaded = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(loaded, dict):
-        raise ValueError(f"Expected an object in {path}")
-    return {str(key): str(value) for key, value in loaded.items()}
 
 
 def _front_matter(path: Path) -> dict[str, Any]:
@@ -115,35 +100,7 @@ def _expanded_candidates(targets: list[Path]) -> list[Path]:
     return expanded
 
 
-def _resolve_source_relative(source_path: str, href: str) -> bool:
-    parsed = urlparse(href)
-    if parsed.scheme or parsed.netloc or href.startswith(("#", "mailto:", "tel:")):
-        return True
-    if not parsed.path:
-        return True
-    if parsed.path.startswith("/"):
-        return False
-
-    resolved = posixpath.normpath(
-        posixpath.join(posixpath.dirname(source_path), parsed.path)
-    )
-    if resolved.startswith("../"):
-        return False
-    target = (ROOT / resolved).resolve()
-    try:
-        target.relative_to(ROOT.resolve())
-    except ValueError:
-        return False
-    return any(candidate.exists() for candidate in _expanded_candidates([target]))
-
-
-def _resolve_relative(
-    page: Path,
-    source_path: str,
-    href: str,
-    docs_dir: Path,
-    migrated_sources: dict[str, str],
-) -> bool:
+def _resolve_relative(page: Path, href: str, docs_dir: Path) -> bool:
     parsed = urlparse(href)
     if parsed.scheme or parsed.netloc or href.startswith(("#", "mailto:", "tel:")):
         return True
@@ -154,11 +111,7 @@ def _resolve_relative(
         targets = [docs_dir / path_part.strip("/")]
     else:
         targets = [(page.parent / path_part).resolve()]
-    if any(candidate.exists() for candidate in _expanded_candidates(targets)):
-        return True
-
-    migrated_source = migrated_sources.get(source_path)
-    return bool(migrated_source and _resolve_source_relative(migrated_source, href))
+    return any(candidate.exists() for candidate in _expanded_candidates(targets))
 
 
 def main() -> int:
@@ -167,8 +120,6 @@ def main() -> int:
     docs_dir = (ROOT / str(config.get("docs_dir") or "docs")).resolve()
     nav_records = _flatten_nav(config.get("nav", []))
     nav_paths = [record["source_path"] for record in nav_records]
-    migrated_sources = _load_json_map(MIGRATED_SOURCE_MAP_PATH)
-    migrated_urls = {_canonical_url(path) for path in migrated_sources}
 
     duplicate_paths = [path for path, count in Counter(nav_paths).items() if count > 1]
     if duplicate_paths:
@@ -185,18 +136,10 @@ def main() -> int:
     if off_nav:
         errors.append(f"unclassified Markdown outside navigation: {off_nav[:30]}")
 
-    for target_path, source_path in sorted(migrated_sources.items()):
-        if target_path not in actual_markdown:
-            errors.append(f"migrated-source target does not exist: {target_path}")
-        if target_path not in nav_paths:
-            errors.append(f"migrated-source target is not navigated: {target_path}")
-        if not (ROOT / source_path).is_file():
-            errors.append(f"migrated-source input does not exist: {source_path}")
-
     ia_rows = _load_ia()
     ia_by_url = {row["url"]: row for row in ia_rows if row.get("url")}
     nav_urls = {_canonical_url(path) for path in nav_paths}
-    non_ia = sorted(nav_urls - set(ia_by_url) - migrated_urls)
+    non_ia = sorted(nav_urls - set(ia_by_url))
     if non_ia:
         errors.append(f"canonical URLs outside the approved IA: {non_ia[:30]}")
 
@@ -208,12 +151,7 @@ def main() -> int:
         metadata = _front_matter(page) if page.is_file() else {}
         url = _canonical_url(source_path)
         ia = ia_by_url.get(url, {})
-        migrated = source_path in migrated_sources
-        page_id = str(
-            metadata.get("page_id")
-            or ia.get("id")
-            or (f"migrated-{Path(source_path).stem}" if migrated else "")
-        )
+        page_id = str(metadata.get("page_id") or ia.get("id") or "")
         if page_id:
             if page_id in page_ids:
                 errors.append(
@@ -228,15 +166,11 @@ def main() -> int:
                 "nav_path": record["nav_path"],
                 "label": record["label"],
                 "content_type": str(
-                    metadata.get("content_type")
-                    or ia.get("kind")
-                    or ("migrated-source" if migrated else "")
+                    metadata.get("content_type") or ia.get("kind") or ""
                 ),
                 "owner": str(metadata.get("owner") or "documentation"),
                 "lifecycle": str(metadata.get("lifecycle") or "active"),
-                "publication_state": (
-                    "public-migrated-source" if migrated else "public-canonical"
-                ),
+                "publication_state": "public-canonical",
             }
         )
 
@@ -245,16 +179,10 @@ def main() -> int:
         text = page.read_text(encoding="utf-8")
         for raw in LINK_RE.findall(text):
             href = raw.strip().split()[0].strip("<>")
-            if not _resolve_relative(
-                page,
-                source_path,
-                href,
-                docs_dir,
-                migrated_sources,
-            ):
+            if not _resolve_relative(page, href, docs_dir):
                 errors.append(f"broken local link: {source_path} -> {raw}")
 
-    redirects_path = PHASE9 / "redirects.tsv"
+    redirects_path = REDIRECTS_PATH
     redirects: list[dict[str, str]] = []
     if redirects_path.is_file():
         with redirects_path.open(encoding="utf-8", newline="") as handle:
@@ -268,7 +196,7 @@ def main() -> int:
                     f"redirect conflict for {source}: {seen_sources[source]} vs {target}"
                 )
             seen_sources[source] = target
-            if target not in ia_by_url and target not in migrated_urls:
+            if target not in ia_by_url:
                 errors.append(
                     f"redirect target outside approved IA: {source} -> {target}"
                 )
@@ -317,14 +245,13 @@ def main() -> int:
         "",
         f"- Public pages: **{len(publication_rows)}**",
         f"- Frozen IA nodes: **{len(ia_rows)}**",
-        f"- Direct source migrations: **{len(migrated_sources)}**",
         f"- Published URLs: **{len(nav_urls)}**",
         f"- Withheld IA nodes: **{len(set(ia_by_url) - nav_urls)}**",
         f"- Legacy redirect sources: **{len(redirects)}**",
         f"- Unclassified Markdown pages: **{len(off_nav)}**",
         f"- Validation errors: **{len(errors)}**",
         "",
-        "The public documentation is sourced from `docs/`; the previous tree is retained under `.github/docs-legacy/` for reference during content migration.",
+        "The public documentation is sourced from `docs/`; the previous documentation tree has been retired and is available only in git history.",
         "",
     ]
     (BUILD / "docs-v2-publication-summary.md").write_text(
@@ -336,7 +263,7 @@ def main() -> int:
         return 1
     print(
         f"Validated {len(publication_rows)} canonical pages, {len(redirects)} redirects, "
-        f"{len(ia_rows)} frozen IA nodes, and {len(migrated_sources)} direct migrations."
+        f"and {len(ia_rows)} frozen IA nodes."
     )
     return 0
 

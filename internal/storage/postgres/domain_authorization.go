@@ -459,8 +459,8 @@ type RolePosture struct {
 }
 
 // domainPosture is the domain runtime role's declared manifest under the
-// Option B two-role split. Table set and flags come from
-// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91
+// Option B two-role split. Table set and flags come from the role-partition
+// manifest (removed in e23ede618; see git history at eda2d6b91)
 // (grant-deriver tool derivation + hand-verified Go source), the sole
 // authority for role/privilege attribution — not this comment, and not any
 // earlier revision of it.
@@ -564,8 +564,8 @@ func domainPosture() RolePosture {
 }
 
 // coordinatorPosture is the coordinator runtime role's declared manifest
-// under the Option B two-role split, per
-// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91 — the
+// under the Option B two-role split, per the role-partition manifest
+// (removed in e23ede618; see git history at eda2d6b91) — the
 // same sole authority domainPosture defers to.
 //
 //   - internal_service_credentials, worker_operator_audits,

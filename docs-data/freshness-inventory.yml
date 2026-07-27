@@ -1,0 +1,67 @@
+# Documentation freshness inventory, validated by scripts/check_freshness_inventory.py
+# (`make docs:check-freshness`).
+#
+# Every tracked page needs an explicit disposition (`refresh` or `retire`), an owner,
+# and a `last-reviewed` date. `page` and `replacement` are paths relative to `docs/`.
+# An entry older than the 180-day review cadence fails the guard, as does an entry
+# pointing at a page that no longer exists.
+#
+# Rebuilt from .github/docs-legacy/freshness-inventory.yml (deleted in e23ede618) after
+# the canonical `docs/` restructure. Each row was remapped to the live successor page
+# and its `owner` taken from that page's frontmatter. Two legacy rows were dropped
+# because they have no live successor by design:
+#   - user-guide/views/flame-diagrams.md  (no flame-diagram page in the canonical IA)
+#   - user-guide/views/ai-attribution.md  (withheld from the public IA; see
+#     tests/docs/test_ai_user_guide_source_accuracy.py::test_ai_attribution_has_no_public_page)
+# `last-reviewed` is carried over from the legacy rows, which is conservative: the live
+# pages were authored after that date, so the cadence window closes no later than it
+# would have on the content the review actually covered.
+
+- page: use/index.md
+  disposition: refresh
+  owner: documentation
+  last-reviewed: '2026-07-16'
+- page: use/investment/investment-mix.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/investment/investment-flows.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/investment/investment-expense.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/code-and-relationships/code-hotspots.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/delivery-flow/pr-flow.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/delivery-flow/quadrants.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/plan-and-improve/capacity-planning.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/code-and-relationships/work-graph.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/ai-workflows/impact.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/ai-workflows/review-load.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'
+- page: use/ai-workflows/risk.md
+  disposition: refresh
+  owner: product-analytics
+  last-reviewed: '2026-07-16'

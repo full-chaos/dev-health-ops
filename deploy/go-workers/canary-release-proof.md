@@ -9,7 +9,7 @@ scope, captures redacted observations, and then invokes:
 python scripts/worker/canary_release_proof.py \
   --celery-observation /secure/celery.json \
   --go-observation /secure/go.json \
-  --output .github/docs-legacy/architecture/evidence/go-worker-migration/v3-canary-release-proof/candidate.json
+  --output ci/evidence/go-worker-migration/v3-canary-release-proof/candidate.json
 ```
 
 Each observation has exact, redacted digest fields for input/output/state and

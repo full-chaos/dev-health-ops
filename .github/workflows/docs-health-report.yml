@@ -32,7 +32,7 @@ jobs:
           set -o pipefail
           python scripts/check_external_links.py \
             --built-site .build/docs \
-            --allowlist .github/docs-legacy/external-link-allowlist.yml \
+            --allowlist docs-data/external-link-allowlist.yml \
             --site-url https://docs.fullchaos.dev \
             2>&1 | tee .build/docs-external-links.log
 

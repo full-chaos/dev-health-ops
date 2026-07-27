@@ -30,9 +30,9 @@ PINNED_PATHS = {
     "registry": REPO_ROOT / "contracts/jobs/v1/registry.json",
     "migration_state": REPO_ROOT / "contracts/jobs/v1/migration-state.json",
     "thresholds": REPO_ROOT
-    / ".github/docs-legacy/architecture/evidence/go-worker-migration/v3-canary-release-proof/parity-thresholds.json",
+    / "ci/evidence/go-worker-migration/v3-canary-release-proof/parity-thresholds.json",
     "baseline": REPO_ROOT
-    / ".github/docs-legacy/architecture/evidence/go-worker-migration/v0-celery-baseline/capture.json",
+    / "ci/evidence/go-worker-migration/v0-celery-baseline/capture.json",
 }
 REQUIRED = {
     "schema_version",

@@ -5,7 +5,6 @@ content_type: task-guide
 owner: platform-api
 source_of_truth:
   - current provider webhook handlers and idempotency stores
-  - .github/docs-legacy/architecture/pagerduty-contract.md
 applicability: current
 lifecycle: active
 ---

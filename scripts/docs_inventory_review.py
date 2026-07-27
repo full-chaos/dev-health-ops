@@ -28,7 +28,6 @@ import yaml
 
 PYTHON_NAME_TAG = "tag:yaml.org,2002:python/name:"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"}
-LEGACY_ASSET_SUFFIXES = IMAGE_SUFFIXES | {".css", ".js"}
 ENTRY_POINT_NAMES = {
     "README.md",
     "CONTRIBUTING.md",
@@ -146,37 +145,7 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
     inventory = base.build_inventory(repo_root, repository)
     rows_by_path = {row["source_path"]: row for row in inventory["rows"]}
 
-    legacy_root = repo_root / ".github" / "docs-legacy"
-    if legacy_root.exists():
-        for path in sorted(legacy_root.rglob("*")):
-            if not path.is_file():
-                continue
-            suffix = path.suffix.lower()
-            if suffix == ".md":
-                artifact_type = "legacy-page"
-                content_type = base._infer_content_type(
-                    path.relative_to(legacy_root).as_posix(),
-                    {},
-                )
-            elif suffix in LEGACY_ASSET_SUFFIXES:
-                artifact_type = "legacy-asset"
-                content_type = None
-            else:
-                artifact_type = "legacy-support"
-                content_type = None
-            _add_file(
-                rows_by_path,
-                repository,
-                repo_root,
-                path,
-                artifact_type,
-                "archived-source",
-                product_area="documentation-legacy",
-                content_type=content_type,
-                notes="Preserved pre-cutover documentation source; not in the public build.",
-            )
-
-    program_root = repo_root / ".github" / "documentation-program"
+    program_root = repo_root / "docs-data"
     inventory_output_root = program_root / "inventory"
     if program_root.exists():
         for path in sorted(program_root.rglob("*")):
@@ -189,8 +158,11 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                 path,
                 "internal-program",
                 "excluded-internal",
-                product_area="documentation-program",
-                notes="Internal remediation evidence; must never enter the public build.",
+                product_area="docs-data",
+                notes=(
+                    "Non-published documentation tooling input; "
+                    "must never enter the public build."
+                ),
             )
 
     docs_root = repo_root / "docs"
@@ -242,19 +214,6 @@ def build_review_inventory(repo_root: Path, repository: str) -> dict[str, Any]:
                         "canonical contributor source."
                     ),
                 )
-
-    legacy_config = legacy_root / "mkdocs.yml"
-    if legacy_config.is_file():
-        _add_file(
-            rows_by_path,
-            repository,
-            repo_root,
-            legacy_config,
-            "configuration",
-            "archived-source",
-            product_area="documentation-legacy",
-            notes="Archived pre-cutover build configuration.",
-        )
 
     for pattern in (
         "wrangler*.toml",

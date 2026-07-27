@@ -145,7 +145,7 @@ def test_reader_critical_checks_invoke_the_canonical_scripts() -> None:
 
     search = run_by_name[STREAMED_CHECK_STEPS[3]]
     assert "check_docs_candidate_search.py" in search
-    assert ".github/documentation-program/phase-10/search-acceptance.json" in search
+    assert "docs-data/search-acceptance.json" in search
 
     accessibility = run_by_name[STREAMED_CHECK_STEPS[4]]
     assert "check_docs_candidate_accessibility.py" in accessibility

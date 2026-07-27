@@ -6,7 +6,6 @@ owner: platform-product
 source_of_truth:
   - current feature registry and product navigation
   - docs/architecture/licensing.md
-  - .github/docs-legacy/architecture/pagerduty-contract.md
   - deploy/go-workers/profiles.json
 applicability: current
 lifecycle: active

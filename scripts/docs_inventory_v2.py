@@ -256,14 +256,6 @@ def _docs_artifacts(repo_root: Path) -> list[Path]:
             if path.is_file() and path.suffix.lower() in OVERRIDE_SUFFIXES
         )
 
-    docs_qa = repo_root / "docs-qa"
-    if docs_qa.exists():
-        candidates.update(
-            path
-            for path in docs_qa.rglob("*")
-            if path.is_file() and "node_modules" not in path.parts
-        )
-
     scripts = repo_root / "scripts"
     if scripts.exists():
         candidates.update(
@@ -364,8 +356,6 @@ def build_inventory(repo_root: Path, repository_name: str) -> dict[str, object]:
             artifact_type = "visual-asset"
         elif rel.startswith("docs/overrides/"):
             artifact_type = "theme-override"
-        elif rel.startswith("docs-qa/"):
-            artifact_type = "browser-qa"
         elif rel.startswith(".github/workflows/"):
             artifact_type = "workflow"
         elif rel in CONFIG_PATHS:

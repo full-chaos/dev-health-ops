@@ -4,8 +4,8 @@ summary: Write precise source-verified documentation with accessible structure, 
 content_type: task-guide
 owner: documentation
 source_of_truth:
-  - .github/documentation-program/style-guide.md
-  - .github/documentation-program/templates.md
+  - docs/contribute/documentation/style-guide.md
+  - docs/contribute/documentation/templates.md
   - docs/visualizations/patterns.md
 applicability: current
 lifecycle: active

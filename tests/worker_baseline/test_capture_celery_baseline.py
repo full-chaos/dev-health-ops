@@ -9,9 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/worker/capture_celery_baseline.py"
-CAPTURE = ROOT / (
-    ".github/docs-legacy/architecture/evidence/go-worker-migration/v0-celery-baseline/capture.json"
-)
+CAPTURE = ROOT / ("ci/evidence/go-worker-migration/v0-celery-baseline/capture.json")
 SCHEMA = CAPTURE.with_name("capture.schema.json")
 
 

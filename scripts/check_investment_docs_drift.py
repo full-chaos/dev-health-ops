@@ -6,18 +6,12 @@ from __future__ import annotations
 import ast
 import json
 import re
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LEGACY_DOCS = ROOT / ".github" / "docs-legacy"
+DOCS = ROOT / "docs"
 TAXONOMY_PATH = ROOT / "src" / "dev_health_ops" / "investment_taxonomy.py"
-LLM_SCHEMA_PATH = (
-    ROOT / "src" / "dev_health_ops" / "work_graph" / "investment" / "llm_schema.py"
-)
-TAXONOMY_DOC = LEGACY_DOCS / "product" / "investment-taxonomy.md"
-LLM_CONTRACT_DOC = LEGACY_DOCS / "llm" / "categorization-contract.md"
-INVESTMENT_MIX_DOC = LEGACY_DOCS / "user-guide" / "views" / "investment-mix.md"
+TAXONOMY_DOC = DOCS / "reference" / "taxonomies" / "investment.md"
 
 BEGIN = "<!-- BEGIN GENERATED TAXONOMY -->"
 END = "<!-- END GENERATED TAXONOMY -->"
@@ -145,27 +139,6 @@ def check_taxonomy_doc() -> list[str]:
     return errors
 
 
-def check_llm_schema_examples() -> list[str]:
-    errors: list[str] = []
-    allowed = _literal_set(LLM_SCHEMA_PATH, "ALLOWED_TOP_LEVEL_KEYS")
-    doc = LLM_CONTRACT_DOC.read_text(encoding="utf-8")
-    for index, raw_json in enumerate(JSON_BLOCK_RE.findall(doc), start=1):
-        try:
-            payload = json.loads(raw_json)
-        except json.JSONDecodeError as exc:
-            errors.append(f"json example #{index} is invalid JSON: {exc}")
-            continue
-        if not isinstance(payload, dict):
-            continue
-        keys = set(payload)
-        if keys != allowed:
-            errors.append(
-                f"json example #{index} top-level keys drift: "
-                f"expected {sorted(allowed)}, found {sorted(keys)}"
-            )
-    return errors
-
-
 def _unknown_taxonomy_example_keys(document: str, source: str) -> list[str]:
     errors: list[str] = []
     canonical_themes = _literal_set(TAXONOMY_PATH, "THEMES")
@@ -199,20 +172,9 @@ def _unknown_taxonomy_example_keys(document: str, source: str) -> list[str]:
 
 
 def check_published_investment_examples() -> list[str]:
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-    from scripts.docs_publication import classify_all
-
     errors: list[str] = []
-    classification = classify_all(
-        ROOT / "docs",
-        ROOT / "mkdocs.yml",
-        LEGACY_DOCS / "publication.yml",
-    )
-    for relpath, bucket in classification.items():
-        if bucket == "excluded-internal":
-            continue
-        path = ROOT / "docs" / relpath
+    for path in sorted(DOCS.rglob("*.md")):
+        relpath = path.relative_to(DOCS).as_posix()
         errors.extend(
             _unknown_taxonomy_example_keys(path.read_text(encoding="utf-8"), relpath)
         )
@@ -222,7 +184,6 @@ def check_published_investment_examples() -> list[str]:
 def main() -> int:
     errors = [
         *check_taxonomy_doc(),
-        *check_llm_schema_examples(),
         *check_published_investment_examples(),
     ]
     if errors:

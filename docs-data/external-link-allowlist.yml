@@ -1,0 +1,18 @@
+# Bounded exceptions for scripts/check_external_links.py.
+#
+# Every entry MUST carry an owner, a reason, and an `expires` date. An
+# expired entry fails the guard even if the underlying URL happens to be
+# reachable again, so a stale exception cannot silently outlive its review
+# window. Do not add an entry without a concrete follow-up plan.
+#
+# There are currently no active exceptions. This file was recovered from
+# .github/docs-legacy/external-link-allowlist.yml (deleted in e23ede618) and all six
+# of its entries were pruned: every allowlisted URL
+# (github.com/chrisgeo/.../LICENSE, fullchaos.studio/pricing,
+# api.fullchaos.studio/docs, www.highlight.io, actionableagile.com/monte-carlo,
+# focusedobjective.com/w/monte-carlo-simulation) was linked only from pages that were
+# removed in the canonical `docs/` restructure, and none appears anywhere under `docs/`
+# today. The file is kept in place, rather than deleted, so the guard's allowlist path
+# resolves to a real file: `load_allowlist` returns an empty mapping for a missing path,
+# which would make a mistyped or stale `--allowlist` argument silently no-op.
+[]

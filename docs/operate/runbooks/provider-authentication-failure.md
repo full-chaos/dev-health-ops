@@ -4,8 +4,7 @@ summary: Recover repeated provider authentication, OAuth refresh, scope, callbac
 content_type: runbook
 owner: platform-operations
 source_of_truth:
-  - .github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md
-  - .github/docs-legacy/architecture/pagerduty-contract.md
+  - docs/admin/data-sources/incident-response.md
   - current provider credential validation and revocation implementation
 applicability: current
 lifecycle: active

@@ -92,8 +92,8 @@ dev-hops migrate postgres
 dev-hops migrate clickhouse
 ```
 
-See [`docs/architecture/database-architecture.md`](docs/architecture/database-architecture.md)
-and [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md) for details.
+See [`docs/contribute/architecture/data-and-storage.md`](docs/contribute/architecture/data-and-storage.md)
+and [`docs/reference/cli/index.md`](docs/reference/cli/index.md) for details.
 
 ## Common workflows
 
@@ -179,7 +179,7 @@ CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
   dev-hops workers start-worker --queues default metrics sync reports
 ```
 
-Phase 1 of the [Go worker migration plan](.github/docs-legacy/plans/go-worker-migration-implementation-plan.md)
+Phase 1 of the Go worker migration plan
 adds the Go runtime, River migration, dual-pool, job-contract, middleware, and
 operator foundations for future worker, scheduler, reconciler, and
 stream-runner processes. Every Go deployment profile remains disabled and all
@@ -192,9 +192,8 @@ Go River processes use `POSTGRES_URI` for domain state and the separate,
 least-privilege `WORKER_DATABASE_URI` for direct queue control. The latter is a
 Go runtime setting, not a replacement Python database alias. River schema is
 applied only by the one-shot migration path when `MIGRATION_DATABASE_URI` and
-the two runtime role names are supplied. See [Workers](docs/operate/run/workers-and-jobs.md) and
-the [Go worker runtime TRD](.github/docs-legacy/architecture/go-worker-runtime-trd.md) for the
-coexistence boundary.
+the two runtime role names are supplied. See [Workers](docs/operate/run/workers-and-jobs.md) for
+the coexistence boundary.
 
 ## Test tiers
 
@@ -267,13 +266,11 @@ docker run --rm -it \
 
 ## Key docs
 
-- [`docs/getting-started.md`](docs/getting-started.md): setup and demo data
-- [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md): full CLI reference
-- [`docs/architecture/database-architecture.md`](docs/architecture/database-architecture.md): PostgreSQL/ClickHouse split
-- [`docs/architecture/data-pipeline.md`](docs/architecture/data-pipeline.md): provider → processor → sink boundaries
-- [`docs/product/prd.md`](docs/product/prd.md): product intent and guardrails
-- [`docs/user-guide/investment-view.md`](docs/user-guide/investment-view.md): canonical Investment View
-- [`docs/user-guide/reports.md`](docs/user-guide/reports.md): Report Center and scheduled reports
+- [`docs/get-started/index.md`](docs/get-started/index.md): setup and demo data
+- [`docs/reference/cli/index.md`](docs/reference/cli/index.md): full CLI reference
+- [`docs/contribute/architecture/data-and-storage.md`](docs/contribute/architecture/data-and-storage.md): PostgreSQL/ClickHouse split and provider → processor → sink boundaries
+- [`docs/use/investment/index.md`](docs/use/investment/index.md): canonical Investment View
+- [`docs/use/reports/index.md`](docs/use/reports/index.md): Report Center and scheduled reports
 
 ## Guardrails
 

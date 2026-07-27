@@ -1,6 +1,6 @@
 # Getting Started
 
-See [docs/getting-started.md](docs/getting-started.md) for full setup instructions, including:
+See [docs/get-started/index.md](docs/get-started/index.md) for full setup instructions, including:
 
 - Installation
 - Quick start (sync, metrics, Grafana)

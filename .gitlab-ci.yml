@@ -179,6 +179,7 @@ test:
     CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
     CLICKHOUSE_HEALTH_URL: http://ch:ch@clickhouse:8123/?query=SELECT%201
     POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
     SECONDARY_DATABASE_URI: mongodb://localhost:27017
     OTEL_ENABLED: "false"
     # Cap xdist workers so parallelism does not contend on the single

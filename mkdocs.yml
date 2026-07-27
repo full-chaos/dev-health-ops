@@ -255,9 +255,11 @@ nav:
           - Classify and place: contribute/documentation/classify-and-place.md
           - Write and review: contribute/documentation/write-and-review.md
           - Preview and validate: contribute/documentation/preview-and-validate.md
-
-hooks:
-  - scripts/mkdocs_migrated_source_links.py
+          - Content model: contribute/documentation/content-model.md
+          - Authoring templates: contribute/documentation/templates.md
+          - Editorial and accessibility style: contribute/documentation/style-guide.md
+          - Representative reader tasks: contribute/documentation/reader-tasks.md
+          - IA diagrams: contribute/documentation/ia-diagrams.md
 
 plugins:
   - search

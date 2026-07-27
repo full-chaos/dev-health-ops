@@ -4,8 +4,6 @@ summary: Configure GitHub, GitLab, Jira, or PagerDuty webhook delivery for the m
 content_type: task-guide
 owner: platform-api
 source_of_truth:
-  - .github/docs-legacy/webhooks.md
-  - .github/docs-legacy/architecture/pagerduty-contract.md
   - current provider webhook routes and handlers
 applicability: current
 lifecycle: active

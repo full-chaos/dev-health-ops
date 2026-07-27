@@ -5,8 +5,8 @@ content_type: task-guide
 owner: platform-operations
 source_of_truth:
   - current provider connection and synchronization surfaces
-  - .github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md
-  - .github/docs-legacy/ops/workers.md
+  - docs/admin/data-sources/incident-response.md
+  - docs/operate/run/workers-and-jobs.md
 applicability: current
 lifecycle: active
 ---

@@ -16,9 +16,9 @@
   hierarchy, readable content measure, conservative rounding, tabular metadata, and
   chromatic elevation. Its purple CTA and luxury retail tone are deliberately not
   adopted: Full Chaos orange remains the one action accent.
-- **Existing contracts:** `docs/design-system.md`, `web/docs/design-system.md`, and
-  `web/DESIGN.md` were read as product-UI references only. They do not govern this
-  public documentation surface.
+- **Existing contracts:** the prior design-system notes and the `dev-health-web`
+  design references were read as product-UI references only. They do not govern
+  this public documentation surface.
 - **Designpowers constraints:** primary readers include a first-time operator looking
   for an accountable next step, a contributor tracing a claim to source material, and
   a keyboard or reduced-motion reader. Their success criteria are a visible route into

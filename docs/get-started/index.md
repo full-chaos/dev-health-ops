@@ -4,7 +4,7 @@ summary: Choose a documentation task or check the minimum conditions required to
 content_type: landing
 owner: documentation
 source_of_truth:
-  - .github/documentation-program/ia/get-started.tsv
+  - docs-data/ia/get-started.tsv
 applicability: current
 lifecycle: provisional
 ---

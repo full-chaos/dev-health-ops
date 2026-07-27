@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dev-health.full-chaos.dev/contracts/providers/v1/route-families.schema.json",
+  "title": "Per-provider budget route-family catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "providers", "route_families"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["github", "gitlab", "jira", "launchdarkly", "linear", "pagerduty"]
+      }
+    },
+    "route_families": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/route_family"}
+    }
+  },
+  "$defs": {
+    "route_family": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "route_family", "dimensions", "covers", "confidence"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["github", "gitlab", "jira", "launchdarkly", "linear", "pagerduty"]
+        },
+        "route_family": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "dimensions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "rest_core",
+              "graphql_cost",
+              "contents_blob",
+              "search",
+              "secondary_abuse_risk"
+            ]
+          }
+        },
+        "covers": {"type": "string", "minLength": 1},
+        "confidence": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -7,8 +7,8 @@ source_of_truth:
   - current settings modules
   - .env.example
   - deploy/ manifests and compose files
-  - .github/docs-legacy/ops/database-connection-pooling.md
-  - .github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md
+  - docs/operate/configure/databases-and-storage.md
+  - docs/admin/data-sources/incident-response.md
 applicability: current
 lifecycle: active
 ---

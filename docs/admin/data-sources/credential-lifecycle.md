@@ -4,7 +4,7 @@ summary: Replace, rotate, revoke, or disconnect provider credentials while prese
 content_type: task-guide
 owner: platform-product
 source_of_truth:
-  - .github/docs-legacy/user-guide/pagerduty-oauth-app-setup.md
+  - docs/admin/data-sources/incident-response.md
   - docs/security/credential-encryption-rotation.md
   - current provider credential and revocation implementation
 applicability: current

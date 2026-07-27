@@ -12,11 +12,7 @@ on:
       - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/check_docs_candidate_facts.py'
-      - 'scripts/mkdocs_migrated_source_links.py'
-      - '.github/documentation-program/content/migrated-source-pages.json'
-      - '.github/documentation-program/ia/**'
-      - '.github/documentation-program/phase-9/**'
-      - '.github/documentation-program/phase-10/**'
+      - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
   pull_request:
     branches: ['**']
@@ -29,11 +25,7 @@ on:
       - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/check_docs_candidate_facts.py'
-      - 'scripts/mkdocs_migrated_source_links.py'
-      - '.github/documentation-program/content/migrated-source-pages.json'
-      - '.github/documentation-program/ia/**'
-      - '.github/documentation-program/phase-9/**'
-      - '.github/documentation-program/phase-10/**'
+      - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
   merge_group:
   workflow_dispatch:
@@ -85,7 +77,7 @@ jobs:
           set -o pipefail
           python scripts/check_docs_candidate_search.py \
             --site-dir .build/docs \
-            --queries .github/documentation-program/phase-10/search-acceptance.json \
+            --queries docs-data/search-acceptance.json \
             2>&1 | tee .build/docs-search.log
 
       - name: Check structural accessibility invariants

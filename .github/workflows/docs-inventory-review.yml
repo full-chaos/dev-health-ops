@@ -5,16 +5,16 @@ on:
     branches:
       - main
     paths:
-      - '.github/documentation-program/inventory/**'
-      - '.github/documentation-program/ia/**'
+      - 'docs-data/inventory/**'
+      - 'docs-data/ia/**'
       - 'scripts/validate_docs_inventory_review.py'
       - '.github/workflows/docs-inventory-review.yml'
   pull_request:
     branches:
       - main
     paths:
-      - '.github/documentation-program/inventory/**'
-      - '.github/documentation-program/ia/**'
+      - 'docs-data/inventory/**'
+      - 'docs-data/ia/**'
       - 'scripts/validate_docs_inventory_review.py'
       - '.github/workflows/docs-inventory-review.yml'
   workflow_dispatch:
@@ -38,9 +38,9 @@ jobs:
       - name: Validate the frozen Phase 1 inventory and dispositions
         run: |
           mkdir -p .build
-          cp .github/documentation-program/inventory/documentation-inventory.json \
+          cp docs-data/inventory/documentation-inventory.json \
             .build/documentation-inventory.json
           python scripts/validate_docs_inventory_review.py \
             --generated-json .build/documentation-inventory.json \
-            --inventory-dir .github/documentation-program/inventory \
-            --ia-dir .github/documentation-program/ia
+            --inventory-dir docs-data/inventory \
+            --ia-dir docs-data/ia

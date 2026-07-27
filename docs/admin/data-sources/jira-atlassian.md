@@ -4,7 +4,6 @@ summary: Connect a supported Jira source, verify project visibility, and underst
 content_type: task-guide
 owner: platform-product
 source_of_truth:
-  - .github/docs-legacy/providers/jira-service-management.md
   - current Jira provider implementation
 applicability: current
 lifecycle: active

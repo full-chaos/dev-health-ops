@@ -406,25 +406,13 @@ async def test_admin_llm_settings_status_ignores_stale_or_cross_org_fallback_row
     }
 
 
-def test_byo_llm_status_reason_codes_match_documented_contract():
-    # The BYO-LLM reason-code contract is an internal/source contract, not a public
-    # reference page; it is preserved under .github/docs-legacy/llm/byo-llm-credentials.md.
-    doc = (
-        Path(__file__).parents[3]
-        / ".github"
-        / "docs-legacy"
-        / "llm"
-        / "byo-llm-credentials.md"
-    )
-    text = doc.read_text(encoding="utf-8")
-    for reason_code in (
-        "not_configured",
-        "unknown_provider",
-        "missing_credentials",
-        "invalid_base_url",
-        "active",
-    ):
-        assert f"`{reason_code}`" in text
+# Removed: test_byo_llm_status_reason_codes_match_documented_contract.
+# It asserted the BYO-LLM reason codes (`not_configured`, `unknown_provider`,
+# `missing_credentials`, `invalid_base_url`, `active`) were documented in
+# the legacy llm/byo-llm-credentials.md page. That page was deleted and no page in
+# the live docs/ tree documents these reason codes at all (grep for `reason_code` across
+# docs/ returns nothing), so there is no page to repoint the guard at. The reason codes
+# themselves remain asserted against the live API in the status tests above.
 
 
 @pytest.mark.asyncio

@@ -8,11 +8,12 @@ package riverstore
 // is called with fixed, checker-only identifiers so its returned SQL text is
 // deterministic and diffable across runs.
 //
-// The role partition this checks against, and why the split exists, are in
-// .github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md. The
-// consumer is internal/domaingrants (LoadGroundTruth). An earlier version of
-// this comment pointed at an absolute path under .remember/, which is ephemeral
-// scratch rather than shipped documentation and did not exist.
+// The role partition this checks against, and why the split exists, are
+// documented in the role-partition manifest (removed in e23ede618; see git
+// history at eda2d6b91). The consumer is internal/domaingrants
+// (LoadGroundTruth). An earlier version of this comment pointed at an
+// absolute path under .remember/, which is ephemeral scratch rather than
+// shipped documentation and did not exist.
 
 // GrantCheckSchema, GrantCheckDomainRole, and GrantCheckQueueRole are the
 // fixed, arbitrary-but-valid identifiers the checker renders

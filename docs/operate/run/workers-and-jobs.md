@@ -4,7 +4,6 @@ summary: Start, verify, roll out, and recover the active Celery worker and sched
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - .github/docs-legacy/ops/workers.md
   - deploy/go-workers/profiles.json
   - contracts/jobs/v1/
   - current worker and synchronization settings

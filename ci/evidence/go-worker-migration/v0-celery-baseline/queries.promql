@@ -1,0 +1,85 @@
+# Task completions per second by task and terminal/retry state.
+sum by (task_name, state) (
+  rate(devhealth_celery_tasks_total[15m])
+)
+
+# Success ratio by task. Missing denominators remain missing, not zero.
+sum by (task_name) (
+  rate(devhealth_celery_tasks_total{state="success"}[15m])
+)
+/
+clamp_min(
+  sum by (task_name) (rate(devhealth_celery_tasks_total[15m])),
+  0.000000001
+)
+
+# Retry plus failure ratio by task. Confirm actual state labels in the capture.
+sum by (task_name) (
+  rate(devhealth_celery_tasks_total{state=~"retry|failure"}[15m])
+)
+/
+clamp_min(
+  sum by (task_name) (rate(devhealth_celery_tasks_total[15m])),
+  0.000000001
+)
+
+# Successful-task p50 duration by task.
+histogram_quantile(
+  0.50,
+  sum by (le, task_name) (
+    rate(devhealth_celery_task_duration_seconds_bucket[15m])
+  )
+)
+
+# Successful-task p95 duration by task.
+histogram_quantile(
+  0.95,
+  sum by (le, task_name) (
+    rate(devhealth_celery_task_duration_seconds_bucket[15m])
+  )
+)
+
+# Kubernetes worker CPU cores. Record any production namespace/pod-label change.
+sum by (namespace, pod) (
+  rate(container_cpu_usage_seconds_total{
+    namespace="dev-health",
+    pod=~"dev-health-(worker|beat).*",
+    container!="",
+    image!=""
+  }[5m])
+)
+
+# Kubernetes worker memory working set in bytes.
+max by (namespace, pod) (
+  container_memory_working_set_bytes{
+    namespace="dev-health",
+    pod=~"dev-health-(worker|beat).*",
+    container!="",
+    image!=""
+  }
+)
+
+# Worker/Beat restarts during a day.
+sum by (namespace, pod) (
+  increase(kube_pod_container_status_restarts_total{
+    namespace="dev-health",
+    pod=~"dev-health-(worker|beat).*"
+  }[24h])
+)
+
+# PostgreSQL application connections. Record the deployed datname matcher.
+sum by (datname) (
+  pg_stat_database_numbackends{datname=~"dev_health.*"}
+)
+
+# PostgreSQL transactions per second.
+sum by (datname) (
+  rate(pg_stat_database_xact_commit{datname=~"dev_health.*"}[5m])
+  +
+  rate(pg_stat_database_xact_rollback{datname=~"dev_health.*"}[5m])
+)
+
+# PostgreSQL block read time per second, when track_io_timing/exporter support it.
+sum by (datname) (
+  rate(pg_stat_database_blk_read_time{datname=~"dev_health.*"}[5m])
+)

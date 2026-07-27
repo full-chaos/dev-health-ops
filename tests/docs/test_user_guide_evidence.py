@@ -1,7 +1,5 @@
 import hashlib
 import os
-import subprocess
-import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -286,18 +284,10 @@ def test_main_requires_an_explicit_evidence_root(
     )
 
 
-def test_validator_cli_runs_from_the_documentation_qa_directory() -> None:
-    repository_root = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
-        [
-            sys.executable,
-            "../scripts/validate_user_guide_evidence.py",
-            "--help",
-        ],
-        capture_output=True,
-        check=False,
-        cwd=repository_root / "docs-qa",
-        text=True,
-    )
-
-    assert result.returncode == 0
+# Removed: test_validator_cli_runs_from_the_documentation_qa_directory.
+# It invoked the validator with cwd set to the deleted browser-QA directory, to prove
+# the CLI worked from the QA authors' working directory. That tree was removed in f2b63b2a4 and
+# its own README declared the whole framework retired and never run by CI, so the
+# directory the test existed to exercise no longer exists as a concept in the repo.
+# `tests/docs/test_docs_guards_workflow.py` independently asserts that tree stays out of
+# CI. The validator CLI itself remains covered by the in-process tests above.

@@ -4,8 +4,8 @@ summary: Recover when Celery work stops advancing or a Go coexistence process, R
 content_type: runbook
 owner: platform-operations
 source_of_truth:
-  - .github/docs-legacy/ops/workers.md
-  - .github/docs-legacy/ops/database-connection-pooling.md
+  - docs/operate/run/workers-and-jobs.md
+  - docs/operate/configure/databases-and-storage.md
   - current worker health, queue, outbox, operator, and route contracts
 applicability: current
 lifecycle: active

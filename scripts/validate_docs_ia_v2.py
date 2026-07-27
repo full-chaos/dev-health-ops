@@ -174,7 +174,7 @@ def main() -> int:
         "manifest",
         nargs="?",
         type=Path,
-        default=Path(".github/documentation-program/ia"),
+        default=Path("docs-data/ia"),
     )
     args = parser.parse_args()
 

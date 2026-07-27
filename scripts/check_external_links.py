@@ -3,7 +3,7 @@
 
 Crawls a built MkDocs site directory for absolute ``http(s)://`` hrefs,
 verifies each is reachable with bounded retries and a timeout, and treats a
-``docs/external-link-allowlist.yml`` entry as an override only while its
+``docs-data/external-link-allowlist.yml`` entry as an override only while its
 ``expires`` date has not passed. An expired allowlist entry fails the guard
 even if the underlying URL happens to be reachable, so stale exceptions are
 forced back into review rather than aging out silently.
@@ -25,7 +25,7 @@ from urllib.parse import unquote, urlsplit
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ALLOWLIST = ROOT / "docs" / "external-link-allowlist.yml"
+DEFAULT_ALLOWLIST = ROOT / "docs-data" / "external-link-allowlist.yml"
 DEFAULT_SITE_URL = "https://docs.fullchaos.dev"
 
 HREF_RE = re.compile(r'<a\b[^>]*\bhref="(https?://[^"]+)"')

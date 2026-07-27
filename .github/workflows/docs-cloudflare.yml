@@ -17,11 +17,7 @@ on:
       - 'scripts/prepare_docs_cloudflare.py'
       - 'scripts/read_wrangler_output.py'
       - 'scripts/check_docs_cloudflare_host.py'
-      - 'scripts/mkdocs_migrated_source_links.py'
-      - '.github/documentation-program/content/migrated-source-pages.json'
-      - '.github/documentation-program/phase-9/**'
-      - '.github/documentation-program/phase-10/**'
-      - '.github/documentation-program/phase-11/**'
+      - 'docs-data/**'
       - '.github/workflows/docs-cloudflare.yml'
   workflow_dispatch:
     inputs:
@@ -204,7 +200,7 @@ jobs:
           for attempt in 1 2 3 4 5 6; do
             if python scripts/check_docs_cloudflare_host.py \
               --origin https://docs.fullchaos.dev \
-              --redirects .github/documentation-program/phase-9/redirects.tsv; then
+              --redirects docs-data/redirects.tsv; then
               exit 0
             fi
             echo "Smoke check attempt ${attempt} failed; waiting for propagation."
@@ -271,4 +267,4 @@ jobs:
         run: |
           python scripts/check_docs_cloudflare_host.py \
             --origin https://docs.fullchaos.dev \
-            --redirects .github/documentation-program/phase-9/redirects.tsv
+            --redirects docs-data/redirects.tsv

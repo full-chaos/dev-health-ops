@@ -373,9 +373,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
 		// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the
-		// Option B two-role split
-		// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @
-		// eda2d6b91) and deliberately have no domain-role GRANT here. Their
+		// Option B two-role split (role-partition manifest, removed in
+		// e23ede618; see git history at eda2d6b91) and deliberately have no
+		// domain-role GRANT here. Their
 		// COORDINATOR-side grants are no longer deploy-deferred: when
 		// MigrationOptions.CoordinatorRole is set, coordinatorGrantStatements
 		// below emits them from the injected posture in this same transaction,
@@ -404,7 +404,7 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// reaps.
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + domainRole + "; END IF; END $$",
 		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
-		// (.github/docs-legacy/architecture/chaos-3033-role-partition-manifest.md @ eda2d6b91).
+		// (role-partition manifest, removed in e23ede618; see git history at eda2d6b91).
 		"DO $$ BEGIN IF to_regclass('public.billing_notifications') IS NOT NULL THEN GRANT SELECT ON TABLE public.billing_notifications TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.daily_metrics_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_partitions TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.daily_metrics_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_runs TO " + domainRole + "; END IF; END $$",

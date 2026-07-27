@@ -29,7 +29,7 @@ docs\:check-built-site:
 
 docs\:check-external-links:
 	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
-	$(PYTHON) scripts/check_external_links.py --built-site .build/docs --allowlist .github/docs-legacy/external-link-allowlist.yml --site-url https://docs.fullchaos.dev
+	$(PYTHON) scripts/check_external_links.py --built-site .build/docs --allowlist docs-data/external-link-allowlist.yml --site-url https://docs.fullchaos.dev
 
 docs\:check-freshness:
 	$(PYTHON) scripts/check_freshness_inventory.py

@@ -4,8 +4,8 @@ summary: Choose one reader outcome, page type, canonical domain, URL, owner, and
 content_type: task-guide
 owner: documentation
 source_of_truth:
-  - .github/documentation-program/content-model.md
-  - .github/documentation-program/ia/
+  - docs/contribute/documentation/content-model.md
+  - docs-data/ia/
 applicability: current
 lifecycle: active
 ---

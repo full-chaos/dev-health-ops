@@ -88,8 +88,8 @@ func execute(
 	// safety gain. Safety comes from the preflight instead — the coordinator
 	// role must already exist as an eligible least-privilege login, so a
 	// migration run before the role is provisioned fails loudly rather than
-	// granting nothing and reporting success. See
-	// .github/docs-legacy/architecture/chaos-3033-coordinator-pool-activation.md for the
+	// granting nothing and reporting success. See the coordinator-pool
+	// activation design doc (removed in e23ede618; see git history) for the
 	// required order of operations.
 	coordinatorRole := defaultCoordinatorRole
 	if value, present := lookup("RIVER_COORDINATOR_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {

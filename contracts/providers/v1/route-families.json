@@ -1,0 +1,526 @@
+{
+  "schema_version": 1,
+  "providers": [
+    "github",
+    "gitlab",
+    "jira",
+    "launchdarkly",
+    "linear",
+    "pagerduty"
+  ],
+  "route_families": [
+    {
+      "provider": "github",
+      "route_family": "repo",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Repository metadata + discovery (`GitHubCodeClient`, CHAOS-2773 CS9)",
+      "confidence": "high"
+    },
+    {
+      "provider": "github",
+      "route_family": "git",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Commit listing (`GitHubCodeClient`, CHAOS-2773 CS6)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "github",
+      "route_family": "commit_stats",
+      "dimensions": [
+        "rest_core",
+        "contents_blob"
+      ],
+      "covers": "Per-commit file/stat expansion (`GitHubCodeClient` REST core, CHAOS-2773 CS6; contents/blob still estimate-only)",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "files",
+      "dimensions": [
+        "rest_core",
+        "contents_blob"
+      ],
+      "covers": "Repository tree listing (`rest_core`, frozen/estimate-only) + blob-text reads (`contents_blob`, `GitHubCodeClient` GraphQL, CHAOS-2773 CS7)",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "blame",
+      "dimensions": [
+        "rest_core",
+        "contents_blob"
+      ],
+      "covers": "Blame expansion (file-count dependent; `contents_blob` via `GitHubCodeClient` GraphQL, CHAOS-2773 CS7)",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "prs",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Pull-request listing + PR commits (`GitHubCodeClient`, CHAOS-2773 CS8)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "github",
+      "route_family": "incidents",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Incident-label issue fetches (`GitHubCodeClient`, resolver-only actuals family, CHAOS-2773 CS8)",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "pr_social",
+      "dimensions": [
+        "graphql_cost",
+        "secondary_abuse_risk"
+      ],
+      "covers": "PR timeline/social expansion",
+      "confidence": "medium"
+    },
+    {
+      "provider": "github",
+      "route_family": "cicd",
+      "dimensions": [
+        "rest_core",
+        "contents_blob"
+      ],
+      "covers": "CI/CD workflow runs + artifact expansion",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "tests",
+      "dimensions": [
+        "rest_core",
+        "contents_blob"
+      ],
+      "covers": "Test report ingestion",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "deployments",
+      "dimensions": [
+        "rest_core",
+        "contents_blob"
+      ],
+      "covers": "Deployment ingestion",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "security",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Security alerts",
+      "confidence": "low"
+    },
+    {
+      "provider": "github",
+      "route_family": "work_items",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Issues / labels / projects / history / comments",
+      "confidence": "medium"
+    },
+    {
+      "provider": "github",
+      "route_family": "work_item_prs",
+      "dimensions": [
+        "graphql_cost",
+        "secondary_abuse_risk"
+      ],
+      "covers": "Linked-PR expansion on work items (when `sync_prs`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "project",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Project metadata, commits, files/blame, feature-flags",
+      "confidence": "high\u2013low"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "merge_requests",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Merge request iterators, MR commits, approvals (`GitLabCodeClient`, CHAOS-2816/CS15)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "notes",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "MR note + discussion expansion (`GitLabCodeClient`, CHAOS-2816/CS15); issue notes still use work-item paths",
+      "confidence": "low"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "pipelines",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "CI/CD pipeline listing + job expansion (`GitLabCodeClient.get_pipelines`)",
+      "confidence": "low"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "deployments",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Deployments, releases, deployment\u2192MR resolution (`GitLabCodeClient`, CHAOS-2773 CS11)",
+      "confidence": "low"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "security",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Vulnerability findings + dependency-scan alerts (`GitLabCodeClient`, CHAOS-2773 CS10)",
+      "confidence": "low"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "tests",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Pipeline test_report, pipeline jobs, job artifact download (`GitLabCodeClient`, CHAOS-2773 CS12)",
+      "confidence": "low"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "issues",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Issue iterator + per-issue events",
+      "confidence": "medium"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "milestones",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Project/group milestone iterators",
+      "confidence": "medium"
+    },
+    {
+      "provider": "gitlab",
+      "route_family": "epics",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Group epic expansion (premium APIs)",
+      "confidence": "low"
+    },
+    {
+      "provider": "jira",
+      "route_family": "jira_metadata",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Project/label metadata",
+      "confidence": "high"
+    },
+    {
+      "provider": "jira",
+      "route_family": "jira_jql",
+      "dimensions": [
+        "search"
+      ],
+      "covers": "Work-item listing via REST `search/jql` pagination",
+      "confidence": "medium"
+    },
+    {
+      "provider": "jira",
+      "route_family": "jira_jsm_incident_admission",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Bounded native JSM incident admission checks for JQL candidates",
+      "confidence": "low"
+    },
+    {
+      "provider": "jira",
+      "route_family": "jira_issue_enrichment",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Per-issue changelog / comment / sprint enrichment",
+      "confidence": "medium"
+    },
+    {
+      "provider": "jira",
+      "route_family": "jira_comments",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Comment pagination (activity-dependent)",
+      "confidence": "low"
+    },
+    {
+      "provider": "jira",
+      "route_family": "jira_worklogs",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Per-issue worklog expansion (`JIRA_FETCH_WORKLOGS`)",
+      "confidence": "low"
+    },
+    {
+      "provider": "jira",
+      "route_family": "jira_gql_enrichment",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "AGG GraphQL enrichment (`ATLASSIAN_GQL_ENABLED`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "linear",
+      "route_family": "teams",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Team listing",
+      "confidence": "medium"
+    },
+    {
+      "provider": "linear",
+      "route_family": "issues",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Issue pages (nested labels/project/comments/attachments/history)",
+      "confidence": "low"
+    },
+    {
+      "provider": "linear",
+      "route_family": "cycles",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Cycle expansion",
+      "confidence": "low"
+    },
+    {
+      "provider": "linear",
+      "route_family": "comments",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Comment pages",
+      "confidence": "low"
+    },
+    {
+      "provider": "linear",
+      "route_family": "attachments",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Attachment edges",
+      "confidence": "low"
+    },
+    {
+      "provider": "linear",
+      "route_family": "history",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Issue history edges",
+      "confidence": "low"
+    },
+    {
+      "provider": "linear",
+      "route_family": "team_members",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Team member edges (large teams paginate)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "linear",
+      "route_family": "projects",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Project listing",
+      "confidence": "medium"
+    },
+    {
+      "provider": "launchdarkly",
+      "route_family": "flags",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "`GET /api/v2/flags/{projectKey}`",
+      "confidence": "medium"
+    },
+    {
+      "provider": "launchdarkly",
+      "route_family": "audit_log",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "`GET`/`POST /api/v2/auditlog` (20-entry page cap)",
+      "confidence": "low"
+    },
+    {
+      "provider": "launchdarkly",
+      "route_family": "code_refs",
+      "dimensions": [
+        "rest_core",
+        "secondary_abuse_risk"
+      ],
+      "covers": "`GET /api/v2/code-refs/repositories`",
+      "confidence": "medium\u2013low"
+    },
+    {
+      "provider": "launchdarkly",
+      "route_family": "projects",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "`GET /api/v2/projects` + environments (modeled, not yet emitted)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "launchdarkly",
+      "route_family": "segments",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "`GET /api/v2/segments/{projectKey}/{environmentKey}` (modeled)",
+      "confidence": "low"
+    },
+    {
+      "provider": "launchdarkly",
+      "route_family": "members",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "`GET /api/v2/members` (modeled)",
+      "confidence": "low"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_incidents",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Incident listing via offset pagination (`PagerDutyBudgetEstimator`, dataset `incidents`); also the parent read reserved by every incident enrichment unit",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_services",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Service catalog listing (`PagerDutyBudgetEstimator`, dataset `services`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_business_services",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Business-service listing (`PagerDutyBudgetEstimator`, dataset `business-services`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_escalation_policies",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Escalation-policy listing (`PagerDutyBudgetEstimator`, dataset `escalation-policies`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_schedules",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "On-call schedule listing (`PagerDutyBudgetEstimator`, dataset `schedules`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_oncalls",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Current on-call resolution (`PagerDutyBudgetEstimator`, dataset `on-calls`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_users",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "User directory listing (`PagerDutyBudgetEstimator`, dataset `users`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_teams",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Team listing (`PagerDutyBudgetEstimator`, dataset `teams`)",
+      "confidence": "medium"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_alerts",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Per-incident alert expansion (`PagerDutyBudgetEstimator`, dataset `incident-alerts`); fan-out capped per sync unit by `enrichment_cap`",
+      "confidence": "low"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_log_entries",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Per-incident log-entry expansion (`PagerDutyBudgetEstimator`, dataset `incident-log-entries`); fan-out capped per sync unit by `enrichment_cap`",
+      "confidence": "low"
+    },
+    {
+      "provider": "pagerduty",
+      "route_family": "pagerduty_notes",
+      "dimensions": [
+        "rest_core"
+      ],
+      "covers": "Per-incident note expansion (`PagerDutyBudgetEstimator`, dataset `incident-notes`); fan-out capped per sync unit by `enrichment_cap`",
+      "confidence": "low"
+    }
+  ]
+}

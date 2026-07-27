@@ -4,7 +4,7 @@ summary: Understand Dev Health views, choose the right workflow, and follow resu
 content_type: landing
 owner: documentation
 source_of_truth:
-  - .github/documentation-program/ia/use.tsv
+  - docs-data/ia/use.tsv
   - docs/user-guide/views-index.md
   - docs/user-guide/how-to-read-dev-health.md
 applicability: current

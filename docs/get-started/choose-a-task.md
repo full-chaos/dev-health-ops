@@ -4,7 +4,7 @@ summary: Route to the documentation domain that owns the outcome you need.
 content_type: task-guide
 owner: documentation
 source_of_truth:
-  - .github/documentation-program/ia/home.tsv
+  - docs-data/ia/home.tsv
 applicability: current
 lifecycle: provisional
 ---

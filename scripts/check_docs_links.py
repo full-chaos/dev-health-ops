@@ -3,25 +3,18 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_ROOT = ROOT / "docs"
-MIGRATED_SOURCE_MAP = (
-    ROOT
-    / ".github"
-    / "documentation-program"
-    / "content"
-    / "migrated-source-pages.json"
-)
 
 INLINE_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 REFERENCE_DEF_RE = re.compile(r"^\[[^\]]+\]:\s+(\S+)", re.MULTILINE)
 HTML_ID_RE = re.compile(r"\bid=[\"']([^\"']+)[\"']")
-HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s+\#*\s*$")
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
 def slugify(heading: str) -> str:
@@ -37,7 +30,16 @@ def anchors_for(path: Path) -> set[str]:
     anchors = {""}
     text = path.read_text(encoding="utf-8")
     counts: dict[str, int] = {}
+    fence: str | None = None
     for line in text.splitlines():
+        fence_match = FENCE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            fence = None if fence == marker else (fence or marker)
+            continue
+        if fence is not None:
+            # `#` inside a fenced block is shell syntax, not a heading.
+            continue
         match = HEADING_RE.match(line)
         if not match:
             continue
@@ -102,11 +104,7 @@ def check_link(
 def check_docs(docs_root: Path, root: Path) -> list[str]:
     errors: list[str] = []
     anchor_cache: dict[Path, set[str]] = {}
-    migrated = set(json.loads(MIGRATED_SOURCE_MAP.read_text(encoding="utf-8")))
     for path in sorted(docs_root.rglob("*.md")):
-        relpath = path.relative_to(docs_root).as_posix()
-        if relpath in migrated:
-            continue
         for target in iter_links(path):
             error = check_link(path, target, anchor_cache, docs_root, root)
             if error:

@@ -20,7 +20,7 @@ def _load_validator() -> ModuleType:
 def test_committed_manifest_is_valid() -> None:
     module: Any = _load_validator()
     root = Path(__file__).parents[2]
-    nodes = module.load_nodes(root / ".github/documentation-program/ia")
+    nodes = module.load_nodes(root / "docs-data/ia")
     assert module.validate_nodes(nodes) == []
 
 

@@ -12,10 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SITE_DIR = ROOT / ".build" / "docs"
 ASSET_DIR = ROOT / ".build" / "docs-cloudflare"
-REDIRECTS = ROOT / ".github" / "documentation-program" / "phase-9" / "redirects.tsv"
-SEARCH_ACCEPTANCE = (
-    ROOT / ".github" / "documentation-program" / "phase-10" / "search-acceptance.json"
-)
+REDIRECTS = ROOT / "docs-data" / "redirects.tsv"
+SEARCH_ACCEPTANCE = ROOT / "docs-data" / "search-acceptance.json"
 
 
 def _run(args: list[str]) -> None:

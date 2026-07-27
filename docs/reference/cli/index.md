@@ -26,7 +26,8 @@ The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 
 Bare CLI commands run inline, executing immediately in your terminal session. However, several commands have argument-enforcement gaps (CHAOS-2475). These operations require credentials or inputs that the CLI doesn't enforce at startup. Running them inline without these inputs can lead to silent failures or incomplete runs.
 
-Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in [workers.md](workers.md).
+Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in [Run workers and jobs](../../operate/run/workers-and-jobs.md).
+
 ---
 
 ## Global Arguments
@@ -51,7 +52,7 @@ Dev Health Ops uses two databases:
 | **Semantic** | PostgreSQL | `POSTGRES_URI` | Users, orgs, settings, credentials |
 | **Analytics** | ClickHouse | `CLICKHOUSE_URI` | Commits, PRs, work items, metrics |
 
-See [Database Architecture](../architecture/database-architecture.md) for details.
+See [Data and storage boundaries](../../contribute/architecture/data-and-storage.md) for details.
 
 ### Database Connection Strings
 
@@ -103,7 +104,7 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 
 > ⚠️ **Warning (CHAOS-2475):** Sync commands run inline and require provider credentials (such as `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, or `LINEAR_API_KEY`) that the CLI doesn't enforce at startup. Running them inline without these inputs can cause silent failures.
 >
-> **Interim Workaround:** We recommend triggering the sync via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/trigger` (which plans a `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [workers.md](workers.md) for details on Celery worker configuration.
+> **Interim Workaround:** We recommend triggering the sync via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/trigger` (which plans a `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
 
 ### `sync git`
 
@@ -150,7 +151,7 @@ dev-hops sync git --provider gitlab \
 
 `--date` is a deprecated hidden alias for `--before`.
 
-GitHub authentication precedence is CLI flags > environment variables > stored database credentials. Use either PAT auth (`--auth` or `GITHUB_TOKEN`) or GitHub App auth, not both. See [GitHub App authentication](../user-guide/github-app-auth.md).
+GitHub authentication precedence is CLI flags > environment variables > stored database credentials. Use either PAT auth (`--auth` or `GITHUB_TOKEN`) or GitHub App auth, not both. See [Connect GitHub](../../admin/data-sources/github.md).
 
 ### `sync prs`
 
@@ -319,7 +320,7 @@ The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
 
 > ⚠️ **Warning (CHAOS-2475):** Metrics commands run inline and require database connections and configurations that the CLI doesn't enforce at startup. Running them inline can cause silent failures or incomplete computations.
 >
-> **Interim Workaround:** We recommend triggering the equivalent Celery jobs on the `metrics` queue. See [workers.md](workers.md) for details on Celery worker configuration.
+> **Interim Workaround:** We recommend triggering the equivalent Celery jobs on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
 
 ### `metrics daily`
 
@@ -886,7 +887,7 @@ python -m dev_health_ops.cli admin bundles assign-org --org-id <uuid> --feature-
 
 > ⚠️ **Warning (CHAOS-2475):** The `backfill run` command runs inline and requires provider credentials that the CLI doesn't enforce at startup. Running it inline can cause silent failures. Additionally, there is a known preflight-token bug (CHAOS-2479) where the CLI fails to validate credentials correctly.
 >
-> **Interim Workaround:** We recommend triggering the backfill via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/backfill` (which plans a backfill-mode `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [workers.md](workers.md) for details on Celery worker configuration.
+> **Interim Workaround:** We recommend triggering the backfill via the API endpoint `POST /api/v1/admin/sync-configs/{config_id}/backfill` (which plans a backfill-mode `SyncRun` and dispatches `dispatch_sync_run` to the `sync` queue). See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
 
 Run historical data backfill for a sync configuration. Data is synced in chunked 7-day windows. Uses `CLICKHOUSE_URI`.
 
@@ -967,7 +968,7 @@ dev-hops workers start-scheduler
 ```
 
 For queue cleanup, stale reserved jobs, and failed-result cleanup, see
-[Workers & Celery](workers.md#queue-cleanup-and-stale-jobs).
+[Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 ### `dev-health-workerctl routes`
 
@@ -1081,7 +1082,7 @@ dev-hops ai allowlist list
 
 > ⚠️ **Warning (CHAOS-2475):** The `work-graph build` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
 >
-> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [workers.md](workers.md) for details on Celery worker configuration.
+> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
 
 Build work graph edges from raw data (issue → PR → commit linkages). Takes its ClickHouse DSN via its own **required** `--db` flag.
 
@@ -1131,7 +1132,7 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 | `--persist-evidence-snippets` / `--no-persist-evidence-snippets` | Persist or skip extractive evidence quotes |
 | `--force` | Force re-materialization |
 
-> Investment categorization runs at **compute time** and persists distributions through sinks only. See the [LLM categorization contract](../llm/categorization-contract.md).
+> Investment categorization runs at **compute time** and persists distributions through sinks only.
 
 ---
 
@@ -1141,7 +1142,7 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 
 > ⚠️ **Warning (CHAOS-2475):** The `recommendations compute` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
 >
-> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [workers.md](workers.md) for details on Celery worker configuration.
+> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
 
 Evaluate rule-based recommendations for a team and persist results to ClickHouse — both fired recommendations and explicit `fired=False` tombstones, so a recovered signal is cleared rather than left lingering. Uses `CLICKHOUSE_URI`.
 
@@ -1166,7 +1167,7 @@ dev-hops recommendations compute --team eng-core \
 
 ## Reports
 
-> ℹ️ **Note:** Reports are not managed or triggered via the CLI. They are managed entirely through the GraphQL API or the Report Center UI. See [reports.md](../user-guide/reports.md) for details.
+> ℹ️ **Note:** Reports are not managed or triggered via the CLI. They are managed entirely through the GraphQL API or the Report Center UI. See [Reports](../../use/reports/index.md) for details.
 
 AI-generated reports are managed through the GraphQL API and executed as Celery tasks. Reports are not triggered via CLI — they are created, triggered, and scheduled through the Report Center UI or GraphQL mutations.
 
@@ -1393,10 +1394,10 @@ dev-hops sync git --provider github \
 
 ## push
 
-`dev-hops push` is the client CLI for [Customer Push Ingestion](../customer-push-ingestion/overview.md)
+`dev-hops push` is the client CLI for [Customer Push](../../integrate/customer-push/overview.md)
 — submitting your own data to `/api/v1/external-ingest/*` instead of relying on a FullChaos-managed
-connector. See [Setup Guide](../customer-push-ingestion/setup-guide.md) for a full first-batch
-walkthrough and [Schemas & Idempotency](../customer-push-ingestion/schemas-and-idempotency.md)
+connector. See [Register a source](../../integrate/customer-push/register-source.md) for a full first-batch
+walkthrough and [Record kinds and enums](../../reference/schemas/record-kinds-and-enums.md)
 for the record kinds. `push` subcommands are excluded from `dev-hops`'s global `--org` auto-resolution
 and ClickHouse/Postgres preflight entirely — `validate`/`sample` are fully offline; `batch`/`status`
 talk to the FullChaos API over HTTP and resolve their own credentials (below).
@@ -1406,7 +1407,7 @@ talk to the FullChaos API over HTTP and resolve their own credentials (below).
 | Flag | Env var | Notes |
 |------|---------|-------|
 | `--api-url` | `FULLCHAOS_API_URL` | FullChaos API base URL. |
-| `--token` | `FULLCHAOS_INGEST_TOKEN` (deprecated alias: `FULLCHAOS_API_TOKEN`) | An `fcpush_...` ingest token — see [Setup Guide](../customer-push-ingestion/setup-guide.md). |
+| `--token` | `FULLCHAOS_INGEST_TOKEN` (deprecated alias: `FULLCHAOS_API_TOKEN`) | An `fcpush_...` ingest token — see [Register a source](../../integrate/customer-push/register-source.md). |
 | `--org` | `FULLCHAOS_ORG_ID` | Organization id. |
 
 A flag always wins over its env var. If any of the three can't be resolved, the command prints

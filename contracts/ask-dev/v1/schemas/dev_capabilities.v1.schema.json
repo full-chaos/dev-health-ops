@@ -1,0 +1,40 @@
+{
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_capabilities.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "agent_context_runtime": {
+      "default": false,
+      "title": "Agent Context Runtime",
+      "type": "boolean"
+    },
+    "ask_dev": {
+      "default": false,
+      "title": "Ask Dev",
+      "type": "boolean"
+    },
+    "byo_llm": {
+      "default": false,
+      "title": "Byo Llm",
+      "type": "boolean"
+    },
+    "can_manage": {
+      "default": false,
+      "title": "Can Manage",
+      "type": "boolean"
+    },
+    "can_read": {
+      "default": false,
+      "title": "Can Read",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "dev_capabilities.v1",
+      "default": "dev_capabilities.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "title": "DevCapabilities",
+  "type": "object"
+}

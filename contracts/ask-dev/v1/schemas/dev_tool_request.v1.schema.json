@@ -1,0 +1,336 @@
+{
+  "$defs": {
+    "DevEntityRef": {
+      "additionalProperties": false,
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "$ref": "#/$defs/EntityType"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        }
+      },
+      "required": [
+        "entity_type",
+        "entity_id",
+        "display_label"
+      ],
+      "title": "DevEntityRef",
+      "type": "object"
+    },
+    "DevScope": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevTimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "direct_scope": {
+          "$ref": "#/$defs/DirectScope"
+        },
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "organization_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "repositories": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Repositories",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_scope.v1",
+          "default": "dev_scope.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "surface_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevSurfaceContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "team_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Team Ids",
+          "type": "array"
+        },
+        "time_range": {
+          "$ref": "#/$defs/DevTimeRange"
+        }
+      },
+      "required": [
+        "organization_id",
+        "direct_scope",
+        "time_range"
+      ],
+      "title": "DevScope",
+      "type": "object"
+    },
+    "DevSurfaceContext": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "filter_fingerprint": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filter Fingerprint"
+        },
+        "route_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Route Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "route_id"
+      ],
+      "title": "DevSurfaceContext",
+      "type": "object"
+    },
+    "DevTimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "timezone"
+      ],
+      "title": "DevTimeRange",
+      "type": "object"
+    },
+    "DirectScope": {
+      "enum": [
+        "organization",
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request"
+      ],
+      "title": "DirectScope",
+      "type": "string"
+    },
+    "EntityType": {
+      "enum": [
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "MetricID": {
+      "enum": [
+        "items_completed",
+        "cycle_time_p50_hours",
+        "avg_wip",
+        "deployments_count",
+        "change_failure_rate",
+        "investment_allocation_pct",
+        "cyclomatic_per_kloc",
+        "compounding_risk_score"
+      ],
+      "title": "MetricID",
+      "type": "string"
+    },
+    "ToolID": {
+      "enum": [
+        "resolve_scope.v1",
+        "list_metrics.v1",
+        "query_metric.v1",
+        "status_snapshot.v1",
+        "change_summary.v1",
+        "work_graph_neighbors.v1",
+        "search_evidence.v1",
+        "get_evidence.v1",
+        "data_health.v1"
+      ],
+      "title": "ToolID",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_tool_request.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "evidence_ref_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 25,
+      "title": "Evidence Ref Ids",
+      "type": "array"
+    },
+    "include_comparison": {
+      "default": false,
+      "title": "Include Comparison",
+      "type": "boolean"
+    },
+    "limit": {
+      "default": 25,
+      "maximum": 25,
+      "minimum": 1,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "metric_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MetricID"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "query": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Query"
+    },
+    "run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "dev_tool_request.v1",
+      "default": "dev_tool_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/DevScope"
+    },
+    "tool_call_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Tool Call Id",
+      "type": "string"
+    },
+    "tool_id": {
+      "$ref": "#/$defs/ToolID"
+    }
+  },
+  "required": [
+    "run_id",
+    "tool_call_id",
+    "tool_id",
+    "scope"
+  ],
+  "title": "DevToolRequest",
+  "type": "object"
+}

@@ -1,0 +1,327 @@
+{
+  "$defs": {
+    "DevEntityRef": {
+      "additionalProperties": false,
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "$ref": "#/$defs/EntityType"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        }
+      },
+      "required": [
+        "entity_type",
+        "entity_id",
+        "display_label"
+      ],
+      "title": "DevEntityRef",
+      "type": "object"
+    },
+    "DevScope": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevTimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "direct_scope": {
+          "$ref": "#/$defs/DirectScope"
+        },
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "organization_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "repositories": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Repositories",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_scope.v1",
+          "default": "dev_scope.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "surface_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevSurfaceContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "team_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Team Ids",
+          "type": "array"
+        },
+        "time_range": {
+          "$ref": "#/$defs/DevTimeRange"
+        }
+      },
+      "required": [
+        "organization_id",
+        "direct_scope",
+        "time_range"
+      ],
+      "title": "DevScope",
+      "type": "object"
+    },
+    "DevSurfaceContext": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_refs": {
+          "items": {
+            "$ref": "#/$defs/DevEntityRef"
+          },
+          "maxItems": 20,
+          "title": "Entity Refs",
+          "type": "array"
+        },
+        "filter_fingerprint": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filter Fingerprint"
+        },
+        "route_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Route Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "route_id"
+      ],
+      "title": "DevSurfaceContext",
+      "type": "object"
+    },
+    "DevTimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "timezone"
+      ],
+      "title": "DevTimeRange",
+      "type": "object"
+    },
+    "DirectScope": {
+      "enum": [
+        "organization",
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request"
+      ],
+      "title": "DirectScope",
+      "type": "string"
+    },
+    "EntityType": {
+      "enum": [
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_conversation.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "conversation_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "current_scope": {
+      "$ref": "#/$defs/DevScope"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expires At"
+    },
+    "latest_answer_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Latest Answer Id"
+    },
+    "message_count": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Message Count",
+      "type": "integer"
+    },
+    "retention_days": {
+      "enum": [
+        0,
+        30
+      ],
+      "title": "Retention Days",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "dev_conversation.v1",
+      "default": "dev_conversation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "active",
+        "deleted",
+        "expired"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "conversation_id",
+    "current_scope",
+    "retention_days",
+    "state",
+    "message_count",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "DevConversation",
+  "type": "object"
+}

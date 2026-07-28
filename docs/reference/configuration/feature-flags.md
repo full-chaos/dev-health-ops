@@ -40,6 +40,27 @@ Provider availability still applies:
 - PagerDuty REST and verified Webhooks V3 are current supported sources when configured.
 - Jira Service Management incident ingestion remains feature-off and release-blocked without live tenant proof. Do not present the implementation as generally available merely because code and unit contracts exist.
 
+## Ask Dev and AI gates
+
+Ask Dev has three independent feature decisions:
+
+| Key | Controls | Default |
+| --- | --- | --- |
+| `ask_dev` | The in-app Ask Dev interaction layer for Context Fabric | Disabled until explicitly enabled for an organization or license |
+| `byo_llm` | Organization-managed LLM provider configuration | Existing tier and override behavior, unchanged |
+| `agent_context_runtime` | Hosted ACR/MCP context capability | Existing explicit-purchase behavior, unchanged |
+
+No gate grants either of the others. Enabling `ask_dev` does not expose BYO LLM
+settings or Context Fabric Validation, and enabling either existing gate does
+not make Ask Dev available. The `ask_dev` registry row is globally enabled only
+so the existing global feature decision remains an emergency kill switch; its
+effective tier default is false for every tier.
+
+This contract delivery does not add the Ask Dev API, orchestration, storage, or
+web experience. Operators should keep the entitlement disabled until the
+documented launch gates pass. Disabling it later must hide or deny new Ask Dev
+work without changing categorization BYO LLM behavior or ACR/MCP access.
+
 ## Go worker migration routes
 
 The Go worker foundation is controlled by versioned migration state and deployment profiles rather than one generic user-facing feature flag.

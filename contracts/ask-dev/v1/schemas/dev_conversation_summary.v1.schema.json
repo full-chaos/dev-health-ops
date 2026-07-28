@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "DirectScope": {
+      "enum": [
+        "organization",
+        "repository",
+        "project",
+        "work_unit",
+        "issue",
+        "pull_request"
+      ],
+      "title": "DirectScope",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_conversation_summary.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "conversation_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "direct_scope": {
+      "$ref": "#/$defs/DirectScope"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expires At"
+    },
+    "message_count": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Message Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "dev_conversation_summary.v1",
+      "default": "dev_conversation_summary.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "active",
+        "deleted",
+        "expired"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "conversation_id",
+    "direct_scope",
+    "state",
+    "message_count",
+    "updated_at"
+  ],
+  "title": "DevConversationSummary",
+  "type": "object"
+}

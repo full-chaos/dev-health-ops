@@ -18,3 +18,17 @@ lifecycle: active
 7. Roll back only when schema and data compatibility permit it.
 
 Release notes must distinguish new, changed, deprecated, removed, fixed, and known-limited behavior.
+
+## Ask Dev contract baseline
+
+The Ask Dev v1 contract release is additive and dark. Migration `0067` registers
+the `ask_dev` entitlement through the existing explicit-enable path, so every
+tier remains disabled by default. It does not change `byo_llm` or
+`agent_context_runtime`. The release also adds provider-neutral schemas,
+positive and negative fixtures, version compatibility rules, and generated web
+types. It does not ship orchestration, persistence, API routes, or UI.
+
+Before release, run the ops contract check and migration tests and the web
+generated-type check. Rollback may leave the additive feature row in place; it
+remains effectively disabled unless explicitly granted, and the global feature
+decision is still the emergency kill switch.

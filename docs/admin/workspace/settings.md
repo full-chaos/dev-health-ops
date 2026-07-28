@@ -18,3 +18,14 @@ lifecycle: active
 5. Record the old and new value, reviewer, and rollback condition for high-impact changes.
 
 Do not store provider secrets, private keys, or infrastructure credentials in general workspace fields. A setting that requires an environment variable or secret manager belongs under [Configure the platform](../../operate/configure/index.md).
+
+## Ask Dev access
+
+Ask Dev access, BYO LLM configuration, and Agent Context Runtime access are
+separate entitlements. An administrator must not infer Ask Dev availability
+from either existing AI-related gate. A missing or false `ask_dev` decision is
+denied. The initial contract release registers `ask_dev` as disabled by default
+and does not yet ship an administrator control or user-visible Ask Dev surface.
+
+Context Fabric Validation is a platform-administrator diagnostic surface. It is
+not granted by `ask_dev`, `byo_llm`, or organization-administrator status.

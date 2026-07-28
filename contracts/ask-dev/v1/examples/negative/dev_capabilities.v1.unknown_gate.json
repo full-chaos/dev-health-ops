@@ -1,0 +1,9 @@
+{
+  "agent_context_runtime": false,
+  "ask_dev": false,
+  "byo_llm": true,
+  "can_manage": false,
+  "can_read": false,
+  "provider_api_key": "secret",
+  "schema_version": "dev_capabilities.v1"
+}

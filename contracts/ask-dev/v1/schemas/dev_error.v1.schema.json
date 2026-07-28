@@ -1,0 +1,77 @@
+{
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_error.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "code": {
+      "enum": [
+        "unauthenticated",
+        "forbidden",
+        "feature_not_enabled",
+        "byo_llm_not_enabled",
+        "provider_not_configured",
+        "model_not_supported",
+        "provider_unavailable",
+        "rate_limited",
+        "concurrency_limited",
+        "cost_limit_reached",
+        "invalid_request",
+        "scope_ambiguous",
+        "scope_not_found",
+        "scope_forbidden",
+        "conversation_not_found",
+        "conversation_expired",
+        "tool_limit_reached",
+        "tool_unavailable",
+        "source_unavailable",
+        "insufficient_evidence",
+        "answer_validation_failed",
+        "cancelled",
+        "internal_error"
+      ],
+      "title": "Code",
+      "type": "string"
+    },
+    "remediation": {
+      "items": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 5,
+      "title": "Remediation",
+      "type": "array"
+    },
+    "request_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "retryable": {
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "safe_message": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Safe Message",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "dev_error.v1",
+      "default": "dev_error.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "code",
+    "safe_message",
+    "retryable"
+  ],
+  "title": "DevError",
+  "type": "object"
+}

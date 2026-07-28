@@ -1,0 +1,33 @@
+{
+  "citation_text": "The contract implementation remains in progress.",
+  "confidence": 1.0,
+  "display_label": "Implement contract baseline",
+  "entity_id": "item_01",
+  "entity_type": "work_item",
+  "evidence_ref_id": "ev_01",
+  "flags": {
+    "conflicting": false,
+    "deleted": false,
+    "redacted": false,
+    "stale": false,
+    "unavailable": false,
+    "uncertain": false,
+    "untrusted_content": true
+  },
+  "freshness": "fresh",
+  "link": {
+    "internal_path": "/work/items/item_01",
+    "source_url": null
+  },
+  "observed_at": "2026-07-28T12:00:00Z",
+  "provenance": "Canonical work graph projection",
+  "repository_ids": [
+    "repo_dev_health"
+  ],
+  "schema_version": "dev_evidence_ref.v1",
+  "source_system": "work_graph",
+  "source_version": "work_graph.v1",
+  "valid_entity_ids": [
+    "item_01"
+  ]
+}

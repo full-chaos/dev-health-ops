@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "DevCitationLink": {
+      "additionalProperties": false,
+      "properties": {
+        "internal_path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^/[^\\s]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Internal Path"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        }
+      },
+      "title": "DevCitationLink",
+      "type": "object"
+    },
+    "DevEvidenceFlags": {
+      "additionalProperties": false,
+      "properties": {
+        "conflicting": {
+          "default": false,
+          "title": "Conflicting",
+          "type": "boolean"
+        },
+        "deleted": {
+          "default": false,
+          "title": "Deleted",
+          "type": "boolean"
+        },
+        "redacted": {
+          "default": false,
+          "title": "Redacted",
+          "type": "boolean"
+        },
+        "stale": {
+          "default": false,
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "unavailable": {
+          "default": false,
+          "title": "Unavailable",
+          "type": "boolean"
+        },
+        "uncertain": {
+          "default": false,
+          "title": "Uncertain",
+          "type": "boolean"
+        },
+        "untrusted_content": {
+          "default": true,
+          "title": "Untrusted Content",
+          "type": "boolean"
+        }
+      },
+      "title": "DevEvidenceFlags",
+      "type": "object"
+    },
+    "FreshnessState": {
+      "enum": [
+        "fresh",
+        "stale",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "FreshnessState",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_evidence_ref.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "citation_text": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Citation Text"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "display_label": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Display Label",
+      "type": "string"
+    },
+    "entity_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Entity Id",
+      "type": "string"
+    },
+    "entity_type": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Entity Type",
+      "type": "string"
+    },
+    "evidence_ref_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Evidence Ref Id",
+      "type": "string"
+    },
+    "flags": {
+      "$ref": "#/$defs/DevEvidenceFlags"
+    },
+    "freshness": {
+      "$ref": "#/$defs/FreshnessState"
+    },
+    "link": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevCitationLink"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "provenance": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Provenance",
+      "type": "string"
+    },
+    "repository_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Repository Ids",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "dev_evidence_ref.v1",
+      "default": "dev_evidence_ref.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_system": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "title": "Source System",
+      "type": "string"
+    },
+    "source_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Source Version",
+      "type": "string"
+    },
+    "valid_entity_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Valid Entity Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "evidence_ref_id",
+    "source_system",
+    "source_version",
+    "entity_type",
+    "entity_id",
+    "display_label",
+    "observed_at",
+    "freshness",
+    "provenance",
+    "confidence",
+    "flags"
+  ],
+  "title": "DevEvidenceRef",
+  "type": "object"
+}

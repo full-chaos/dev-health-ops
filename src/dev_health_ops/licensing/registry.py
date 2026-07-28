@@ -14,7 +14,10 @@ from dev_health_ops.licensing.types import TIER_ORDER, FeatureCategory, LicenseT
 STANDARD_FEATURE_ROW = tuple[str, str, FeatureCategory, LicenseTier, str]
 
 CANONICAL_INCIDENT_INGESTION_FEATURE: Final = "canonical_incident_ingestion"
-EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset({"agent_context_runtime"})
+ASK_DEV_FEATURE: Final = "ask_dev"
+EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset(
+    {"agent_context_runtime", ASK_DEV_FEATURE}
+)
 ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset()
 
 
@@ -166,6 +169,13 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         FeatureCategory.INTEGRATIONS,
         LicenseTier.COMMUNITY,
         "Hosted evidence-backed context for authorized coding agents",
+    ),
+    (
+        ASK_DEV_FEATURE,
+        "Ask Dev",
+        FeatureCategory.ANALYTICS,
+        LicenseTier.COMMUNITY,
+        "Evidence-backed conversational interaction with Context Fabric",
     ),
     (
         "scheduled_jobs",

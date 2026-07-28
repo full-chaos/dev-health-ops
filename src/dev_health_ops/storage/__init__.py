@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from .clickhouse import ClickHouseStore
 from .mixins.testops_cicd import (
+    clickhouse_insert_ci_acceptance_checks,
     clickhouse_insert_testops_job_runs,
     clickhouse_insert_testops_pipeline_runs,
 )
@@ -31,6 +32,11 @@ setattr(
     clickhouse_insert_testops_pipeline_runs,
 )
 setattr(ClickHouseStore, "insert_testops_job_runs", clickhouse_insert_testops_job_runs)
+setattr(
+    ClickHouseStore,
+    "insert_ci_acceptance_checks",
+    clickhouse_insert_ci_acceptance_checks,
+)
 
 
 def detect_db_type(conn_string: str) -> str:

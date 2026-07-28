@@ -166,6 +166,74 @@ async def test_native_pr_ci_never_invents_required_check_semantics(
 
 
 @pytest.mark.asyncio
+async def test_native_pr_green_pipeline_with_skipped_required_check_is_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM git_pull_requests" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "number": 7,
+                    "entity_id": "repo-a#pr7",
+                    "display_label": "PR 7",
+                    "state": "merged",
+                    "review_state": "APPROVED",
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM ci_pipeline_runs" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-1",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci1",
+                    "display_label": "CI",
+                    "conclusion": "success",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM ci_acceptance_checks" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-1",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci1#acceptance",
+                    "display_label": "acceptance",
+                    "requirement": "required",
+                    "conclusion": "skipped",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(DirectScope.PULL_REQUEST)),
+    )
+
+    assert result.actual.state is CompletionState.NOT_READY
+    assert "required_ci_work_skipped" in result.actual.reason_codes
+    assert result.ci[0].required is True
+    assert result.ci[0].skipped_required_work is True
+
+
+@pytest.mark.asyncio
 async def test_native_reader_preserves_the_completion_assessment_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

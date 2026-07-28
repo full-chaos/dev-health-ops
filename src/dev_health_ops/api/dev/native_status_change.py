@@ -122,6 +122,21 @@ ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
 
+_CI_ACCEPTANCE_SQL = """
+SELECT toString(repo_id) AS repository_id, run_id, check_key,
+       concat(toString(repo_id), '#ci', run_id, '#check', check_key) AS entity_id,
+       check_name AS display_label, requirement, result AS conclusion,
+       ifNull(pr_number, 0) AS pr_number, observed_at, last_synced,
+       provenance, rule_version, source_url
+FROM ci_acceptance_checks FINAL
+WHERE org_id = {org_id:String}
+  AND toString(repo_id) IN {repository_ids:Array(String)}
+  AND ifNull(pr_number, 0) IN {pr_numbers:Array(UInt32)}
+  AND observed_at <= {as_of:DateTime64(3, 'UTC')}
+ORDER BY observed_at DESC, entity_id
+LIMIT {limit:UInt32}
+"""
+
 _DEPLOYMENTS_SQL = """
 SELECT toString(repo_id) AS repository_id, deployment_id AS entity_id,
        concat('Deployment ', deployment_id) AS display_label,
@@ -280,6 +295,8 @@ class ClickHouseStatusChangeSource:
         pr_numbers = sorted({number for _, number in pr_pairs if number})
 
         ci_rows: list[dict[str, Any]] = []
+        ci_acceptance_rows: list[dict[str, Any]] = []
+        ci_acceptance_ref: SourceReference | None = None
         if pr_numbers:
             ci_rows, ci_ref, warning = await self._read(
                 "ci_runs", _CI_SQL, {**common, "pr_numbers": pr_numbers}, scope
@@ -293,9 +310,21 @@ class ClickHouseStatusChangeSource:
                 if (str(row.get("repository_id") or ""), int(row.get("pr_number") or 0))
                 in pr_pairs
             ]
-            warnings.append(
-                "Required-check designation is unavailable; green CI cannot prove required work ran."
+            ci_acceptance_rows, ci_acceptance_ref, warning = await self._read(
+                "ci_acceptance_checks",
+                _CI_ACCEPTANCE_SQL,
+                {**common, "pr_numbers": pr_numbers},
+                scope,
             )
+            source_refs.append(ci_acceptance_ref)
+            if warning:
+                warnings.append(warning)
+            ci_acceptance_rows = [
+                row
+                for row in ci_acceptance_rows
+                if (str(row.get("repository_id") or ""), int(row.get("pr_number") or 0))
+                in pr_pairs
+            ]
 
         deployment_rows, deployment_ref, warning = await self._read(
             "deployments",
@@ -362,28 +391,65 @@ class ClickHouseStatusChangeSource:
                 "Project declared status has no canonical current-state source."
             )
 
+        acceptance_run_ids = {
+            (str(row.get("repository_id") or ""), str(row.get("run_id") or ""))
+            for row in ci_acceptance_rows
+        }
+        missing_classification_rows = [
+            row
+            for row in ci_rows
+            if (str(row.get("repository_id") or ""), str(row.get("run_id") or ""))
+            not in acceptance_run_ids
+        ]
+        if missing_classification_rows:
+            warnings.append(
+                "CI requirement classification is missing for one or more runs; green CI cannot prove required work ran."
+            )
+        ci_facts = [
+            CIFact(
+                entity_id=str(row.get("entity_id") or ""),
+                display_label=str(row.get("display_label") or "CI check"),
+                conclusion=str(row.get("conclusion") or "unknown"),
+                required=(
+                    True
+                    if row.get("requirement") == "required"
+                    else False
+                    if row.get("requirement") == "optional"
+                    else None
+                ),
+                skipped_required_work=(
+                    str(row.get("conclusion") or "").casefold() == "skipped"
+                    if row.get("requirement") == "required"
+                    else None
+                ),
+                observed_at=self._datetime(row.get("observed_at"), as_of),
+                source_ref_id=ci_acceptance_ref.ref_id
+                if ci_acceptance_ref is not None
+                else ci_ref.ref_id,
+                evidence_ref_ids=(),
+            )
+            for row in ci_acceptance_rows
+        ]
+        ci_facts.extend(
+            CIFact(
+                entity_id=str(row.get("entity_id") or ""),
+                display_label=str(row.get("display_label") or "CI run"),
+                conclusion=str(row.get("conclusion") or "unknown"),
+                required=None,
+                skipped_required_work=None,
+                observed_at=self._datetime(row.get("observed_at"), as_of),
+                source_ref_id=ci_ref.ref_id,
+                evidence_ref_ids=(),
+            )
+            for row in missing_classification_rows
+        )
+
         return RawStatusSnapshot(
             declared=declared,
             children=children,
             blockers=(),
             pull_requests=pull_requests,
-            ci=tuple(
-                CIFact(
-                    entity_id=str(row.get("entity_id") or ""),
-                    display_label=str(row.get("display_label") or "CI run"),
-                    conclusion=str(row.get("conclusion") or "unknown"),
-                    required=None,
-                    skipped_required_work=None,
-                    observed_at=self._datetime(row.get("observed_at"), as_of),
-                    source_ref_id=next(
-                        ref.ref_id
-                        for ref in source_refs
-                        if ref.source_system == "ci_runs"
-                    ),
-                    evidence_ref_ids=(),
-                )
-                for row in ci_rows
-            ),
+            ci=tuple(ci_facts),
             deployments=tuple(
                 DeploymentFact(
                     entity_id=str(row.get("entity_id") or ""),

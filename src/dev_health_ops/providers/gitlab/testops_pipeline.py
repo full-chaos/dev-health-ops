@@ -8,6 +8,7 @@ from uuid import UUID
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 from dev_health_ops.providers._base import BasePipelineAdapter, PipelineSyncBatch
 from dev_health_ops.providers._http import GITLAB_DIAGNOSTIC_HEADER_NAMES
+from dev_health_ops.providers.ci_acceptance import project_checks
 from dev_health_ops.providers.gitlab.budget import GITLAB_USAGE_RESOLVER
 
 
@@ -75,6 +76,27 @@ class GitLabCIAdapter(BasePipelineAdapter):
             return "hosted"
         return None
 
+    async def _pipeline_requirement(
+        self, encoded_project: str
+    ) -> tuple[set[str] | None, str]:
+        """Read the project merge policy; denial remains unknown."""
+
+        client = await self._get_client()
+        response = await client.get(f"/projects/{encoded_project}")
+        self._record_response_usage(
+            response, operation="tests:GET /projects/{project_id}"
+        )
+        if response.status_code != 200:
+            return None, f"gitlab.project_merge_policy.http_{response.status_code}"
+        payload = response.json()
+        if (
+            not isinstance(payload, dict)
+            or "only_allow_merge_if_pipeline_succeeds" not in payload
+        ):
+            return None, "gitlab.project_merge_policy.missing_field"
+        required = bool(payload["only_allow_merge_if_pipeline_succeeds"])
+        return ({"pipeline"} if required else set()), "gitlab.project_merge_policy"
+
     async def fetch_pipeline_data(  # type: ignore[override]
         self,
         *,
@@ -94,6 +116,9 @@ class GitLabCIAdapter(BasePipelineAdapter):
             params["updated_before"] = until_date.isoformat()
 
         encoded_project = self._encode_project(project_id)
+        required_names, requirement_provenance = await self._pipeline_requirement(
+            encoded_project
+        )
         pipelines = await self._paginate(
             f"/projects/{encoded_project}/pipelines",
             params=params,
@@ -102,6 +127,7 @@ class GitLabCIAdapter(BasePipelineAdapter):
 
         pipeline_rows: list[PipelineRunExtendedRow] = []
         job_rows: list[JobRunRow] = []
+        acceptance_rows = []
         cursor_candidates: list[datetime] = []
 
         for pipeline in pipelines:
@@ -147,6 +173,9 @@ class GitLabCIAdapter(BasePipelineAdapter):
                 params={"include_retried": True},
                 operation=f"tests:GET /projects/{project_id}/pipelines/{{id}}/jobs",
             )
+            projected_jobs: list[dict[str, Any]] = [
+                {"name": "pipeline", "status": pipeline.get("status")}
+            ]
             for job in jobs:
                 job_started_at = self.parse_datetime(job.get("started_at"))
                 job_finished_at = self.parse_datetime(job.get("finished_at"))
@@ -170,10 +199,33 @@ class GitLabCIAdapter(BasePipelineAdapter):
                 if org_id:
                     job_row["org_id"] = org_id
                 job_rows.append(job_row)
+                projected_jobs.append(
+                    {"name": job_row["job_name"], "status": job_row["status"]}
+                )
+
+            acceptance_rows.extend(
+                project_checks(
+                    repo_id=repo_id,
+                    org_id=org_id,
+                    run_id=str(pipeline.get("id")),
+                    provider=self.provider,
+                    observed_at=finished_at or started_at,
+                    jobs=projected_jobs,
+                    required_names=required_names,
+                    provenance=requirement_provenance,
+                    target_branch=str(pipeline.get("ref"))
+                    if pipeline.get("ref")
+                    else None,
+                    source_url=str(pipeline.get("web_url"))
+                    if pipeline.get("web_url")
+                    else None,
+                )
+            )
 
         cursor = max(cursor_candidates) if cursor_candidates else effective_since
         return PipelineSyncBatch(
             pipeline_runs=pipeline_rows,
             job_runs=job_rows,
+            acceptance_checks=acceptance_rows,
             last_synced_cursor=cursor,
         )

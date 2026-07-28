@@ -9,6 +9,7 @@ from .pull_request import PullRequestMixin
 from .team import TeamMixin
 from .testops_cicd import (
     TestOpsCICDMixin,
+    clickhouse_insert_ci_acceptance_checks,
     clickhouse_insert_testops_job_runs,
     clickhouse_insert_testops_pipeline_runs,
 )
@@ -27,5 +28,6 @@ __all__ = [
     "TestOpsCICDMixin",
     "clickhouse_insert_testops_pipeline_runs",
     "clickhouse_insert_testops_job_runs",
+    "clickhouse_insert_ci_acceptance_checks",
     "TestOpsTestsMixin",
 ]

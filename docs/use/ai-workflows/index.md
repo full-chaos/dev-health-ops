@@ -65,3 +65,20 @@ Then read comparison and drag measures together. A change in review amplificatio
 Where the product exposes **Last computed**, persisted evidence, or an attribution path, use those details to confirm freshness and provenance before comparing periods. Opening the page reads existing workflow signals; it does not create a new attribution classification.
 
 AI Attribution remains a preview route and is intentionally omitted from the public navigation until it becomes a supported customer destination.
+
+## Ask Dev conversation history
+
+Ask Dev keeps a conversation only under the retention choice shown when the
+conversation starts:
+
+- **Do not retain** removes the question, validated answer, run, tool audit,
+  and feedback after the request reaches a terminal state. A minimal deletion
+  record remains so operators can verify that cleanup occurred.
+- **30 days** keeps the conversation for 30 days after its latest activity.
+  Starting from a saved conversation extends that conversation's expiry from
+  the latest activity; it does not create a hidden longer-lived copy.
+
+You can delete a saved conversation before it expires. Dev Health does not use
+Ask Dev conversation content to train models. Disabling Ask Dev stops new use;
+it does not silently delete saved history, whose selected retention and delete
+controls continue to apply.

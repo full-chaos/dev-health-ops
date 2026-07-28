@@ -267,6 +267,12 @@ func TestScheduleCoverageBindsEveryFixedScheduleToItsBeatCadence(t *testing.T) {
 		t.Fatal("no fixed schedules are declared")
 	}
 	for _, schedule := range schedules {
+		if schedule.Native {
+			if schedule.LegacyBeatEntry != "" {
+				t.Errorf("native schedule %s also claims legacy beat entry %q", schedule.ID, schedule.LegacyBeatEntry)
+			}
+			continue
+		}
 		legacy, ok := byName[schedule.LegacyBeatEntry]
 		if !ok {
 			t.Errorf(
@@ -369,6 +375,7 @@ func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
 		"phone_home_heartbeat":             CatchUpSkip,
 		"prune_rate_limit_observations":    CatchUpSkip,
 		"prune_external_ingest_batches":    CatchUpSkip,
+		"prune_ask_dev_conversations":      CatchUpSkip,
 		"daily_metrics_fanout":             CatchUpBounded,
 		"complexity_daily_fanout":          CatchUpBounded,
 		"release_impact_daily_fanout":      CatchUpBounded,

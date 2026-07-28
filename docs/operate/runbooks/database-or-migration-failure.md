@@ -17,3 +17,13 @@ lifecycle: active
 6. Verify schema, API, workers, writes, reads, and product freshness.
 
 Retain migration output and recovery evidence. Escalate suspected data loss or tenant-isolation impact immediately.
+
+For Ask Dev migration `0067`, keep the feature disabled while investigating.
+Confirm all six tables exist together (`dev_conversations`, `dev_messages`,
+`dev_runs`, `dev_tool_calls`, `dev_feedback`, and
+`dev_conversation_tombstones`) and that the domain worker role has only
+`SELECT, DELETE` on conversations plus `SELECT, INSERT` on tombstones. Do not
+manually delete child tables: conversation deletion owns the cascade. A
+pre-release downgrade is supported only after all binaries that import the new
+models are stopped; after release, restore forward from the migration and the
+approved backup instead of using the destructive downgrade.

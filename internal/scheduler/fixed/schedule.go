@@ -38,17 +38,23 @@ const (
 )
 
 // Schedule is the complete checked-in declaration for one fixed maintenance
-// schedule, matching TRD section 9.2. Every field is required: a partially
-// declared schedule is rejected at construction rather than defaulted, so an
-// operator cannot inherit an unreviewed cadence or retry policy.
+// schedule, matching TRD section 9.2. A partially declared schedule is
+// rejected at construction rather than defaulted, so an operator cannot
+// inherit an unreviewed cadence or retry policy. The one optional field is
+// LegacyBeatEntry: native Go schedules have no Python predecessor to name.
 type Schedule struct {
 	// ID is the stable schedule identity. It participates in every occurrence
 	// key, so renaming it re-identifies all future occurrences.
 	ID string
-	// LegacyBeatEntry is the Celery Beat name this schedule replaces. The
-	// schedule-coverage test uses it to prove the legacy inventory is fully
-	// accounted for.
+	// LegacyBeatEntry is the Celery Beat name this schedule replaces. It is
+	// empty only when Native is explicitly true. The schedule-coverage test
+	// uses non-empty values to prove the legacy inventory is fully accounted
+	// for.
 	LegacyBeatEntry string
+	// Native marks a fixed schedule introduced in Go with no legacy Beat row.
+	// Making this explicit prevents an accidentally blank legacy identity from
+	// bypassing the bidirectional inventory check.
+	Native bool
 	// Cadence and Timezone define the canonical due-time set.
 	Cadence  Cadence
 	Timezone string
@@ -93,8 +99,11 @@ func (schedule Schedule) Validate() error {
 	if !scheduleIDPattern.MatchString(schedule.ID) {
 		return fmt.Errorf("%w: id %q", ErrInvalidSchedule, schedule.ID)
 	}
-	if schedule.LegacyBeatEntry == "" {
-		return fmt.Errorf("%w: %s has no legacy beat entry", ErrInvalidSchedule, schedule.ID)
+	if schedule.Native == (schedule.LegacyBeatEntry != "") {
+		return fmt.Errorf(
+			"%w: %s must declare exactly one of native ownership or a legacy beat entry",
+			ErrInvalidSchedule, schedule.ID,
+		)
 	}
 	if err := schedule.Cadence.Validate(); err != nil {
 		return fmt.Errorf("schedule %s: %w", schedule.ID, err)

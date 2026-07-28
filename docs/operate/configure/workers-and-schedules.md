@@ -76,6 +76,14 @@ Celery Beat remains required for current production schedules. The Go scheduler 
 
 Run exactly one active production scheduler unless the deployment contract explicitly provides leader election or another duplicate-prevention mechanism. Verify that recurring work cannot overlap beyond provider, worker, and store capacity.
 
+The Ask Dev expiry repair is a native Go fixed schedule rather than a migrated
+Celery Beat entry. It emits `system.retention_cleanup` contract version 3 at
+05:30 UTC with the table-scoped `ask_dev_conversations` policy. Its cutoff is
+the occurrence time because each conversation already persists its exact
+expiry; adding an environment retention horizon would incorrectly extend or
+shorten the user's 0/30-day choice. Keep the retention queue consumer and fixed
+scheduler ownership enabled together whenever Ask Dev can contain saved data.
+
 ## Validate the configuration
 
 - each emitted queue has an intended consumer;

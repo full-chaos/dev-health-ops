@@ -202,6 +202,23 @@ func checkedInSchedules() []Schedule {
 			Rationale: "CHAOS-2694 bounded retention for external-ingest status batches. " +
 				"Immediately after the rate-limit prune, terminal-status rows only.",
 		},
+		{
+			ID:       "prune_ask_dev_conversations",
+			Native:   true,
+			Cadence:  DailyAt(5, 30),
+			Timezone: inventoryTimezone,
+			// Product reads enforce expires_at immediately. The scheduled pass
+			// durably removes expired content and is cumulative, so a missed run
+			// is repaired by the next occurrence without replaying stale buckets.
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: 25 * time.Hour,
+			TargetKind:       jobcontract.KindRetentionCleanup,
+			ProducerID:       ProducerRetentionCleanup,
+			MaxAttempts:      3,
+			AlertThreshold:   25 * time.Hour,
+			Rationale: "CHAOS-3209 bounded Ask Dev expiry cleanup. Conversation rows carry " +
+				"their exact 0/30-day expiry; this schedule adds no second horizon.",
+		},
 	}
 }
 
@@ -220,13 +237,15 @@ func Schedules() ([]Schedule, error) {
 			return nil, fmt.Errorf("%w: duplicate schedule id %s", ErrInvalidSchedule, schedule.ID)
 		}
 		seenID[schedule.ID] = struct{}{}
-		if _, duplicate := seenBeat[schedule.LegacyBeatEntry]; duplicate {
-			return nil, fmt.Errorf(
-				"%w: duplicate legacy beat entry %s",
-				ErrInvalidSchedule, schedule.LegacyBeatEntry,
-			)
+		if !schedule.Native {
+			if _, duplicate := seenBeat[schedule.LegacyBeatEntry]; duplicate {
+				return nil, fmt.Errorf(
+					"%w: duplicate legacy beat entry %s",
+					ErrInvalidSchedule, schedule.LegacyBeatEntry,
+				)
+			}
+			seenBeat[schedule.LegacyBeatEntry] = struct{}{}
 		}
-		seenBeat[schedule.LegacyBeatEntry] = struct{}{}
 	}
 	sort.Slice(schedules, func(first, second int) bool {
 		return schedules[first].ID < schedules[second].ID
@@ -506,6 +525,9 @@ func ValidateInventory() error {
 	}
 
 	for _, schedule := range schedules {
+		if schedule.Native {
+			continue
+		}
 		if _, ok := claimed[schedule.ID]; !ok {
 			return fmt.Errorf(
 				"%w: schedule %s is not claimed by any legacy inventory entry",

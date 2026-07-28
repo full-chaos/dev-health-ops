@@ -74,6 +74,9 @@ func (HeartbeatProducer) Produce(
 type RetentionSpec struct {
 	// Policy is the checked-in retention policy value.
 	Policy string
+	// ContractVersion preserves each published policy domain. New policies use
+	// a new version rather than widening an older required-field enum in place.
+	ContractVersion int
 	// DefaultDays is the checked horizon when no operator override applies.
 	DefaultDays int
 	// BatchSize bounds one deletion pass.
@@ -154,8 +157,9 @@ func NewRetentionProducer() Producer {
 	)
 	return &RetentionProducer{byScheduleID: map[string]RetentionSpec{
 		"prune_rate_limit_observations": {
-			Policy:      jobcontract.RetentionRateLimitObservations,
-			DefaultDays: 14, // CHAOS-2758
+			Policy:          jobcontract.RetentionRateLimitObservations,
+			ContractVersion: jobcontract.ContractVersionV2,
+			DefaultDays:     14, // CHAOS-2758
 			// The handler drains one occurrence chunk-by-chunk until the work is
 			// gone, so this bounds a single pass rather than the total deletion.
 			// No catch-up occurrence is needed to clear a first-run backlog.
@@ -164,9 +168,18 @@ func NewRetentionProducer() Producer {
 		},
 		"prune_external_ingest_batches": {
 			Policy:           jobcontract.RetentionExternalIngestBatches,
+			ContractVersion:  jobcontract.ContractVersionV2,
 			DefaultDays:      90, // CHAOS-2694
 			BatchSize:        500,
 			RetentionDaysEnv: externalIngestEnv,
+		},
+		"prune_ask_dev_conversations": {
+			Policy:          jobcontract.RetentionAskDevConversations,
+			ContractVersion: jobcontract.ContractVersionV3,
+			// Conversation.expires_at already contains the exact 0/30-day
+			// product policy. A second horizon here would silently double it.
+			DefaultDays: 0,
+			BatchSize:   500,
 		},
 	}}
 }
@@ -197,7 +210,7 @@ func (producer *RetentionProducer) Produce(
 	}
 	deleteBefore := occurrence.ScheduledFor.UTC().Add(-retention).Format(time.RFC3339)
 	envelope := jobcontract.Envelope{
-		ContractVersion: jobcontract.ContractVersionV1,
+		ContractVersion: spec.ContractVersion,
 		CorrelationID:   "fixed-schedule:" + schedule.ID + ":" + occurrence.ScheduledFor.UTC().Format(time.RFC3339),
 		IdempotencyKey:  "retention:" + spec.Policy + ":" + occurrence.ScheduledFor.UTC().Format("2006-01-02"),
 		Domain: jobcontract.DomainLink{

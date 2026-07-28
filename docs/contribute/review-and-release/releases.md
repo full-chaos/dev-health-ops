@@ -18,7 +18,6 @@ lifecycle: active
 7. Roll back only when schema and data compatibility permit it.
 
 Release notes must distinguish new, changed, deprecated, removed, fixed, and known-limited behavior.
-
 ## Ask Dev contract baseline
 
 The Ask Dev v1 contract release is additive and dark. Migration `0067` registers
@@ -32,3 +31,18 @@ Before release, run the ops contract check and migration tests and the web
 generated-type check. Rollback may leave the additive feature row in place; it
 remains effectively disabled unless explicitly granted, and the global feature
 decision is still the emergency kill switch.
+
+## Ask Dev Wave 1 release note
+
+- **New:** additive PostgreSQL conversation, message, run, safe tool-audit,
+  feedback, and minimal deletion-tombstone storage behind the disabled Ask Dev
+  feature.
+- **Changed:** the retention job contract adds version 3 and the
+  table-scoped `ask_dev_conversations` policy; versions 1 and 2 remain accepted
+  with their original frozen policy domains.
+- **Known limited:** this storage release does not enable Ask Dev or replace
+  existing LLM workflows. UI/API/orchestrator owners must use the canonical
+  persistence service and validated `dev_answer.v1` seam before rollout.
+- **Rollback:** disable Ask Dev normally. Downgrade migration `0068` only in a
+  pre-release environment after new binaries are stopped because it deletes
+  all Ask Dev tables and their contents.

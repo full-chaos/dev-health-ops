@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.dev.persistence import DevPersistenceService
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.org_deletion import (
     OrganizationDeletionService,
@@ -25,6 +26,14 @@ from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.billing import BillingPlan, BillingPrice
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.models.checkpoints import MetricCheckpoint, SyncComputeCheckpoint
+from dev_health_ops.models.dev_persistence import (
+    DevConversation,
+    DevConversationTombstone,
+    DevFeedback,
+    DevMessage,
+    DevRun,
+    DevToolCall,
+)
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.impersonation import ImpersonationSession
 from dev_health_ops.models.integrations import (
@@ -80,6 +89,12 @@ _TABLES = tables_of(
     BillingPrice,
     FeatureFlag,
     Membership,
+    DevConversation,
+    DevMessage,
+    DevRun,
+    DevToolCall,
+    DevFeedback,
+    DevConversationTombstone,
     Setting,
     IntegrationCredential,
     GithubAppInstallation,
@@ -783,6 +798,39 @@ async def test_org_deletion_result_counts(session_maker):
 
         assert result.postgres.total >= 0
         assert "organizations" in result.postgres.tables
+
+
+@pytest.mark.asyncio
+async def test_org_deletion_counts_and_purges_ask_dev_content(session_maker):
+    async with session_maker() as session:
+        org1_id, _org2_id = await _seed_org_pair(session)
+        user_id = await session.scalar(
+            select(Membership.user_id).where(Membership.org_id == uuid.UUID(org1_id))
+        )
+        assert user_id is not None
+        dev = DevPersistenceService(session)
+        conversation = await dev.create_conversation(
+            org_id=uuid.UUID(org1_id), user_id=user_id, current_scope={}
+        )
+        await dev.append_user_message_and_run(
+            org_id=uuid.UUID(org1_id),
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Delete with the organization",
+            scope_snapshot={},
+        )
+
+        result = await OrganizationDeletionService(session).delete(org1_id)
+
+        assert result.postgres.tables["dev_conversations"] == 1
+        assert result.postgres.tables["dev_messages"] == 1
+        assert result.postgres.tables["dev_runs"] == 1
+        assert (
+            await session.scalar(select(func.count()).select_from(DevConversation)) == 0
+        )
+        assert await session.scalar(select(func.count()).select_from(DevMessage)) == 0
+        assert await session.scalar(select(func.count()).select_from(DevRun)) == 0
 
 
 def test_postgres_targets_do_not_overlap_clickhouse_tables():

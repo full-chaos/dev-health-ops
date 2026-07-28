@@ -21,6 +21,13 @@ from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.models.checkpoints import MetricCheckpoint, SyncComputeCheckpoint
+from dev_health_ops.models.dev_persistence import (
+    DevConversation,
+    DevFeedback,
+    DevMessage,
+    DevRun,
+    DevToolCall,
+)
 from dev_health_ops.models.impersonation import ImpersonationSession
 from dev_health_ops.models.integrations import (
     Integration,
@@ -168,6 +175,31 @@ def _postgres_targets() -> list[PostgresDeletionTarget]:
         return select(Subscription.id).where(Subscription.org_id == org_uuid)
 
     return [
+        PostgresDeletionTarget(
+            "dev_feedback",
+            DevFeedback,
+            lambda org_uuid, _org_id: DevFeedback.org_id == org_uuid,
+        ),
+        PostgresDeletionTarget(
+            "dev_tool_calls",
+            DevToolCall,
+            lambda org_uuid, _org_id: DevToolCall.org_id == org_uuid,
+        ),
+        PostgresDeletionTarget(
+            "dev_runs",
+            DevRun,
+            lambda org_uuid, _org_id: DevRun.org_id == org_uuid,
+        ),
+        PostgresDeletionTarget(
+            "dev_messages",
+            DevMessage,
+            lambda org_uuid, _org_id: DevMessage.org_id == org_uuid,
+        ),
+        PostgresDeletionTarget(
+            "dev_conversations",
+            DevConversation,
+            lambda org_uuid, _org_id: DevConversation.org_id == org_uuid,
+        ),
         PostgresDeletionTarget(
             "report_runs",
             ReportRun,

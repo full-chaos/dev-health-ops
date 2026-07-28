@@ -328,6 +328,7 @@ func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
 		"phone_home_heartbeat":          NewHeartbeatProducer(),
 		"prune_rate_limit_observations": retentionProducer,
 		"prune_external_ingest_batches": retentionProducer,
+		"prune_ask_dev_conversations":   retentionProducer,
 	}
 	for id, producer := range producers {
 		schedule := scheduleByID(t, id)
@@ -395,6 +396,7 @@ func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 	for _, test := range []struct{ scheduleID, wantPolicy string }{
 		{"prune_rate_limit_observations", jobcontract.RetentionRateLimitObservations},
 		{"prune_external_ingest_batches", jobcontract.RetentionExternalIngestBatches},
+		{"prune_ask_dev_conversations", jobcontract.RetentionAskDevConversations},
 	} {
 		schedule := scheduleByID(t, test.scheduleID)
 		dueTime := mustTime(t, "2026-07-24T05:00:00Z")
@@ -440,7 +442,7 @@ func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 			t.Errorf("%s cutoff %s is in the future relative to its due time",
 				test.scheduleID, payload.DeleteBefore)
 		}
-		if !parsed.Before(dueTime) {
+		if test.scheduleID != "prune_ask_dev_conversations" && !parsed.Before(dueTime) {
 			t.Errorf("%s cutoff %s is not before its due time under the default horizon",
 				test.scheduleID, payload.DeleteBefore)
 		}

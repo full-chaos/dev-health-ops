@@ -435,7 +435,8 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	// contract version therefore requires teaching this function what that
 	// version's payload must look like; it can never be validated by default.
 	if version != ContractVersionV1 &&
-		!(kind == KindRetentionCleanup && version == ContractVersionV2) {
+		!(kind == KindRetentionCleanup &&
+			(version == ContractVersionV2 || version == ContractVersionV3)) {
 		return fmt.Errorf("no compiled schema validator for version %d", version)
 	}
 	expectedFields := map[string][]string{
@@ -521,6 +522,8 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	expectedPolicies := RetentionPolicies()
 	if version == ContractVersionV1 {
 		expectedPolicies = FrozenRetentionPoliciesV1()
+	} else if version == ContractVersionV2 {
+		expectedPolicies = FrozenRetentionPoliciesV2()
 	}
 	enum, ok := policy["enum"].([]any)
 	if !ok || len(enum) != len(expectedPolicies) {

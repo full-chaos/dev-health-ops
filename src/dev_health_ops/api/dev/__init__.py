@@ -1,4 +1,4 @@
-"""Provider-neutral Ask Dev public contracts."""
+"""Provider-neutral Ask Dev contracts and backend application services."""
 
 from .contracts import CONTRACT_MODELS
 from .scope_service import ScopeResolutionService

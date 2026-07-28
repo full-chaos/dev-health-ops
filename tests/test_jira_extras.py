@@ -79,6 +79,14 @@ def test_extract_jira_issue_dependencies() -> None:
                     "outwardIssue": {"key": "ABC-2"},
                 },
                 {
+                    "type": {
+                        "name": "Blocks",
+                        "outward": "blocks",
+                        "inward": "is blocked by",
+                    },
+                    "inwardIssue": {"key": "ABC-6"},
+                },
+                {
                     "type": {"name": "Relates", "outward": "relates to"},
                     "inwardIssue": {"key": "ABC-3"},
                 },
@@ -95,16 +103,20 @@ def test_extract_jira_issue_dependencies() -> None:
     }
 
     deps = extract_jira_issue_dependencies(issue=issue, work_item_id="jira:ABC-1")
-    assert len(deps) == 4
+    assert len(deps) == 5
 
     dep_map = {
         (d.source_work_item_id, d.target_work_item_id): d.relationship_type
         for d in deps
     }
     assert dep_map[("jira:ABC-1", "jira:ABC-2")] == "blocks"
+    assert dep_map[("jira:ABC-6", "jira:ABC-1")] == "blocks"
     assert dep_map[("jira:ABC-3", "jira:ABC-1")] == "relates"
     assert dep_map[("jira:ABC-1", "jira:ABC-4")] == "duplicates"
     assert dep_map[("jira:ABC-5", "jira:ABC-1")] == "other"
+    assert all(
+        dep.relationship_semantics_version == "canonical-blocks.v2" for dep in deps
+    )
 
 
 def test_detect_reopen_events() -> None:

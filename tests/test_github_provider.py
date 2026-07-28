@@ -629,9 +629,10 @@ def test_extract_github_dependencies_depends_on():
     )
 
     assert len(deps) == 1
-    assert deps[0].source_work_item_id == "gh:owner/repo#456"
-    assert deps[0].target_work_item_id == "gh:owner/repo#123"
+    assert deps[0].source_work_item_id == "gh:owner/repo#123"
+    assert deps[0].target_work_item_id == "gh:owner/repo#456"
     assert deps[0].relationship_type == "blocks"
+    assert deps[0].relationship_semantics_version == "canonical-blocks.v2"
 
 
 def test_extract_github_dependencies_blocked_by():
@@ -645,6 +646,8 @@ def test_extract_github_dependencies_blocked_by():
     )
 
     assert len(deps) == 1
+    assert deps[0].source_work_item_id == "gh:owner/repo#99"
+    assert deps[0].target_work_item_id == "gh:owner/repo#456"
     assert deps[0].relationship_type == "blocks"
 
 
@@ -659,7 +662,9 @@ def test_extract_github_dependencies_blocks():
     )
 
     assert len(deps) == 1
-    assert deps[0].relationship_type == "is_blocked_by"
+    assert deps[0].source_work_item_id == "gh:owner/repo#456"
+    assert deps[0].target_work_item_id == "gh:owner/repo#789"
+    assert deps[0].relationship_type == "blocks"
 
 
 def test_extract_github_dependencies_fixes():
@@ -687,7 +692,8 @@ def test_extract_github_dependencies_cross_repo():
     )
 
     assert len(deps) == 1
-    assert deps[0].target_work_item_id == "gh:other/repo#42"
+    assert deps[0].source_work_item_id == "gh:other/repo#42"
+    assert deps[0].target_work_item_id == "gh:owner/repo#456"
 
 
 def test_extract_github_dependencies_no_body():

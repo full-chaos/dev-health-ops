@@ -144,6 +144,10 @@ class WorkItemDependency:
     target_work_item_id: str
     relationship_type: str
     relationship_type_raw: str
+    # ``canonical-blocks.v2`` means blocker edges use exactly
+    # source_work_item_id --blocks--> target_work_item_id. Existing rows are
+    # migrated as ``legacy.v1`` and normalized only by the graph rebuild.
+    relationship_semantics_version: str = "canonical-blocks.v2"
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     org_id: str = ""
     # Nullable — NULL for native sync, stamped by external-ingest sink writes

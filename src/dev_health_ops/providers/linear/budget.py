@@ -68,7 +68,7 @@ def _dataset_estimates(
                 _CONFIDENCE_LOW,
                 "issues",
                 notes=(
-                    "Linear issue pages include nested labels, project, comments, attachments, and history edges",
+                    "Linear issue pages include nested labels, project, comments, attachments, relations, and history edges",
                 ),
             ),
             _estimate(
@@ -85,6 +85,12 @@ def _dataset_estimates(
                 _scaled_units(1, span_days),
                 _CONFIDENCE_LOW,
                 "attachments",
+            ),
+            _estimate(
+                bucket(BudgetDimension.GRAPHQL_COST),
+                _scaled_units(2, span_days),
+                _CONFIDENCE_LOW,
+                "relations",
             ),
             _estimate(
                 bucket(BudgetDimension.GRAPHQL_COST),
@@ -290,6 +296,12 @@ LINEAR_USAGE_ROUTE_FAMILIES: tuple[UsageRouteFamily, ...] = (
         BudgetDimension.GRAPHQL_COST,
         transport="graphql",
         operation_markers=("attachments",),
+    ),
+    UsageRouteFamily(
+        "relations",
+        BudgetDimension.GRAPHQL_COST,
+        transport="graphql",
+        operation_markers=("IssueRelations", "IssueInverseRelations"),
     ),
 )
 

@@ -165,6 +165,31 @@ def test_linear_attachment_emits_pr_to_issue_edge() -> None:
     assert edge.target_work_item_id == "linear:CHAOS-2400"
     assert edge.relationship_type == "relates_to"  # inheritance-safe
     assert edge.relationship_type_raw == "linear_attachment"
+    assert edge.relationship_semantics_version == "canonical-blocks.v2"
+    assert edge.relationship_type != "blocks"
+
+
+def test_linear_native_relations_use_object_orientation_for_both_connections() -> None:
+    shared = {
+        "id": "rel-1",
+        "type": "blocks",
+        "issue": {"identifier": "CHAOS-1"},
+        "relatedIssue": {"identifier": "CHAOS-2"},
+    }
+    deps = extract_linear_dependencies(
+        issue={
+            "relations": {"nodes": [shared]},
+            "inverseRelations": {"nodes": [shared]},
+        },
+        work_item_id="linear:CHAOS-1",
+    )
+
+    assert len(deps) == 1
+    assert deps[0].source_work_item_id == "linear:CHAOS-1"
+    assert deps[0].target_work_item_id == "linear:CHAOS-2"
+    assert deps[0].relationship_type == "blocks"
+    assert deps[0].relationship_type_raw == "linear_relation:blocks"
+    assert deps[0].relationship_semantics_version == "canonical-blocks.v2"
 
 
 def test_linear_attachment_edge_drives_pr_inheritance_direct_target() -> None:

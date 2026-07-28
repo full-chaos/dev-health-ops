@@ -30,6 +30,7 @@ from dev_health_ops.api.dev.status_change_service import (
     ChangeWindow,
     CIFact,
     CompletionState,
+    DeploymentFact,
     ObservedChange,
     RawChangeSummary,
     RawStatusSnapshot,
@@ -97,6 +98,19 @@ def _fact(
         source_ref_id="source:work-items",
         evidence_ref_ids=(f"ev-{entity_id}",),
         required=required,
+    )
+
+
+def _deployment(status: str = "success") -> DeploymentFact:
+    return DeploymentFact(
+        entity_id="deployment-1",
+        display_label="Production deployment",
+        status=status,
+        environment="production",
+        required=True,
+        observed_at=NOW,
+        source_ref_id="source:work-items",
+        evidence_ref_ids=("ev-deployment-1",),
     )
 
 
@@ -188,6 +202,7 @@ async def test_completed_parent_with_incomplete_required_child_is_not_ready() ->
             RawStatusSnapshot(
                 declared=_fact("issue-1", "done"),
                 children=(_fact("issue-child", "in_progress", required=True),),
+                deployments=(_deployment(),),
                 source_refs=(_source_ref(),),
             )
         )
@@ -205,7 +220,11 @@ async def test_completed_parent_with_incomplete_required_child_is_not_ready() ->
     assert result.actual.conflicts[0].code == (
         "declared_complete_conflicts_with_observed_work"
     )
-    assert result.actual.evidence_ref_ids == ("ev-issue-1", "ev-issue-child")
+    assert result.actual.evidence_ref_ids == (
+        "ev-deployment-1",
+        "ev-issue-1",
+        "ev-issue-child",
+    )
 
 
 @pytest.mark.asyncio
@@ -215,6 +234,7 @@ async def test_project_completion_does_not_require_a_declared_project_status() -
             RawStatusSnapshot(
                 declared=None,
                 children=(_fact("issue-child", "done", required=True),),
+                deployments=(_deployment(),),
                 source_refs=(_source_ref(),),
             )
         )
@@ -239,6 +259,7 @@ async def test_completed_parent_with_unknown_child_requirement_is_indeterminate(
             RawStatusSnapshot(
                 declared=_fact("issue-1", "done"),
                 children=(_fact("issue-child", "in_progress", required=None),),
+                deployments=(_deployment(),),
                 source_refs=(_source_ref(),),
             )
         )
@@ -275,6 +296,7 @@ async def test_green_ci_with_unknown_required_skip_semantics_cannot_prove_comple
                         evidence_ref_ids=("ev-ci-1",),
                     ),
                 ),
+                deployments=(_deployment(),),
                 source_refs=(_source_ref(),),
             )
         )
@@ -294,6 +316,7 @@ async def test_stale_source_is_partial_and_never_ready() -> None:
         Source(
             RawStatusSnapshot(
                 declared=_fact("issue-1", "done"),
+                deployments=(_deployment(),),
                 source_refs=(_source_ref(FreshnessState.STALE),),
             )
         )
@@ -482,8 +505,48 @@ def test_rejects_naive_as_of_and_out_of_bounds() -> None:
         StatusSnapshotRequest(_scope(), max_items=101)
 
 
-def test_fresh_complete_fixture_is_ready() -> None:
+@pytest.mark.asyncio
+async def test_fresh_complete_fixture_is_ready() -> None:
     raw = RawStatusSnapshot(
-        declared=_fact("issue-1", "done"), source_refs=(_source_ref(),)
+        declared=_fact("issue-1", "done"),
+        deployments=(_deployment(),),
+        source_refs=(_source_ref(),),
     )
     assert replace(raw, warnings=("fixture",)).warnings == ("fixture",)
+    result = await StatusChangeService(Source(raw)).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+    assert result.state is StatusResultState.COMPLETE
+    assert result.actual.state is CompletionState.READY
+
+
+@pytest.mark.asyncio
+async def test_merged_delivery_without_release_evidence_is_indeterminate() -> None:
+    raw = RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        source_refs=(_source_ref(),),
+    )
+
+    result = await StatusChangeService(Source(raw)).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.state is StatusResultState.INSUFFICIENT_EVIDENCE
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert result.actual.reason_codes == ("required_release_evidence_missing",)
+
+
+@pytest.mark.asyncio
+async def test_unsuccessful_required_release_is_not_ready() -> None:
+    raw = RawStatusSnapshot(
+        declared=_fact("issue-1", "done"),
+        deployments=(_deployment("failed"),),
+        source_refs=(_source_ref(),),
+    )
+
+    result = await StatusChangeService(Source(raw)).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.state is CompletionState.NOT_READY
+    assert result.actual.reason_codes == ("required_deployment_not_succeeded",)

@@ -340,6 +340,7 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                 "target_work_item_id",
                 "relationship_type",
                 "relationship_type_raw",
+                "relationship_semantics_version",
                 "last_synced",
                 "org_id",
                 "source_id",
@@ -564,6 +565,24 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                 )
             matrix = [[row[col] for col in column_names] for row in data]
             self.client.insert("work_graph_edges", matrix, column_names=column_names)
+
+    def write_work_graph_projection_runs(self, rows: Sequence[dict[str, Any]]) -> None:
+        """Publish completed projection watermarks after all edge writes succeed."""
+        if not rows:
+            return
+        self._insert_rows(
+            "work_graph_projection_runs",
+            [
+                "org_id",
+                "projection_name",
+                "scope_repo_id",
+                "rule_version",
+                "input_watermark",
+                "row_count",
+                "completed_at",
+            ],
+            rows,
+        )
 
     def write_work_graph_issue_pr(self, rows: Sequence[WorkGraphIssuePRRecord]) -> None:
         if not rows:

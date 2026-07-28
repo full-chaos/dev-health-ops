@@ -80,7 +80,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
     Capabilities:
     - work_items: yes (issues)
     - status_transitions: yes (via issue history)
-    - dependencies: yes (PR/MR links via issue attachments; not blocking relations)
+    - dependencies: yes (PR/MR attachments and native issue relations)
     - interactions: yes (via comments)
     - sprints: yes (via cycles)
     - reopen_events: yes (via issue history)
@@ -98,7 +98,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
     capabilities = ProviderCapabilities(
         work_items=True,
         status_transitions=True,
-        dependencies=True,  # PR/MR links via issue attachments (not blocking relations)
+        dependencies=True,
         interactions=True,
         sprints=True,
         reopen_events=True,
@@ -143,12 +143,12 @@ class LinearProvider(ProviderWithClient[LinearClient]):
             # the first page is not silently dropped — best-effort: a transient
             # fetch error must not abort the whole sync, so fall back to the
             # first page already in hand.
-            source: dict = issue
+            source: dict = dict(issue)
             att_page = issue.get("attachments") or {}
             if (att_page.get("pageInfo") or {}).get("hasNextPage") and issue.get("id"):
                 try:
                     full = client.get_issue_attachments(str(issue["id"]))
-                    source = {"attachments": {"nodes": full}}
+                    source["attachments"] = {"nodes": full}
                 except Exception as exc:
                     logger.warning(
                         "Linear: failed to fetch full attachments for %s; "
@@ -156,6 +156,27 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                         work_item_id,
                         exc,
                     )
+            for connection_name, inverse in (
+                ("relations", False),
+                ("inverseRelations", True),
+            ):
+                connection = issue.get(connection_name) or {}
+                if not (connection.get("pageInfo") or {}).get("hasNextPage"):
+                    continue
+                try:
+                    source[connection_name] = {
+                        "nodes": client.get_issue_relations(
+                            str(issue["id"]), inverse=inverse
+                        )
+                    }
+                except Exception as exc:
+                    logger.error(
+                        "Linear: failed to fetch complete %s for %s (%s)",
+                        connection_name,
+                        work_item_id,
+                        exc,
+                    )
+                    raise
             return extract_linear_dependencies(issue=source, work_item_id=work_item_id)
 
         fetch_comments = _env_flag("LINEAR_FETCH_COMMENTS", True)

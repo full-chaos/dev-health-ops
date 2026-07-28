@@ -20,6 +20,9 @@ class WorkItemMixin(SQLAlchemyStoreMixinProtocol):
                         "target_work_item_id": item.get("target_work_item_id"),
                         "relationship_type": item.get("relationship_type"),
                         "relationship_type_raw": item.get("relationship_type_raw"),
+                        "relationship_semantics_version": item.get(
+                            "relationship_semantics_version", "canonical-blocks.v2"
+                        ),
                         "org_id": str(item.get("org_id") or ""),
                         "last_synced": item.get("last_synced") or synced_at_default,
                     }
@@ -31,6 +34,11 @@ class WorkItemMixin(SQLAlchemyStoreMixinProtocol):
                         "target_work_item_id": item.target_work_item_id,
                         "relationship_type": item.relationship_type,
                         "relationship_type_raw": item.relationship_type_raw,
+                        "relationship_semantics_version": getattr(
+                            item,
+                            "relationship_semantics_version",
+                            "canonical-blocks.v2",
+                        ),
                         "org_id": str(getattr(item, "org_id", "") or ""),
                         "last_synced": getattr(item, "last_synced", None)
                         or synced_at_default,
@@ -45,7 +53,11 @@ class WorkItemMixin(SQLAlchemyStoreMixinProtocol):
                 "target_work_item_id",
                 "relationship_type",
             ],
-            update_columns=["relationship_type_raw", "last_synced"],
+            update_columns=[
+                "relationship_type_raw",
+                "relationship_semantics_version",
+                "last_synced",
+            ],
         )
 
     async def insert_work_graph_issue_pr(self, records: list[dict[str, Any]]) -> None:

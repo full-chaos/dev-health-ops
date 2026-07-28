@@ -29,7 +29,7 @@ from .metrics.service import (
 STATUS_CONTRACT_VERSION = "status_snapshot.v1"
 CHANGE_CONTRACT_VERSION = "change_summary.v1"
 STATUS_RULE_ID = "actual-completion"
-STATUS_RULE_VERSION = "actual-completion.v2"
+STATUS_RULE_VERSION = "actual-completion.v3"
 MAX_STATUS_ITEMS = 100
 MAX_CHANGE_ITEMS = 100
 MAX_STATUS_ASSESSMENT_ITEMS = 1_000
@@ -357,6 +357,8 @@ class StatusChangeService:
             raw,
             assessment_source_limit_reached=assessment_source_limit_reached,
             declared_optional=request.scope.direct_scope is DirectScope.PROJECT,
+            release_evidence_required=request.scope.direct_scope
+            in {DirectScope.ISSUE, DirectScope.PROJECT, DirectScope.PULL_REQUEST},
         )
         actual = replace(
             actual,
@@ -364,7 +366,12 @@ class StatusChangeService:
                 actual.required_children, request.max_items
             ),
         )
-        freshness = {ref.freshness for ref in bounded.source_refs}
+        assessment_source_ids = set(actual.source_ref_ids)
+        freshness = {
+            ref.freshness
+            for ref in bounded.source_refs
+            if ref.ref_id in assessment_source_ids
+        }
         if FreshnessState.UNAVAILABLE in freshness:
             result_state = StatusResultState.DEGRADED
         elif not bounded.source_refs:
@@ -581,6 +588,7 @@ class StatusChangeService:
         *,
         assessment_source_limit_reached: bool = False,
         declared_optional: bool = False,
+        release_evidence_required: bool = False,
     ) -> ActualCompletion:
         reasons: set[str] = set()
         conflicts: list[StatusConflict] = []
@@ -590,9 +598,16 @@ class StatusChangeService:
         if any(child.required is None for child in raw.children):
             reasons.add("child_requirement_unknown")
         source_by_id = {ref.ref_id: ref for ref in raw.source_refs}
+        required_source_ids = set(self._fact_sources(raw)) | {
+            ref.ref_id
+            for ref in raw.source_refs
+            if ref.source_system in {"work_items", "work_graph"}
+            or ref.freshness is FreshnessState.UNAVAILABLE
+        }
         unavailable = [
             ref.ref_id
             for ref in raw.source_refs
+            if ref.ref_id in required_source_ids
             if ref.freshness
             in {
                 FreshnessState.STALE,
@@ -606,6 +621,8 @@ class StatusChangeService:
             reasons.add("required_source_not_fresh")
         if assessment_source_limit_reached:
             reasons.add("assessment_source_limit_reached")
+        if release_evidence_required and not raw.deployments:
+            reasons.add("required_release_evidence_missing")
         incomplete_children = [
             child
             for child in required_children
@@ -692,7 +709,7 @@ class StatusChangeService:
             if unknown_reasons or not declared_complete
             else CompletionState.READY
         )
-        used_source_ids = tuple(sorted(source_by_id))
+        used_source_ids = tuple(sorted(required_source_ids & source_by_id.keys()))
         return ActualCompletion(
             state=state,
             rule_id=STATUS_RULE_ID,

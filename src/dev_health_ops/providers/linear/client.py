@@ -187,12 +187,59 @@ query Issues($first: Int!, $after: String, $filter: IssueFilter) {
         }
         pageInfo {
           hasNextPage
+          endCursor
+        }
+      }
+      relations(first: 50) {
+        nodes {
+          id
+          type
+          issue { id identifier }
+          relatedIssue { id identifier }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      inverseRelations(first: 50) {
+        nodes {
+          id
+          type
+          issue { id identifier }
+          relatedIssue { id identifier }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
         }
       }
     }
     pageInfo {
       hasNextPage
       endCursor
+    }
+  }
+}
+"""
+
+ISSUE_RELATIONS_QUERY = """
+query IssueRelations($issueId: String!, $first: Int!, $after: String) {
+  issue(id: $issueId) {
+    relations(first: $first, after: $after) {
+      nodes { id type issue { id identifier } relatedIssue { id identifier } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+"""
+
+ISSUE_INVERSE_RELATIONS_QUERY = """
+query IssueInverseRelations($issueId: String!, $first: Int!, $after: String) {
+  issue(id: $issueId) {
+    inverseRelations(first: $first, after: $after) {
+      nodes { id type issue { id identifier } relatedIssue { id identifier } }
+      pageInfo { hasNextPage endCursor }
     }
   }
 }
@@ -762,6 +809,41 @@ class LinearClient:
             if not cursor:
                 break
         return attachments[:limit]
+
+    def get_issue_relations(
+        self, issue_id: str, *, inverse: bool = False, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Fetch one complete, bounded Linear issue-relation direction."""
+        cursor: str | None = None
+        relations: list[dict[str, Any]] = []
+        truncated = False
+        query = ISSUE_INVERSE_RELATIONS_QUERY if inverse else ISSUE_RELATIONS_QUERY
+        field = "inverseRelations" if inverse else "relations"
+        while len(relations) < limit:
+            data = self._execute(
+                query,
+                {
+                    "issueId": issue_id,
+                    "first": min(100, limit - len(relations)),
+                    "after": cursor,
+                },
+            )
+            conn = (data.get("issue") or {}).get(field) or {}
+            relations.extend(conn.get("nodes", []))
+            page_info = conn.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                break
+            if len(relations) >= limit:
+                truncated = True
+                break
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                raise LinearGraphQLError(f"Linear {field} pagination omitted endCursor")
+        if truncated:
+            raise LinearGraphQLError(
+                f"Linear {field} exceeds the bounded {limit}-relation limit"
+            )
+        return relations[:limit]
 
     def get_issue_history(self, issue_id: str) -> list[dict[str, Any]]:
         data = self._execute(ISSUE_HISTORY_QUERY, {"issueId": issue_id})

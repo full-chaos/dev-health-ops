@@ -123,6 +123,12 @@ class SQLAlchemyStore(
             Column("target_work_item_id", String, primary_key=True),
             Column("relationship_type", String, primary_key=True),
             Column("relationship_type_raw", String),
+            Column(
+                "relationship_semantics_version",
+                String,
+                nullable=False,
+                server_default="canonical-blocks.v2",
+            ),
             Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )

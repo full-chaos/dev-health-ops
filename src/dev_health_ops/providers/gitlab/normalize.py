@@ -507,14 +507,17 @@ def extract_gitlab_dependencies(
             seen_targets.add(target_id)
 
             # Map GitLab link types
+            source_id = work_item_id
             if link_type in {"blocks", "is_blocked_by"}:
-                relationship = "blocks" if link_type == "blocks" else "blocked_by"
+                relationship = "blocks"
+                if link_type == "is_blocked_by":
+                    source_id, target_id = target_id, source_id
             else:
                 relationship = "relates_to"
 
             dependencies.append(
                 WorkItemDependency(
-                    source_work_item_id=work_item_id,
+                    source_work_item_id=source_id,
                     target_work_item_id=target_id,
                     relationship_type=relationship,
                     relationship_type_raw=link_type,
@@ -540,15 +543,18 @@ def extract_gitlab_dependencies(
             context = description[start : match.end()].lower()
             relationship = "relates_to"
             relationship_raw = "description_reference"
+            source_id = work_item_id
             for kw in _BLOCKING_KEYWORDS:
                 if kw in context:
-                    relationship = "blocked_by" if "by" in kw else "blocks"
+                    relationship = "blocks"
                     relationship_raw = kw
+                    if "by" in kw:
+                        source_id, target_id = target_id, source_id
                     break
 
             dependencies.append(
                 WorkItemDependency(
-                    source_work_item_id=work_item_id,
+                    source_work_item_id=source_id,
                     target_work_item_id=target_id,
                     relationship_type=relationship,
                     relationship_type_raw=relationship_raw,

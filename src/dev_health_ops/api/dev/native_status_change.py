@@ -40,6 +40,8 @@ NATIVE_STATUS_SOURCE_VERSION = "native-status-change.v1"
 NATIVE_STATUS_QUERY_VERSION = "native-status-change-query.v1"
 QUERY_TIMEOUT_SECONDS = 15
 
+_BLOCKER_PROJECTION_RULE_VERSION = "canonical-blocks.v2"
+
 _WORK_ITEMS_SQL = """
 SELECT toString(repo_id) AS repository_id, work_item_id, title, status,
        parent_id, project_id, project_key, updated_at, last_synced
@@ -54,6 +56,57 @@ WHERE org_id = {org_id:String}
       AND (project_id = {entity_id:String} OR project_key = {entity_id:String}))
   )
 ORDER BY (work_item_id = {entity_id:String}) DESC, updated_at DESC, work_item_id
+LIMIT {limit:UInt32}
+"""
+
+_BLOCKER_WATERMARK_SQL = """
+SELECT if(
+         countIf(scope_repo_id IS NULL) > 0,
+         maxIf(last_completed, scope_repo_id IS NULL),
+         min(last_completed)
+       ) AS last_synced
+FROM (
+  SELECT scope_repo_id, max(completed_at) AS last_completed
+  FROM work_graph_projection_runs
+  WHERE org_id = {org_id:String}
+    AND projection_name = 'issue_blockers'
+    AND rule_version = {blocker_rule_version:String}
+    AND completed_at <= {as_of:DateTime64(3, 'UTC')}
+    AND (scope_repo_id IS NULL OR toString(scope_repo_id) IN {repository_ids:Array(String)})
+  GROUP BY scope_repo_id
+)
+HAVING countIf(scope_repo_id IS NULL) > 0
+    OR countDistinctIf(toString(scope_repo_id), scope_repo_id IS NOT NULL)
+       = length({repository_ids:Array(String)})
+"""
+
+_BLOCKERS_SQL = """
+SELECT blocker.work_item_id AS entity_id,
+       blocker.title AS display_label,
+       blocker.status,
+       greatest(blocker.updated_at, edge.event_ts) AS observed_at,
+       greatest(blocker.last_synced, edge.last_synced) AS last_synced
+FROM work_graph_edges AS edge FINAL
+INNER JOIN work_items AS blocker FINAL
+  ON blocker.org_id = edge.org_id AND blocker.work_item_id = edge.source_id
+INNER JOIN work_items AS blocked FINAL
+  ON blocked.org_id = edge.org_id AND blocked.work_item_id = edge.target_id
+WHERE edge.org_id = {org_id:String}
+  AND edge.source_type = 'issue'
+  AND edge.target_type = 'issue'
+  AND edge.edge_type = 'blocks'
+  AND edge.provenance = 'native'
+  AND toString(blocker.repo_id) IN {repository_ids:Array(String)}
+  AND toString(blocked.repo_id) IN {repository_ids:Array(String)}
+  AND edge.event_ts <= {as_of:DateTime64(3, 'UTC')}
+  AND blocker.updated_at <= {as_of:DateTime64(3, 'UTC')}
+  AND blocked.updated_at <= {as_of:DateTime64(3, 'UTC')}
+  AND (
+    ({scope_type:String} = 'issue' AND edge.target_id = {entity_id:String})
+    OR ({scope_type:String} = 'project'
+      AND (blocked.project_id = {entity_id:String} OR blocked.project_key = {entity_id:String}))
+  )
+ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
 """
 
@@ -475,6 +528,14 @@ class ClickHouseStatusChangeSource:
         scope_type = scope.direct_scope.value
         warnings: list[str] = []
         source_refs: list[SourceReference] = []
+        if scope.direct_scope is DirectScope.WORK_UNIT:
+            return RawStatusSnapshot(
+                declared=None,
+                source_refs=(self._unavailable_ref("work_unit_status", scope),),
+                warnings=(
+                    "status_snapshot.v1 does not support WORK_UNIT until canonical work-unit membership is projected",
+                ),
+            )
         if not repositories:
             return RawStatusSnapshot(
                 declared=None,
@@ -501,6 +562,30 @@ class ClickHouseStatusChangeSource:
             source_refs.append(ref)
             if warning:
                 warnings.append(warning)
+
+        blocker_rows: list[dict[str, Any]] = []
+        blocker_ref: SourceReference | None = None
+        if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT}:
+            marker_rows, blocker_ref, warning = await self._read(
+                "work_graph",
+                _BLOCKER_WATERMARK_SQL,
+                {
+                    **common,
+                    "blocker_rule_version": _BLOCKER_PROJECTION_RULE_VERSION,
+                },
+                scope,
+            )
+            if warning:
+                warnings.append(warning)
+            if marker_rows:
+                try:
+                    async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                        blocker_rows = await query_dicts(
+                            self._client, _BLOCKERS_SQL, common
+                        )
+                except Exception:
+                    blocker_ref = self._unavailable_ref("work_graph", scope)
+                    warnings.append("work_graph blocker source unavailable")
 
         pr_rows, pr_ref, warning = await self._read(
             "pull_requests", _PULL_REQUESTS_SQL, common, scope
@@ -612,17 +697,6 @@ class ClickHouseStatusChangeSource:
             )
 
         gap_refs: list[SourceReference] = []
-        if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT}:
-            gap_refs.append(self._unavailable_ref("canonical_blocker_direction", scope))
-            warnings.append(
-                "Blocker direction is unavailable; an empty blocker list does not mean no blockers."
-            )
-        if scope.direct_scope is DirectScope.PROJECT:
-            gap_refs.append(self._unavailable_ref("project_declared_status", scope))
-            warnings.append(
-                "Project declared status has no canonical current-state source."
-            )
-
         acceptance_run_ids = {
             (str(row.get("repository_id") or ""), str(row.get("run_id") or ""))
             for row in ci_acceptance_rows
@@ -679,7 +753,21 @@ class ClickHouseStatusChangeSource:
         return RawStatusSnapshot(
             declared=declared,
             children=children,
-            blockers=(),
+            blockers=tuple(
+                StatusFact(
+                    entity_type="issue",
+                    entity_id=str(row.get("entity_id") or ""),
+                    display_label=str(row.get("display_label") or "Work item"),
+                    status=str(row.get("status") or "unknown"),
+                    observed_at=self._datetime(row.get("observed_at"), as_of),
+                    source_ref_id=blocker_ref.ref_id
+                    if blocker_ref is not None
+                    else "source:work-graph-unavailable",
+                    evidence_ref_ids=(),
+                    required=True,
+                )
+                for row in blocker_rows
+            ),
             pull_requests=pull_requests,
             ci=tuple(ci_facts),
             deployments=tuple(
@@ -690,7 +778,7 @@ class ClickHouseStatusChangeSource:
                     environment=str(row["environment"])
                     if row.get("environment")
                     else None,
-                    required=False,
+                    required=True,
                     observed_at=self._datetime(row.get("observed_at"), as_of),
                     source_ref_id=deployment_ref.ref_id,
                     evidence_ref_ids=(),
@@ -714,7 +802,11 @@ class ClickHouseStatusChangeSource:
                 )
                 for row in incident_rows
             ),
-            source_refs=tuple(source_refs + gap_refs),
+            source_refs=tuple(
+                source_refs
+                + ([blocker_ref] if blocker_ref is not None else [])
+                + gap_refs
+            ),
             warnings=tuple(warnings),
         )
 

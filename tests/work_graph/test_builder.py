@@ -217,6 +217,7 @@ class TestDependencyIssuePrLinks:
     def test_regular_dependency_still_writes_issue_issue_edge(self):
         fake_sink = MagicMock()
         fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
         fake_sink.write_work_graph_edges = MagicMock()
         fake_sink.query_dicts.return_value = [
             {
@@ -228,7 +229,7 @@ class TestDependencyIssuePrLinks:
             }
         ]
 
-        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
         with patch(
             "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
         ):
@@ -244,6 +245,143 @@ class TestDependencyIssuePrLinks:
         assert edge.target_type == "issue"
         assert edge.target_id == "linear:CHAOS-2401"
         assert edge.edge_type == "blocks"
+
+    def test_blocker_rebuild_mixes_legacy_and_v2_without_double_swapping(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.write_work_graph_projection_runs = MagicMock()
+        fake_sink.query_dicts.return_value = [
+            {
+                # Legacy GitHub encoded "blocked by blocker" backwards.
+                "source_work_item_id": "gh:org/repo#blocked",
+                "target_work_item_id": "gh:org/repo#blocker",
+                "relationship_type": "blocks",
+                "relationship_type_raw": "blocks",
+                "relationship_semantics_version": "legacy.v1",
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            },
+            {
+                # New rows already obey source --blocks--> target.
+                "source_work_item_id": "gh:org/repo#blocker",
+                "target_work_item_id": "gh:org/repo#blocked",
+                "relationship_type": "blocks",
+                "relationship_type_raw": "blocked by #blocker",
+                "relationship_semantics_version": "canonical-blocks.v2",
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            },
+        ]
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            assert builder._build_issue_issue_edges() == 1
+            assert builder._build_issue_issue_edges() == 1
+            builder.close()
+
+        for call in fake_sink.write_work_graph_edges.call_args_list:
+            edges = call.args[0]
+            assert len(edges) == 1
+            assert edges[0].source_id == "gh:org/repo#blocker"
+            assert edges[0].target_id == "gh:org/repo#blocked"
+            assert edges[0].edge_type == "blocks"
+        assert fake_sink.client.command.call_count == 4
+        first_edge_delete = fake_sink.client.command.call_args_list[1]
+        assert first_edge_delete.kwargs["parameters"]["org_id"] == "org-a"
+        assert len(first_edge_delete.kwargs["parameters"]["edge_ids"]) == 6
+        assert fake_sink.write_work_graph_projection_runs.call_count == 2
+
+    def test_blocker_projection_fails_before_write_when_cleanup_is_unavailable(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = object()
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.write_work_graph_projection_runs = MagicMock()
+        fake_sink.query_dicts.return_value = [
+            {
+                "source_work_item_id": "jira:BLOCK-1",
+                "target_work_item_id": "jira:DONE-1",
+                "relationship_type": "blocks",
+                "relationship_type_raw": "blocks",
+                "relationship_semantics_version": "canonical-blocks.v2",
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+        ]
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            with pytest.raises(RuntimeError, match="cleanup is unavailable"):
+                builder._build_issue_issue_edges()
+            builder.close()
+
+        fake_sink.write_work_graph_edges.assert_not_called()
+        fake_sink.write_work_graph_projection_runs.assert_not_called()
+
+    def test_blocker_projection_fails_before_cleanup_when_marker_sink_is_unavailable(
+        self,
+    ):
+        fake_sink = MagicMock(
+            spec=["backend_type", "client", "query_dicts", "ensure_schema", "close"]
+        )
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
+        fake_sink.query_dicts.return_value = [
+            {
+                "source_work_item_id": "jira:BLOCK-1",
+                "target_work_item_id": "jira:DONE-1",
+                "relationship_type": "blocks",
+                "relationship_type_raw": "blocks",
+                "relationship_semantics_version": "canonical-blocks.v2",
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+        ]
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            with pytest.raises(RuntimeError, match="watermark sink is unavailable"):
+                builder._build_issue_issue_edges()
+            builder.close()
+
+        fake_sink.client.command.assert_not_called()
+
+    def test_zero_dependency_rebuild_removes_stale_blockers_before_publishing(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.write_work_graph_projection_runs = MagicMock()
+        fake_sink.query_dicts.side_effect = [
+            [],
+            [{"edge_id": "stale-blocker-edge"}],
+        ]
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            assert builder._build_issue_issue_edges() == 0
+            builder.close()
+
+        fake_sink.write_work_graph_edges.assert_not_called()
+        marker_delete, delete = fake_sink.client.command.call_args_list
+        assert "work_graph_projection_runs" in marker_delete.args[0]
+        assert delete.kwargs["parameters"] == {
+            "org_id": "org-a",
+            "edge_ids": ["stale-blocker-edge"],
+        }
+        marker = fake_sink.write_work_graph_projection_runs.call_args.args[0][0]
+        assert marker["row_count"] == 0
+        assert marker["rule_version"] == "canonical-blocks.v2"
 
     def test_stale_pr_dependency_issue_edge_cleanup_is_scoped(self):
         fake_sink = MagicMock()

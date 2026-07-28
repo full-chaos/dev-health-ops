@@ -25,19 +25,23 @@ NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 
 
 def _scope(
-    kind: DirectScope = DirectScope.ISSUE, *, entity_id: str | None = None
+    kind: DirectScope = DirectScope.ISSUE,
+    *,
+    entity_id: str | None = None,
+    repositories: list[str] | None = None,
 ) -> DevScope:
     entity_type = {
         DirectScope.ISSUE: EntityType.ISSUE,
         DirectScope.PROJECT: EntityType.PROJECT,
         DirectScope.PULL_REQUEST: EntityType.PULL_REQUEST,
+        DirectScope.WORK_UNIT: EntityType.WORK_UNIT,
     }[kind]
     entity_id = entity_id or ("issue-1" if kind is DirectScope.ISSUE else "repo-a#pr7")
     return DevScope(
         schema_version="dev_scope.v1",
         organization_id="org-a",
         direct_scope=kind,
-        repositories=["repo-a"],
+        repositories=repositories or ["repo-a"],
         entity_refs=[
             DevEntityRef(
                 entity_type=entity_type,
@@ -55,6 +59,50 @@ def _scope(
     )
 
 
+def _deployment_row(status: str = "success") -> dict[str, Any]:
+    return {
+        "entity_id": "deployment-1",
+        "display_label": "Production deployment",
+        "status": status,
+        "environment": "production",
+        "pr_number": 7,
+        "observed_at": NOW,
+        "last_synced": NOW,
+    }
+
+
+@pytest.mark.asyncio
+async def test_native_work_unit_status_is_explicitly_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected_query(
+        *_args: object, **_kwargs: object
+    ) -> list[dict[str, Any]]:
+        pytest.fail(
+            "unsupported WORK_UNIT status must not issue partial native queries"
+        )
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", unexpected_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(DirectScope.WORK_UNIT, entity_id="work-unit-1")),
+    )
+
+    assert result.state is StatusResultState.DEGRADED
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert result.actual.reason_codes == (
+        "declared_status_missing",
+        "required_source_not_fresh",
+    )
+    assert result.source_refs[0].source_system == "work_unit_status"
+    assert "does not support WORK_UNIT" in result.warnings[0]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ("jira", "github", "gitlab", "linear"))
 async def test_native_issue_reader_applies_same_membership_rule_for_every_provider(
@@ -69,6 +117,10 @@ async def test_native_issue_reader_applies_same_membership_rule_for_every_provid
         _client: object, sql: str, params: dict[str, Any]
     ) -> list[dict[str, Any]]:
         observed_params.append(params)
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return []
         if "FROM work_items FINAL" in sql and "parent_id" in sql:
             return [
                 {
@@ -103,19 +155,255 @@ async def test_native_issue_reader_applies_same_membership_rule_for_every_provid
         StatusSnapshotRequest(_scope(entity_id=parent_id), as_of=NOW),
     )
 
-    assert result.state is StatusResultState.DEGRADED
+    assert result.state is StatusResultState.COMPLETE
     assert result.actual.state is CompletionState.NOT_READY
     assert "required_child_incomplete" in result.actual.reason_codes
     assert "child_requirement_unknown" not in result.actual.reason_codes
     assert result.children[0].required is True
     assert any(
-        ref.source_system == "canonical_blocker_direction"
-        and ref.freshness.value == "unavailable"
+        ref.source_system == "work_graph" and ref.freshness.value == "fresh"
         for ref in result.source_refs
     )
-    assert any("does not mean no blockers" in warning for warning in result.warnings)
     assert observed_params
     assert all(params["org_id"] == "org-a" for params in observed_params)
+
+
+@pytest.mark.asyncio
+async def test_native_open_incoming_blocker_is_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return [
+                {
+                    "entity_id": "jira:BLOCK-1",
+                    "display_label": "Open blocker",
+                    "status": "in_progress",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "jira:DONE-1",
+                    "title": "Done issue",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(entity_id="jira:DONE-1"), as_of=NOW),
+    )
+
+    assert result.actual.state is CompletionState.NOT_READY
+    assert result.actual.reason_codes == ("open_blocker",)
+    assert result.blockers[0].entity_id == "jira:BLOCK-1"
+
+
+@pytest.mark.asyncio
+async def test_native_done_issue_is_ready_after_fresh_zero_blocker_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return []
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "linear:DONE-1",
+                    "title": "Done issue",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(entity_id="linear:DONE-1"), as_of=NOW),
+    )
+
+    assert result.state is StatusResultState.COMPLETE
+    assert result.actual.state is CompletionState.READY
+    assert result.actual.reason_codes == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_source", ("pull_requests", "deployments"))
+async def test_native_source_failure_cannot_masquerade_as_empty_optional_data(
+    monkeypatch: pytest.MonkeyPatch,
+    failing_source: str,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return []
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "linear:DONE-1",
+                    "title": "Done issue",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if failing_source == "pull_requests" and "FROM git_pull_requests" in sql:
+            raise RuntimeError("pull request source unavailable")
+        if failing_source == "deployments" and "FROM deployments" in sql:
+            raise RuntimeError("deployment source unavailable")
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(entity_id="linear:DONE-1"), as_of=NOW),
+    )
+
+    assert result.state is StatusResultState.DEGRADED
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert "required_source_not_fresh" in result.actual.reason_codes
+    assert ("required_release_evidence_missing" in result.actual.reason_codes) is (
+        failing_source == "deployments"
+    )
+    assert any(
+        ref.source_system == failing_source and ref.freshness.value == "unavailable"
+        for ref in result.source_refs
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_missing_release_evidence_is_never_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return []
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "linear:DONE-1",
+                    "title": "Done issue",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(entity_id="linear:DONE-1"), as_of=NOW),
+    )
+
+    assert result.state is StatusResultState.INSUFFICIENT_EVIDENCE
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert result.actual.reason_codes == ("required_release_evidence_missing",)
+
+
+@pytest.mark.asyncio
+async def test_multi_repo_blocker_watermark_requires_complete_scope_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker_sql: list[str] = []
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_projection_runs" in sql:
+            marker_sql.append(sql)
+            return []  # one missing repo means the aggregate HAVING returns no row
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "jira:DONE-1",
+                    "title": "Done issue",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(
+            _scope(entity_id="jira:DONE-1", repositories=["repo-a", "repo-b"]),
+            as_of=NOW,
+        ),
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert "required_source_not_fresh" in result.actual.reason_codes
+    assert marker_sql
+    assert "countDistinctIf" in marker_sql[0]
+    assert "length({repository_ids:Array(String)})" in marker_sql[0]
 
 
 @pytest.mark.asyncio

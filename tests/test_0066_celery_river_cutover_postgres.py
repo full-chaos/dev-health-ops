@@ -141,7 +141,7 @@ def test_0066_real_postgres_refuses_without_opt_in_without_advancing_revision(
     monkeypatch.delenv(_CUTOVER_ENV, raising=False)
 
     with pytest.raises(RuntimeError, match=f"{_CUTOVER_ENV}=1"):
-        command.upgrade(_migration_config(), "head")
+        command.upgrade(_migration_config(), "0066")
 
     assert _revision(migrated_to_0065.engine) == "0065"
     assert _routes(migrated_to_0065.engine, migration) == before
@@ -170,7 +170,7 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     migration = _migration()
     monkeypatch.setenv(_CUTOVER_ENV, "1")
 
-    command.upgrade(_migration_config(), "head")
+    command.upgrade(_migration_config(), "0066")
 
     assert _revision(migrated_to_0065.engine) == "0066"
     assert _routes(migrated_to_0065.engine, migration) == [

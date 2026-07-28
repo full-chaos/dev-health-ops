@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from strawberry.fastapi import BaseContext
 
 if TYPE_CHECKING:
+    from dev_health_ops.api.dev.scope_service import ScopeRequestCache
     from dev_health_ops.api.services.auth import AuthenticatedUser
 
     from .loaders import (
@@ -38,6 +39,7 @@ class GraphQLContext(BaseContext):
         repo_by_name_loader: DataLoader for repos by name.
         cache: Optional cache backend for cross-request caching.
         user: Authenticated user from JWT (None if unauthenticated).
+        dev_scope_cache: Bounded request-local Ask Dev scope cache.
     """
 
     org_id: str
@@ -52,6 +54,7 @@ class GraphQLContext(BaseContext):
     repo_by_name_loader: RepoByNameLoader | None = None
     cache: Any = None
     user: AuthenticatedUser | None = None
+    dev_scope_cache: ScopeRequestCache | None = None
 
     def __post_init__(self) -> None:
         # Platform/super admins can reach cross-org admin queries without
@@ -66,6 +69,9 @@ class GraphQLContext(BaseContext):
     def rebind_org_id(self, org_id: str) -> None:
         """Rebuild tenant-bound loaders for an authorized operation scope."""
         self.org_id = org_id
+        # A superuser operation may rebind this context to another tenant.
+        # Never retain tenant- or permission-keyed request-local results.
+        self.dev_scope_cache = None
         if self.client is None:
             return
         from .loaders import (

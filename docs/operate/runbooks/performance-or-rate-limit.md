@@ -17,3 +17,29 @@ lifecycle: active
 6. Restore normal budgets gradually.
 
 Do not bypass provider budgets or rate limits in a way that hides delayed coverage or creates an outage loop.
+
+## Ask Dev scope catalog
+
+Ask Dev scope resolution reads only the tenant-scoped `repos`, `projects`,
+`work_unit_investments`, `work_items`, `git_pull_requests`, and `teams` catalogs.
+Each entity search is capped at 25 candidates; repository sets are capped at 20.
+Candidate order is deterministic, so changing order between identical requests
+usually indicates catalog or watermark drift rather than a client-side ranking
+change.
+
+The resolver uses a bounded request-local cache. Its key includes organization,
+the effective permission fingerprint, normalized input, query version, and the
+latest relevant source watermark. It has no distributed cache to flush. A role,
+tenant, query-version, input, or watermark change produces a different key, and
+an authorized GraphQL context rebind clears the request cache.
+
+For a `catalog_unavailable` warning or a failed `devScopeSearch` query:
+
+1. identify the entity kinds in the request without logging user text or IDs;
+2. verify the corresponding ClickHouse tables and migrations are healthy;
+3. check the latest source watermark and tenant-scoped query latency;
+4. confirm every query includes `org_id` and a bounded `LIMIT`;
+5. retry one bounded request after storage health recovers.
+
+Do not replace a failed explicit reference with organization scope, increase the
+25-candidate limit, or add a shared cache while troubleshooting.

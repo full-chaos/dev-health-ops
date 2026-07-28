@@ -82,6 +82,7 @@ from .resolvers.cognitive_load import resolve_cognitive_load
 from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
+from .resolvers.dev_scope import resolve_dev_scope_search
 from .resolvers.improve import resolve_improve_opportunities
 from .resolvers.pr import resolve_pr
 from .resolvers.product_telemetry import (
@@ -122,6 +123,7 @@ from .types.compounding_risk import (
     CompoundingRiskFilterInput,
     CompoundingRiskResult,
 )
+from .types.dev_scope import DevScopeSearchInput, DevScopeSearchResult
 from .types.review_edges import (
     ReviewEdgesInput,
     ReviewEdgesResult,
@@ -139,6 +141,20 @@ def get_context(info: Info) -> GraphQLContext:
 @strawberry.type
 class Query:
     """Root query type for analytics API."""
+
+    @strawberry.field(
+        description=(
+            "Search authorized Ask Dev V1 direct-scope entities. Results are "
+            "tenant-scoped, deterministic, and capped at 25 candidates."
+        )
+    )
+    async def dev_scope_search(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevScopeSearchInput,
+    ) -> DevScopeSearchResult:
+        return await resolve_dev_scope_search(get_context(info), input)
 
     @strawberry.field(
         description="Get catalog of available dimensions, measures, and limits"

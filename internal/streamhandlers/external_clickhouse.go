@@ -84,7 +84,7 @@ func externalInsertQuery(kind string) (string, error) {
 		"identity.v1":                   "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
 		"work_item.v1":                  "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
 		"work_item_transition.v1":       "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
-		"work_item_dependency.v1":       "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,last_synced,org_id,source_id)",
+		"work_item_dependency.v1":       "INSERT INTO work_item_dependencies (source_work_item_id,target_work_item_id,relationship_type,relationship_type_raw,relationship_semantics_version,last_synced,org_id,source_id)",
 		"operational_service.v1":        "INSERT INTO operational_services (" + operationalBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at)",
 		"operational_incident.v1":       "INSERT INTO operational_incidents (" + operationalBaseColumns + ",service_id,service_external_id,escalation_policy_id,title,description,started_at,resolved_at,is_deleted,deleted_at)",
 		"operational_alert.v1":          "INSERT INTO operational_alerts (" + operationalBaseColumns + ",service_id,incident_id,title,description,triggered_at,acknowledged_at,resolved_at,is_deleted,deleted_at)",
@@ -224,7 +224,8 @@ func externalRecordValues(
 		targetID := externalWorkItemID(system, externalWorkItemInstance(system, instance, ""), stringField(payload, "targetExternalKey"), stringField(payload, "targetWorkItemType"))
 		return []any{
 			sourceID, targetID, stringField(payload, "relationshipType"),
-			stringField(payload, "relationshipTypeRaw"), now, orgID, source.SourceID,
+			stringField(payload, "relationshipTypeRaw"), "canonical-blocks.v2",
+			now, orgID, source.SourceID,
 		}, nil
 	default:
 		return externalOperationalValues(source, record, now, scope)

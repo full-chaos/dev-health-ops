@@ -1,5 +1,5 @@
 -- GAP-ASKDEV-CI-01: provider-neutral required CI/acceptance projection.
--- Missing provider policy and missing results stay explicit ``unknown`` values;
+-- Missing provider policy and missing results stay explicit ``unknown`` values.
 -- neither is rewritten as optional/passed. ReplacingMergeTree makes bounded
 -- producer replays idempotent without publishing partial-run completeness.
 CREATE TABLE IF NOT EXISTS ci_acceptance_checks (

@@ -56,9 +56,12 @@ def _scope(kind: DirectScope = DirectScope.ISSUE) -> DevScope:
 async def test_native_issue_reader_keeps_blocker_gap_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    observed_params: list[dict[str, Any]] = []
+
     async def fake_query(
-        _client: object, sql: str, _params: dict[str, Any]
+        _client: object, sql: str, params: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        observed_params.append(params)
         if "FROM work_items FINAL" in sql and "parent_id" in sql:
             return [
                 {
@@ -100,6 +103,8 @@ async def test_native_issue_reader_keeps_blocker_gap_explicit(
         for ref in result.source_refs
     )
     assert any("does not mean no blockers" in warning for warning in result.warnings)
+    assert observed_params
+    assert all(params["org_id"] == "org-a" for params in observed_params)
 
 
 @pytest.mark.asyncio

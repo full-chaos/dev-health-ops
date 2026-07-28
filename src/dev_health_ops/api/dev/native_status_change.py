@@ -44,7 +44,8 @@ _WORK_ITEMS_SQL = """
 SELECT toString(repo_id) AS repository_id, work_item_id, title, status,
        parent_id, project_id, project_key, updated_at, last_synced
 FROM work_items FINAL
-WHERE toString(repo_id) IN {repository_ids:Array(String)}
+WHERE org_id = {org_id:String}
+  AND toString(repo_id) IN {repository_ids:Array(String)}
   AND updated_at <= {as_of:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'issue'
@@ -52,7 +53,7 @@ WHERE toString(repo_id) IN {repository_ids:Array(String)}
     OR ({scope_type:String} = 'project'
       AND (project_id = {entity_id:String} OR project_key = {entity_id:String}))
   )
-ORDER BY updated_at DESC, work_item_id
+ORDER BY (work_item_id = {entity_id:String}) DESC, updated_at DESC, work_item_id
 LIMIT {limit:UInt32}
 """
 
@@ -62,7 +63,9 @@ WITH linked AS (
   FROM work_graph_issue_pr AS link FINAL
   LEFT JOIN work_items AS item FINAL
     ON item.repo_id = link.repo_id AND item.work_item_id = link.work_item_id
-  WHERE toString(link.repo_id) IN {repository_ids:Array(String)}
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
     AND (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
       OR ({scope_type:String} = 'project'
@@ -73,7 +76,8 @@ WITH linked AS (
          argMax(state, submitted_at) AS review_state,
          countIf(upper(state) = 'CHANGES_REQUESTED') AS changes_requested
   FROM git_pull_request_reviews FINAL
-  WHERE toString(repo_id) IN {repository_ids:Array(String)}
+  WHERE org_id = {org_id:String}
+    AND toString(repo_id) IN {repository_ids:Array(String)}
   GROUP BY repository_id, number
 )
 SELECT toString(pr.repo_id) AS repository_id, pr.number,
@@ -88,7 +92,8 @@ SELECT toString(pr.repo_id) AS repository_id, pr.number,
 FROM git_pull_requests AS pr FINAL
 LEFT JOIN reviews
   ON reviews.repository_id = toString(pr.repo_id) AND reviews.number = pr.number
-WHERE toString(pr.repo_id) IN {repository_ids:Array(String)}
+WHERE pr.org_id = {org_id:String}
+  AND toString(pr.repo_id) IN {repository_ids:Array(String)}
   AND pr.created_at <= {as_of:DateTime64(3, 'UTC')}
   AND (
     ({scope_type:String} = 'pull_request' AND pr.number = {pr_number:UInt32})
@@ -109,7 +114,8 @@ SELECT toString(repo_id) AS repository_id, run_id,
        ifNull(pr_number, 0) AS pr_number,
        coalesce(finished_at, started_at) AS observed_at, last_synced
 FROM ci_pipeline_runs FINAL
-WHERE toString(repo_id) IN {repository_ids:Array(String)}
+WHERE org_id = {org_id:String}
+  AND toString(repo_id) IN {repository_ids:Array(String)}
   AND ifNull(pr_number, 0) IN {pr_numbers:Array(UInt32)}
   AND started_at <= {as_of:DateTime64(3, 'UTC')}
 ORDER BY observed_at DESC, entity_id
@@ -124,7 +130,8 @@ SELECT toString(repo_id) AS repository_id, deployment_id AS entity_id,
        coalesce(deployed_at, finished_at, started_at, last_synced) AS observed_at,
        last_synced
 FROM deployments FINAL
-WHERE toString(repo_id) IN {repository_ids:Array(String)}
+WHERE org_id = {org_id:String}
+  AND toString(repo_id) IN {repository_ids:Array(String)}
   AND (
     ({scope_type:String} = 'repository')
     OR ifNull(pull_request_number, 0) IN {pr_numbers:Array(UInt32)}
@@ -160,8 +167,12 @@ SELECT transition.work_item_id AS entity_id, item.title AS display_label,
        transition.occurred_at AS observed_at, transition.last_synced
 FROM work_item_transitions AS transition FINAL
 INNER JOIN work_items AS item FINAL
-  ON item.work_item_id = transition.work_item_id
-WHERE toString(item.repo_id) IN {repository_ids:Array(String)}
+  ON item.org_id = transition.org_id
+ AND item.repo_id = transition.repo_id
+ AND item.work_item_id = transition.work_item_id
+WHERE transition.org_id = {org_id:String}
+  AND item.org_id = {org_id:String}
+  AND toString(item.repo_id) IN {repository_ids:Array(String)}
   AND transition.occurred_at >= {start:DateTime64(3, 'UTC')}
   AND transition.occurred_at < {end:DateTime64(3, 'UTC')}
   AND (
@@ -179,7 +190,8 @@ SELECT edge_id AS change_id, source_type, source_id, edge_type,
        target_type, target_id, provenance, confidence,
        discovered_at AS observed_at, last_synced
 FROM work_graph_edges FINAL
-WHERE toString(repo_id) IN {repository_ids:Array(String)}
+WHERE org_id = {org_id:String}
+  AND toString(repo_id) IN {repository_ids:Array(String)}
   AND discovered_at >= {start:DateTime64(3, 'UTC')}
   AND discovered_at < {end:DateTime64(3, 'UTC')}
   AND (
@@ -188,12 +200,14 @@ WHERE toString(repo_id) IN {repository_ids:Array(String)}
     OR ({scope_type:String} = 'project' AND (
       source_id IN (
         SELECT work_item_id FROM work_items FINAL
-        WHERE toString(repo_id) IN {repository_ids:Array(String)}
+        WHERE org_id = {org_id:String}
+          AND toString(repo_id) IN {repository_ids:Array(String)}
           AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
       )
       OR target_id IN (
         SELECT work_item_id FROM work_items FINAL
-        WHERE toString(repo_id) IN {repository_ids:Array(String)}
+        WHERE org_id = {org_id:String}
+          AND toString(repo_id) IN {repository_ids:Array(String)}
           AND (project_id = {entity_id:String} OR project_key = {entity_id:String})
       )
     ))
@@ -236,6 +250,7 @@ class ClickHouseStatusChangeSource:
             )
 
         common = {
+            "org_id": org_id,
             "repository_ids": repositories,
             "scope_type": scope_type,
             "entity_id": entity_id,
@@ -414,7 +429,7 @@ class ClickHouseStatusChangeSource:
         comparison: ChangeWindow,
         limit: int,
     ) -> RawChangeSummary:
-        del org_id, comparison
+        del comparison
         repositories = self._repository_ids(scope)
         if not repositories:
             return RawChangeSummary(
@@ -423,6 +438,7 @@ class ClickHouseStatusChangeSource:
                 warnings=("Observed-change scope was not widened.",),
             )
         params = {
+            "org_id": org_id,
             "repository_ids": repositories,
             "scope_type": scope.direct_scope.value,
             "entity_id": self._entity_id(scope),

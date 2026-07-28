@@ -52,3 +52,10 @@ do not silently reinterpret an old version.
 and feedback comments to 2 KiB of UTF-8. JSON Schema's `maxLength` counts code
 points, so the schemas carry `x-max-utf8-bytes` and the authoritative Pydantic
 validation enforces the byte bound.
+
+Evidence search returns at most 25 `dev_evidence_ref.v1` objects. Expansion
+accepts at most 10 persisted references and emits at most 64 KiB of sanitized,
+delimited `UNTRUSTED_DATA` excerpts. The stable evidence ID protects the
+canonical source descriptor against tampering; it is not an authorization
+grant. Every expansion re-resolves current organization, repository, entity,
+and user access before reading the native or optional ACR source.

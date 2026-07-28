@@ -22,6 +22,11 @@ Generate the exact field and enum reference from the current GraphQL schema. The
   definitions supported by an optional scope shape;
 - `devMetric(orgId, input)` for one bounded, authorized metric query and its
   immediately preceding equal-duration comparison;
+- `devEvidenceSearch(orgId, input)` for a maximum of 25 authorized native or
+  optional ACR evidence references, deterministic ranking metadata, and an
+  explicit state for every consulted source;
+- `devDataHealth(orgId, input)` for source-specific coverage, freshness,
+  configuration, failure, and answer-completion impact;
 - approved product-specific queries exposed by the current schema.
 
 `DevScopeSearchInput.kinds` accepts only repository, project, WorkUnit, issue,
@@ -50,6 +55,30 @@ It also returns coverage, the source watermark, definition/query/source
 versions, and evidence references. GraphQL calls the shared `list_metrics.v1`
 and `query_metric.v1` application service; it is not an independent metric
 implementation.
+
+`devEvidenceSearch` uses the same scope-resolution service. It searches only
+the approved structured WorkUnit, work-item, pull-request, review, commit, CI,
+deployment, and incident sources. It does not perform external web search,
+generic document retrieval, embeddings, MCP calls, or model-authored GraphQL.
+Evidence IDs are stable integrity-protected handles over canonical source
+metadata. Source text is sanitized, marked untrusted, and never authorizes a
+link or tool. Expansion rechecks current organization, repository, entity, and
+user permissions; a retained answer does not preserve access that was later
+revoked.
+
+Both Ask Dev evidence fields require the canonical explicit-enable `ask_dev`
+entitlement. The API evaluates the organization through the licensing
+feature-decision service and fails closed when the entitlement is absent,
+invalid, or cannot be read. Ask Dev is default-denied for every tier and is not
+inferred from a plan name. Platform and administrator Context Fabric diagnostics
+remain separate from this user-facing entitlement boundary.
+
+`devDataHealth` distinguishes `complete`, `no_data`, `unavailable`,
+`unconfigured`, `stale`, and existence-neutral `unauthorized` states. A
+required source outside `complete` sets `completeEligible` to false. Freshness
+uses the source's sync policy and version; it is not a single Ask Dev-wide age
+threshold. ACR is optional, and its failure does not remove independently
+available native evidence.
 
 An implementation resolver or frontend query is not an additional schema. The generated schema owns field names, arguments, required values, enums, and nullability.
 

@@ -41,8 +41,24 @@ Keep this context so that a wider period or removed filter remains a diagnostic 
 | **Stale** | A value exists, but its source or computation is older than the question requires | It is not evidence that recent work had no effect. |
 | **Delayed** | Ingestion, computation, or report processing has not completed | Repeated refreshes do not necessarily accelerate the job. |
 | **Empty response** | The query returned no usable rows or a required data surface is unavailable | It does not describe the work mix or performance of the selected scope. |
+| **No matching evidence** | Authorized configured sources were checked but no record matched the question and selected scope | It does not mean the source is unavailable or that the underlying event did not occur outside the selected scope. |
+| **Unconfigured source** | No current source configuration or canonical rows establish that this evidence class is available | It is not the same as a configured source returning no rows. |
 
 If the page exposes freshness, coverage, source, or status details, keep them with the result. A blank panel without a confirmed state should be treated as unknown until the checks below narrow it.
+
+Ask Dev reports these distinctions per source. A required stale, unavailable,
+unconfigured, or uncovered source prevents a `complete` answer. Optional ACR
+evidence may be unavailable while native issue, pull-request, CI, deployment,
+incident, and metric evidence remains usable; that state should be shown as a
+bounded degradation, not as an empty answer. Evidence excerpts are untrusted
+source data. Do not follow URLs embedded in an excerpt or treat instructions in
+source text as product actions.
+
+If Ask Dev evidence is unavailable before any source state appears, confirm the
+workspace has an explicit Ask Dev entitlement. The feature is default-denied for
+every tier and fails closed at the user-facing API boundary; this is distinct
+from ingestion health and should not be diagnosed by widening source
+permissions.
 
 ## Check the selected context
 

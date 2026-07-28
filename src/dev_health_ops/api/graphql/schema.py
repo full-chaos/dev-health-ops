@@ -82,6 +82,10 @@ from .resolvers.cognitive_load import resolve_cognitive_load
 from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
+from .resolvers.dev_evidence import (
+    resolve_dev_data_health,
+    resolve_dev_evidence_search,
+)
 from .resolvers.dev_metric import resolve_dev_metric, resolve_dev_metric_catalog
 from .resolvers.dev_scope import resolve_dev_scope_search
 from .resolvers.improve import resolve_improve_opportunities
@@ -123,6 +127,12 @@ from .types.complexity import (
 from .types.compounding_risk import (
     CompoundingRiskFilterInput,
     CompoundingRiskResult,
+)
+from .types.dev_evidence import (
+    DevDataHealthInput,
+    DevDataHealthResult,
+    DevEvidenceSearchInput,
+    DevEvidenceSearchResult,
 )
 from .types.dev_metric import (
     DevMetricCatalog,
@@ -187,6 +197,36 @@ class Query:
         input: DevMetricQueryInput,
     ) -> DevMetricResult:
         return await resolve_dev_metric(get_context(info), input)
+
+    @strawberry.field(
+        description=(
+            "Search bounded authorized Ask Dev evidence. Source text is "
+            "sanitized and explicitly untrusted; results are capped at 25. "
+            "Requires the canonical explicit-enable ask_dev entitlement."
+        )
+    )
+    async def dev_evidence_search(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevEvidenceSearchInput,
+    ) -> DevEvidenceSearchResult:
+        return await resolve_dev_evidence_search(get_context(info), input)
+
+    @strawberry.field(
+        description=(
+            "Report source-specific Ask Dev coverage, freshness, failures, "
+            "and whether required sources permit a complete answer. Requires "
+            "the canonical explicit-enable ask_dev entitlement."
+        )
+    )
+    async def dev_data_health(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevDataHealthInput,
+    ) -> DevDataHealthResult:
+        return await resolve_dev_data_health(get_context(info), input)
 
     @strawberry.field(
         description="Get catalog of available dimensions, measures, and limits"

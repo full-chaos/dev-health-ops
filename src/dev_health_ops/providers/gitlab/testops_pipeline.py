@@ -97,6 +97,54 @@ class GitLabCIAdapter(BasePipelineAdapter):
         required = bool(payload["only_allow_merge_if_pipeline_succeeds"])
         return ({"pipeline"} if required else set()), "gitlab.project_merge_policy"
 
+    async def _merge_request_iid(
+        self, *, encoded_project: str, pipeline: dict[str, Any]
+    ) -> int | None:
+        """Resolve an MR pipeline to its repo-local IID without parsing refs."""
+
+        if pipeline.get("source") != "merge_request_event":
+            return None
+        embedded = pipeline.get("merge_request")
+        embedded_iid = embedded.get("iid") if isinstance(embedded, dict) else None
+        if embedded_iid is not None:
+            try:
+                return int(embedded_iid)
+            except (TypeError, ValueError):
+                return None
+        sha = pipeline.get("sha")
+        if not sha:
+            return None
+        client = await self._get_client()
+        encoded_sha = quote_plus(str(sha), safe="")
+        response = await client.get(
+            f"/projects/{encoded_project}/repository/commits/{encoded_sha}/merge_requests"
+        )
+        self._record_response_usage(
+            response,
+            operation="tests:GET /projects/{project_id}/repository/commits/{sha}/merge_requests",
+        )
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        if not isinstance(payload, list):
+            return None
+        exact: list[dict[str, Any]] = []
+        candidates = [item for item in payload if isinstance(item, dict)]
+        for item in candidates:
+            diff_refs = item.get("diff_refs")
+            if item.get("sha") == sha or (
+                isinstance(diff_refs, dict) and diff_refs.get("head_sha") == sha
+            ):
+                exact.append(item)
+        selected = exact or candidates
+        iids: set[int] = set()
+        for item in selected:
+            try:
+                iids.add(int(item["iid"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return next(iter(iids)) if len(iids) == 1 else None
+
     async def fetch_pipeline_data(  # type: ignore[override]
         self,
         *,
@@ -142,6 +190,9 @@ class GitLabCIAdapter(BasePipelineAdapter):
 
             finished_at = self.parse_datetime(pipeline.get("finished_at"))
             status = self._map_pipeline_status(pipeline.get("status"))
+            merge_request_iid = await self._merge_request_iid(
+                encoded_project=encoded_project, pipeline=pipeline
+            )
             pipeline_row: PipelineRunExtendedRow = {
                 "repo_id": repo_id,
                 "run_id": str(pipeline.get("id")),
@@ -158,7 +209,7 @@ class GitLabCIAdapter(BasePipelineAdapter):
                 "trigger_source": self.coerce_trigger_source(pipeline.get("source")),
                 "commit_hash": pipeline.get("sha"),
                 "branch": pipeline.get("ref"),
-                "pr_number": None,
+                "pr_number": merge_request_iid,
                 "team_id": None,
                 "service_id": None,
             }
@@ -216,6 +267,7 @@ class GitLabCIAdapter(BasePipelineAdapter):
                     target_branch=str(pipeline.get("ref"))
                     if pipeline.get("ref")
                     else None,
+                    pr_number=merge_request_iid,
                     source_url=str(pipeline.get("web_url"))
                     if pipeline.get("web_url")
                     else None,

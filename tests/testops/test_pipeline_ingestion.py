@@ -225,6 +225,64 @@ async def test_gitlab_ci_adapter_handles_pagination_and_incremental_sync() -> No
     assert batch.last_synced_cursor == _dt("2026-04-02T09:03:00Z")
 
 
+@pytest.mark.asyncio
+async def test_gitlab_mr_pipeline_persists_resolved_iid_on_acceptance_rows() -> None:
+    repo_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        url = str(request.url)
+        if (
+            "projects/group%2Fapi" in url
+            and "/pipelines" not in url
+            and "/repository/" not in url
+        ):
+            return httpx.Response(
+                200, json={"only_allow_merge_if_pipeline_succeeds": True}
+            )
+        if "/projects/group%2Fapi/pipelines?" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 302,
+                        "status": "success",
+                        "created_at": "2026-04-02T10:00:00Z",
+                        "started_at": "2026-04-02T10:01:00Z",
+                        "finished_at": "2026-04-02T10:03:00Z",
+                        "source": "merge_request_event",
+                        "sha": "mrsha",
+                        "ref": "feature/mr",
+                    }
+                ],
+            )
+        if path.endswith("/repository/commits/mrsha/merge_requests"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "iid": 42,
+                        "diff_refs": {"head_sha": "mrsha"},
+                    }
+                ],
+            )
+        if path.endswith("/pipelines/302/jobs"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    adapter = GitLabCIAdapter(
+        base_url="https://gitlab.example/api/v4",
+        token="token",
+        transport=httpx.MockTransport(handler),
+    )
+    batch = await adapter.fetch_pipeline_data(project_id="group/api", repo_id=repo_id)
+    await adapter.close()
+
+    assert batch.pipeline_runs[0]["pr_number"] == 42
+    assert batch.acceptance_checks[0]["pr_number"] == 42
+    assert batch.acceptance_checks[0]["requirement"] == "required"
+
+
 class _FakeStore:
     def __init__(self) -> None:
         self.pipeline_runs: list[PipelineRunExtendedRow] = []

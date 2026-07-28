@@ -7,11 +7,13 @@ application-service result; it never owns completion or change semantics.
 
 from __future__ import annotations
 
-import importlib
 from typing import cast
 
 import strawberry
 
+from dev_health_ops.api.dev.metrics.clickhouse import ClickHouseMetricSource
+from dev_health_ops.api.dev.metrics.service import MetricQueryService
+from dev_health_ops.api.dev.native_status_change import ClickHouseStatusChangeSource
 from dev_health_ops.api.dev.status_change_service import (
     ActualCompletion,
     ChangeSummaryRequest,
@@ -62,9 +64,10 @@ def _status_change_service(context: GraphQLContext) -> StatusChangeService:
         return cast(StatusChangeService, injected)
     if context.client is None:
         raise RuntimeError("Database client not available for Ask Dev status")
-    native = importlib.import_module("dev_health_ops.api.dev.native_status_change")
-    source_type = getattr(native, "ClickHouseStatusChangeSource")
-    return StatusChangeService(source_type(context.client))
+    return StatusChangeService(
+        ClickHouseStatusChangeSource(context.client),
+        metric_service=MetricQueryService(ClickHouseMetricSource(context.client)),
+    )
 
 
 async def resolve_dev_status_snapshot(

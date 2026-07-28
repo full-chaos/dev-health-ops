@@ -92,6 +92,7 @@ from .resolvers.dev_status_change import (
     resolve_dev_change_summary,
     resolve_dev_status_snapshot,
 )
+from .resolvers.dev_work_graph import resolve_dev_work_graph_neighbors
 from .resolvers.improve import resolve_improve_opportunities
 from .resolvers.pr import resolve_pr
 from .resolvers.product_telemetry import (
@@ -150,6 +151,10 @@ from .types.dev_status_change import (
     DevChangeSummaryInput,
     DevStatusSnapshot,
     DevStatusSnapshotInput,
+)
+from .types.dev_work_graph import (
+    DevWorkGraphNeighborsInput,
+    DevWorkGraphNeighborsResult,
 )
 from .types.review_edges import (
     ReviewEdgesInput,
@@ -265,6 +270,20 @@ class Query:
         input: DevChangeSummaryInput,
     ) -> DevChangeSummary:
         return await resolve_dev_change_summary(get_context(info), input)
+
+    @strawberry.field(
+        description=(
+            "Return persisted, tenant-scoped work-graph neighbors with depth fixed "
+            "to one and code-owned relationship/result bounds."
+        )
+    )
+    async def dev_work_graph_neighbors(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevWorkGraphNeighborsInput,
+    ) -> DevWorkGraphNeighborsResult:
+        return await resolve_dev_work_graph_neighbors(get_context(info), input)
 
     @strawberry.field(
         description="Get catalog of available dimensions, measures, and limits"

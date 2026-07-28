@@ -53,6 +53,7 @@ class DevWorkGraphNeighborEdge:
     direction: DevWorkGraphDirection
     provenance: str
     confidence: float
+    source_ref_id: strawberry.ID
     evidence_ref_ids: list[strawberry.ID]
     observed_at: datetime
     freshness: str
@@ -60,6 +61,7 @@ class DevWorkGraphNeighborEdge:
 
 @strawberry.type
 class DevWorkGraphSourceRef:
+    ref_id: strawberry.ID
     source_table: str
     source_version: str
     watermark: datetime | None

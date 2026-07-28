@@ -52,6 +52,33 @@ type fixedOrganizationLister struct {
 	err         error
 }
 
+type fixedAskDevRetentionAdmission struct {
+	state AskDevRetentionState
+	err   error
+	calls int
+}
+
+func (admission *fixedAskDevRetentionAdmission) State(
+	context.Context,
+	pgx.Tx,
+) (AskDevRetentionState, error) {
+	admission.calls++
+	return admission.state, admission.err
+}
+
+func askDevRetentionProducer(
+	t *testing.T,
+	admission AskDevRetentionAdmission,
+	producerVersion int,
+) Producer {
+	t.Helper()
+	producer, err := NewRetentionProducerForRoute(admission, producerVersion)
+	if err != nil {
+		t.Fatalf("NewRetentionProducerForRoute() = %v", err)
+	}
+	return producer
+}
+
 func (lister fixedOrganizationLister) ActiveOrganizationIDs(
 	context.Context,
 	pgx.Tx,
@@ -324,11 +351,16 @@ func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
 	// pins its schema enum to jobcontract.RetentionPolicies() element-by-
 	// element, so both plural policy names now marshal and decode cleanly.
 	retentionProducer := NewRetentionProducer()
+	askDevProducer := askDevRetentionProducer(
+		t,
+		&fixedAskDevRetentionAdmission{state: AskDevRetentionState{FeatureEnabled: true}},
+		jobcontract.ContractVersionV3,
+	)
 	producers := map[string]Producer{
 		"phone_home_heartbeat":          NewHeartbeatProducer(),
 		"prune_rate_limit_observations": retentionProducer,
 		"prune_external_ingest_batches": retentionProducer,
-		"prune_ask_dev_conversations":   retentionProducer,
+		"prune_ask_dev_conversations":   askDevProducer,
 	}
 	for id, producer := range producers {
 		schedule := scheduleByID(t, id)
@@ -338,6 +370,9 @@ func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
 		)
 		if err != nil {
 			t.Fatalf("%s Produce() = %v", id, err)
+		}
+		if len(outcome.Requests) != 1 {
+			t.Fatalf("%s produced %d requests, want one", id, len(outcome.Requests))
 		}
 		for _, request := range outcome.Requests {
 			encoded, err := jobcontract.MarshalCanonical(request.Envelope)
@@ -392,12 +427,21 @@ func TestOccurrenceDomainIdentityIsAValidDeterministicUUID(t *testing.T) {
 // than discovered at execution. This stands in for the strict contract
 // round-trip until the runtime-truth lane's jobcontract change merges.
 func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
-	producer := NewRetentionProducer()
+	legacyProducer := NewRetentionProducer()
+	askDevProducer := askDevRetentionProducer(
+		t,
+		&fixedAskDevRetentionAdmission{state: AskDevRetentionState{FeatureEnabled: true}},
+		jobcontract.ContractVersionV3,
+	)
 	for _, test := range []struct{ scheduleID, wantPolicy string }{
 		{"prune_rate_limit_observations", jobcontract.RetentionRateLimitObservations},
 		{"prune_external_ingest_batches", jobcontract.RetentionExternalIngestBatches},
 		{"prune_ask_dev_conversations", jobcontract.RetentionAskDevConversations},
 	} {
+		producer := legacyProducer
+		if test.scheduleID == "prune_ask_dev_conversations" {
+			producer = askDevProducer
+		}
 		schedule := scheduleByID(t, test.scheduleID)
 		dueTime := mustTime(t, "2026-07-24T05:00:00Z")
 		outcome, err := producer.Produce(
@@ -447,6 +491,72 @@ func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 				test.scheduleID, payload.DeleteBefore)
 		}
 	}
+}
+
+func TestAskDevRetentionAdmissionPreservesRollbackAndConsumerCompatibility(t *testing.T) {
+	schedule := scheduleByID(t, "prune_ask_dev_conversations")
+	dueTime := mustTime(t, "2026-07-24T05:30:00Z")
+	occurrence := NewOccurrence(schedule, dueTime, dueTime)
+
+	t.Run("never enabled with no rows does not emit", func(t *testing.T) {
+		admission := &fixedAskDevRetentionAdmission{}
+		producer := askDevRetentionProducer(t, admission, jobcontract.ContractVersionV3)
+		outcome, err := producer.Produce(t.Context(), &stubTx{}, schedule, occurrence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(outcome.Requests) != 0 || outcome.SkipReason != "ask_dev_inactive_without_state" {
+			t.Fatalf("outcome = %+v, want an explicit inactive/no-state skip", outcome)
+		}
+		if admission.calls != 1 {
+			t.Fatalf("admission calls = %d, want one fresh decision", admission.calls)
+		}
+	})
+
+	t.Run("disabled after use still emits for persisted state", func(t *testing.T) {
+		admission := &fixedAskDevRetentionAdmission{state: AskDevRetentionState{
+			FeatureEnabled:    false,
+			HasPersistedState: true,
+		}}
+		producer := askDevRetentionProducer(t, admission, jobcontract.ContractVersionV3)
+		outcome, err := producer.Produce(t.Context(), &stubTx{}, schedule, occurrence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(outcome.Requests) != 1 {
+			t.Fatalf("outcome = %+v, disabled Ask Dev stranded persisted state", outcome)
+		}
+		if outcome.Requests[0].Envelope.ContractVersion != jobcontract.ContractVersionV3 {
+			t.Fatalf("contract version = %d, want v3", outcome.Requests[0].Envelope.ContractVersion)
+		}
+	})
+
+	t.Run("incompatible consumer route never emits v3", func(t *testing.T) {
+		admission := &fixedAskDevRetentionAdmission{state: AskDevRetentionState{
+			FeatureEnabled:    true,
+			HasPersistedState: true,
+		}}
+		producer := askDevRetentionProducer(t, admission, jobcontract.ContractVersionV2)
+		outcome, err := producer.Produce(t.Context(), &stubTx{}, schedule, occurrence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(outcome.Requests) != 0 || outcome.SkipReason != "consumer_version_incompatible" {
+			t.Fatalf("outcome = %+v, want an explicit compatibility skip", outcome)
+		}
+		if admission.calls != 0 {
+			t.Fatal("feature admission ran even though the active route cannot carry v3")
+		}
+	})
+
+	t.Run("admission storage failure is loud", func(t *testing.T) {
+		admission := &fixedAskDevRetentionAdmission{err: ErrProducerUnavailable}
+		producer := askDevRetentionProducer(t, admission, jobcontract.ContractVersionV3)
+		outcome, err := producer.Produce(t.Context(), &stubTx{}, schedule, occurrence)
+		if err == nil || len(outcome.Requests) != 0 {
+			t.Fatalf("outcome = %+v, error = %v; admission failure must not emit", outcome, err)
+		}
+	})
 }
 
 // Unset, empty, and unparseable overrides take the checked default, matching

@@ -263,7 +263,7 @@ var definitions = map[string]contractDefinition{
 		// required field is a breaking change for a v1 consumer, so it cannot
 		// be edited in place under the registry's additive_optional_only
 		// policy.
-		CurrentVersion:    ContractVersionV3,
+		CurrentVersion:    ContractVersionV2,
 		SupportedVersions: []int{ContractVersionV1, ContractVersionV2, ContractVersionV3},
 		DomainLink:        "maintenance_run",
 		OrganizationScope: "global",

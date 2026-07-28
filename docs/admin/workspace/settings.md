@@ -25,7 +25,9 @@ Ask Dev access, BYO LLM configuration, and Agent Context Runtime access are
 separate entitlements. An administrator must not infer Ask Dev availability
 from either existing AI-related gate. A missing or false `ask_dev` decision is
 denied. The initial contract release registers `ask_dev` as disabled by default
-and does not yet ship an administrator control or user-visible Ask Dev surface.
+for every tier and does not yet ship an administrator control or user-visible
+Ask Dev surface. Future inclusion in paid plans requires separate product
+change control and is not part of the current V1 entitlement.
 
 Context Fabric Validation is a platform-administrator diagnostic surface. It is
 not granted by `ask_dev`, `byo_llm`, or organization-administrator status.

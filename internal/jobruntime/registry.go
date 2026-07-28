@@ -20,6 +20,10 @@ type Descriptor struct {
 	Kind              string
 	CurrentVersion    int
 	SupportedVersions []int
+	// ProducerVersion is the highest contract version the active migration
+	// route may emit. Reading it from migration state keeps producer activation
+	// tied to the rollout authority rather than inferred from schema support.
+	ProducerVersion   int
 	Profile           string
 	Queue             string
 	ExecutionMode     string
@@ -130,6 +134,7 @@ func newRegistry(contracts jobcontract.Registry, migration jobcontract.Migration
 			Kind:              contract.Kind,
 			CurrentVersion:    contract.CurrentVersion,
 			SupportedVersions: append([]int(nil), contract.SupportedVersions...),
+			ProducerVersion:   policy.ProducerVersion,
 			Profile:           contract.Profile,
 			Queue:             contract.Queue,
 			ExecutionMode:     contract.ExecutionMode,

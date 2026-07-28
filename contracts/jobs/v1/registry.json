@@ -387,7 +387,7 @@
     },
     {
       "kind": "system.retention_cleanup",
-      "current_version": 3,
+      "current_version": 2,
       "supported_versions": [1, 2, 3],
       "profile": "ops",
       "queue": "retention",

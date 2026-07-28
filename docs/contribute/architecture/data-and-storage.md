@@ -105,6 +105,12 @@ The `/dev` page and `/dev` application window use one canonical PostgreSQL
 conversation service. Every read and write is scoped by server-owned
 `org_id + user_id`; clients and model output cannot choose those values.
 
+Retention admission has two independent inputs: the canonical Ask Dev feature
+decision controls a never-used installation, while the existence of persisted
+conversation state preserves lifecycle cleanup after feature rollback. Contract
+route compatibility is a separate gate: a v3 cleanup envelope cannot be
+constructed while the active migration producer version is still v2.
+
 ```mermaid
 erDiagram
     DEV_CONVERSATIONS ||--o{ DEV_MESSAGES : contains

@@ -74,8 +74,8 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 	}
 
 	// DELETE is an ordinary privilege since Phase 2 added AllowDelete to the
-	// posture; these three used to be reported as permanently unrepresentable.
-	for _, table := range []string{"external_ingest_batch_payloads", "provider_rate_limit_observations"} {
+	// posture; these tables used to be reported as permanently unrepresentable.
+	for _, table := range []string{"dev_conversations", "external_ingest_batch_payloads", "provider_rate_limit_observations"} {
 		for _, src := range []struct {
 			name string
 			m    map[string]PrivilegeSet
@@ -86,12 +86,26 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 		}
 	}
 
-	if len(gt.RequiredTablePrivileges) != 32 {
-		t.Errorf("domain posture: got %d tables, want 32 (Option B two-role split) -- "+
+	for _, src := range []struct {
+		name string
+		m    map[string]PrivilegeSet
+	}{{"grants", gt.Grants}, {"required", gt.RequiredTablePrivileges}} {
+		conversations := src.m["dev_conversations"]
+		if !conversations.Has(PrivSelect) || !conversations.Has(PrivUpdate) || !conversations.Has(PrivDelete) || conversations.Has(PrivInsert) {
+			t.Errorf("%s: dev_conversations = %+v, want SELECT+UPDATE+DELETE only", src.name, conversations)
+		}
+		tombstones := src.m["dev_conversation_tombstones"]
+		if !tombstones.Has(PrivSelect) || !tombstones.Has(PrivInsert) || tombstones.Has(PrivUpdate) || tombstones.Has(PrivDelete) {
+			t.Errorf("%s: dev_conversation_tombstones = %+v, want SELECT+INSERT only", src.name, tombstones)
+		}
+	}
+
+	if len(gt.RequiredTablePrivileges) != 34 {
+		t.Errorf("domain posture: got %d tables, want 34 (Option B two-role split) -- "+
 			"if this changed intentionally, the ground-truth reader is fine, just update this pin", len(gt.RequiredTablePrivileges))
 	}
-	if len(gt.Grants) != 32 {
-		t.Errorf("runtimeGrantStatements: got %d granted tables, want 32 -- see note above", len(gt.Grants))
+	if len(gt.Grants) != 34 {
+		t.Errorf("runtimeGrantStatements: got %d granted tables, want 34 -- see note above", len(gt.Grants))
 	}
 	// The two lists agreeing on their size is the property that matters most
 	// here: this checker exists because they disagreed once.

@@ -145,51 +145,78 @@ func retentionDays(name string, fallbackDays int) (time.Duration, error) {
 // schedules. Each schedule maps to exactly one policy: the two prune entries
 // stay distinct operations so one can be paused or rolled back alone.
 type RetentionProducer struct {
-	byScheduleID map[string]RetentionSpec
+	byScheduleID          map[string]RetentionSpec
+	askDevAdmission       AskDevRetentionAdmission
+	activeProducerVersion int
 }
 
 // NewRetentionProducer constructs the retention producer with the checked-in
-// policy bindings.
+// policy bindings at the currently active v2 route. Ask Dev v3 stays dark
+// unless the composition root supplies both lifecycle admission and a route
+// whose producer version has completed consumer rollout.
 func NewRetentionProducer() Producer {
+	producer, err := NewRetentionProducerForRoute(
+		disabledAskDevRetentionAdmission{}, jobcontract.ContractVersionV2,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return producer
+}
+
+// NewRetentionProducerForRoute binds the producer to the active migration
+// route and the canonical Ask Dev lifecycle admission reader.
+func NewRetentionProducerForRoute(
+	askDevAdmission AskDevRetentionAdmission,
+	activeProducerVersion int,
+) (Producer, error) {
+	if askDevAdmission == nil || activeProducerVersion < jobcontract.ContractVersionV1 ||
+		activeProducerVersion > jobcontract.ContractVersionV3 {
+		return nil, ErrProducerUnavailable
+	}
 	const (
 		rateLimitEnv      = "SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS"
 		externalIngestEnv = "EXTERNAL_INGEST_STATUS_RETENTION_DAYS"
 	)
-	return &RetentionProducer{byScheduleID: map[string]RetentionSpec{
-		"prune_rate_limit_observations": {
-			Policy:          jobcontract.RetentionRateLimitObservations,
-			ContractVersion: jobcontract.ContractVersionV2,
-			DefaultDays:     14, // CHAOS-2758
-			// The handler drains one occurrence chunk-by-chunk until the work is
-			// gone, so this bounds a single pass rather than the total deletion.
-			// No catch-up occurrence is needed to clear a first-run backlog.
-			BatchSize:        500,
-			RetentionDaysEnv: rateLimitEnv,
+	return &RetentionProducer{
+		askDevAdmission:       askDevAdmission,
+		activeProducerVersion: activeProducerVersion,
+		byScheduleID: map[string]RetentionSpec{
+			"prune_rate_limit_observations": {
+				Policy:          jobcontract.RetentionRateLimitObservations,
+				ContractVersion: jobcontract.ContractVersionV2,
+				DefaultDays:     14, // CHAOS-2758
+				// The handler drains one occurrence chunk-by-chunk until the work is
+				// gone, so this bounds a single pass rather than the total deletion.
+				// No catch-up occurrence is needed to clear a first-run backlog.
+				BatchSize:        500,
+				RetentionDaysEnv: rateLimitEnv,
+			},
+			"prune_external_ingest_batches": {
+				Policy:           jobcontract.RetentionExternalIngestBatches,
+				ContractVersion:  jobcontract.ContractVersionV2,
+				DefaultDays:      90, // CHAOS-2694
+				BatchSize:        500,
+				RetentionDaysEnv: externalIngestEnv,
+			},
+			"prune_ask_dev_conversations": {
+				Policy:          jobcontract.RetentionAskDevConversations,
+				ContractVersion: jobcontract.ContractVersionV3,
+				// Conversation.expires_at already contains the exact 0/30-day
+				// product policy. A second horizon here would silently double it.
+				DefaultDays: 0,
+				BatchSize:   500,
+			},
 		},
-		"prune_external_ingest_batches": {
-			Policy:           jobcontract.RetentionExternalIngestBatches,
-			ContractVersion:  jobcontract.ContractVersionV2,
-			DefaultDays:      90, // CHAOS-2694
-			BatchSize:        500,
-			RetentionDaysEnv: externalIngestEnv,
-		},
-		"prune_ask_dev_conversations": {
-			Policy:          jobcontract.RetentionAskDevConversations,
-			ContractVersion: jobcontract.ContractVersionV3,
-			// Conversation.expires_at already contains the exact 0/30-day
-			// product policy. A second horizon here would silently double it.
-			DefaultDays: 0,
-			BatchSize:   500,
-		},
-	}}
+	}, nil
 }
 
 func (*RetentionProducer) ID() string { return ProducerRetentionCleanup }
 
 // Produce builds one bounded retention request.
 func (producer *RetentionProducer) Produce(
-	_ context.Context,
-	_ pgx.Tx,
+	ctx context.Context,
+	tx pgx.Tx,
 	schedule Schedule,
 	occurrence Occurrence,
 ) (Outcome, error) {
@@ -199,6 +226,18 @@ func (producer *RetentionProducer) Produce(
 			"%w: retention producer has no policy for schedule %s",
 			ErrProducerUnavailable, schedule.ID,
 		)
+	}
+	if spec.ContractVersion > producer.activeProducerVersion {
+		return Outcome{SkipReason: "consumer_version_incompatible"}, nil
+	}
+	if spec.Policy == jobcontract.RetentionAskDevConversations {
+		state, err := producer.askDevAdmission.State(ctx, tx)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("schedule %s: %w", schedule.ID, err)
+		}
+		if !state.Eligible() {
+			return Outcome{SkipReason: "ask_dev_inactive_without_state"}, nil
+		}
 	}
 	// The handler reads no environment and requires a UTC RFC3339 cutoff with a
 	// trailing Z: a non-UTC offset is a permanent failure there. Deriving it

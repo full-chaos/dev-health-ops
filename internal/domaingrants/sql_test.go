@@ -195,6 +195,21 @@ SELECT count(*) FROM required_tables`
 	notPresent(t, res, "required_tables")
 }
 
+func TestParseStatement_MaterializedCTEIsNotATable(t *testing.T) {
+	sql := `
+WITH candidates AS MATERIALIZED (
+	SELECT conversation.id
+	FROM public.dev_conversations AS conversation
+	FOR UPDATE OF conversation
+)
+DELETE FROM public.dev_conversations AS conversation
+USING candidates
+WHERE conversation.id = candidates.id`
+	res := ParseStatement(sql)
+	has(t, res, "dev_conversations", PrivSelect, PrivUpdate, PrivDelete)
+	notPresent(t, res, "candidates")
+}
+
 func TestParseStatement_CommentsDoNotSmuggleTables(t *testing.T) {
 	sql := `-- FROM public.fake_table
 SELECT 1 /* JOIN public.also_fake */ FROM public.real_table`

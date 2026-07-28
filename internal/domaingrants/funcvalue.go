@@ -31,7 +31,7 @@ import (
 //
 // Why this mattered enough to fix rather than document: it hid the ENTIRE
 // scheduler and fixed-engine query surface from the coordinator derivation --
-// 8 of CoordinatorPosture()'s 19 tables (scheduled_jobs,
+// 8 of CoordinatorPosture()'s 23 tables (scheduled_jobs,
 // scheduled_sync_occurrences, fixed_schedule_occurrences, organizations,
 // sync_configurations, remaining_metric_runs, remaining_metric_partitions,
 // work_graph_execution_requests). The reconciler's equivalent hops

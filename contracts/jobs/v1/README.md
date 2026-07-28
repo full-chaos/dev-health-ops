@@ -40,6 +40,12 @@ deployment process and proves the maximum PostgreSQL connection footprint.
 published policy enums; accepting v3 must never make an older-version decoder
 accept the new deletion capability.
 
+The registry and ops consumer accept v3 before production emission is enabled.
+`migration-state.json` therefore keeps `producer_version` at 2 until capability
+reports from every live ops profile prove the v3 schema digest. The fixed
+scheduler treats that producer version as an admission boundary and cannot
+construct a v3 envelope while the route remains at v2.
+
 ## Validation
 
 From the repository root:

@@ -3329,12 +3329,12 @@
       "notes": "does NOT cover prune_rate_limit_observations/prune_external_ingest_batches (gap 2.6)"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:419",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:421",
       "surface": "workgraph.build",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 419
+        "line": 421
       },
       "queue_or_cadence": "workgraph / heavy",
       "dispatches": "run_work_graph_build",

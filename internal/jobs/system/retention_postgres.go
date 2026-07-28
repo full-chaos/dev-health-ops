@@ -98,11 +98,12 @@ func (store *AskDevConversationStore) DeleteBefore(
 	}
 	return deleteInChunks(ctx, store.pool, `
 		WITH candidates AS MATERIALIZED (
-			SELECT id, org_id, user_id, retention_days, created_at
-			FROM public.dev_conversations
-			WHERE expires_at IS NOT NULL AND expires_at <= $1
-			ORDER BY expires_at, id
-			FOR UPDATE SKIP LOCKED
+			SELECT candidate.id, candidate.org_id, candidate.user_id,
+				candidate.retention_days, candidate.created_at
+			FROM public.dev_conversations AS candidate
+			WHERE candidate.expires_at IS NOT NULL AND candidate.expires_at <= $1
+			ORDER BY candidate.expires_at, candidate.id
+			FOR UPDATE OF candidate SKIP LOCKED
 			LIMIT $2
 		), inserted_tombstones AS (
 			INSERT INTO public.dev_conversation_tombstones (

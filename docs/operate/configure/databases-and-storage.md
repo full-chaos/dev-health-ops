@@ -118,11 +118,12 @@ values are 0 and 30 days. The 30-day expiry is persisted on each conversation
 and moves with its latest activity; the retention worker consumes that exact
 timestamp and must not apply a second horizon. The zero-day path removes
 content as soon as a request terminalizes. A daily bounded cleanup at 05:30 UTC
-repairs expired rows with `FOR UPDATE SKIP LOCKED` batches and is replay-safe.
+is staged to repair expired rows with `FOR UPDATE SKIP LOCKED` batches and is
+replay-safe after the v3 producer compatibility cutover.
 
 Disabling the Ask Dev feature is the normal application rollback. The additive
 tables remain dormant, existing LLM workflows are unchanged, and previously
 saved conversations continue through their selected retention or explicit
 delete path. Do not downgrade the database while a binary that imports the Ask
 Dev models is deployed. The pre-release downgrade rehearsal for migration
-`0067` drops only the six `dev_*` tables.
+`0068` drops only the six `dev_*` tables.

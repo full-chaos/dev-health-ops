@@ -227,7 +227,10 @@ var (
 	// its own self-reference later in the same query
 	// (`FROM required_table_privileges AS required`) gets mis-parsed as a
 	// real external table read.
-	cteDefRE = regexp.MustCompile(`(?i)\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\([^()]*\)\s*)?AS\s*\(`)
+	// PostgreSQL also permits the optional MATERIALIZED / NOT MATERIALIZED
+	// modifier between AS and the opening parenthesis. Missing that shape
+	// makes the analyzer report the CTE alias as an external table.
+	cteDefRE = regexp.MustCompile(`(?i)\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\([^()]*\)\s*)?AS\s+(?:(?:NOT\s+)?MATERIALIZED\s+)?\(`)
 
 	insertIntoRE = regexp.MustCompile(`(?i)\bINSERT\s+INTO\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)`)
 	updateSetRE  = regexp.MustCompile(`(?i)\bUPDATE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+(?:AS\s+[a-zA-Z_][a-zA-Z0-9_]*\s+)?SET\b`)

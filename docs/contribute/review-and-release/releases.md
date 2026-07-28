@@ -30,7 +30,8 @@ types. It does not ship orchestration, persistence, API routes, or UI.
 Before release, run the ops contract check and migration tests and the web
 generated-type check. Rollback may leave the additive feature row in place; it
 remains effectively disabled unless explicitly granted, and the global feature
-decision is still the emergency kill switch.
+decision is still the emergency kill switch. Future inclusion in paid plans is
+a separate product change and is not part of this V1 release.
 
 ## Ask Dev Wave 1 release note
 
@@ -42,7 +43,10 @@ decision is still the emergency kill switch.
   with their original frozen policy domains.
 - **Known limited:** this storage release does not enable Ask Dev or replace
   existing LLM workflows. UI/API/orchestrator owners must use the canonical
-  persistence service and validated `dev_answer.v1` seam before rollout.
+  persistence service and validated `dev_answer.v1` seam before rollout. The
+  ops consumer accepts retention v3, but the active producer remains v2 until
+  live capability reports prove every consumer is compatible.
 - **Rollback:** disable Ask Dev normally. Downgrade migration `0068` only in a
   pre-release environment after new binaries are stopped because it deletes
-  all Ask Dev tables and their contents.
+  all Ask Dev tables and their contents. Disabling the feature never disables
+  retention for conversations already stored.

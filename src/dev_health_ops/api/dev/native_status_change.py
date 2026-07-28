@@ -22,6 +22,7 @@ from .native_evidence import (
     default_native_freshness_policies,
 )
 from .status_change_service import (
+    MAX_STATUS_ASSESSMENT_ITEMS,
     ChangeCategory,
     ChangeWindow,
     CIFact,
@@ -240,7 +241,7 @@ class ClickHouseStatusChangeSource:
             "entity_id": entity_id,
             "pr_number": self._pr_number(entity_id),
             "as_of": as_of.astimezone(UTC),
-            "limit": min(limit, 100),
+            "limit": min(limit, MAX_STATUS_ASSESSMENT_ITEMS),
         }
         work_item_rows: list[dict[str, Any]] = []
         if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT}:

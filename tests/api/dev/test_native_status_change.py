@@ -159,6 +159,33 @@ async def test_native_pr_ci_never_invents_required_check_semantics(
 
 
 @pytest.mark.asyncio
+async def test_native_reader_preserves_the_completion_assessment_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_limits: list[int] = []
+
+    async def fake_query(
+        _client: object, _sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed_limits.append(int(params["limit"]))
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    assert observed_limits
+    assert set(observed_limits) == {1_000}
+
+
+@pytest.mark.asyncio
 async def test_native_change_reader_returns_only_canonical_observed_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

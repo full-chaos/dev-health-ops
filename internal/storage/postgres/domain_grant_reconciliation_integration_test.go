@@ -321,6 +321,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			tier text NOT NULL, features_override json
 		)`,
 		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",

@@ -1487,6 +1487,7 @@
         "target_work_item_id",
         "relationship_type",
         "relationship_type_raw",
+        "relationship_semantics_version",
         "last_synced",
         "org_id",
         "source_id"
@@ -1505,6 +1506,7 @@
         "gh:Acme/API#8",
         "blocks",
         "blocks",
+        "canonical-blocks.v2",
         "2026-07-23T12:00:00.000000Z",
         "org-golden",
         "9749bda0-fc9f-4076-b19d-7b26c4f306ff"

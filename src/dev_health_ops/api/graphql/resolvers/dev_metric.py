@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -28,13 +27,10 @@ from dev_health_ops.api.dev.scope_service import (
     TimeRangeRequest,
 )
 from dev_health_ops.db import get_postgres_session
-from dev_health_ops.licensing.feature_decisions import is_org_feature_enabled_async
-from dev_health_ops.licensing.registry import ASK_DEV_FEATURE
 from dev_health_ops.models.settings import SyncConfiguration
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
-from ..errors import AuthorizationError
 from ..types.dev_metric import (
     DevMetricCatalog,
     DevMetricCatalogInput,
@@ -51,6 +47,7 @@ from ..types.dev_metric import (
     DevMetricSourceRef,
     DevMetricValue,
 )
+from . import dev_entitlement
 from .dev_scope import permission_fingerprint
 
 REGISTRY_VERSION = "ask-dev-metrics.v1"
@@ -106,7 +103,7 @@ async def resolve_dev_metric_catalog(
 ) -> DevMetricCatalog:
     org_id = require_org_id(context)
     permission_fingerprint(context)
-    await _require_ask_dev_entitlement(org_id)
+    await dev_entitlement.require_ask_dev_entitlement(org_id)
     service = MetricQueryService(ClickHouseMetricSource(context.client))
     definitions = service.list_metrics()
     if input is not None and input.direct_scope is not None:
@@ -129,7 +126,7 @@ async def resolve_dev_metric(
 ) -> DevMetricResult:
     org_id = require_org_id(context)
     fingerprint = permission_fingerprint(context)
-    await _require_ask_dev_entitlement(org_id)
+    await dev_entitlement.require_ask_dev_entitlement(org_id)
     if context.client is None:
         raise RuntimeError("Database client not available for metric query")
     scope = await _resolve_scope(context, input)
@@ -289,23 +286,6 @@ def _request_source_state_resolver() -> Callable[[str, MetricDefinition], Any]:
         return state
 
     return resolve
-
-
-async def _require_ask_dev_entitlement(org_id: str) -> None:
-    """Fail closed unless the explicit-purchase Ask Dev gate is enabled."""
-    try:
-        canonical_org_id = uuid.UUID(org_id)
-    except ValueError as exc:
-        raise AuthorizationError("Ask Dev entitlement required") from exc
-    try:
-        async with get_postgres_session() as session:
-            allowed = await is_org_feature_enabled_async(
-                session, canonical_org_id, ASK_DEV_FEATURE
-            )
-    except Exception as exc:
-        raise AuthorizationError("Ask Dev entitlement required") from exc
-    if not allowed:
-        raise AuthorizationError("Ask Dev entitlement required")
 
 
 __all__ = [

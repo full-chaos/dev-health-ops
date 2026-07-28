@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
 
 from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
 from dev_health_ops.api.graphql.context import GraphQLContext
+from dev_health_ops.api.graphql.resolvers import dev_entitlement
 from dev_health_ops.api.graphql.schema import schema
 from dev_health_ops.api.services.auth import AuthenticatedUser
 
@@ -18,6 +20,8 @@ query ScopeSearch($orgId: String!, $input: DevScopeSearchInput!) {
   }
 }
 """
+ORG_ID = "70d529e0-3c06-4597-8480-794fd02328b6"
+OTHER_ORG_ID = "80d529e0-3c06-4597-8480-794fd02328b6"
 
 
 class FakeCatalog:
@@ -27,7 +31,7 @@ class FakeCatalog:
         pass
 
     async def watermark(self, org_id: str, kinds: tuple[EntityKind, ...]) -> str:
-        assert org_id == "org-a"
+        assert org_id == ORG_ID
         return "2026-07-28T12:00:00+00:00"
 
     async def search(
@@ -39,7 +43,7 @@ class FakeCatalog:
         limit: int,
     ) -> list[AuthorizedEntity]:
         type(self).calls += 1
-        assert org_id == "org-a"
+        assert org_id == ORG_ID
         assert query == "ask"
         assert kinds == (EntityKind.ISSUE, EntityKind.PROJECT)
         assert limit == 25
@@ -52,7 +56,7 @@ class FakeCatalog:
         raise AssertionError("GraphQL scope search must use the shared search service")
 
 
-def _context(org_id: str = "org-a", *, authenticated: bool = True) -> GraphQLContext:
+def _context(org_id: str = ORG_ID, *, authenticated: bool = True) -> GraphQLContext:
     user = None
     if authenticated:
         user = AuthenticatedUser(
@@ -70,9 +74,23 @@ def _context(org_id: str = "org-a", *, authenticated: bool = True) -> GraphQLCon
     )
 
 
+@pytest.fixture
+def _allow_ask_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    async def allow(_session, _org_id, _feature_key):
+        return True
+
+    monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
+    monkeypatch.setattr(dev_entitlement, "is_org_feature_enabled_async", allow)
+
+
 @pytest.mark.asyncio
 async def test_graphql_scope_search_uses_shared_authorized_service(
     monkeypatch: pytest.MonkeyPatch,
+    _allow_ask_dev,
 ) -> None:
     FakeCatalog.calls = 0
     monkeypatch.setattr(
@@ -83,7 +101,7 @@ async def test_graphql_scope_search_uses_shared_authorized_service(
     result = await schema.execute(
         _QUERY,
         variable_values={
-            "orgId": "org-a",
+            "orgId": ORG_ID,
             "input": {"query": "ask", "kinds": ["PROJECT", "ISSUE"]},
         },
         context_value=_context(),
@@ -126,7 +144,7 @@ async def test_graphql_scope_search_rejects_cross_tenant_before_catalog(
     result = await schema.execute(
         _QUERY,
         variable_values={
-            "orgId": "org-b",
+            "orgId": OTHER_ORG_ID,
             "input": {"query": "ask", "kinds": ["PROJECT"]},
         },
         context_value=_context(),
@@ -150,7 +168,7 @@ async def test_graphql_scope_search_requires_authenticated_user(
     result = await schema.execute(
         _QUERY,
         variable_values={
-            "orgId": "org-a",
+            "orgId": ORG_ID,
             "input": {"query": "ask", "kinds": ["PROJECT"]},
         },
         context_value=_context(authenticated=False),
@@ -165,10 +183,44 @@ async def test_graphql_scope_search_does_not_expose_supporting_evidence_kinds() 
     result = await schema.execute(
         _QUERY,
         variable_values={
-            "orgId": "org-a",
+            "orgId": ORG_ID,
             "input": {"query": "prod", "kinds": ["DEPLOYMENT"]},
         },
         context_value=_context(),
     )
 
     assert result.errors is not None
+
+
+@pytest.mark.asyncio
+async def test_graphql_scope_search_requires_canonical_ask_dev_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeCatalog.calls = 0
+
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    async def deny(_session, _org_id, _feature_key):
+        return False
+
+    monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
+    monkeypatch.setattr(dev_entitlement, "is_org_feature_enabled_async", deny)
+    monkeypatch.setattr(
+        "dev_health_ops.api.graphql.resolvers.dev_scope.ClickHouseAuthorizedEntityCatalog",
+        FakeCatalog,
+    )
+
+    result = await schema.execute(
+        _QUERY,
+        variable_values={
+            "orgId": ORG_ID,
+            "input": {"query": "ask", "kinds": ["PROJECT"]},
+        },
+        context_value=_context(),
+    )
+
+    assert result.errors is not None
+    assert result.data is None
+    assert FakeCatalog.calls == 0

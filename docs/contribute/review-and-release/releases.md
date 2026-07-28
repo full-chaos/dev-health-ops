@@ -25,7 +25,9 @@ the `ask_dev` entitlement through the existing explicit-enable path, so every
 tier remains disabled by default. It does not change `byo_llm` or
 `agent_context_runtime`. The release also adds provider-neutral schemas,
 positive and negative fixtures, version compatibility rules, and generated web
-types. It does not ship orchestration, persistence, API routes, or UI.
+types. Wave 1 adds the authorized scope-search and bounded metric GraphQL fields
+behind the same canonical entitlement decision. It does not ship orchestration,
+conversation persistence, or the user interaction UI.
 
 Before release, run the ops contract check and migration tests and the web
 generated-type check. Rollback may leave the additive feature row in place; it

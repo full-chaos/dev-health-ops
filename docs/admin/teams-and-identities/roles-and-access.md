@@ -28,6 +28,8 @@ authenticated server session. Browser-provided organization, repository,
 project, WorkUnit, issue, pull-request, page-context, and conversation-context
 IDs are reauthorized before use. Team selections are filters over an authorized
 direct scope and do not grant access to additional repositories or entities.
+The scope and metric GraphQL fields also require the canonical `ask_dev`
+feature decision; request fields and UI state cannot grant that entitlement.
 
 Missing and unauthorized stable IDs intentionally return the same
 existence-neutral result. Administrators should not expect the response to

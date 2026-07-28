@@ -25,6 +25,7 @@ from ..types.dev_scope import (
     DevScopeSearchInput,
     DevScopeSearchResult,
 )
+from . import dev_entitlement
 
 
 def permission_fingerprint(context: GraphQLContext) -> str:
@@ -65,9 +66,11 @@ async def resolve_dev_scope_search(
     context: GraphQLContext, input: DevScopeSearchInput
 ) -> DevScopeSearchResult:
     org_id = require_org_id(context)
+    fingerprint = permission_fingerprint(context)
+    await dev_entitlement.require_ask_dev_entitlement(org_id)
     result = await _scope_service(context).search(
         org_id,
-        permission_fingerprint(context),
+        fingerprint,
         ScopeSearchRequest(
             query=input.query,
             kinds=tuple(EntityKind(kind.value) for kind in input.kinds),

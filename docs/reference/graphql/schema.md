@@ -33,9 +33,10 @@ enum.
 
 The result includes canonical IDs, safe labels, an optional canonical repository
 ID, `queryVersion`, and `catalogWatermark`. The resolver requires an
-authenticated user with metrics-read permission and uses the same application
-service as `resolve_scope.v1`; GraphQL is not a separate authorization or entity
-resolution implementation.
+authenticated user with metrics-read permission and an enabled canonical
+`ask_dev` decision. It uses the same application service as `resolve_scope.v1`;
+GraphQL is not a separate authorization, entitlement, or entity-resolution
+implementation.
 
 `DevMetricQueryInput` accepts one typed metric ID, one resolved direct-scope
 shape, an optional team filter, supported dimensions, and bounded comparison or

@@ -58,11 +58,17 @@ effective tier default is false for every tier. Inclusion in paid plans may be
 considered later only through separate product change control; it is not part
 of the current V1 entitlement.
 
-The Wave 1 foundation adds dark, additive storage but not the Ask Dev API,
-orchestration, or web experience. Operators should keep the entitlement
-disabled until the documented launch gates pass. Disabling it later must hide
-or deny new Ask Dev work without changing categorization BYO LLM behavior or
-ACR/MCP access; expiry, deletion, and purge continue for content already stored.
+Do not infer Ask Dev access from a paid plan. Bundling it into all paid plans is
+a deferred commercial possibility and requires a new accepted product decision,
+registry/migration change, and verification matrix before implementation.
+
+The current Wave 1 backend exposes authorized scope search and the bounded
+eight-metric catalog/query API through this canonical feature decision, plus
+dark additive conversation storage. It does not add Ask Dev orchestration or
+the web experience. Operators should keep the entitlement disabled until the
+documented launch gates pass. Disabling it later must hide or deny new Ask Dev
+work without changing categorization BYO LLM behavior or ACR/MCP access;
+expiry, deletion, and purge continue for content already stored.
 
 ## Go worker migration routes
 

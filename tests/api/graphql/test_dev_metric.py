@@ -89,11 +89,16 @@ def _allow_ask_dev(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_session():
         yield object()
 
-    async def allow(_session, _org_id, _feature_key):
-        return True
+    class AllowedEntitlement:
+        async def require(self, _org_id: str) -> None:
+            return None
 
     monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
-    monkeypatch.setattr(dev_entitlement, "is_org_feature_enabled_async", allow)
+    monkeypatch.setattr(
+        dev_entitlement,
+        "CanonicalAskDevEntitlementAuthorizer",
+        lambda _session: AllowedEntitlement(),
+    )
 
 
 @pytest.mark.asyncio
@@ -236,14 +241,58 @@ async def test_graphql_metric_catalog_requires_ask_dev_entitlement(
     async def fake_session():
         yield object()
 
-    async def deny(_session, _org_id, _feature_key):
-        return False
+    class DeniedEntitlement:
+        async def require(self, _org_id: str) -> None:
+            raise RuntimeError("denied")
 
     monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
-    monkeypatch.setattr(dev_entitlement, "is_org_feature_enabled_async", deny)
+    monkeypatch.setattr(
+        dev_entitlement,
+        "CanonicalAskDevEntitlementAuthorizer",
+        lambda _session: DeniedEntitlement(),
+    )
     result = await schema.execute(
         _CATALOG_QUERY,
         variable_values={"orgId": ORG_ID},
+        context_value=_context(),
+    )
+
+    assert result.errors is not None
+    assert result.data is None
+
+
+@pytest.mark.asyncio
+async def test_graphql_metric_query_requires_ask_dev_entitlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    class DeniedEntitlement:
+        async def require(self, _org_id: str) -> None:
+            raise RuntimeError("denied")
+
+    monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
+    monkeypatch.setattr(
+        dev_entitlement,
+        "CanonicalAskDevEntitlementAuthorizer",
+        lambda _session: DeniedEntitlement(),
+    )
+
+    result = await schema.execute(
+        _METRIC_QUERY,
+        variable_values={
+            "orgId": ORG_ID,
+            "input": {
+                "metricId": "ITEMS_COMPLETED",
+                "scope": {
+                    "directScope": "ORGANIZATION",
+                    "startDate": "2026-07-01",
+                    "endDate": "2026-07-08",
+                },
+            },
+        },
         context_value=_context(),
     )
 
@@ -261,16 +310,22 @@ async def test_shared_entitlement_boundary_uses_canonical_feature_decision(
     async def fake_session():
         yield object()
 
-    async def decide(session, org_id, feature_key):
-        observed.update(session=session, org_id=org_id, feature_key=feature_key)
-        return True
+    class ObservedEntitlement:
+        def __init__(self, session: object) -> None:
+            observed["session"] = session
+
+        async def require(self, org_id: str) -> None:
+            observed["org_id"] = org_id
 
     monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
-    monkeypatch.setattr(dev_entitlement, "is_org_feature_enabled_async", decide)
+    monkeypatch.setattr(
+        dev_entitlement,
+        "CanonicalAskDevEntitlementAuthorizer",
+        ObservedEntitlement,
+    )
 
     await dev_entitlement.require_ask_dev_entitlement(
         "70d529e0-3c06-4597-8480-794fd02328b6"
     )
 
-    assert str(observed["org_id"]) == "70d529e0-3c06-4597-8480-794fd02328b6"
-    assert observed["feature_key"] == "ask_dev"
+    assert observed["org_id"] == "70d529e0-3c06-4597-8480-794fd02328b6"

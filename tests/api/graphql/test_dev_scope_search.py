@@ -80,11 +80,16 @@ def _allow_ask_dev(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_session():
         yield object()
 
-    async def allow(_session, _org_id, _feature_key):
-        return True
+    class AllowedEntitlement:
+        async def require(self, _org_id: str) -> None:
+            return None
 
     monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
-    monkeypatch.setattr(dev_entitlement, "is_org_feature_enabled_async", allow)
+    monkeypatch.setattr(
+        dev_entitlement,
+        "CanonicalAskDevEntitlementAuthorizer",
+        lambda _session: AllowedEntitlement(),
+    )
 
 
 @pytest.mark.asyncio
@@ -202,11 +207,16 @@ async def test_graphql_scope_search_requires_canonical_ask_dev_entitlement(
     async def fake_session():
         yield object()
 
-    async def deny(_session, _org_id, _feature_key):
-        return False
+    class DeniedEntitlement:
+        async def require(self, _org_id: str) -> None:
+            raise RuntimeError("denied")
 
     monkeypatch.setattr(dev_entitlement, "get_postgres_session", fake_session)
-    monkeypatch.setattr(dev_entitlement, "is_org_feature_enabled_async", deny)
+    monkeypatch.setattr(
+        dev_entitlement,
+        "CanonicalAskDevEntitlementAuthorizer",
+        lambda _session: DeniedEntitlement(),
+    )
     monkeypatch.setattr(
         "dev_health_ops.api.graphql.resolvers.dev_scope.ClickHouseAuthorizedEntityCatalog",
         FakeCatalog,

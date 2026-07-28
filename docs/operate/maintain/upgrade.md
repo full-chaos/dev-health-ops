@@ -33,3 +33,17 @@ Ask Dev interaction surfaces disabled until their canonical contracts and
 authenticated API path are deployed together. This backend-only delivery adds
 no in-product copy or screenshots; user-visible scope and ambiguity states are
 owned by the later shared Ask Dev interaction surface.
+
+## Ask Dev Wave 1 metric compatibility
+
+The Wave 1 metric delivery adds `devMetricCatalog` and `devMetric` without a
+storage migration. Deploy the API schema only after the existing daily metric
+tables, organization columns, and current readers are present. Regenerate
+downstream GraphQL types before enabling a consumer.
+
+The registry is intentionally closed at eight metrics. A rollback removes the
+additive GraphQL fields and shared query service without reverting data. Do not
+replace `deploy_metrics_daily` change-failure semantics with the older PR-revert
+measure during rollback or compatibility work, and do not use the singular
+`work_item_state_duration_daily` name: the supported table is
+`work_item_state_durations_daily`.

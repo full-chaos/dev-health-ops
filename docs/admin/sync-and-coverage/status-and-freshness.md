@@ -52,6 +52,32 @@ Compare:
 
 A successful connection or recent worker heartbeat is not proof that the selected product period is covered. A completed run outside the selected time window may be healthy but irrelevant.
 
+### Ask Dev metric freshness
+
+Ask Dev daily metrics use coverage watermarks, not a universal elapsed-hours
+threshold. A daily source is fresh when its latest valid materialized day covers
+the latest completed UTC day required by the selected window and the required
+upstream source is configured and available. The open UTC day is partial and is
+not itself evidence that completed data is stale.
+
+Treat the visible states separately:
+
+- `UNCONFIGURED`: no active synchronization configuration covers the required
+  upstream dataset;
+- `UNAVAILABLE`: the configured source or metric store could not provide a
+  usable result;
+- `STALE`: the source is available, but its materialized-day watermark does not
+  cover the required completed day;
+- `PARTIAL`: the selected window includes the open UTC day;
+- `NO_MATCH`: the source is available and current, but no rows match the
+  authorized scope and window;
+- `INSUFFICIENT_EVIDENCE`: rows exist but a required denominator or persisted
+  input is absent;
+- `ZERO`: matching measured rows explicitly produce zero.
+
+Do not convert any of these states to zero, and do not use a connection's last
+successful sync timestamp as a substitute for table-specific coverage.
+
 ## Provider-specific checks
 
 ### PagerDuty

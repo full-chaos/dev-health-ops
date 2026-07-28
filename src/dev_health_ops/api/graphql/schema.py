@@ -82,6 +82,7 @@ from .resolvers.cognitive_load import resolve_cognitive_load
 from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
+from .resolvers.dev_metric import resolve_dev_metric, resolve_dev_metric_catalog
 from .resolvers.dev_scope import resolve_dev_scope_search
 from .resolvers.improve import resolve_improve_opportunities
 from .resolvers.pr import resolve_pr
@@ -123,6 +124,12 @@ from .types.compounding_risk import (
     CompoundingRiskFilterInput,
     CompoundingRiskResult,
 )
+from .types.dev_metric import (
+    DevMetricCatalog,
+    DevMetricCatalogInput,
+    DevMetricQueryInput,
+    DevMetricResult,
+)
 from .types.dev_scope import DevScopeSearchInput, DevScopeSearchResult
 from .types.review_edges import (
     ReviewEdgesInput,
@@ -155,6 +162,31 @@ class Query:
         input: DevScopeSearchInput,
     ) -> DevScopeSearchResult:
         return await resolve_dev_scope_search(get_context(info), input)
+
+    @strawberry.field(
+        description="List the exact authorized Ask Dev V1 metric registry."
+    )
+    async def dev_metric_catalog(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevMetricCatalogInput | None = None,
+    ) -> DevMetricCatalog:
+        return await resolve_dev_metric_catalog(get_context(info), input)
+
+    @strawberry.field(
+        description=(
+            "Query one registered Ask Dev V1 metric through the shared bounded "
+            "service, including prior-equivalent comparison and source state."
+        )
+    )
+    async def dev_metric(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevMetricQueryInput,
+    ) -> DevMetricResult:
+        return await resolve_dev_metric(get_context(info), input)
 
     @strawberry.field(
         description="Get catalog of available dimensions, measures, and limits"

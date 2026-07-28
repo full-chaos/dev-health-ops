@@ -16,3 +16,17 @@ lifecycle: active
 5. Retain the route and visible message for escalation.
 
 AI Attribution, several report subroutes, and some other product routes are currently marked preview in the product navigation source. Their absence from v2 navigation is intentional.
+
+## Ask Dev metrics
+
+Ask Dev metric catalog and query fields require an authenticated workspace
+member with metrics-read access and the Ask Dev entitlement. The server derives
+the organization and effective permissions from the session and reauthorizes
+all requested scope IDs. Supplying another workspace's ID does not reveal
+whether that entity exists.
+
+A blank or unavailable metric is not automatically zero. Preserve the selected
+scope, dates, metric name, and displayed state when asking an administrator for
+help. `NO_MATCH`, `INSUFFICIENT_EVIDENCE`, `PARTIAL`, `STALE`, `UNCONFIGURED`,
+and `UNAVAILABLE` each identify a different next check; only `ZERO` represents
+matching measured rows whose value is zero.

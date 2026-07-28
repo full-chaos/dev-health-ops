@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -13,6 +13,14 @@ from dev_health_ops.api.dev.contracts import (
     DirectScope,
     EntityType,
     FreshnessState,
+    MetricID,
+)
+from dev_health_ops.api.dev.metrics.service import (
+    MetricQueryService,
+    MetricSourceRef,
+    MetricSourceState,
+    RawMetricResult,
+    RawMetricRow,
 )
 from dev_health_ops.api.dev.status_change_service import (
     CHANGE_CONTRACT_VERSION,
@@ -122,6 +130,46 @@ class Source:
                 ),
             ),
             source_refs=(_source_ref(),),
+        )
+
+
+class MetricSource:
+    async def watermark(self, org_id, definition, scope):
+        return f"{org_id}:{definition.metric_id.value}:{scope.time_range.end}"
+
+    async def query(
+        self,
+        org_id,
+        definition,
+        scope,
+        *,
+        comparison,
+        include_series,
+        max_series_points,
+    ):
+        del org_id, include_series, max_series_points
+        latest_day = date(2026, 7, 20) if comparison else date(2026, 7, 27)
+        watermark = datetime.combine(latest_day, datetime.min.time(), tzinfo=UTC)
+        return RawMetricResult(
+            rows=(
+                RawMetricRow(
+                    dimensions=(), value=4.0 if comparison else 6.0, series=()
+                ),
+            ),
+            watermark=watermark,
+            latest_materialized_day=latest_day,
+            source_state=MetricSourceState.AVAILABLE,
+            covered_days=7,
+            expected_days=7,
+            source_refs=(
+                MetricSourceRef(
+                    ref_id=f"metric-source:{definition.metric_id.value}",
+                    source_table=definition.source_table,
+                    source_version=definition.source_version,
+                    watermark=watermark,
+                    query_version=definition.query_version,
+                ),
+            ),
         )
 
 
@@ -241,6 +289,45 @@ async def test_change_summary_is_reproducible_and_tenant_scoped() -> None:
     assert source.change_calls[0] == source.change_calls[1]
     with pytest.raises(ValueError, match="authenticated organization"):
         await service.change_summary("org-b", "permission-v1", request)
+
+
+@pytest.mark.asyncio
+async def test_change_summary_reserves_bound_for_registered_metric_deltas() -> None:
+    source = Source(
+        RawStatusSnapshot(
+            declared=_fact("issue-1", "done"), source_refs=(_source_ref(),)
+        )
+    )
+    service = StatusChangeService(
+        source, metric_service=MetricQueryService(MetricSource())
+    )
+    request = ChangeSummaryRequest(
+        scope=_scope(),
+        current_start=NOW - timedelta(days=7),
+        current_end=NOW,
+        comparison_start=NOW - timedelta(days=14),
+        comparison_end=NOW - timedelta(days=7),
+        max_items=5,
+    )
+
+    result = await service.change_summary("org-a", "permission-v1", request)
+
+    assert len(result.changes) == 5
+    assert all(change.category is ChangeCategory.METRIC for change in result.changes)
+    assert {change.metric_id for change in result.changes} == {
+        MetricID.DEPLOYMENTS_COUNT,
+        MetricID.CHANGE_FAILURE_RATE,
+        MetricID.INVESTMENT_ALLOCATION_PCT,
+        MetricID.CYCLOMATIC_PER_KLOC,
+        MetricID.COMPOUNDING_RISK_SCORE,
+    }
+    assert all(change.metric_value == 6.0 for change in result.changes)
+    assert all(change.metric_comparison_value == 4.0 for change in result.changes)
+    assert all(change.source_ref_ids for change in result.changes)
+    assert (
+        len([ref for ref in result.source_refs if ref.ref_id.startswith("metric-")])
+        == 5
+    )
 
 
 @pytest.mark.asyncio

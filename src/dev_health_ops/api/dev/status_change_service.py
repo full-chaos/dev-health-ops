@@ -389,6 +389,7 @@ class StatusChangeService:
             limit=request.max_items,
         )
         changes = list(raw.changes)
+        metric_changes: list[ObservedChange] = []
         warnings = list(raw.warnings)
         source_refs = list(raw.source_refs)
         if self._metric_service is not None:
@@ -402,11 +403,26 @@ class StatusChangeService:
                 )
                 if result.state not in {MetricDataState.VALUE, MetricDataState.ZERO}:
                     warnings.extend(result.warnings)
+                for metric_source in result.source_refs:
+                    source_refs.append(
+                        SourceReference(
+                            ref_id=metric_source.ref_id,
+                            source_system=metric_source.source_table,
+                            source_version=metric_source.source_version,
+                            freshness=result.freshness,
+                            watermark=metric_source.watermark,
+                            evidence_ref_ids=(),
+                        )
+                    )
+                if result.state not in {MetricDataState.VALUE, MetricDataState.ZERO}:
                     continue
                 for value in result.values:
-                    changes.append(
+                    metric_changes.append(
                         ObservedChange(
-                            change_id=f"metric:{metric_id.value}:{len(changes)}",
+                            change_id=(
+                                f"metric:{metric_id.value}:"
+                                f"{','.join(f'{key}={item}' for key, item in value.dimensions)}"
+                            ),
                             category=ChangeCategory.METRIC,
                             entity_type="metric",
                             entity_id=metric_id.value,
@@ -429,7 +445,16 @@ class StatusChangeService:
                             ),
                         )
                     )
-        ordered = tuple(sorted(changes, key=self._change_key)[: request.max_items])
+        ordered_metrics = sorted(
+            metric_changes,
+            key=lambda change: (change.entity_id, change.change_id),
+        )
+        remaining = max(0, request.max_items - len(ordered_metrics))
+        ordered = tuple(
+            ordered_metrics[: request.max_items]
+            + sorted(changes, key=self._change_key)[:remaining]
+        )
+        source_refs = list({ref.ref_id: ref for ref in source_refs}.values())
         freshness = {ref.freshness for ref in source_refs}
         state = (
             StatusResultState.DEGRADED
@@ -612,8 +637,7 @@ class StatusChangeService:
             if unknown_reasons or not declared_complete
             else CompletionState.READY
         )
-        used_source_ids = self._fact_sources(raw)
-        used_source_ids = tuple(ref for ref in used_source_ids if ref in source_by_id)
+        used_source_ids = tuple(sorted(source_by_id))
         return ActualCompletion(
             state=state,
             rule_id=STATUS_RULE_ID,

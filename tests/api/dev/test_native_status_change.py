@@ -233,6 +233,150 @@ async def test_native_pr_green_pipeline_with_skipped_required_check_is_not_ready
     assert result.ci[0].skipped_required_work is True
 
 
+@pytest.mark.parametrize(
+    ("older_result", "newer_result", "expected_state"),
+    (
+        ("failed", "passed", CompletionState.READY),
+        ("passed", "failed", CompletionState.NOT_READY),
+    ),
+)
+@pytest.mark.asyncio
+async def test_native_pr_assesses_only_the_latest_ci_run_as_a_unit(
+    monkeypatch: pytest.MonkeyPatch,
+    older_result: str,
+    newer_result: str,
+    expected_state: CompletionState,
+) -> None:
+    older = NOW - timedelta(hours=1)
+    observed_ci_params: list[dict[str, Any]] = []
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM git_pull_requests" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "number": 7,
+                    "entity_id": "repo-a#pr7",
+                    "display_label": "PR 7",
+                    "state": "merged",
+                    "review_state": "APPROVED",
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM ci_pipeline_runs" in sql:
+            observed_ci_params.append(params)
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-new",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci-new",
+                    "display_label": "New CI",
+                    "conclusion": "success",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                },
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-old",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci-old",
+                    "display_label": "Old CI",
+                    "conclusion": "failure",
+                    "observed_at": older,
+                    "last_synced": older,
+                },
+            ]
+        if "FROM ci_acceptance_checks" in sql:
+            observed_ci_params.append(params)
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-new",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci-new#required",
+                    "display_label": "required",
+                    "requirement": "required",
+                    "conclusion": newer_result,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                },
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-new",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci-new#optional",
+                    "display_label": "optional",
+                    "requirement": "optional",
+                    "conclusion": "failed",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                },
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-old",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci-old#required",
+                    "display_label": "required",
+                    "requirement": "required",
+                    "conclusion": older_result,
+                    "observed_at": older,
+                    "last_synced": older,
+                },
+            ]
+        if "FROM deployments" in sql:
+            return [
+                {
+                    "entity_id": "deployment-1",
+                    "status": "success",
+                    "environment": "production",
+                    "pr_number": 7,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM operational_incidents" in sql:
+            return [
+                {
+                    "entity_id": "incident-1",
+                    "display_label": "Resolved incident",
+                    "status": "resolved",
+                    "active": 0,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(DirectScope.PULL_REQUEST), as_of=NOW),
+    )
+
+    assert result.actual.state is expected_state
+    assert {fact.entity_id for fact in result.ci} == {
+        "repo-a#ci-new#required",
+        "repo-a#ci-new#optional",
+    }
+    assert ("required_ci_not_passing" in result.actual.reason_codes) is (
+        newer_result == "failed"
+    )
+    assert observed_ci_params
+    assert all(params["org_id"] == "org-a" for params in observed_ci_params)
+    assert all(params["as_of"] == NOW for params in observed_ci_params)
+
+
 @pytest.mark.asyncio
 async def test_native_reader_preserves_the_completion_assessment_bound(
     monkeypatch: pytest.MonkeyPatch,

@@ -66,6 +66,7 @@ def default_native_freshness_policies() -> dict[str, SourceFreshnessPolicy]:
             "reviews",
             "commits",
             "ci_runs",
+            "ci_acceptance_checks",
             "deployments",
             "incidents",
         )

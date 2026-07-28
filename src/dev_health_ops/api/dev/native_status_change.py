@@ -325,6 +325,18 @@ class ClickHouseStatusChangeSource:
                 if (str(row.get("repository_id") or ""), int(row.get("pr_number") or 0))
                 in pr_pairs
             ]
+            ci_rows = self._latest_ci_run_rows(ci_rows)
+            latest_pipeline_runs = {
+                self._ci_run_scope(row): str(row.get("run_id") or "") for row in ci_rows
+            }
+            ci_acceptance_rows = [
+                row
+                for row in self._latest_ci_run_rows(ci_acceptance_rows)
+                if latest_pipeline_runs.get(
+                    self._ci_run_scope(row), str(row.get("run_id") or "")
+                )
+                == str(row.get("run_id") or "")
+            ]
 
         deployment_rows, deployment_ref, warning = await self._read(
             "deployments",
@@ -665,6 +677,34 @@ class ClickHouseStatusChangeSource:
         declared = next((fact for fact in facts if fact.entity_id == entity_id), None)
         children = tuple(fact for fact in facts if fact is not declared)
         return declared, children
+
+    @classmethod
+    def _latest_ci_run_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep every row from the latest run for each repository and PR."""
+
+        minimum = datetime.min.replace(tzinfo=UTC)
+        latest: dict[tuple[str, int], tuple[datetime, datetime, str]] = {}
+        for row in rows:
+            order = (
+                cls._datetime(row.get("observed_at"), minimum),
+                cls._datetime(row.get("last_synced"), minimum),
+                str(row.get("run_id") or ""),
+            )
+            scope = cls._ci_run_scope(row)
+            if order > latest.get(scope, (minimum, minimum, "")):
+                latest[scope] = order
+        return [
+            row
+            for row in rows
+            if str(row.get("run_id") or "") == latest[cls._ci_run_scope(row)][2]
+        ]
+
+    @staticmethod
+    def _ci_run_scope(row: Mapping[str, Any]) -> tuple[str, int]:
+        return (
+            str(row.get("repository_id") or ""),
+            int(row.get("pr_number") or 0),
+        )
 
     @staticmethod
     def _repository_ids(scope: DevScope) -> list[str]:

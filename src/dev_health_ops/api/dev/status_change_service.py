@@ -650,7 +650,7 @@ class StatusChangeService:
         declared_complete = (
             raw.declared is not None
             and raw.declared.status.casefold()
-            in {"complete", "completed", "done", "closed"}
+            in {"complete", "completed", "done", "closed", "merged"}
         )
         contradiction_codes = {
             "required_child_incomplete",

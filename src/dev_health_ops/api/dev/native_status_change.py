@@ -14,6 +14,11 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from dev_health_ops.api.graphql.resolvers._membership_run_scope import (
+    LATEST_COMPLETE_RUN_SUBQUERY,
+    LEGACY_NODE_MAX_JOIN,
+    RUN_SCOPE_PREDICATE,
+)
 from dev_health_ops.api.queries.client import query_dicts
 
 from .contracts import ClaimKind, DevScope, DirectScope, FreshnessState
@@ -42,6 +47,31 @@ QUERY_TIMEOUT_SECONDS = 15
 
 _BLOCKER_PROJECTION_RULE_VERSION = "canonical-blocks.v2"
 
+_WORK_UNIT_MEMBERSHIP_WATERMARK_SQL = """
+SELECT max(completed_at) AS last_synced
+FROM work_unit_membership_runs
+WHERE org_id = {org_id:String}
+  AND completed_at <= {as_of:DateTime64(3, 'UTC')}
+HAVING count() > 0
+"""
+
+_WORK_UNIT_MEMBERS_SQL = f"""
+WITH latest_run AS (
+{LATEST_COMPLETE_RUN_SUBQUERY.replace("%(org_id)s", "{org_id:String}")}
+)
+SELECT m.node_type, m.node_id, max(m.computed_at) AS last_synced
+FROM work_unit_membership AS m FINAL
+INNER JOIN latest_run ON 1 = 1
+{LEGACY_NODE_MAX_JOIN.replace("%(org_id)s", "{org_id:String}")}
+WHERE m.org_id = {{org_id:String}}
+  AND m.work_unit_id = {{entity_id:String}}
+  AND latest_run.latest_run_id != ''
+  AND ({RUN_SCOPE_PREDICATE})
+GROUP BY m.node_type, m.node_id
+ORDER BY m.node_type, m.node_id
+LIMIT {{limit:UInt32}}
+"""
+
 _WORK_ITEMS_SQL = """
 SELECT toString(repo_id) AS repository_id, work_item_id, title, status,
        parent_id, project_id, project_key, updated_at, last_synced
@@ -54,6 +84,8 @@ WHERE org_id = {org_id:String}
       AND (work_item_id = {entity_id:String} OR parent_id = {entity_id:String}))
     OR ({scope_type:String} = 'project'
       AND (project_id = {entity_id:String} OR project_key = {entity_id:String}))
+    OR ({scope_type:String} = 'work_unit'
+      AND work_item_id IN {member_issue_ids:Array(String)})
   )
 ORDER BY (work_item_id = {entity_id:String}) DESC, updated_at DESC, work_item_id
 LIMIT {limit:UInt32}
@@ -105,6 +137,8 @@ WHERE edge.org_id = {org_id:String}
     ({scope_type:String} = 'issue' AND edge.target_id = {entity_id:String})
     OR ({scope_type:String} = 'project'
       AND (blocked.project_id = {entity_id:String} OR blocked.project_key = {entity_id:String}))
+    OR ({scope_type:String} = 'work_unit'
+      AND edge.target_id IN {member_issue_ids:Array(String)})
   )
 ORDER BY observed_at DESC, entity_id
 LIMIT {limit:UInt32}
@@ -123,14 +157,28 @@ WITH linked AS (
       ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
       OR ({scope_type:String} = 'project'
         AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+      OR ({scope_type:String} = 'work_unit'
+        AND link.work_item_id IN {member_issue_ids:Array(String)})
     )
-), reviews AS (
-  SELECT toString(repo_id) AS repository_id, number,
-         argMax(state, submitted_at) AS review_state,
-         countIf(upper(state) = 'CHANGES_REQUESTED') AS changes_requested
+), latest_reviews AS (
+  SELECT toString(repo_id) AS repository_id, number, reviewer,
+         argMax(state, (submitted_at, last_synced, review_id)) AS state,
+         max(submitted_at) AS submitted_at
   FROM git_pull_request_reviews FINAL
   WHERE org_id = {org_id:String}
     AND toString(repo_id) IN {repository_ids:Array(String)}
+  GROUP BY repository_id, number, reviewer
+), reviews AS (
+  SELECT repository_id, number,
+         multiIf(
+           countIf(upper(state) = 'CHANGES_REQUESTED') > 0,
+           'CHANGES_REQUESTED',
+           countIf(upper(state) = 'APPROVED') > 0,
+           'APPROVED',
+           argMax(state, submitted_at)
+         ) AS review_state,
+         countIf(upper(state) = 'CHANGES_REQUESTED') AS changes_requested
+  FROM latest_reviews
   GROUP BY repository_id, number
 )
 SELECT toString(pr.repo_id) AS repository_id, pr.number,
@@ -153,6 +201,13 @@ WHERE pr.org_id = {org_id:String}
     OR ({scope_type:String} IN ('issue', 'project')
       AND (toString(pr.repo_id), pr.number) IN
           (SELECT repository_id, pr_number FROM linked))
+    OR ({scope_type:String} = 'work_unit'
+      AND (
+        (toString(pr.repo_id), pr.number) IN
+          (SELECT repository_id, pr_number FROM linked)
+        OR concat(toString(pr.repo_id), '#pr', toString(pr.number))
+          IN {member_pr_ids:Array(String)}
+      ))
     OR ({scope_type:String} = 'repository')
   )
 ORDER BY observed_at DESC, entity_id
@@ -476,6 +531,9 @@ SELECT concat(incident.id, '#state#',
        incident.title AS display_label,
        CAST(NULL, 'Nullable(String)') AS before_value,
        ifNull(incident.normalized_status, 'unknown') AS after_value,
+       edge.deployment_id AS deployment_id,
+       edge.source AS relationship_source,
+       edge.confidence AS relationship_confidence,
        coalesce(incident.resolved_at, incident.source_event_at,
                 incident.observed_at) AS observed_at,
        incident.last_synced
@@ -528,14 +586,6 @@ class ClickHouseStatusChangeSource:
         scope_type = scope.direct_scope.value
         warnings: list[str] = []
         source_refs: list[SourceReference] = []
-        if scope.direct_scope is DirectScope.WORK_UNIT:
-            return RawStatusSnapshot(
-                declared=None,
-                source_refs=(self._unavailable_ref("work_unit_status", scope),),
-                warnings=(
-                    "status_snapshot.v1 does not support WORK_UNIT until canonical work-unit membership is projected",
-                ),
-            )
         if not repositories:
             return RawStatusSnapshot(
                 declared=None,
@@ -553,9 +603,68 @@ class ClickHouseStatusChangeSource:
             "pr_number": self._pr_number(entity_id),
             "as_of": as_of.astimezone(UTC),
             "limit": min(limit, MAX_STATUS_ASSESSMENT_ITEMS),
+            "member_issue_ids": [],
+            "member_pr_ids": [],
         }
+        if scope.direct_scope is DirectScope.WORK_UNIT:
+            marker_rows, membership_ref, warning = await self._read(
+                "work_units",
+                _WORK_UNIT_MEMBERSHIP_WATERMARK_SQL,
+                common,
+                scope,
+            )
+            source_refs.append(membership_ref)
+            if warning:
+                warnings.append(warning)
+            if not marker_rows:
+                return RawStatusSnapshot(
+                    declared=None,
+                    source_refs=tuple(source_refs),
+                    warnings=tuple(
+                        warnings
+                        + ["canonical work-unit membership has no complete run"]
+                    ),
+                )
+            try:
+                async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                    member_rows = await query_dicts(
+                        self._client, _WORK_UNIT_MEMBERS_SQL, common
+                    )
+            except Exception:
+                return RawStatusSnapshot(
+                    declared=None,
+                    source_refs=(self._unavailable_ref("work_units", scope),),
+                    warnings=("work_units source unavailable",),
+                )
+            common["member_issue_ids"] = sorted(
+                {
+                    str(row.get("node_id") or "")
+                    for row in member_rows
+                    if str(row.get("node_type") or "").casefold() == "issue"
+                    and row.get("node_id")
+                }
+            )
+            common["member_pr_ids"] = sorted(
+                {
+                    str(row.get("node_id") or "")
+                    for row in member_rows
+                    if str(row.get("node_type") or "").casefold()
+                    in {"pr", "pull_request"}
+                    and row.get("node_id")
+                }
+            )
+            if not common["member_issue_ids"] and not common["member_pr_ids"]:
+                return RawStatusSnapshot(
+                    declared=None,
+                    source_refs=tuple(source_refs),
+                    warnings=tuple(warnings),
+                )
+
         work_item_rows: list[dict[str, Any]] = []
-        if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT}:
+        if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT} or (
+            scope.direct_scope is DirectScope.WORK_UNIT
+            and bool(common["member_issue_ids"])
+        ):
             work_item_rows, ref, warning = await self._read(
                 "work_items", _WORK_ITEMS_SQL, common, scope
             )
@@ -565,7 +674,10 @@ class ClickHouseStatusChangeSource:
 
         blocker_rows: list[dict[str, Any]] = []
         blocker_ref: SourceReference | None = None
-        if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT}:
+        if scope.direct_scope in {DirectScope.ISSUE, DirectScope.PROJECT} or (
+            scope.direct_scope is DirectScope.WORK_UNIT
+            and bool(common["member_issue_ids"])
+        ):
             marker_rows, blocker_ref, warning = await self._read(
                 "work_graph",
                 _BLOCKER_WATERMARK_SQL,
@@ -680,7 +792,13 @@ class ClickHouseStatusChangeSource:
                 observed_at=self._datetime(row.get("observed_at"), as_of),
                 source_ref_id=pr_ref.ref_id,
                 evidence_ref_ids=(),
-                required=scope.direct_scope is DirectScope.PULL_REQUEST,
+                required=scope.direct_scope
+                in {
+                    DirectScope.ISSUE,
+                    DirectScope.PROJECT,
+                    DirectScope.WORK_UNIT,
+                    DirectScope.PULL_REQUEST,
+                },
             )
             for row in pr_rows
         )
@@ -895,7 +1013,9 @@ class ClickHouseStatusChangeSource:
         changes.extend(
             ObservedChange(
                 change_id=str(row.get("change_id") or self._change_id("edge", row)),
-                category=ChangeCategory.RELATIONSHIP,
+                category=self._relationship_change_category(
+                    str(row.get("edge_type") or "")
+                ),
                 entity_type=str(row.get("source_type") or "entity"),
                 entity_id=str(row.get("source_id") or ""),
                 display_label=(
@@ -1032,6 +1152,7 @@ class ClickHouseStatusChangeSource:
                 # change this policy.
                 required=(
                     scope.direct_scope is DirectScope.PROJECT
+                    or scope.direct_scope is DirectScope.WORK_UNIT
                     or str(row.get("parent_id") or "") == entity_id
                 ),
             )
@@ -1107,16 +1228,45 @@ class ClickHouseStatusChangeSource:
                     else None
                 ),
                 observed_at=cls._datetime(row.get("observed_at"), fallback),
-                claim_kind=ClaimKind.OBSERVED,
-                relationship_chain=(),
+                claim_kind=(
+                    ClaimKind.INFERRED
+                    if str(row.get("relationship_source") or "").casefold()
+                    == "heuristic"
+                    else ClaimKind.OBSERVED
+                ),
+                relationship_chain=cls._delivery_relationship_chain(row, category),
                 metric_id=None,
                 metric_value=None,
                 metric_comparison_value=None,
                 source_ref_ids=(source_ref_id,),
                 evidence_ref_ids=(),
+                confidence=(
+                    float(row["relationship_confidence"])
+                    if row.get("relationship_confidence") is not None
+                    else None
+                ),
             )
             for row in rows
         )
+
+    @staticmethod
+    def _relationship_change_category(edge_type: str) -> ChangeCategory:
+        normalized = edge_type.casefold()
+        if normalized == "blocks":
+            return ChangeCategory.BLOCKER
+        if normalized in {"depends_on", "dependency", "is_blocked_by"}:
+            return ChangeCategory.DEPENDENCY
+        return ChangeCategory.RELATIONSHIP
+
+    @staticmethod
+    def _delivery_relationship_chain(
+        row: Mapping[str, Any], category: ChangeCategory
+    ) -> tuple[str, ...]:
+        deployment_id = str(row.get("deployment_id") or "")
+        incident_id = str(row.get("entity_id") or "")
+        if category is ChangeCategory.INCIDENT and deployment_id and incident_id:
+            return (deployment_id, "associated_with", incident_id)
+        return ()
 
     @staticmethod
     def _observed_change_key(change: ObservedChange) -> tuple:

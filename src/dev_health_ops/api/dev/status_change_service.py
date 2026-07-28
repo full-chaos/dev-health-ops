@@ -29,7 +29,7 @@ from .metrics.service import (
 STATUS_CONTRACT_VERSION = "status_snapshot.v1"
 CHANGE_CONTRACT_VERSION = "change_summary.v1"
 STATUS_RULE_ID = "actual-completion"
-STATUS_RULE_VERSION = "actual-completion.v3"
+STATUS_RULE_VERSION = "actual-completion.v4"
 MAX_STATUS_ITEMS = 100
 MAX_CHANGE_ITEMS = 100
 MAX_STATUS_ASSESSMENT_ITEMS = 1_000
@@ -227,6 +227,7 @@ class ObservedChange:
     metric_comparison_value: float | None
     source_ref_ids: tuple[str, ...]
     evidence_ref_ids: tuple[str, ...]
+    confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,9 +357,15 @@ class StatusChangeService:
         actual = self._assess(
             raw,
             assessment_source_limit_reached=assessment_source_limit_reached,
-            declared_optional=request.scope.direct_scope is DirectScope.PROJECT,
+            declared_optional=request.scope.direct_scope
+            in {DirectScope.PROJECT, DirectScope.WORK_UNIT},
             release_evidence_required=request.scope.direct_scope
-            in {DirectScope.ISSUE, DirectScope.PROJECT, DirectScope.PULL_REQUEST},
+            in {
+                DirectScope.ISSUE,
+                DirectScope.PROJECT,
+                DirectScope.WORK_UNIT,
+                DirectScope.PULL_REQUEST,
+            },
         )
         actual = replace(
             actual,
@@ -601,7 +608,7 @@ class StatusChangeService:
         required_source_ids = set(self._fact_sources(raw)) | {
             ref.ref_id
             for ref in raw.source_refs
-            if ref.source_system in {"work_items", "work_graph"}
+            if ref.source_system in {"work_items", "work_graph", "work_units"}
             or ref.freshness is FreshnessState.UNAVAILABLE
         }
         unavailable = [
@@ -649,7 +656,9 @@ class StatusChangeService:
             reasons.add("open_blocker")
         if any(pr.required and not pr.merged for pr in raw.pull_requests):
             reasons.add("required_pull_request_unmerged")
-        if any(pr.changes_requested > 0 for pr in raw.pull_requests):
+        if any(pr.required and not pr.review_state for pr in raw.pull_requests):
+            reasons.add("required_review_unresolved")
+        if any(pr.required and pr.changes_requested > 0 for pr in raw.pull_requests):
             reasons.add("review_changes_requested")
         if any(ci.required is None for ci in raw.ci):
             reasons.add("ci_requirement_unknown")
@@ -682,6 +691,7 @@ class StatusChangeService:
             "required_child_incomplete",
             "open_blocker",
             "required_pull_request_unmerged",
+            "required_review_unresolved",
             "review_changes_requested",
             "required_ci_work_skipped",
             "required_ci_not_passing",

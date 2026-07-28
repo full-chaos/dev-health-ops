@@ -298,4 +298,5 @@ def _change(item: ObservedChange) -> DevObservedChange:
         metric_comparison_value=item.metric_comparison_value,
         source_ref_ids=_ids(item.source_ref_ids),
         evidence_ref_ids=_ids(item.evidence_ref_ids),
+        confidence=item.confidence,
     )

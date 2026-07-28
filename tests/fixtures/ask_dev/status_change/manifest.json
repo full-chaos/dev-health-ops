@@ -1,7 +1,7 @@
 {
   "schema_version": "ask-dev-status-change-fixtures.v1",
   "rule_id": "actual-completion",
-  "rule_version": "actual-completion.v3",
+  "rule_version": "actual-completion.v4",
   "status_contract": "status_snapshot.v1",
   "change_contract": "change_summary.v1",
   "change_sources": {
@@ -30,9 +30,7 @@
     "empty_source_result": "partial_unknown_freshness",
     "missing_rows_mean_no_observed_change_only_when_source_is_available": true
   },
-  "unsupported_status_scopes": {
-    "work_unit": "status_snapshot.v1 requires a canonical work-unit membership projection"
-  },
+  "unsupported_status_scopes": {},
   "blocker_direction": {
     "gap_id": "GAP-ASKDEV-BLOCKER-DIRECTION-01",
     "rule_version": "canonical-blocks.v2",

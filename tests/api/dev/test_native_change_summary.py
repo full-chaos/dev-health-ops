@@ -178,6 +178,91 @@ async def test_native_change_summary_emits_every_delivery_change_class(
     assert all(params["limit"] == 100 for params in observed_params)
 
 
+@pytest.mark.asyncio
+async def test_native_change_summary_preserves_blocker_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_edges FINAL" in sql:
+            return [
+                {
+                    "change_id": "edge-1",
+                    "source_type": "issue",
+                    "source_id": "blocker-a",
+                    "edge_type": "blocks",
+                    "target_type": "issue",
+                    "target_id": "issue-a",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).change_summary("org-a", "permission-v1", _request())
+
+    assert result.changes[0].category is ChangeCategory.BLOCKER
+    assert result.changes[0].relationship_chain == (
+        "blocker-a",
+        "blocks",
+        "issue-a",
+    )
+
+
+@pytest.mark.asyncio
+async def test_heuristic_deployment_incident_change_is_inferred_with_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_incident_sql: list[str] = []
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM operational_incidents AS incident" in sql:
+            observed_incident_sql.append(sql)
+            return [
+                {
+                    "change_id": "incident-1#state#open",
+                    "entity_id": "incident-1",
+                    "display_label": "Incident 1",
+                    "before_value": None,
+                    "after_value": "open",
+                    "deployment_id": "deployment-1",
+                    "relationship_source": "heuristic",
+                    "relationship_confidence": 0.3,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).change_summary("org-a", "permission-v1", _request())
+
+    incident = result.changes[0]
+    assert incident.category is ChangeCategory.INCIDENT
+    assert incident.claim_kind.value == "inferred"
+    assert incident.confidence == 0.3
+    assert incident.relationship_chain == (
+        "deployment-1",
+        "associated_with",
+        "incident-1",
+    )
+    assert observed_incident_sql
+    assert "edge.source AS relationship_source" in observed_incident_sql[0]
+    assert "edge.confidence AS relationship_confidence" in observed_incident_sql[0]
+
+
 @pytest.mark.parametrize(
     ("failed_marker", "source_system"),
     [(fixture[0], fixture[1]) for fixture in _CLASS_FIXTURES],

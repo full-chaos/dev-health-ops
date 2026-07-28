@@ -72,18 +72,96 @@ def _deployment_row(status: str = "success") -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_native_work_unit_status_is_explicitly_unsupported(
+async def test_native_work_unit_status_uses_canonical_membership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def unexpected_query(
-        *_args: object, **_kwargs: object
+    observed_sql: list[str] = []
+    observed_params: list[dict[str, Any]] = []
+
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        pytest.fail(
-            "unsupported WORK_UNIT status must not issue partial native queries"
-        )
+        observed_sql.append(sql)
+        observed_params.append(_params)
+        if "SELECT max(completed_at) AS last_synced" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_unit_membership AS m FINAL" in sql:
+            return [
+                {
+                    "node_type": "issue",
+                    "node_id": "linear:DONE-1",
+                    "last_synced": NOW,
+                },
+                {
+                    "node_type": "pr",
+                    "node_id": "repo-a#pr7",
+                    "last_synced": NOW,
+                },
+            ]
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return []
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "linear:DONE-1",
+                    "title": "Done issue",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "number": 7,
+                    "entity_id": "repo-a#pr7",
+                    "display_label": "PR 7",
+                    "state": "merged",
+                    "review_state": "APPROVED",
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM ci_pipeline_runs" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-1",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci1",
+                    "display_label": "CI",
+                    "conclusion": "success",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM ci_acceptance_checks" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-1",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci1#required",
+                    "display_label": "required",
+                    "requirement": "required",
+                    "conclusion": "success",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
+        return []
 
     monkeypatch.setattr(
-        "dev_health_ops.api.dev.native_status_change.query_dicts", unexpected_query
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
     )
     result = await StatusChangeService(
         ClickHouseStatusChangeSource(object(), now=NOW)
@@ -93,14 +171,216 @@ async def test_native_work_unit_status_is_explicitly_unsupported(
         StatusSnapshotRequest(_scope(DirectScope.WORK_UNIT, entity_id="work-unit-1")),
     )
 
-    assert result.state is StatusResultState.DEGRADED
-    assert result.actual.state is CompletionState.INDETERMINATE
-    assert result.actual.reason_codes == (
-        "declared_status_missing",
-        "required_source_not_fresh",
+    assert result.state is StatusResultState.COMPLETE
+    assert result.actual.state is CompletionState.READY
+    assert result.actual.reason_codes == ()
+    assert result.children[0].entity_id == "linear:DONE-1"
+    assert result.children[0].required is True
+    assert result.pull_requests[0].required is True
+    assert any("work_unit_membership" in sql for sql in observed_sql)
+    assert any(
+        params.get("member_issue_ids") == ["linear:DONE-1"]
+        and params.get("member_pr_ids") == ["repo-a#pr7"]
+        for params in observed_params
     )
-    assert result.source_refs[0].source_system == "work_unit_status"
-    assert "does not support WORK_UNIT" in result.warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_native_work_unit_without_complete_membership_run_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        assert "SELECT max(completed_at) AS last_synced" in sql
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(DirectScope.WORK_UNIT, entity_id="work-unit-1")),
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert "required_source_not_fresh" in result.actual.reason_codes
+    assert result.source_refs[0].source_system == "work_units"
+    assert result.source_refs[0].freshness.value == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_native_empty_complete_work_unit_membership_is_not_source_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "SELECT max(completed_at) AS last_synced" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_unit_membership AS m FINAL" in sql:
+            return []
+        pytest.fail(f"empty complete membership must not query downstream: {sql}")
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(DirectScope.WORK_UNIT, entity_id="work-unit-1")),
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert result.actual.reason_codes == ("required_release_evidence_missing",)
+    assert result.source_refs[0].source_system == "work_units"
+    assert result.source_refs[0].freshness.value == "fresh"
+
+
+@pytest.mark.asyncio
+async def test_native_linked_open_unreviewed_pr_blocks_issue_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return []
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "issue-1",
+                    "title": "Issue 1",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "number": 7,
+                    "entity_id": "repo-a#pr7",
+                    "display_label": "PR 7",
+                    "state": "open",
+                    "review_state": None,
+                    "changes_requested": 0,
+                    "merged": 0,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM ci_pipeline_runs" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-1",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci1",
+                    "display_label": "CI",
+                    "conclusion": "success",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM ci_acceptance_checks" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "run_id": "run-1",
+                    "pr_number": 7,
+                    "entity_id": "repo-a#ci1#required",
+                    "display_label": "required",
+                    "requirement": "required",
+                    "conclusion": "success",
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.state is CompletionState.NOT_READY
+    assert result.pull_requests[0].required is True
+    assert result.actual.reason_codes == (
+        "required_pull_request_unmerged",
+        "required_review_unresolved",
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_linked_merged_unreviewed_pr_still_blocks_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query(
+        _client: object, sql: str, _params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM work_graph_projection_runs" in sql:
+            return [{"last_synced": NOW}]
+        if "FROM work_graph_edges AS edge" in sql:
+            return []
+        if "FROM work_items FINAL" in sql and "parent_id" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "work_item_id": "issue-1",
+                    "title": "Issue 1",
+                    "status": "done",
+                    "parent_id": "",
+                    "updated_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM git_pull_requests AS pr" in sql:
+            return [
+                {
+                    "repository_id": "repo-a",
+                    "number": 7,
+                    "entity_id": "repo-a#pr7",
+                    "display_label": "PR 7",
+                    "state": "merged",
+                    "review_state": None,
+                    "changes_requested": 0,
+                    "merged": 1,
+                    "observed_at": NOW,
+                    "last_synced": NOW,
+                }
+            ]
+        if "FROM deployments" in sql:
+            return [_deployment_row()]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    result = await StatusChangeService(
+        ClickHouseStatusChangeSource(object(), now=NOW)
+    ).status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.state is CompletionState.NOT_READY
+    assert result.actual.reason_codes == ("required_review_unresolved",)
 
 
 @pytest.mark.asyncio

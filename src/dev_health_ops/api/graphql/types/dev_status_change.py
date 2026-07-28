@@ -189,6 +189,7 @@ class DevObservedChange:
     metric_comparison_value: float | None
     source_ref_ids: list[strawberry.ID]
     evidence_ref_ids: list[strawberry.ID]
+    confidence: float | None
 
 
 @strawberry.type

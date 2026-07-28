@@ -22,7 +22,7 @@ from .metrics.service import (
 STATUS_CONTRACT_VERSION = "status_snapshot.v1"
 CHANGE_CONTRACT_VERSION = "change_summary.v1"
 STATUS_RULE_ID = "actual-completion"
-STATUS_RULE_VERSION = "actual-completion.v1"
+STATUS_RULE_VERSION = "actual-completion.v2"
 MAX_STATUS_ITEMS = 100
 MAX_CHANGE_ITEMS = 100
 MAX_STATUS_ASSESSMENT_ITEMS = 1_000
@@ -79,7 +79,7 @@ class StatusFact:
     observed_at: datetime
     source_ref_id: str
     evidence_ref_ids: tuple[str, ...]
-    required: bool = False
+    required: bool | None = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +187,7 @@ class StatusSnapshotResult:
     as_of: datetime
     declared: StatusFact | None
     actual: ActualCompletion
+    children: tuple[StatusFact, ...]
     blockers: tuple[StatusFact, ...]
     pull_requests: tuple[PullRequestFact, ...]
     ci: tuple[CIFact, ...]
@@ -373,6 +374,7 @@ class StatusChangeService:
             as_of=as_of,
             declared=bounded.declared,
             actual=actual,
+            children=self._ordered_status(bounded.children),
             blockers=self._ordered_status(bounded.blockers),
             pull_requests=tuple(sorted(bounded.pull_requests, key=self._pr_key)),
             ci=tuple(sorted(bounded.ci, key=self._ci_key)),
@@ -574,8 +576,10 @@ class StatusChangeService:
         reasons: set[str] = set()
         conflicts: list[StatusConflict] = []
         required_children = self._ordered_status(
-            tuple(child for child in raw.children if child.required)
+            tuple(child for child in raw.children if child.required is True)
         )
+        if any(child.required is None for child in raw.children):
+            reasons.add("child_requirement_unknown")
         source_by_id = {ref.ref_id: ref for ref in raw.source_refs}
         unavailable = [
             ref.ref_id

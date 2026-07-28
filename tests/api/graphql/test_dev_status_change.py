@@ -171,6 +171,7 @@ class FakeStatusChangeService:
                 ("source-work",),
                 ("evidence-a",),
             ),
+            children=(),
             blockers=(),
             pull_requests=(),
             ci=(),

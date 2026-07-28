@@ -53,7 +53,7 @@ def _scope(kind: DirectScope = DirectScope.ISSUE) -> DevScope:
 
 
 @pytest.mark.asyncio
-async def test_native_issue_reader_keeps_blocker_gap_explicit(
+async def test_native_issue_reader_keeps_child_requirement_and_blocker_gaps_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_params: list[dict[str, Any]] = []
@@ -95,8 +95,10 @@ async def test_native_issue_reader_keeps_blocker_gap_explicit(
     )
 
     assert result.state is StatusResultState.DEGRADED
-    assert result.actual.state is CompletionState.NOT_READY
-    assert "required_child_incomplete" in result.actual.reason_codes
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert "child_requirement_unknown" in result.actual.reason_codes
+    assert "required_child_incomplete" not in result.actual.reason_codes
+    assert result.children[0].required is None
     assert any(
         ref.source_system == "canonical_blocker_direction"
         and ref.freshness.value == "unavailable"

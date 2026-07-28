@@ -119,6 +119,7 @@ def _status_snapshot(result: StatusSnapshotResult) -> DevStatusSnapshot:
         as_of=result.as_of,
         declared=_status_fact(result.declared) if result.declared else None,
         actual=_actual(result.actual),
+        children=[_status_fact(item) for item in result.children],
         blockers=[_status_fact(item) for item in result.blockers],
         pull_requests=[_pull_request(item) for item in result.pull_requests],
         ci=[_ci(item) for item in result.ci],

@@ -588,10 +588,11 @@ class ClickHouseStatusChangeSource:
                 ),
                 source_ref_id=ref_id,
                 evidence_ref_ids=(),
-                required=(
-                    scope.direct_scope is DirectScope.PROJECT
-                    or str(row.get("parent_id") or "") == entity_id
-                ),
+                # Hierarchy and project membership prove relationship, not whether
+                # completion policy requires this work item.  Until a canonical
+                # producer supplies that policy, preserve the relationship while
+                # forcing the completion assessment to remain indeterminate.
+                required=None,
             )
             for row in rows
         )

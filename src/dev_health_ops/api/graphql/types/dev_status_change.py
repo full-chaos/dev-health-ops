@@ -41,7 +41,7 @@ class DevStatusFact:
     observed_at: datetime
     source_ref_id: strawberry.ID
     evidence_ref_ids: list[strawberry.ID]
-    required: bool
+    required: bool | None
 
 
 @strawberry.type
@@ -156,6 +156,7 @@ class DevStatusSnapshot:
     as_of: datetime
     declared: DevStatusFact | None
     actual: DevActualCompletion
+    children: list[DevStatusFact]
     blockers: list[DevStatusFact]
     pull_requests: list[DevPullRequestStatusFact]
     ci: list[DevCIStatusFact]

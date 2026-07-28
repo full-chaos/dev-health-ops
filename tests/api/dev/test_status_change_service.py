@@ -78,7 +78,11 @@ def _source_ref(freshness: FreshnessState = FreshnessState.FRESH) -> SourceRefer
 
 
 def _fact(
-    entity_id: str, status: str, *, required: bool = False, label: str | None = None
+    entity_id: str,
+    status: str,
+    *,
+    required: bool | None = False,
+    label: str | None = None,
 ) -> StatusFact:
     return StatusFact(
         entity_type="issue",
@@ -198,6 +202,31 @@ async def test_completed_parent_with_incomplete_required_child_is_not_ready() ->
         "declared_complete_conflicts_with_observed_work"
     )
     assert result.actual.evidence_ref_ids == ("ev-issue-1", "ev-issue-child")
+
+
+@pytest.mark.asyncio
+async def test_completed_parent_with_unknown_child_requirement_is_indeterminate() -> (
+    None
+):
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=(_fact("issue-child", "in_progress", required=None),),
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert result.actual.reason_codes == ("child_requirement_unknown",)
+    assert result.actual.required_children == ()
+    assert result.children[0].required is None
+    assert result.actual.conflicts == ()
 
 
 @pytest.mark.asyncio

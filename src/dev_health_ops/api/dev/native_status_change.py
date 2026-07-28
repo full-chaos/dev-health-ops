@@ -1,7 +1,7 @@
 """Bounded ClickHouse reader for Ask Dev status and observed-change facts.
 
 Only canonical links are followed.  Current schema gaps (required CI/check
-designation, provider-neutral blocker direction, and project declared state)
+designation, consistent blocker direction, and project declared state)
 remain explicit unknown/unavailable inputs to the deterministic rule service.
 """
 
@@ -666,11 +666,14 @@ class ClickHouseStatusChangeSource:
                 ),
                 source_ref_id=ref_id,
                 evidence_ref_ids=(),
-                # Hierarchy and project membership prove relationship, not whether
-                # completion policy requires this work item.  Until a canonical
-                # producer supplies that policy, preserve the relationship while
-                # forcing the completion assessment to remain indeterminate.
-                required=None,
+                # The provider-neutral v2 completion rule treats canonical direct
+                # parent-child and project-work-item membership as required work.
+                # Provider-specific labels, statuses, and issue-key prefixes never
+                # change this policy.
+                required=(
+                    scope.direct_scope is DirectScope.PROJECT
+                    or str(row.get("parent_id") or "") == entity_id
+                ),
             )
             for row in rows
         )

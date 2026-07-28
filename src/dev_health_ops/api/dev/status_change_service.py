@@ -12,7 +12,14 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
-from .contracts import ClaimKind, DevScope, DevTimeRange, FreshnessState, MetricID
+from .contracts import (
+    ClaimKind,
+    DevScope,
+    DevTimeRange,
+    DirectScope,
+    FreshnessState,
+    MetricID,
+)
 from .metrics.service import (
     MetricDataState,
     MetricQueryRequest,
@@ -349,6 +356,7 @@ class StatusChangeService:
         actual = self._assess(
             raw,
             assessment_source_limit_reached=assessment_source_limit_reached,
+            declared_optional=request.scope.direct_scope is DirectScope.PROJECT,
         )
         actual = replace(
             actual,
@@ -572,6 +580,7 @@ class StatusChangeService:
         raw: RawStatusSnapshot,
         *,
         assessment_source_limit_reached: bool = False,
+        declared_optional: bool = False,
     ) -> ActualCompletion:
         reasons: set[str] = set()
         conflicts: list[StatusConflict] = []
@@ -591,7 +600,7 @@ class StatusChangeService:
                 FreshnessState.UNKNOWN,
             }
         ]
-        if raw.declared is None:
+        if raw.declared is None and not declared_optional:
             reasons.add("declared_status_missing")
         if unavailable:
             reasons.add("required_source_not_fresh")
@@ -647,7 +656,7 @@ class StatusChangeService:
         if any(incident.blocking and incident.active for incident in raw.incidents):
             reasons.add("active_blocking_incident")
 
-        declared_complete = (
+        declared_complete = declared_optional or (
             raw.declared is not None
             and raw.declared.status.casefold()
             in {"complete", "completed", "done", "closed", "merged"}

@@ -24,12 +24,15 @@ from dev_health_ops.api.dev.status_change_service import (
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 
 
-def _scope(kind: DirectScope = DirectScope.ISSUE) -> DevScope:
+def _scope(
+    kind: DirectScope = DirectScope.ISSUE, *, entity_id: str | None = None
+) -> DevScope:
     entity_type = {
         DirectScope.ISSUE: EntityType.ISSUE,
+        DirectScope.PROJECT: EntityType.PROJECT,
         DirectScope.PULL_REQUEST: EntityType.PULL_REQUEST,
     }[kind]
-    entity_id = "issue-1" if kind is DirectScope.ISSUE else "repo-a#pr7"
+    entity_id = entity_id or ("issue-1" if kind is DirectScope.ISSUE else "repo-a#pr7")
     return DevScope(
         schema_version="dev_scope.v1",
         organization_id="org-a",
@@ -53,10 +56,14 @@ def _scope(kind: DirectScope = DirectScope.ISSUE) -> DevScope:
 
 
 @pytest.mark.asyncio
-async def test_native_issue_reader_keeps_child_requirement_and_blocker_gaps_explicit(
+@pytest.mark.parametrize("provider", ("jira", "github", "gitlab", "linear"))
+async def test_native_issue_reader_applies_same_membership_rule_for_every_provider(
     monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
     observed_params: list[dict[str, Any]] = []
+    parent_id = f"{provider}:parent"
+    child_id = f"{provider}:child"
 
     async def fake_query(
         _client: object, sql: str, params: dict[str, Any]
@@ -66,7 +73,7 @@ async def test_native_issue_reader_keeps_child_requirement_and_blocker_gaps_expl
             return [
                 {
                     "repository_id": "repo-a",
-                    "work_item_id": "issue-1",
+                    "work_item_id": parent_id,
                     "title": "Parent",
                     "status": "done",
                     "parent_id": "",
@@ -75,10 +82,10 @@ async def test_native_issue_reader_keeps_child_requirement_and_blocker_gaps_expl
                 },
                 {
                     "repository_id": "repo-a",
-                    "work_item_id": "child-1",
+                    "work_item_id": child_id,
                     "title": "Child",
                     "status": "in_progress",
-                    "parent_id": "issue-1",
+                    "parent_id": parent_id,
                     "updated_at": NOW,
                     "last_synced": NOW,
                 },
@@ -91,14 +98,16 @@ async def test_native_issue_reader_keeps_child_requirement_and_blocker_gaps_expl
     service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
 
     result = await service.status_snapshot(
-        "org-a", "permission-v1", StatusSnapshotRequest(_scope(), as_of=NOW)
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(entity_id=parent_id), as_of=NOW),
     )
 
     assert result.state is StatusResultState.DEGRADED
-    assert result.actual.state is CompletionState.INDETERMINATE
-    assert "child_requirement_unknown" in result.actual.reason_codes
-    assert "required_child_incomplete" not in result.actual.reason_codes
-    assert result.children[0].required is None
+    assert result.actual.state is CompletionState.NOT_READY
+    assert "required_child_incomplete" in result.actual.reason_codes
+    assert "child_requirement_unknown" not in result.actual.reason_codes
+    assert result.children[0].required is True
     assert any(
         ref.source_system == "canonical_blocker_direction"
         and ref.freshness.value == "unavailable"

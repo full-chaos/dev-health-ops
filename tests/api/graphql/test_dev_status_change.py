@@ -164,7 +164,7 @@ class FakeStatusChangeService:
             actual=ActualCompletion(
                 CompletionState.READY,
                 "actual-completion",
-                "actual-completion.v1",
+                "actual-completion.v2",
                 (),
                 (),
                 (),
@@ -229,7 +229,7 @@ async def test_status_snapshot_is_typed_and_uses_shared_service(
     assert result.data["devStatusSnapshot"]["actual"] == {
         "state": "READY",
         "ruleId": "actual-completion",
-        "ruleVersion": "actual-completion.v1",
+        "ruleVersion": "actual-completion.v2",
         "reasonCodes": [],
         "evidenceRefIds": ["evidence-a"],
     }

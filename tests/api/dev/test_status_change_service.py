@@ -43,17 +43,21 @@ from dev_health_ops.api.dev.status_change_service import (
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 
 
-def _scope() -> DevScope:
+def _scope(kind: DirectScope = DirectScope.ISSUE) -> DevScope:
+    entity_type = (
+        EntityType.PROJECT if kind is DirectScope.PROJECT else EntityType.ISSUE
+    )
+    entity_id = "project-1" if kind is DirectScope.PROJECT else "issue-1"
     return DevScope(
         schema_version="dev_scope.v1",
         organization_id="org-a",
-        direct_scope=DirectScope.ISSUE,
+        direct_scope=kind,
         repositories=["repo-a"],
         entity_refs=[
             DevEntityRef(
-                entity_type=EntityType.ISSUE,
-                entity_id="issue-1",
-                display_label="Issue 1",
+                entity_type=entity_type,
+                entity_id=entity_id,
+                display_label=entity_id,
                 repository_id="repo-a",
             )
         ],
@@ -202,6 +206,28 @@ async def test_completed_parent_with_incomplete_required_child_is_not_ready() ->
         "declared_complete_conflicts_with_observed_work"
     )
     assert result.actual.evidence_ref_ids == ("ev-issue-1", "ev-issue-child")
+
+
+@pytest.mark.asyncio
+async def test_project_completion_does_not_require_a_declared_project_status() -> None:
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=None,
+                children=(_fact("issue-child", "done", required=True),),
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(DirectScope.PROJECT), as_of=NOW),
+    )
+
+    assert result.actual.state is CompletionState.READY
+    assert "declared_status_missing" not in result.actual.reason_codes
 
 
 @pytest.mark.asyncio

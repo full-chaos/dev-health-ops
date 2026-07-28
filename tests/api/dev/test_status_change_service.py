@@ -324,6 +324,10 @@ async def test_change_summary_reserves_bound_for_registered_metric_deltas() -> N
     assert all(change.metric_value == 6.0 for change in result.changes)
     assert all(change.metric_comparison_value == 4.0 for change in result.changes)
     assert all(change.source_ref_ids for change in result.changes)
+    returned_source_ids = {ref.ref_id for ref in result.source_refs}
+    assert all(
+        set(change.source_ref_ids) <= returned_source_ids for change in result.changes
+    )
     assert (
         len([ref for ref in result.source_refs if ref.ref_id.startswith("metric-")])
         == 5
@@ -357,6 +361,63 @@ async def test_order_and_bounds_are_server_owned() -> None:
 
     assert len(result.actual.required_children) == 10
     assert [fact.display_label for fact in result.blockers] == ["Alpha", "Zulu"]
+
+
+@pytest.mark.asyncio
+async def test_completion_assesses_required_children_beyond_display_bound() -> None:
+    children = tuple(
+        _fact(
+            f"child-{index:03d}",
+            "in_progress" if index == 100 else "done",
+            required=True,
+        )
+        for index in range(101)
+    )
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=children,
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    assert result.actual.state is CompletionState.NOT_READY
+    assert "required_child_incomplete" in result.actual.reason_codes
+    assert len(result.actual.required_children) == 100
+
+
+@pytest.mark.asyncio
+async def test_assessment_source_bound_never_false_passes_completion() -> None:
+    children = tuple(
+        _fact(f"child-{index:04d}", "done", required=True) for index in range(1_000)
+    )
+    service = StatusChangeService(
+        Source(
+            RawStatusSnapshot(
+                declared=_fact("issue-1", "done"),
+                children=children,
+                source_refs=(_source_ref(),),
+            )
+        )
+    )
+
+    result = await service.status_snapshot(
+        "org-a",
+        "permission-v1",
+        StatusSnapshotRequest(_scope(), max_items=100),
+    )
+
+    assert result.actual.state is CompletionState.INDETERMINATE
+    assert "assessment_source_limit_reached" in result.actual.reason_codes
+    assert result.warnings == ("status assessment source bound reached",)
 
 
 def test_rejects_naive_as_of_and_out_of_bounds() -> None:

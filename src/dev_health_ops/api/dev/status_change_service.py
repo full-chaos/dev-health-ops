@@ -25,6 +25,7 @@ STATUS_RULE_ID = "actual-completion"
 STATUS_RULE_VERSION = "actual-completion.v1"
 MAX_STATUS_ITEMS = 100
 MAX_CHANGE_ITEMS = 100
+MAX_STATUS_ASSESSMENT_ITEMS = 1_000
 
 
 class StatusResultState(StrEnum):
@@ -319,7 +320,21 @@ class StatusChangeService:
         self._validate_identity(org_id, permission_fingerprint, request.scope)
         as_of = request.as_of or request.scope.time_range.end
         raw = await self._source.status_snapshot(
-            org_id=org_id, scope=request.scope, as_of=as_of, limit=request.max_items
+            org_id=org_id,
+            scope=request.scope,
+            as_of=as_of,
+            limit=MAX_STATUS_ASSESSMENT_ITEMS,
+        )
+        assessment_source_limit_reached = any(
+            len(facts) >= MAX_STATUS_ASSESSMENT_ITEMS
+            for facts in (
+                raw.children,
+                raw.blockers,
+                raw.pull_requests,
+                raw.ci,
+                raw.deployments,
+                raw.incidents,
+            )
         )
         bounded = replace(
             raw,
@@ -330,7 +345,16 @@ class StatusChangeService:
             deployments=self._bounded(raw.deployments, request.max_items),
             incidents=self._bounded(raw.incidents, request.max_items),
         )
-        actual = self._assess(bounded)
+        actual = self._assess(
+            raw,
+            assessment_source_limit_reached=assessment_source_limit_reached,
+        )
+        actual = replace(
+            actual,
+            required_children=self._bounded(
+                actual.required_children, request.max_items
+            ),
+        )
         freshness = {ref.freshness for ref in bounded.source_refs}
         if FreshnessState.UNAVAILABLE in freshness:
             result_state = StatusResultState.DEGRADED
@@ -355,7 +379,18 @@ class StatusChangeService:
             deployments=tuple(sorted(bounded.deployments, key=self._deployment_key)),
             incidents=tuple(sorted(bounded.incidents, key=self._incident_key)),
             source_refs=tuple(sorted(bounded.source_refs, key=lambda ref: ref.ref_id)),
-            warnings=tuple(sorted(set(bounded.warnings))),
+            warnings=tuple(
+                sorted(
+                    {
+                        *bounded.warnings,
+                        *(
+                            ("status assessment source bound reached",)
+                            if assessment_source_limit_reached
+                            else ()
+                        ),
+                    }
+                )
+            ),
         )
 
     async def change_summary(
@@ -530,7 +565,12 @@ class StatusChangeService:
             change.change_id,
         )
 
-    def _assess(self, raw: RawStatusSnapshot) -> ActualCompletion:
+    def _assess(
+        self,
+        raw: RawStatusSnapshot,
+        *,
+        assessment_source_limit_reached: bool = False,
+    ) -> ActualCompletion:
         reasons: set[str] = set()
         conflicts: list[StatusConflict] = []
         required_children = self._ordered_status(
@@ -551,6 +591,8 @@ class StatusChangeService:
             reasons.add("declared_status_missing")
         if unavailable:
             reasons.add("required_source_not_fresh")
+        if assessment_source_limit_reached:
+            reasons.add("assessment_source_limit_reached")
         incomplete_children = [
             child
             for child in required_children

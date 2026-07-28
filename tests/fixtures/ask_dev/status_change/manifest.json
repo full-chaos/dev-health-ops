@@ -1,0 +1,52 @@
+{
+  "schema_version": "ask-dev-status-change-fixtures.v1",
+  "rule_id": "actual-completion",
+  "rule_version": "actual-completion.v1",
+  "status_contract": "status_snapshot.v1",
+  "change_contract": "change_summary.v1",
+  "cases": [
+    {
+      "id": "declared-complete-with-required-child-open",
+      "expected_completion": "not_ready",
+      "required_reason": "required_child_incomplete"
+    },
+    {
+      "id": "merged-pr-with-required-acceptance-failing",
+      "expected_completion": "not_ready",
+      "required_reason": "required_ci_not_passing"
+    },
+    {
+      "id": "green-pipeline-with-required-work-skipped",
+      "expected_completion": "not_ready",
+      "required_reason": "required_ci_skipped"
+    },
+    {
+      "id": "declared-complete-with-stale-source",
+      "expected_completion": "indeterminate",
+      "required_reason": "source_stale"
+    },
+    {
+      "id": "declared-complete-with-source-unavailable",
+      "expected_completion": "indeterminate",
+      "required_reason": "source_unavailable"
+    },
+    {
+      "id": "observed-change-without-causal-edge",
+      "expected_claim_kind": "inferred",
+      "forbidden_claim_kind": "observed"
+    },
+    {
+      "id": "identical-explicit-windows",
+      "expected_reproducible": true
+    },
+    {
+      "id": "cross-tenant-scope",
+      "expected_result": "not_found"
+    }
+  ],
+  "proven_source_gaps": [
+    "GAP-ASKDEV-STATUS-01",
+    "GAP-ASKDEV-CI-01",
+    "GAP-ASKDEV-PROJECT-01"
+  ]
+}

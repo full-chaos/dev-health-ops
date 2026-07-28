@@ -64,12 +64,12 @@
     },
     "schema_version": {
       "const": "dev_feedback.v1",
-      "default": "dev_feedback.v1",
       "title": "Schema Version",
       "type": "string"
     }
   },
   "required": [
+    "schema_version",
     "feedback_id",
     "answer_id",
     "rating",

@@ -154,7 +154,7 @@ class DevSurfaceContext(ContractModel):
 
 
 class DevScope(ContractModel):
-    schema_version: Literal["dev_scope.v1"] = "dev_scope.v1"
+    schema_version: Literal["dev_scope.v1"]
     organization_id: OpaqueID
     direct_scope: DirectScope
     repositories: list[OpaqueID] = Field(default_factory=list, max_length=20)
@@ -207,7 +207,7 @@ class DevDisambiguationCandidate(ContractModel):
 
 
 class DevScopeResolution(ContractModel):
-    schema_version: Literal["dev_scope_resolution.v1"] = "dev_scope_resolution.v1"
+    schema_version: Literal["dev_scope_resolution.v1"]
     requested_scope: DevScope
     resolved_scope: DevScope | None = None
     outcome: ScopeResolutionOutcome
@@ -248,7 +248,7 @@ class DevScopeResolution(ContractModel):
 
 
 class DevCapabilities(ContractModel):
-    schema_version: Literal["dev_capabilities.v1"] = "dev_capabilities.v1"
+    schema_version: Literal["dev_capabilities.v1"]
     ask_dev: bool = False
     byo_llm: bool = False
     agent_context_runtime: bool = False
@@ -257,7 +257,7 @@ class DevCapabilities(ContractModel):
 
 
 class DevConversation(ContractModel):
-    schema_version: Literal["dev_conversation.v1"] = "dev_conversation.v1"
+    schema_version: Literal["dev_conversation.v1"]
     conversation_id: OpaqueID
     title: Annotated[str, StringConstraints(min_length=1, max_length=160)] | None = None
     current_scope: DevScope
@@ -271,9 +271,7 @@ class DevConversation(ContractModel):
 
 
 class DevConversationSummary(ContractModel):
-    schema_version: Literal["dev_conversation_summary.v1"] = (
-        "dev_conversation_summary.v1"
-    )
+    schema_version: Literal["dev_conversation_summary.v1"]
     conversation_id: OpaqueID
     title: Annotated[str, StringConstraints(min_length=1, max_length=160)] | None = None
     direct_scope: DirectScope
@@ -284,7 +282,7 @@ class DevConversationSummary(ContractModel):
 
 
 class DevMessageRequest(ContractModel):
-    schema_version: Literal["dev_message_request.v1"] = "dev_message_request.v1"
+    schema_version: Literal["dev_message_request.v1"]
     request_id: OpaqueID
     client_message_id: OpaqueID
     conversation_id: OpaqueID | None = None
@@ -328,7 +326,7 @@ class DevEvidenceFlags(ContractModel):
 
 
 class DevEvidenceRef(ContractModel):
-    schema_version: Literal["dev_evidence_ref.v1"] = "dev_evidence_ref.v1"
+    schema_version: Literal["dev_evidence_ref.v1"]
     evidence_ref_id: OpaqueID
     source_system: OpaqueID
     source_version: Version
@@ -354,7 +352,7 @@ class DevMetricPoint(ContractModel):
 
 
 class DevMetricRef(ContractModel):
-    schema_version: Literal["dev_metric_ref.v1"] = "dev_metric_ref.v1"
+    schema_version: Literal["dev_metric_ref.v1"]
     metric_ref_id: OpaqueID
     metric_id: MetricID
     label: Label
@@ -390,7 +388,7 @@ class DevClaimFlags(ContractModel):
 
 
 class DevClaim(ContractModel):
-    schema_version: Literal["dev_claim.v1"] = "dev_claim.v1"
+    schema_version: Literal["dev_claim.v1"]
     claim_id: OpaqueID
     kind: ClaimKind
     text: LongText
@@ -459,7 +457,7 @@ class DevModelMetadata(ContractModel):
 
 
 class DevAnswer(ContractModel):
-    schema_version: Literal["dev_answer.v1"] = "dev_answer.v1"
+    schema_version: Literal["dev_answer.v1"]
     answer_id: OpaqueID
     conversation_id: OpaqueID
     generated_at: AwareDatetime
@@ -533,7 +531,7 @@ class DevDataHealth(ContractModel):
 
 
 class DevToolRequest(ContractModel):
-    schema_version: Literal["dev_tool_request.v1"] = "dev_tool_request.v1"
+    schema_version: Literal["dev_tool_request.v1"]
     run_id: OpaqueID
     tool_call_id: OpaqueID
     tool_id: ToolID
@@ -548,7 +546,7 @@ class DevToolRequest(ContractModel):
 
 
 class DevToolResult(ContractModel):
-    schema_version: Literal["dev_tool_result.v1"] = "dev_tool_result.v1"
+    schema_version: Literal["dev_tool_result.v1"]
     run_id: OpaqueID
     tool_call_id: OpaqueID
     tool_id: ToolID
@@ -573,7 +571,7 @@ class DevToolResult(ContractModel):
 
 
 class DevFeedback(ContractModel):
-    schema_version: Literal["dev_feedback.v1"] = "dev_feedback.v1"
+    schema_version: Literal["dev_feedback.v1"]
     feedback_id: OpaqueID
     answer_id: OpaqueID
     rating: Literal["up", "down"]
@@ -604,7 +602,7 @@ class DevFeedback(ContractModel):
 
 
 class DevError(ContractModel):
-    schema_version: Literal["dev_error.v1"] = "dev_error.v1"
+    schema_version: Literal["dev_error.v1"]
     request_id: OpaqueID
     code: Literal[
         "unauthenticated",
@@ -658,7 +656,7 @@ class ProgressState(StrEnum):
 
 
 class DevStreamEvent(ContractModel):
-    schema_version: Literal["dev_stream_event.v1"] = "dev_stream_event.v1"
+    schema_version: Literal["dev_stream_event.v1"]
     run_id: OpaqueID
     sequence: int = Field(ge=0, le=100_000)
     event: StreamEventType

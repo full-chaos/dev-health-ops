@@ -48,7 +48,6 @@
     },
     "schema_version": {
       "const": "dev_conversation_summary.v1",
-      "default": "dev_conversation_summary.v1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -82,6 +81,7 @@
     }
   },
   "required": [
+    "schema_version",
     "conversation_id",
     "direct_scope",
     "state",

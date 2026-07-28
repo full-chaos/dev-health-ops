@@ -30,11 +30,13 @@
     },
     "schema_version": {
       "const": "dev_capabilities.v1",
-      "default": "dev_capabilities.v1",
       "title": "Schema Version",
       "type": "string"
     }
   },
+  "required": [
+    "schema_version"
+  ],
   "title": "DevCapabilities",
   "type": "object"
 }

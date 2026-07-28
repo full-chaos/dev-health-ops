@@ -181,7 +181,6 @@
     },
     "schema_version": {
       "const": "dev_evidence_ref.v1",
-      "default": "dev_evidence_ref.v1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -211,6 +210,7 @@
     }
   },
   "required": [
+    "schema_version",
     "evidence_ref_id",
     "source_system",
     "source_version",

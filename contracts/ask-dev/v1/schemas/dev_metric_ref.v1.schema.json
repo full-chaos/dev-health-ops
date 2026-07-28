@@ -108,7 +108,6 @@
         },
         "schema_version": {
           "const": "dev_scope.v1",
-          "default": "dev_scope.v1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -139,6 +138,7 @@
         }
       },
       "required": [
+        "schema_version",
         "organization_id",
         "direct_scope",
         "time_range"
@@ -368,7 +368,6 @@
     },
     "schema_version": {
       "const": "dev_metric_ref.v1",
-      "default": "dev_metric_ref.v1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -407,6 +406,7 @@
     }
   },
   "required": [
+    "schema_version",
     "metric_ref_id",
     "metric_id",
     "label",

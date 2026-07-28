@@ -97,7 +97,6 @@
         },
         "schema_version": {
           "const": "dev_answer.v1",
-          "default": "dev_answer.v1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -129,6 +128,7 @@
         }
       },
       "required": [
+        "schema_version",
         "answer_id",
         "conversation_id",
         "generated_at",
@@ -239,7 +239,6 @@
         },
         "schema_version": {
           "const": "dev_claim.v1",
-          "default": "dev_claim.v1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -254,6 +253,7 @@
         }
       },
       "required": [
+        "schema_version",
         "claim_id",
         "kind",
         "text",
@@ -547,12 +547,12 @@
         },
         "schema_version": {
           "const": "dev_error.v1",
-          "default": "dev_error.v1",
           "title": "Schema Version",
           "type": "string"
         }
       },
       "required": [
+        "schema_version",
         "request_id",
         "code",
         "safe_message",
@@ -694,7 +694,6 @@
         },
         "schema_version": {
           "const": "dev_evidence_ref.v1",
-          "default": "dev_evidence_ref.v1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -724,6 +723,7 @@
         }
       },
       "required": [
+        "schema_version",
         "evidence_ref_id",
         "source_system",
         "source_version",
@@ -864,7 +864,6 @@
         },
         "schema_version": {
           "const": "dev_metric_ref.v1",
-          "default": "dev_metric_ref.v1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -903,6 +902,7 @@
         }
       },
       "required": [
+        "schema_version",
         "metric_ref_id",
         "metric_id",
         "label",
@@ -999,7 +999,6 @@
         },
         "schema_version": {
           "const": "dev_scope.v1",
-          "default": "dev_scope.v1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1030,6 +1029,7 @@
         }
       },
       "required": [
+        "schema_version",
         "organization_id",
         "direct_scope",
         "time_range"
@@ -1104,7 +1104,6 @@
         },
         "schema_version": {
           "const": "dev_scope_resolution.v1",
-          "default": "dev_scope_resolution.v1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1120,6 +1119,7 @@
         }
       },
       "required": [
+        "schema_version",
         "requested_scope",
         "outcome",
         "resolved_at"
@@ -1351,7 +1351,6 @@
     },
     "schema_version": {
       "const": "dev_stream_event.v1",
-      "default": "dev_stream_event.v1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -1404,6 +1403,7 @@
     }
   },
   "required": [
+    "schema_version",
     "run_id",
     "sequence",
     "event",

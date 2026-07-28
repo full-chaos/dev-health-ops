@@ -123,3 +123,11 @@ def test_contract_schemas_are_provider_neutral_and_closed() -> None:
     assert 'additionalProperties": false' in schemas
     for provider_specific in ("openai_api_key", "anthropic_api_key", "tool_choice"):
         assert provider_specific not in schemas
+
+
+@pytest.mark.parametrize("schema_version", CONTRACT_MODELS)
+def test_every_contract_requires_its_explicit_version(schema_version: str) -> None:
+    payload = deepcopy(positive_fixtures()[schema_version])
+    payload.pop("schema_version")
+    with pytest.raises(ValidationError, match="schema_version"):
+        CONTRACT_MODELS[schema_version].model_validate(payload)

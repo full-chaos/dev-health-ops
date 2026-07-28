@@ -1,9 +1,51 @@
 {
   "schema_version": "ask-dev-status-change-fixtures.v1",
   "rule_id": "actual-completion",
-  "rule_version": "actual-completion.v2",
+  "rule_version": "actual-completion.v3",
   "status_contract": "status_snapshot.v1",
   "change_contract": "change_summary.v1",
+  "change_sources": {
+    "pull_request": "git_pull_requests",
+    "review": "git_pull_request_reviews",
+    "ci": "ci_pipeline_runs",
+    "deployment": "deployments",
+    "incident": "operational_incidents"
+  },
+  "change_source_policy": {
+    "claim_kind": "observed",
+    "scope_bounds": [
+      "organization",
+      "authorized_repositories",
+      "direct_scope",
+      "current_window",
+      "max_items"
+    ],
+    "ordering": [
+      "observed_at",
+      "category",
+      "display_label",
+      "change_id"
+    ],
+    "unavailable_source_result": "degraded",
+    "empty_source_result": "partial_unknown_freshness",
+    "missing_rows_mean_no_observed_change_only_when_source_is_available": true
+  },
+  "unsupported_status_scopes": {
+    "work_unit": "status_snapshot.v1 requires a canonical work-unit membership projection"
+  },
+  "blocker_direction": {
+    "gap_id": "GAP-ASKDEV-BLOCKER-DIRECTION-01",
+    "rule_version": "canonical-blocks.v2",
+    "contract": "source issue --blocks--> target issue",
+    "legacy_rebuild": "bounded tenant-scoped candidate deletion plus deterministic rewrite",
+    "linear_native_blockers": true
+  },
+  "release_evidence": {
+    "required_for_delivery_scopes": true,
+    "missing_result": "indeterminate",
+    "unsuccessful_result": "not_ready",
+    "active_incidents_are_informational_without_canonical_policy": true
+  },
   "cases": [
     {
       "id": "declared-complete-with-required-child-open",
@@ -14,6 +56,16 @@
       "id": "merged-pr-with-required-acceptance-failing",
       "expected_completion": "not_ready",
       "required_reason": "required_ci_not_passing"
+    },
+    {
+      "id": "merged-pr-without-release-evidence",
+      "expected_completion": "indeterminate",
+      "required_reason": "required_release_evidence_missing"
+    },
+    {
+      "id": "delivery-with-unsuccessful-required-release",
+      "expected_completion": "not_ready",
+      "required_reason": "required_deployment_not_succeeded"
     },
     {
       "id": "green-pipeline-with-required-work-skipped",
@@ -47,6 +99,7 @@
   "proven_source_gaps": [
     "GAP-ASKDEV-STATUS-01",
     "GAP-ASKDEV-CI-01",
-    "GAP-ASKDEV-PROJECT-01"
+    "GAP-ASKDEV-PROJECT-01",
+    "GAP-ASKDEV-BLOCKER-DIRECTION-01"
   ]
 }

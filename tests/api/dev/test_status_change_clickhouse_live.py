@@ -9,11 +9,16 @@ from typing import Any
 import pytest
 
 from dev_health_ops.api.dev.native_status_change import (
+    _CI_CHANGES_SQL,
     _CI_SQL,
+    _DEPLOYMENT_CHANGES_SQL,
     _DEPLOYMENTS_SQL,
+    _INCIDENT_CHANGES_SQL,
     _INCIDENTS_SQL,
+    _PULL_REQUEST_CHANGES_SQL,
     _PULL_REQUESTS_SQL,
     _RELATIONSHIPS_SQL,
+    _REVIEW_CHANGES_SQL,
     _TRANSITIONS_SQL,
     _WORK_ITEMS_SQL,
 )
@@ -49,6 +54,8 @@ def _fixtures() -> tuple[tuple[str, str, dict[str, object]], ...]:
         "entity_id": "issue-target",
         "pr_number": 1,
         "as_of": NOW,
+        "start": NOW - timedelta(days=7),
+        "end": NOW,
         "limit": 100,
     }
     return (
@@ -69,8 +76,13 @@ def _fixtures() -> tuple[tuple[str, str, dict[str, object]], ...]:
         (
             "work_graph_relationships",
             _RELATIONSHIPS_SQL,
-            {**common, "start": NOW - timedelta(days=7), "end": NOW},
+            common,
         ),
+        ("pull_request_changes", _PULL_REQUEST_CHANGES_SQL, common),
+        ("review_changes", _REVIEW_CHANGES_SQL, common),
+        ("ci_changes", _CI_CHANGES_SQL, common),
+        ("deployment_changes", _DEPLOYMENT_CHANGES_SQL, common),
+        ("incident_changes", _INCIDENT_CHANGES_SQL, common),
     )
 
 

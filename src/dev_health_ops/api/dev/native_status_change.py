@@ -232,6 +232,226 @@ ORDER BY observed_at, source_type, source_id, edge_type, target_type, target_id
 LIMIT {limit:UInt32}
 """
 
+_PULL_REQUEST_CHANGES_SQL = """
+WITH linked AS (
+  SELECT toString(link.repo_id) AS repository_id, link.pr_number
+  FROM work_graph_issue_pr AS link FINAL
+  INNER JOIN work_items AS item FINAL
+    ON item.org_id = link.org_id
+   AND item.repo_id = link.repo_id
+   AND item.work_item_id = link.work_item_id
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
+    AND (
+      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
+      OR ({scope_type:String} = 'project'
+        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+    )
+)
+SELECT concat(toString(pr.repo_id), '#pr', toString(pr.number), '#state#',
+              if(isNotNull(pr.merged_at), 'merged',
+                 if(isNotNull(pr.closed_at), 'closed', ifNull(pr.state, 'open')))) AS change_id,
+       concat(toString(pr.repo_id), '#pr', toString(pr.number)) AS entity_id,
+       ifNull(pr.title, concat('Pull request #', toString(pr.number))) AS display_label,
+       if(isNotNull(pr.merged_at) OR isNotNull(pr.closed_at),
+          CAST('open', 'Nullable(String)'), CAST(NULL, 'Nullable(String)')) AS before_value,
+       if(isNotNull(pr.merged_at), 'merged',
+          if(isNotNull(pr.closed_at), 'closed', ifNull(pr.state, 'open'))) AS after_value,
+       coalesce(pr.merged_at, pr.closed_at, pr.created_at) AS observed_at,
+       pr.last_synced
+FROM git_pull_requests AS pr FINAL
+WHERE pr.org_id = {org_id:String}
+  AND toString(pr.repo_id) IN {repository_ids:Array(String)}
+  AND observed_at >= {start:DateTime64(3, 'UTC')}
+  AND observed_at < {end:DateTime64(3, 'UTC')}
+  AND (
+    ({scope_type:String} = 'pull_request' AND pr.number = {pr_number:UInt32})
+    OR ({scope_type:String} IN ('issue', 'project')
+      AND (toString(pr.repo_id), pr.number) IN
+          (SELECT repository_id, pr_number FROM linked))
+    OR ({scope_type:String} IN ('organization', 'repository'))
+  )
+ORDER BY observed_at, entity_id, change_id
+LIMIT {limit:UInt32}
+"""
+
+_REVIEW_CHANGES_SQL = """
+WITH linked AS (
+  SELECT toString(link.repo_id) AS repository_id, link.pr_number
+  FROM work_graph_issue_pr AS link FINAL
+  INNER JOIN work_items AS item FINAL
+    ON item.org_id = link.org_id
+   AND item.repo_id = link.repo_id
+   AND item.work_item_id = link.work_item_id
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
+    AND (
+      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
+      OR ({scope_type:String} = 'project'
+        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+    )
+)
+SELECT concat(toString(review.repo_id), '#pr', toString(review.number),
+              '#review#', review.review_id) AS change_id,
+       change_id AS entity_id,
+       concat('Review by ', review.reviewer) AS display_label,
+       CAST(NULL, 'Nullable(String)') AS before_value,
+       review.state AS after_value,
+       review.submitted_at AS observed_at,
+       review.last_synced
+FROM git_pull_request_reviews AS review FINAL
+WHERE review.org_id = {org_id:String}
+  AND toString(review.repo_id) IN {repository_ids:Array(String)}
+  AND review.submitted_at >= {start:DateTime64(3, 'UTC')}
+  AND review.submitted_at < {end:DateTime64(3, 'UTC')}
+  AND (
+    ({scope_type:String} = 'pull_request' AND review.number = {pr_number:UInt32})
+    OR ({scope_type:String} IN ('issue', 'project')
+      AND (toString(review.repo_id), review.number) IN
+          (SELECT repository_id, pr_number FROM linked))
+    OR ({scope_type:String} IN ('organization', 'repository'))
+  )
+ORDER BY observed_at, entity_id, change_id
+LIMIT {limit:UInt32}
+"""
+
+_CI_CHANGES_SQL = """
+WITH linked AS (
+  SELECT toString(link.repo_id) AS repository_id, link.pr_number
+  FROM work_graph_issue_pr AS link FINAL
+  INNER JOIN work_items AS item FINAL
+    ON item.org_id = link.org_id
+   AND item.repo_id = link.repo_id
+   AND item.work_item_id = link.work_item_id
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
+    AND (
+      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
+      OR ({scope_type:String} = 'project'
+        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+    )
+)
+SELECT concat(toString(run.repo_id), '#ci#', run.run_id) AS change_id,
+       change_id AS entity_id,
+       ifNull(run.pipeline_name, concat('CI run ', run.run_id)) AS display_label,
+       CAST(NULL, 'Nullable(String)') AS before_value,
+       ifNull(run.status, 'unknown') AS after_value,
+       coalesce(run.finished_at, run.started_at) AS observed_at,
+       run.last_synced
+FROM ci_pipeline_runs AS run FINAL
+WHERE run.org_id = {org_id:String}
+  AND toString(run.repo_id) IN {repository_ids:Array(String)}
+  AND observed_at >= {start:DateTime64(3, 'UTC')}
+  AND observed_at < {end:DateTime64(3, 'UTC')}
+  AND (
+    ({scope_type:String} = 'pull_request' AND ifNull(run.pr_number, 0) = {pr_number:UInt32})
+    OR ({scope_type:String} IN ('issue', 'project')
+      AND (toString(run.repo_id), ifNull(run.pr_number, 0)) IN
+          (SELECT repository_id, pr_number FROM linked))
+    OR ({scope_type:String} IN ('organization', 'repository'))
+  )
+ORDER BY observed_at, entity_id, change_id
+LIMIT {limit:UInt32}
+"""
+
+_DEPLOYMENT_CHANGES_SQL = """
+WITH linked AS (
+  SELECT toString(link.repo_id) AS repository_id, link.pr_number
+  FROM work_graph_issue_pr AS link FINAL
+  INNER JOIN work_items AS item FINAL
+    ON item.org_id = link.org_id
+   AND item.repo_id = link.repo_id
+   AND item.work_item_id = link.work_item_id
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
+    AND (
+      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
+      OR ({scope_type:String} = 'project'
+        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+    )
+)
+SELECT concat(toString(deployment.repo_id), '#deployment#',
+              deployment.deployment_id) AS change_id,
+       change_id AS entity_id,
+       concat('Deployment ', deployment.deployment_id) AS display_label,
+       CAST(NULL, 'Nullable(String)') AS before_value,
+       ifNull(deployment.status, 'unknown') AS after_value,
+       coalesce(deployment.deployed_at, deployment.finished_at,
+                deployment.started_at, deployment.last_synced) AS observed_at,
+       deployment.last_synced
+FROM deployments AS deployment FINAL
+WHERE deployment.org_id = {org_id:String}
+  AND toString(deployment.repo_id) IN {repository_ids:Array(String)}
+  AND observed_at >= {start:DateTime64(3, 'UTC')}
+  AND observed_at < {end:DateTime64(3, 'UTC')}
+  AND (
+    ({scope_type:String} = 'pull_request'
+      AND ifNull(deployment.pull_request_number, 0) = {pr_number:UInt32})
+    OR ({scope_type:String} IN ('issue', 'project')
+      AND (toString(deployment.repo_id), ifNull(deployment.pull_request_number, 0)) IN
+          (SELECT repository_id, pr_number FROM linked))
+    OR ({scope_type:String} IN ('organization', 'repository'))
+  )
+ORDER BY observed_at, entity_id, change_id
+LIMIT {limit:UInt32}
+"""
+
+_INCIDENT_CHANGES_SQL = """
+WITH linked AS (
+  SELECT toString(link.repo_id) AS repository_id, link.pr_number
+  FROM work_graph_issue_pr AS link FINAL
+  INNER JOIN work_items AS item FINAL
+    ON item.org_id = link.org_id
+   AND item.repo_id = link.repo_id
+   AND item.work_item_id = link.work_item_id
+  WHERE link.org_id = {org_id:String}
+    AND item.org_id = {org_id:String}
+    AND toString(link.repo_id) IN {repository_ids:Array(String)}
+    AND (
+      ({scope_type:String} = 'issue' AND link.work_item_id = {entity_id:String})
+      OR ({scope_type:String} = 'project'
+        AND (item.project_id = {entity_id:String} OR item.project_key = {entity_id:String}))
+    )
+)
+SELECT concat(incident.id, '#state#',
+              ifNull(incident.normalized_status, 'unknown')) AS change_id,
+       incident.id AS entity_id,
+       incident.title AS display_label,
+       CAST(NULL, 'Nullable(String)') AS before_value,
+       ifNull(incident.normalized_status, 'unknown') AS after_value,
+       coalesce(incident.resolved_at, incident.source_event_at,
+                incident.observed_at) AS observed_at,
+       incident.last_synced
+FROM operational_incidents AS incident FINAL
+INNER JOIN work_graph_deployment_incident_edges AS edge FINAL
+  ON edge.org_id = toUUIDOrZero(incident.org_id)
+ AND edge.incident_id = incident.id
+INNER JOIN deployments AS deployment FINAL
+  ON deployment.org_id = incident.org_id
+ AND deployment.repo_id = edge.repo_id
+ AND deployment.deployment_id = edge.deployment_id
+WHERE incident.org_id = {org_id:String}
+  AND deployment.org_id = {org_id:String}
+  AND toString(edge.repo_id) IN {repository_ids:Array(String)}
+  AND incident.is_deleted = 0
+  AND observed_at >= {start:DateTime64(3, 'UTC')}
+  AND observed_at < {end:DateTime64(3, 'UTC')}
+  AND (
+    ({scope_type:String} = 'pull_request'
+      AND ifNull(deployment.pull_request_number, 0) = {pr_number:UInt32})
+    OR ({scope_type:String} IN ('issue', 'project')
+      AND (toString(deployment.repo_id), ifNull(deployment.pull_request_number, 0)) IN
+          (SELECT repository_id, pr_number FROM linked))
+    OR ({scope_type:String} IN ('organization', 'repository'))
+  )
+ORDER BY observed_at, entity_id, change_id
+LIMIT {limit:UInt32}
+"""
+
 
 class ClickHouseStatusChangeSource:
     """Read only facts with server-owned repository bounds and query timeout."""
@@ -515,11 +735,13 @@ class ClickHouseStatusChangeSource:
                 source_refs=(self._unavailable_ref("authorized_repositories", scope),),
                 warnings=("Observed-change scope was not widened.",),
             )
+        entity_id = self._entity_id(scope)
         params = {
             "org_id": org_id,
             "repository_ids": repositories,
             "scope_type": scope.direct_scope.value,
-            "entity_id": self._entity_id(scope),
+            "entity_id": entity_id,
+            "pr_number": self._pr_number(entity_id),
             "start": current.start.astimezone(UTC),
             "end": current.end.astimezone(UTC),
             "limit": min(limit, 100),
@@ -529,6 +751,34 @@ class ClickHouseStatusChangeSource:
         )
         relationships, relationship_ref, relationship_warning = await self._read(
             "work_graph", _RELATIONSHIPS_SQL, params, scope
+        )
+        delivery_specs = (
+            (
+                "pull_requests",
+                _PULL_REQUEST_CHANGES_SQL,
+                ChangeCategory.PULL_REQUEST,
+                "pull_request",
+            ),
+            ("reviews", _REVIEW_CHANGES_SQL, ChangeCategory.REVIEW, "review"),
+            ("ci_runs", _CI_CHANGES_SQL, ChangeCategory.CI, "ci_run"),
+            (
+                "deployments",
+                _DEPLOYMENT_CHANGES_SQL,
+                ChangeCategory.DEPLOYMENT,
+                "deployment",
+            ),
+            (
+                "incidents",
+                _INCIDENT_CHANGES_SQL,
+                ChangeCategory.INCIDENT,
+                "incident",
+            ),
+        )
+        delivery_results = await asyncio.gather(
+            *(
+                self._read(source_system, sql, params, scope)
+                for source_system, sql, _, _ in delivery_specs
+            )
         )
         changes = [
             ObservedChange(
@@ -577,15 +827,33 @@ class ClickHouseStatusChangeSource:
             )
             for row in relationships
         )
-        warnings = tuple(
+        source_refs = [transition_ref, relationship_ref]
+        warnings = [
             warning
             for warning in (transition_warning, relationship_warning)
             if warning is not None
-        )
+        ]
+        for (
+            (_, _, category, entity_type),
+            (rows, source_ref, warning),
+        ) in zip(delivery_specs, delivery_results, strict=True):
+            source_refs.append(source_ref)
+            if warning is not None:
+                warnings.append(warning)
+            changes.extend(
+                self._delivery_changes(
+                    rows,
+                    category=category,
+                    entity_type=entity_type,
+                    source_ref_id=source_ref.ref_id,
+                    fallback=current.end,
+                )
+            )
+        changes.sort(key=self._observed_change_key)
         return RawChangeSummary(
             changes=tuple(changes[:limit]),
-            source_refs=(transition_ref, relationship_ref),
-            warnings=warnings,
+            source_refs=tuple(source_refs),
+            warnings=tuple(warnings),
         )
 
     async def _read(
@@ -707,6 +975,64 @@ class ClickHouseStatusChangeSource:
         return (
             str(row.get("repository_id") or ""),
             int(row.get("pr_number") or 0),
+        )
+
+    @classmethod
+    def _delivery_changes(
+        cls,
+        rows: list[dict[str, Any]],
+        *,
+        category: ChangeCategory,
+        entity_type: str,
+        source_ref_id: str,
+        fallback: datetime,
+    ) -> tuple[ObservedChange, ...]:
+        return tuple(
+            ObservedChange(
+                change_id=str(
+                    row.get("change_id")
+                    or cls._change_id(
+                        category.value,
+                        {
+                            "entity_id": row.get("entity_id"),
+                            "after_value": row.get("after_value"),
+                            "observed_at": row.get("observed_at"),
+                        },
+                    )
+                ),
+                category=category,
+                entity_type=entity_type,
+                entity_id=str(row.get("entity_id") or ""),
+                display_label=str(row.get("display_label") or entity_type),
+                before=(
+                    str(row["before_value"])
+                    if row.get("before_value") is not None
+                    else None
+                ),
+                after=(
+                    str(row["after_value"])
+                    if row.get("after_value") is not None
+                    else None
+                ),
+                observed_at=cls._datetime(row.get("observed_at"), fallback),
+                claim_kind=ClaimKind.OBSERVED,
+                relationship_chain=(),
+                metric_id=None,
+                metric_value=None,
+                metric_comparison_value=None,
+                source_ref_ids=(source_ref_id,),
+                evidence_ref_ids=(),
+            )
+            for row in rows
+        )
+
+    @staticmethod
+    def _observed_change_key(change: ObservedChange) -> tuple:
+        return (
+            change.observed_at,
+            change.category.value,
+            change.display_label.casefold(),
+            change.change_id,
         )
 
     @staticmethod

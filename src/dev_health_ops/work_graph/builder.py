@@ -21,6 +21,7 @@ from dev_health_ops.metrics.schemas import (
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
+    WorkGraphProjectionRunRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse.idempotency import WORK_ITEMS_DEDUPED
 from dev_health_ops.metrics.sinks.factory import create_sink
@@ -1004,7 +1005,9 @@ class WorkGraphBuilder:
             )
         logger.info("Removed %d candidate legacy blocker edge ids", len(ordered))
 
-    def _require_projection_writer(self) -> Callable[[list[dict]], None]:
+    def _require_projection_writer(
+        self,
+    ) -> Callable[[list[WorkGraphProjectionRunRecord]], None]:
         writer = getattr(self.sink, "write_work_graph_projection_runs", None)
         if not callable(writer):
             raise RuntimeError("work graph projection watermark sink is unavailable")
@@ -1024,15 +1027,15 @@ class WorkGraphBuilder:
         ]
         writer(
             [
-                {
-                    "org_id": self.config.org_id,
-                    "projection_name": "issue_blockers",
-                    "scope_repo_id": self.config.repo_id,
-                    "rule_version": BLOCKER_PROJECTION_RULE_VERSION,
-                    "input_watermark": max(watermarks, default=self._now),
-                    "row_count": len(blocker_edges),
-                    "completed_at": self._now,
-                }
+                WorkGraphProjectionRunRecord(
+                    org_id=self.config.org_id,
+                    projection_name="issue_blockers",
+                    scope_repo_id=self.config.repo_id,
+                    rule_version=BLOCKER_PROJECTION_RULE_VERSION,
+                    input_watermark=max(watermarks, default=self._now),
+                    row_count=len(blocker_edges),
+                    completed_at=self._now,
+                )
             ]
         )
         logger.info(

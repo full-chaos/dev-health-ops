@@ -830,6 +830,17 @@ class WorkGraphEdgeRecord:
 
 
 @dataclass(frozen=True)
+class WorkGraphProjectionRunRecord:
+    org_id: str
+    projection_name: str
+    scope_repo_id: UUID | None
+    rule_version: str
+    input_watermark: datetime | None
+    row_count: int
+    completed_at: datetime
+
+
+@dataclass(frozen=True)
 class WorkGraphIssuePRRecord:
     repo_id: UUID
     work_item_id: str

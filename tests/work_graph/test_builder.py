@@ -380,8 +380,32 @@ class TestDependencyIssuePrLinks:
             "edge_ids": ["stale-blocker-edge"],
         }
         marker = fake_sink.write_work_graph_projection_runs.call_args.args[0][0]
-        assert marker["row_count"] == 0
-        assert marker["rule_version"] == "canonical-blocks.v2"
+        assert marker.row_count == 0
+        assert marker.rule_version == "canonical-blocks.v2"
+
+    def test_blocker_projection_persists_through_real_clickhouse_sink_contract(self):
+        from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+        sink = object.__new__(ClickHouseMetricsSink)
+        sink.client = MagicMock()
+        builder = object.__new__(WorkGraphBuilder)
+        builder.config = BuildConfig(
+            dsn="clickhouse://localhost:9000/default", org_id="org-a"
+        )
+        builder.sink = sink
+        builder._now = datetime(2026, 7, 28, 12, tzinfo=timezone.utc)
+
+        builder._publish_blocker_projection([], [])
+
+        insert = sink.client.insert.call_args
+        assert insert.args[0] == "work_graph_projection_runs"
+        assert insert.args[1][0][0:4] == [
+            "org-a",
+            "issue_blockers",
+            None,
+            "canonical-blocks.v2",
+        ]
+        assert insert.args[1][0][5] == 0
 
     def test_stale_pr_dependency_issue_edge_cleanup_is_scoped(self):
         fake_sink = MagicMock()

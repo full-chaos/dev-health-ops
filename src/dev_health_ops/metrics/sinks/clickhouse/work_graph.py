@@ -36,6 +36,7 @@ from dev_health_ops.metrics.schemas import (
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
+    WorkGraphProjectionRunRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
@@ -566,7 +567,9 @@ class WorkGraphMixin(_ClickHouseSinkBase):
             matrix = [[row[col] for col in column_names] for row in data]
             self.client.insert("work_graph_edges", matrix, column_names=column_names)
 
-    def write_work_graph_projection_runs(self, rows: Sequence[dict[str, Any]]) -> None:
+    def write_work_graph_projection_runs(
+        self, rows: Sequence[WorkGraphProjectionRunRecord]
+    ) -> None:
         """Publish completed projection watermarks after all edge writes succeed."""
         if not rows:
             return

@@ -88,6 +88,10 @@ from .resolvers.dev_evidence import (
 )
 from .resolvers.dev_metric import resolve_dev_metric, resolve_dev_metric_catalog
 from .resolvers.dev_scope import resolve_dev_scope_search
+from .resolvers.dev_status_change import (
+    resolve_dev_change_summary,
+    resolve_dev_status_snapshot,
+)
 from .resolvers.improve import resolve_improve_opportunities
 from .resolvers.pr import resolve_pr
 from .resolvers.product_telemetry import (
@@ -141,6 +145,12 @@ from .types.dev_metric import (
     DevMetricResult,
 )
 from .types.dev_scope import DevScopeSearchInput, DevScopeSearchResult
+from .types.dev_status_change import (
+    DevChangeSummary,
+    DevChangeSummaryInput,
+    DevStatusSnapshot,
+    DevStatusSnapshotInput,
+)
 from .types.review_edges import (
     ReviewEdgesInput,
     ReviewEdgesResult,
@@ -227,6 +237,34 @@ class Query:
         input: DevDataHealthInput,
     ) -> DevDataHealthResult:
         return await resolve_dev_data_health(get_context(info), input)
+
+    @strawberry.field(
+        description=(
+            "Return declared status separately from deterministic, evidence-backed "
+            "completion using the versioned Ask Dev status rules."
+        )
+    )
+    async def dev_status_snapshot(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevStatusSnapshotInput,
+    ) -> DevStatusSnapshot:
+        return await resolve_dev_status_snapshot(get_context(info), input)
+
+    @strawberry.field(
+        description=(
+            "Return reproducible observed changes across explicit equal-duration "
+            "windows without upgrading correlation to cause."
+        )
+    )
+    async def dev_change_summary(
+        self,
+        info: Info,
+        org_id: str,
+        input: DevChangeSummaryInput,
+    ) -> DevChangeSummary:
+        return await resolve_dev_change_summary(get_context(info), input)
 
     @strawberry.field(
         description="Get catalog of available dimensions, measures, and limits"

@@ -43,6 +43,7 @@ from ..types.dev_metric import (
     DevMetricMetadata,
     DevMetricQueryInput,
     DevMetricResult,
+    DevMetricScopeInput,
     DevMetricSeriesPoint,
     DevMetricSourceRef,
     DevMetricValue,
@@ -201,9 +202,16 @@ async def resolve_dev_metric(
 async def _resolve_scope(
     context: GraphQLContext, input: DevMetricQueryInput
 ) -> DevScope:
+    return await resolve_dev_metric_scope(context, input.scope)
+
+
+async def resolve_dev_metric_scope(
+    context: GraphQLContext, scope_input: DevMetricScopeInput
+) -> DevScope:
+    """Resolve the shared bounded metric/status GraphQL scope input."""
     org_id = require_org_id(context)
-    kind = EntityKind(input.scope.direct_scope.value)
-    refs = tuple(str(value) for value in input.scope.refs)
+    kind = EntityKind(scope_input.direct_scope.value)
+    refs = tuple(str(value) for value in scope_input.refs)
     scope_refs: tuple[ScopeRef, ...]
     if kind is EntityKind.ORGANIZATION:
         if refs:
@@ -214,13 +222,13 @@ async def _resolve_scope(
     request = ScopeResolveRequest(
         explicit_refs=scope_refs,
         team_filter_refs=tuple(
-            ScopeRef(EntityKind.TEAM, str(value)) for value in input.scope.team_ids
+            ScopeRef(EntityKind.TEAM, str(value)) for value in scope_input.team_ids
         ),
         time_range=TimeRangeRequest(
             preset_days=None,
-            start_date=input.scope.start_date,
-            end_date=input.scope.end_date,
-            timezone=input.scope.timezone,
+            start_date=scope_input.start_date,
+            end_date=scope_input.end_date,
+            timezone=scope_input.timezone,
         ),
     )
     if context.dev_scope_cache is None:

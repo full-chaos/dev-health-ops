@@ -14,6 +14,8 @@ from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     DevAnswer,
     DevCapabilities,
+    DevScope,
+    DevScopeResolution,
     DevStreamEvent,
     validate_stream,
 )
@@ -74,6 +76,39 @@ def test_capability_gates_are_independent() -> None:
     assert capabilities.ask_dev is False
     assert capabilities.byo_llm is True
     assert capabilities.agent_context_runtime is False
+
+
+def test_scope_contract_accepts_canonical_pull_request_ids_and_repository_candidates() -> (
+    None
+):
+    pull_request_scope = deepcopy(positive_fixtures()["dev_scope.v1"])
+    pull_request_scope["direct_scope"] = "pull_request"
+    pull_request_scope["entity_refs"] = [
+        {
+            "entity_type": "pull_request",
+            "entity_id": "550e8400-e29b-41d4-a716-446655440000#pr42",
+            "display_label": "PR 42",
+            "repository_id": "repo_dev_health",
+        }
+    ]
+    DevScope.model_validate(pull_request_scope)
+
+    ambiguous = deepcopy(positive_fixtures()["dev_scope_resolution.v1"])
+    ambiguous["outcome"] = "ambiguous"
+    ambiguous["resolved_scope"] = None
+    ambiguous["candidates"] = [
+        {
+            "entity_ref": {
+                "entity_type": "repository",
+                "entity_id": "full-chaos/dev-health",
+                "display_label": "full-chaos/dev-health",
+                "repository_id": "repo_dev_health",
+            },
+            "repository_id": "repo_dev_health",
+            "reason": "Repository name matched more than one authorized catalog entry.",
+        }
+    ]
+    DevScopeResolution.model_validate(ambiguous)
 
 
 def test_checked_in_contract_artifacts_have_no_drift() -> None:

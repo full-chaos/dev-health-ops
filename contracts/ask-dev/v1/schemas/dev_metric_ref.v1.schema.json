@@ -12,7 +12,7 @@
         "entity_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Entity Id",
           "type": "string"
         },
@@ -24,7 +24,7 @@
             {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
               "type": "string"
             },
             {
@@ -91,7 +91,7 @@
         "organization_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Organization Id",
           "type": "string"
         },
@@ -99,7 +99,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -127,7 +127,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -162,7 +162,7 @@
             {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
               "type": "string"
             },
             {
@@ -175,7 +175,7 @@
         "route_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Route Id",
           "type": "string"
         }
@@ -228,6 +228,7 @@
     },
     "EntityType": {
       "enum": [
+        "repository",
         "project",
         "work_unit",
         "issue",
@@ -268,7 +269,7 @@
     "aggregation": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Aggregation",
       "type": "string"
     },
@@ -330,7 +331,7 @@
       "items": {
         "maxLength": 128,
         "minLength": 1,
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
         "type": "string"
       },
       "maxItems": 25,
@@ -352,7 +353,7 @@
     "metric_ref_id": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Metric Ref Id",
       "type": "string"
     },
@@ -388,7 +389,7 @@
     "unit": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Unit",
       "type": "string"
     },

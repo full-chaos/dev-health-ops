@@ -64,7 +64,7 @@
         "source_system": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Source System",
           "type": "string"
         },
@@ -108,7 +108,7 @@
             {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
               "type": "string"
             },
             {
@@ -138,7 +138,7 @@
         "entity_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Entity Id",
           "type": "string"
         },
@@ -150,7 +150,7 @@
             {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
               "type": "string"
             },
             {
@@ -214,7 +214,7 @@
         "request_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Request Id",
           "type": "string"
         },
@@ -318,21 +318,21 @@
         "entity_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Entity Id",
           "type": "string"
         },
         "entity_type": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Entity Type",
           "type": "string"
         },
         "evidence_ref_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Evidence Ref Id",
           "type": "string"
         },
@@ -368,7 +368,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -384,7 +384,7 @@
         "source_system": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Source System",
           "type": "string"
         },
@@ -398,7 +398,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -429,7 +429,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 25,
@@ -439,21 +439,21 @@
         "relationship": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Relationship",
           "type": "string"
         },
         "source_entity_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Source Entity Id",
           "type": "string"
         },
         "target_entity_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Target Entity Id",
           "type": "string"
         }
@@ -492,7 +492,7 @@
         "aggregation": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Aggregation",
           "type": "string"
         },
@@ -554,7 +554,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 25,
@@ -576,7 +576,7 @@
         "metric_ref_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Metric Ref Id",
           "type": "string"
         },
@@ -612,7 +612,7 @@
         "unit": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Unit",
           "type": "string"
         },
@@ -675,7 +675,7 @@
         "organization_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Organization Id",
           "type": "string"
         },
@@ -683,7 +683,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -711,7 +711,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -737,7 +737,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -748,7 +748,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 20,
@@ -827,7 +827,7 @@
           "items": {
             "maxLength": 128,
             "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
             "type": "string"
           },
           "maxItems": 25,
@@ -838,7 +838,7 @@
         "fact_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Fact Id",
           "type": "string"
         },
@@ -873,7 +873,7 @@
             {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
               "type": "string"
             },
             {
@@ -886,7 +886,7 @@
         "route_id": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
           "title": "Route Id",
           "type": "string"
         }
@@ -939,6 +939,7 @@
     },
     "EntityType": {
       "enum": [
+        "repository",
         "project",
         "work_unit",
         "issue",
@@ -1050,7 +1051,7 @@
     "run_id": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Run Id",
       "type": "string"
     },
@@ -1098,7 +1099,7 @@
     "tool_call_id": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Tool Call Id",
       "type": "string"
     },

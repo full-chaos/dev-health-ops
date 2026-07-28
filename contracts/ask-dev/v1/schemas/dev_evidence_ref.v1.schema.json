@@ -122,21 +122,21 @@
     "entity_id": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Entity Id",
       "type": "string"
     },
     "entity_type": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Entity Type",
       "type": "string"
     },
     "evidence_ref_id": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Evidence Ref Id",
       "type": "string"
     },
@@ -172,7 +172,7 @@
       "items": {
         "maxLength": 128,
         "minLength": 1,
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
         "type": "string"
       },
       "maxItems": 20,
@@ -188,7 +188,7 @@
     "source_system": {
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
       "title": "Source System",
       "type": "string"
     },
@@ -202,7 +202,7 @@
       "items": {
         "maxLength": 128,
         "minLength": 1,
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
         "type": "string"
       },
       "maxItems": 20,

@@ -27,7 +27,7 @@ OpaqueID = Annotated[
     StringConstraints(
         min_length=1,
         max_length=128,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
     ),
 ]
 Label = Annotated[str, StringConstraints(min_length=1, max_length=256)]
@@ -57,6 +57,7 @@ class DirectScope(StrEnum):
 
 
 class EntityType(StrEnum):
+    REPOSITORY = "repository"
     PROJECT = "project"
     WORK_UNIT = "work_unit"
     ISSUE = "issue"

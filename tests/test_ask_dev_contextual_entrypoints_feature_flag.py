@@ -25,7 +25,7 @@ from dev_health_ops.licensing.types import LicenseTier
 
 
 def test_contextual_entrypoints_default_disabled_for_every_tier() -> None:
-    for tier in LicenseTier:
+    for tier in LicenseTier.__members__.values():
         features = get_features_for_tier(tier)
         assert features[ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE] is False
         assert features[ASK_DEV_FEATURE] is False

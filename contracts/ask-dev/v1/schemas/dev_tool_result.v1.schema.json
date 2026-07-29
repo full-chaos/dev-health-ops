@@ -220,6 +220,19 @@
           "title": "Code",
           "type": "string"
         },
+        "limit_reset_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit Reset At"
+        },
         "remediation": {
           "items": {
             "maxLength": 2048,

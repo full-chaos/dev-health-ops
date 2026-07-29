@@ -65,10 +65,13 @@ from .persistence.service import (
     ConversationRecord,
     DevAdmissionLimits,
     DevConcurrencyLimitExceeded,
+    DevMonthlyCostLimitExceeded,
+    DevMonthlyRequestLimitExceeded,
     DevPersistenceConflict,
     DevPersistenceNotFound,
     DevPersistenceService,
     DevPersistenceValidationError,
+    DevPlatformAllowance,
     DevRateLimitExceeded,
     TranscriptRecord,
 )
@@ -267,7 +270,7 @@ async def ask_dev_error_handler(_request: Request, exc: Exception) -> JSONRespon
     assert isinstance(exc, AskDevApiError)
     return JSONResponse(
         status_code=exc.status_code,
-        content=exc.error.model_dump(mode="json"),
+        content=exc.error.model_dump(mode="json", exclude_none=True),
         headers={"Cache-Control": "private, no-store", "Pragma": "no-cache"},
     )
 
@@ -285,7 +288,7 @@ async def ask_dev_validation_error_handler(
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content=error.model_dump(mode="json"),
+        content=error.model_dump(mode="json", exclude_none=True),
         headers={"Cache-Control": "private, no-store", "Pragma": "no-cache"},
     )
 
@@ -296,6 +299,7 @@ def _error(
     message: str,
     *,
     retryable: bool = False,
+    limit_reset_at: datetime | None = None,
 ) -> DevError:
     safe_request_id = request_id or str(uuid.uuid4())
     try:
@@ -305,6 +309,7 @@ def _error(
             code=code,
             safe_message=message,
             retryable=retryable,
+            limit_reset_at=limit_reset_at,
         )
     except ValueError:
         return DevError(
@@ -313,6 +318,7 @@ def _error(
             code=code,
             safe_message=message,
             retryable=retryable,
+            limit_reset_at=limit_reset_at,
         )
 
 
@@ -323,10 +329,17 @@ def _raise(
     *,
     request_id: str | None = None,
     retryable: bool = False,
+    limit_reset_at: datetime | None = None,
 ) -> None:
     raise AskDevApiError(
         status_code,
-        _error(request_id, code, message, retryable=retryable),
+        _error(
+            request_id,
+            code,
+            message,
+            retryable=retryable,
+            limit_reset_at=limit_reset_at,
+        ),
     )
 
 
@@ -400,6 +413,22 @@ def _parse_uuid(value: str | uuid.UUID, request_id: str | None) -> uuid.UUID:
 
 
 def _raise_persistence(exc: Exception, request_id: str | None) -> None:
+    if isinstance(exc, DevMonthlyCostLimitExceeded):
+        _raise(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "cost_limit_reached",
+            "The Ask Dev platform cost allowance was reached.",
+            request_id=request_id,
+            limit_reset_at=exc.reset_at,
+        )
+    if isinstance(exc, DevMonthlyRequestLimitExceeded):
+        _raise(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "rate_limited",
+            "The Ask Dev platform request allowance was reached.",
+            request_id=request_id,
+            limit_reset_at=exc.reset_at,
+        )
     if isinstance(exc, DevRateLimitExceeded):
         _raise(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1009,6 +1038,11 @@ async def create_message(
     )
     prior_turns: tuple[PromptConversationTurn, ...] = ()
     try:
+        runtime = runtime_resolution.runtime
+        policy = await load_ask_dev_org_policy(
+            SettingsService(service.session, user.org_id)
+        )
+        provider_source = runtime.provider_source if runtime is not None else None
         accepted = await service.append_user_message_and_run(
             org_id=org_id,
             user_id=user_id,
@@ -1023,6 +1057,17 @@ async def create_message(
                 else None
             ),
             admission_limits=DevAdmissionLimits(),
+            provider_source=provider_source,
+            platform_allowance=(
+                DevPlatformAllowance(
+                    monthly_request_limit=policy.platform_monthly_request_limit,
+                    monthly_cost_limit_microusd=(
+                        policy.platform_monthly_cost_limit_microusd
+                    ),
+                )
+                if provider_source == "platform"
+                else None
+            ),
         )
         if accepted.created:
             history = await service.list_prompt_history_messages(

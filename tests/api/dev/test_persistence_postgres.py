@@ -23,7 +23,10 @@ from sqlalchemy.ext.asyncio import (
 from dev_health_ops.api.dev.persistence import (
     DevAdmissionLimits,
     DevConcurrencyLimitExceeded,
+    DevMonthlyCostLimitExceeded,
+    DevMonthlyRequestLimitExceeded,
     DevPersistenceService,
+    DevPlatformAllowance,
     DevRateLimitExceeded,
 )
 from dev_health_ops.models.dev_persistence import (
@@ -283,4 +286,132 @@ async def test_postgres_serializes_concurrent_user_admission_and_replay_is_free(
 
     async with maker() as verify_session:
         assert await verify_session.scalar(select(func.count(DevRun.id))) == 2
-        assert await verify_session.scalar(select(func.count(DevMessage.id))) == 2
+    assert await verify_session.scalar(select(func.count(DevMessage.id))) == 2
+
+
+@pytest.mark.asyncio
+async def test_platform_monthly_allowance_charges_unique_runs_and_replay_is_free(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    maker, _engine, org_id, user_id = postgres_persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+        )
+        allowance = DevPlatformAllowance(
+            monthly_request_limit=2,
+            monthly_cost_limit_microusd=6_000_000,
+        )
+        client_message_id = uuid.uuid4()
+        first = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=client_message_id,
+            question="First platform request",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        replay = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=client_message_id,
+            question="Replay content is ignored",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        assert replay.created is False
+        assert replay.run.id == first.run.id
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=first.run.id,
+            state="completed",
+            estimated_cost_microusd=1_000_000,
+        )
+        second = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Second platform request",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=second.run.id,
+            state="cancelled",
+        )
+        with pytest.raises(DevMonthlyRequestLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="Third platform request",
+                scope_snapshot={},
+                admission_limits=DevAdmissionLimits(),
+                provider_source="platform",
+                platform_allowance=allowance,
+            )
+
+
+@pytest.mark.asyncio
+async def test_platform_monthly_allowance_reserves_unknown_cost_fail_closed(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    maker, _engine, org_id, user_id = postgres_persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+        )
+        allowance = DevPlatformAllowance(
+            monthly_request_limit=10,
+            monthly_cost_limit_microusd=5_000_000,
+        )
+        first = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Reserve the full unknown platform cost",
+            scope_snapshot={},
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=first.run.id,
+            state="cancelled",
+        )
+        with pytest.raises(DevMonthlyCostLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="Unknown cost cannot be treated as zero",
+                scope_snapshot={},
+                provider_source="platform",
+                platform_allowance=allowance,
+            )

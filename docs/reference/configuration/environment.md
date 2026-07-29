@@ -69,6 +69,13 @@ A setting that enables a route is not sufficient evidence that the corresponding
 
 Include model providers, email, billing, Sentry-compatible error delivery, OpenTelemetry endpoints, Prometheus settings, service names, sampling, and external integration configuration.
 
+Ask Dev platform allowances use `ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX` and
+`ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD` on the API. They are non-secret,
+restart-loaded operator maxima; organization administrators can only configure
+values at or below them. Defaults are 1,000 accepted platform runs and
+100,000,000 microUSD per UTC calendar month. Runtime hard bounds are 100–5,000
+runs and 10,000,000–500,000,000 microUSD.
+
 ## Reference rules
 
 For every generated entry, include:

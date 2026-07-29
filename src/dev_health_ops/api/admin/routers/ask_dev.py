@@ -9,15 +9,24 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id, get_admin_user
 from dev_health_ops.api.dev.org_policy import (
     ASK_DEV_EMERGENCY_DISABLED_KEY,
     ASK_DEV_FALLBACK_KEY,
+    ASK_DEV_PLATFORM_MONTHLY_COST_LIMIT_KEY,
+    ASK_DEV_PLATFORM_MONTHLY_REQUEST_LIMIT_KEY,
     ASK_DEV_RETENTION_KEY,
+    ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+    PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD,
+    PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
+    PLATFORM_MONTHLY_REQUEST_LIMIT_HARD_MAX,
+    PLATFORM_MONTHLY_REQUEST_LIMIT_MIN,
     load_ask_dev_org_policy,
+    platform_operator_cost_limit_microusd,
+    platform_operator_request_limit,
 )
 from dev_health_ops.api.dev.persistence.service import DevAdmissionLimits
 from dev_health_ops.api.dev.production_runtime import resolve_certification_provider
@@ -60,12 +69,30 @@ class AskDevAdminSettings(StrictAdminModel):
     retention_days: Literal[0, 30]
     fallback_policy: Literal["fail_closed", "platform"]
     emergency_disabled: bool
+    platform_monthly_request_limit: int = Field(
+        ge=PLATFORM_MONTHLY_REQUEST_LIMIT_MIN,
+        le=PLATFORM_MONTHLY_REQUEST_LIMIT_HARD_MAX,
+    )
+    platform_monthly_cost_limit_microusd: int = Field(
+        ge=PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
+        le=PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD,
+    )
 
 
 class AskDevAdminSettingsUpdate(StrictAdminModel):
     retention_days: Literal[0, 30] | None = None
     fallback_policy: Literal["fail_closed", "platform"] | None = None
     emergency_disabled: bool | None = None
+    platform_monthly_request_limit: int | None = Field(
+        default=None,
+        ge=PLATFORM_MONTHLY_REQUEST_LIMIT_MIN,
+        le=PLATFORM_MONTHLY_REQUEST_LIMIT_HARD_MAX,
+    )
+    platform_monthly_cost_limit_microusd: int | None = Field(
+        default=None,
+        ge=PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
+        le=PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD,
+    )
 
     @model_validator(mode="after")
     def require_change(self) -> AskDevAdminSettingsUpdate:
@@ -79,6 +106,25 @@ class AskDevAdminRequestLimits(StrictAdminModel):
     active_runs_per_organization: int = Field(ge=1)
     requests_per_user_per_15_minutes: int = Field(ge=1)
     requests_per_organization_per_hour: int = Field(ge=1)
+
+
+class AskDevPlatformAllowanceBounds(StrictAdminModel):
+    request_minimum: int = Field(ge=1)
+    request_maximum: int = Field(ge=1)
+    cost_minimum_microusd: int = Field(ge=1)
+    cost_maximum_microusd: int = Field(ge=1)
+
+
+class AskDevPlatformAllowanceUsage(StrictAdminModel):
+    window_start: AwareDatetime
+    reset_at: AwareDatetime
+    request_limit: int = Field(ge=1)
+    request_used: int = Field(ge=0)
+    request_remaining: int = Field(ge=0)
+    cost_limit_microusd: int = Field(ge=1)
+    cost_used_microusd: int = Field(ge=0)
+    cost_remaining_microusd: int = Field(ge=0)
+    warning: Literal["none", "eighty_percent", "ninety_percent", "exhausted"]
 
 
 def _retention_options() -> list[Literal[0, 30]]:
@@ -110,6 +156,7 @@ class AskDevAdminResponse(StrictAdminModel):
         default_factory=_fallback_options
     )
     request_limits: AskDevAdminRequestLimits
+    platform_allowance_bounds: AskDevPlatformAllowanceBounds
     no_training_by_default: Literal[True] = True
 
 
@@ -129,6 +176,78 @@ class AskDevAdminUsageResponse(StrictAdminModel):
     failure_rate: float = Field(ge=0, le=1)
     degraded_rate: float = Field(ge=0, le=1)
     readiness: ReadinessState
+    platform_allowance: AskDevPlatformAllowanceUsage
+
+
+def _platform_month_window(now: datetime) -> tuple[datetime, datetime]:
+    start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    if now.month == 12:
+        return start, datetime(now.year + 1, 1, 1, tzinfo=UTC)
+    return start, datetime(now.year, now.month + 1, 1, tzinfo=UTC)
+
+
+def _allowance_warning(*, used: int, limit: int) -> int:
+    if used >= limit:
+        return 3
+    if used * 10 >= limit * 9:
+        return 2
+    if used * 10 >= limit * 8:
+        return 1
+    return 0
+
+
+async def _platform_allowance_usage(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    request_limit: int,
+    cost_limit_microusd: int,
+) -> AskDevPlatformAllowanceUsage:
+    window_start, reset_at = _platform_month_window(datetime.now(UTC))
+    terminal = {
+        "completed",
+        "insufficient_evidence",
+        "refused",
+        "failed",
+        "cancelled",
+    }
+    charged_cost = case(
+        (
+            and_(
+                DevRun.state.in_(terminal),
+                DevRun.estimated_cost_microusd.is_not(None),
+            ),
+            DevRun.estimated_cost_microusd,
+        ),
+        else_=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+    )
+    statement = select(
+        func.count(DevRun.id), func.coalesce(func.sum(charged_cost), 0)
+    ).where(
+        DevRun.org_id == uuid.UUID(org_id),
+        DevRun.provider_source == "platform",
+        DevRun.started_at >= window_start,
+        DevRun.started_at < reset_at,
+    )
+    request_used, cost_used = (await session.execute(statement)).one()
+    requests = int(request_used or 0)
+    cost = int(cost_used or 0)
+    warning_rank = max(
+        _allowance_warning(used=requests, limit=request_limit),
+        _allowance_warning(used=cost, limit=cost_limit_microusd),
+    )
+    warning = ("none", "eighty_percent", "ninety_percent", "exhausted")[warning_rank]
+    return AskDevPlatformAllowanceUsage(
+        window_start=window_start,
+        reset_at=reset_at,
+        request_limit=request_limit,
+        request_used=requests,
+        request_remaining=max(0, request_limit - requests),
+        cost_limit_microusd=cost_limit_microusd,
+        cost_used_microusd=cost,
+        cost_remaining_microusd=max(0, cost_limit_microusd - cost),
+        warning=warning,
+    )
 
 
 def _block_impersonated_write(user: AuthenticatedUser) -> None:
@@ -270,12 +389,22 @@ async def _admin_response(
             retention_days=policy.retention_days,
             fallback_policy=policy.fallback_policy,
             emergency_disabled=policy.emergency_disabled,
+            platform_monthly_request_limit=policy.platform_monthly_request_limit,
+            platform_monthly_cost_limit_microusd=(
+                policy.platform_monthly_cost_limit_microusd
+            ),
         ),
         request_limits=AskDevAdminRequestLimits(
             active_runs_per_user=limits.active_runs_per_user,
             active_runs_per_organization=limits.active_runs_per_org,
             requests_per_user_per_15_minutes=limits.requests_per_user_per_15_minutes,
             requests_per_organization_per_hour=limits.requests_per_org_per_hour,
+        ),
+        platform_allowance_bounds=AskDevPlatformAllowanceBounds(
+            request_minimum=PLATFORM_MONTHLY_REQUEST_LIMIT_MIN,
+            request_maximum=platform_operator_request_limit(),
+            cost_minimum_microusd=PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
+            cost_maximum_microusd=platform_operator_cost_limit_microusd(),
         ),
     )
 
@@ -318,6 +447,38 @@ async def update_ask_dev_admin_settings(
             "true" if payload.emergency_disabled else "false",
             category,
             description="Organization emergency disable for both Ask Dev surfaces",
+        )
+    operator_request_limit = platform_operator_request_limit()
+    operator_cost_limit = platform_operator_cost_limit_microusd()
+    if (
+        payload.platform_monthly_request_limit is not None
+        and payload.platform_monthly_request_limit > operator_request_limit
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="platform request limit exceeds the provisioned maximum",
+        )
+    if (
+        payload.platform_monthly_cost_limit_microusd is not None
+        and payload.platform_monthly_cost_limit_microusd > operator_cost_limit
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="platform cost limit exceeds the provisioned maximum",
+        )
+    if payload.platform_monthly_request_limit is not None:
+        await settings.set(
+            ASK_DEV_PLATFORM_MONTHLY_REQUEST_LIMIT_KEY,
+            str(payload.platform_monthly_request_limit),
+            category,
+            description="Ask Dev platform monthly accepted-run allowance",
+        )
+    if payload.platform_monthly_cost_limit_microusd is not None:
+        await settings.set(
+            ASK_DEV_PLATFORM_MONTHLY_COST_LIMIT_KEY,
+            str(payload.platform_monthly_cost_limit_microusd),
+            category,
+            description="Ask Dev platform monthly provider cost allowance in micro-USD",
         )
     await session.flush()
     return await _admin_response(session, org_id=org_id)
@@ -403,6 +564,12 @@ async def get_ask_dev_usage(
     failed_runs = int(row[2] or 0)
     degraded_runs = int(row[3] or 0)
     admin = await _admin_response(session, org_id=org_id)
+    allowance = await _platform_allowance_usage(
+        session,
+        org_id=org_id,
+        request_limit=admin.settings.platform_monthly_request_limit,
+        cost_limit_microusd=admin.settings.platform_monthly_cost_limit_microusd,
+    )
     return AskDevAdminUsageResponse(
         since=response_since,
         through=through,
@@ -417,4 +584,5 @@ async def get_ask_dev_usage(
         failure_rate=(failed_runs / run_count if run_count else 0.0),
         degraded_rate=(degraded_runs / run_count if run_count else 0.0),
         readiness=admin.readiness,
+        platform_allowance=allowance,
     )

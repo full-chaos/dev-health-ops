@@ -891,6 +891,7 @@ class DevError(ContractModel):
     ]
     safe_message: ShortText
     retryable: bool
+    limit_reset_at: AwareDatetime | None = None
     remediation: list[ShortText] = Field(default_factory=list, max_length=5)
 
 

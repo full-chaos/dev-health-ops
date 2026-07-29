@@ -34,10 +34,37 @@ from .errors import (
 )
 
 READINESS_VERSION = "ask-dev-agent-v1"
+PLATFORM_PRICE_BOOK_VERSION = "openai-2026-07-29"
+
+# Server-owned conservative prices in microUSD per million tokens. Cached input
+# is intentionally charged at the full input rate because the normalized usage
+# contract does not expose cached-token detail.
+# Source snapshot: https://developers.openai.com/api/docs/models/gpt-5-mini
+_PLATFORM_MODEL_PRICES: dict[str, tuple[int, int]] = {
+    "gpt-5-mini": (250_000, 2_000_000),
+}
 
 
 def _fingerprint(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:24]
+
+
+def _estimated_cost_microusd(
+    *, model: str, input_tokens: int, output_tokens: int
+) -> int | None:
+    canonical_model = next(
+        (
+            known
+            for known in _PLATFORM_MODEL_PRICES
+            if model == known or model.startswith(f"{known}-")
+        ),
+        None,
+    )
+    if canonical_model is None:
+        return None
+    input_rate, output_rate = _PLATFORM_MODEL_PRICES[canonical_model]
+    numerator = input_tokens * input_rate + output_tokens * output_rate
+    return (numerator + 999_999) // 1_000_000
 
 
 class OpenAICompatibleAgentProvider:
@@ -156,11 +183,18 @@ class OpenAICompatibleAgentProvider:
         ):
             raise AgentProviderError(AgentProviderErrorCode.INVALID_RESPONSE) from None
         usage = getattr(response, "usage", None)
+        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         return AgentDecisionResult(
             decision=decision,
             usage=AgentUsage(
-                input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
-                output_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                estimated_cost_microusd=_estimated_cost_microusd(
+                    model=self.model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                ),
             ),
             latency_ms=max(0, round((time.monotonic() - started) * 1000)),
             provider_fingerprint=self.provider_fingerprint,

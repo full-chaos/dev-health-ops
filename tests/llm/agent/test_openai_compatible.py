@@ -81,9 +81,29 @@ async def test_normalizes_native_tool_decision_and_usage() -> None:
     )
     assert result.decision == AgentToolRequest("lookup", {"id": "WU-1"}, "call-1")
     assert (result.usage.input_tokens, result.usage.output_tokens) == (11, 7)
+    assert result.usage.estimated_cost_microusd is None
     sent = client.chat.completions.calls[0]
     assert sent["tools"][0]["function"]["name"] == "lookup"
     assert sent["response_format"]["json_schema"]["strict"] is True
+
+
+@pytest.mark.asyncio
+async def test_estimates_known_platform_model_cost_in_integer_microusd() -> None:
+    client = Client([response(content='{"kind":"refusal","code":"no","message":"no"}')])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="gpt-5-mini-2026-07-29", client=client
+    )
+
+    result = await provider.decide(
+        [AgentMessage(AgentMessageRole.USER, "question")],
+        [],
+        {"type": "object"},
+        1,
+        256,
+    )
+
+    # ceil((11 * $0.25/M + 7 * $2/M) * 1M microUSD/USD)
+    assert result.usage.estimated_cost_microusd == 17
 
 
 @pytest.mark.asyncio

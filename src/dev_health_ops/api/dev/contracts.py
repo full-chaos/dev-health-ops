@@ -574,7 +574,7 @@ class DevFeedback(ContractModel):
     schema_version: Literal["dev_feedback.v1"]
     feedback_id: OpaqueID
     answer_id: OpaqueID
-    rating: Literal["up", "down"]
+    rating: Literal["helpful", "not_helpful"]
     reasons: list[
         Literal[
             "incorrect",

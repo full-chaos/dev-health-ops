@@ -39,8 +39,8 @@
     },
     "rating": {
       "enum": [
-        "up",
-        "down"
+        "helpful",
+        "not_helpful"
       ],
       "title": "Rating",
       "type": "string"

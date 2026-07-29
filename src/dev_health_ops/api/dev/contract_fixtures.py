@@ -254,7 +254,7 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
             "schema_version": "dev_feedback.v1",
             "feedback_id": "feedback_01",
             "answer_id": "answer_01",
-            "rating": "up",
+            "rating": "helpful",
             "reasons": ["useful"],
             "comment": "The evidence answered my question.",
             "created_at": NOW,

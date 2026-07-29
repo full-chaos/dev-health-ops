@@ -181,7 +181,7 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revision(migrated_to_0065.engine) == "0069"
+    assert _revision(migrated_to_0065.engine) == "0070"
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)
     ]

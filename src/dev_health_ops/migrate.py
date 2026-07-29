@@ -12,6 +12,7 @@ installed wheel exists.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import subprocess
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 # Resolve the alembic directory from the *installed* package tree,
 # not from a hard-coded source path.
 _ALEMBIC_DIR = Path(__file__).resolve().parent / "alembic"
+_CELERY_RIVER_CUTOVER_ENV = "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
+_CELERY_RIVER_CUTOVER_REVISION = "0066"
+_PRE_CELERY_RIVER_CUTOVER_REVISION = "0065"
+# tests/test_migrate_commands.py pins 0066 as the sole head. A later revision
+# must deliberately decide whether it is also deferred or needs a separate
+# Alembic branch that can advance without crossing this ownership cutover.
 
 
 def _get_migration_database_uri() -> str | None:
@@ -81,6 +88,80 @@ def _make_alembic_config(db_url: str | None = None):
 # ── individual commands ────────────────────────────────────────────
 
 
+async def _read_current_postgres_heads(cfg) -> tuple[str, ...]:
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import pool
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.ext.asyncio import async_engine_from_config
+
+    connectable = async_engine_from_config(
+        cfg.get_section(cfg.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    try:
+        async with connectable.connect() as connection:
+
+            def current_heads(sync_connection: Connection) -> tuple[str, ...]:
+                context = MigrationContext.configure(sync_connection)
+                return tuple(context.get_current_heads())
+
+            return await connection.run_sync(current_heads)
+    finally:
+        await connectable.dispose()
+
+
+def _current_postgres_heads(cfg) -> tuple[str, ...]:
+    return asyncio.run(_read_current_postgres_heads(cfg))
+
+
+def _database_has_revision(
+    cfg, current_heads: tuple[str, ...], target_revision: str
+) -> bool:
+    """Return whether any current Alembic head descends from ``target_revision``."""
+    from alembic.script import ScriptDirectory
+
+    scripts = ScriptDirectory.from_config(cfg)
+    pending = list(current_heads)
+    visited: set[str] = set()
+    while pending:
+        revision = pending.pop()
+        if revision == target_revision:
+            return True
+        if revision in visited:
+            continue
+        visited.add(revision)
+        script = scripts.get_revision(revision)
+        if script is None or script.down_revision is None:
+            continue
+        if isinstance(script.down_revision, str):
+            pending.append(script.down_revision)
+        else:
+            pending.extend(script.down_revision)
+    return False
+
+
+def _effective_postgres_upgrade_revision(cfg, requested_revision: str) -> str:
+    """Keep an ordinary upgrade below the explicit Celery-to-River cutover."""
+    if requested_revision != "head":
+        return requested_revision
+    if os.getenv(_CELERY_RIVER_CUTOVER_ENV) == "1":
+        return requested_revision
+
+    current_heads = _current_postgres_heads(cfg)
+    if _database_has_revision(cfg, current_heads, _CELERY_RIVER_CUTOVER_REVISION):
+        # The cutover already ran in this database. Never turn an upgrade into a
+        # backwards target merely because a one-shot authorization is absent.
+        return requested_revision
+
+    logger.info(
+        "Deferring Celery-to-River cutover revision %s; set %s=1 to apply it",
+        _CELERY_RIVER_CUTOVER_REVISION,
+        _CELERY_RIVER_CUTOVER_ENV,
+    )
+    return _PRE_CELERY_RIVER_CUTOVER_REVISION
+
+
 def _run_upgrade(ns: argparse.Namespace) -> int:
     from alembic import command
 
@@ -94,7 +175,8 @@ def _run_upgrade(ns: argparse.Namespace) -> int:
             "MIGRATION_DATABASE_URI_FILE for a unified upgrade"
         )
     cfg = _make_alembic_config(explicit_db)
-    command.upgrade(cfg, ns.revision)
+    revision = _effective_postgres_upgrade_revision(cfg, ns.revision)
+    command.upgrade(cfg, revision)
     return _run_river_upgrade()
 
 

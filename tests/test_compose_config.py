@@ -1004,13 +1004,10 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
     """CHAOS-3142/CHAOS-3143: no `go-*` service may `depends_on` the Python
     `migrate` service.
 
-    `depends_on` pulls a service in regardless of profile, so such an edge makes
-    `docker compose --profile go up -d` run Alembic to *head* -- which is
-    0066_activate_river_worker_job_routes, the cutover that retargets 23 job
-    kinds from Celery to River. Both Go runtimes sit downstream of
-    go-worker-migrate, so the edge guaranteed precisely the ordering 0066's own
-    docstring forbids: routes flip to River before any River consumer can
-    start, and envelopes then pile up in worker_job_outbox with no executor.
+    `depends_on` pulls a service in regardless of profile. The application
+    migrator defers 0066 by default, but an environment carrying the explicit
+    cutover authorization would still flip routes before the downstream Go
+    runtimes can start, violating 0066's ordering contract.
 
     Standing up the Go observation path must never be able to move real traffic
     as a side effect, so the Python schema stays an explicitly authorized
@@ -1035,8 +1032,8 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
         )
         assert "migrate" not in dependencies, (
             f"{name} must not depend on the Python `migrate` service: that edge runs "
-            "Alembic to head (0066, the Celery->River cutover) on a plain "
-            "`--profile go up`, before any Go consumer can start"
+            "the Python migration service on a plain `--profile go up`; an "
+            "authorized 0066 cutover would run before any Go consumer can start"
         )
 
 

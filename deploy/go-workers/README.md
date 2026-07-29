@@ -158,14 +158,14 @@ own compose file(s) for exactly which services exist and where.
 ### Bring-up order: the Python schema is a prerequisite, never a `depends_on`
 
 **`depends_on` ignores profiles.** A profiled service that declares
-`depends_on: migrate` pulls the *unprofiled* Python migrator into the plan, so
-`docker compose --profile go up -d` runs Alembic to **head** — and head is
-`0066_activate_river_worker_job_routes`, the cutover that retargets 23 of 24
-job kinds from Celery to River. Both Go runtimes sit downstream of
-`go-worker-migrate`, so that edge guaranteed precisely the ordering `0066`'s
-own docstring forbids: routes flip to River *before* any River consumer can
-start, and envelopes then accumulate in `worker_job_outbox` with nothing to
-execute them.
+`depends_on: migrate` pulls the *unprofiled* Python migrator into the plan. The
+application migrator now stops at `0065` unless
+`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`, but a deployment carrying that
+one-shot authorization would still run
+`0066_activate_river_worker_job_routes` before the downstream Go runtimes can
+start. That is precisely the ordering `0066`'s own docstring forbids: routes
+flip to River before any River consumer is available, and envelopes then
+accumulate in `worker_job_outbox` with nothing to execute them.
 
 `go-worker-migrate` therefore does **not** depend on `migrate`, and standing up
 the Go observation path cannot move real traffic as a side effect.
@@ -175,10 +175,9 @@ is the regression barrier.
 Bring the Python schema to the last pre-cutover revision yourself, first:
 
 ```bash
-# Explicit, separately authorized, and stops one revision short of the cutover.
-# `revision` is a positional on `upgrade`; omitting it means head, i.e. 0066.
+# Without the cutover opt-in, the application migrator stops at 0065.
 docker compose run --rm --entrypoint sh migrate -c \
-  'python -m dev_health_ops.cli migrate postgres upgrade 0065'
+  'python -m dev_health_ops.cli migrate postgres upgrade'
 
 # Confirm where you actually landed before going further.
 docker compose run --rm --entrypoint sh migrate -c \
@@ -386,8 +385,8 @@ line per unsatisfied requirement — `postgres.DiagnoseRolePosture`, wired at
 reconciler's own logs first; the query above is for when you need to trace
 it back to a specific migration yourself.
 
-**Before you reach for `alembic upgrade head` (or the `migrate` service, which
-always goes to head) to fix this: read every pending migration first, not
+**Before you reach for direct `alembic upgrade head` to fix this: read every
+pending migration first, not
 just the one that creates the table you need.** "Behind on migrations" and
 "the next migration is inert DDL" are not the same claim, and treating
 `migrate` as a safe, idempotent, always-correct-to-run step because it
@@ -398,31 +397,29 @@ database this was diagnosed against was `0065_add_fixed_schedule_occurrences.py`
 `0066_activate_river_worker_job_routes.py` — the CHAOS-3033 Celery-to-River
 cutover migration, which flips checked-in job kinds from `transport='celery'`
 to `transport='river'` and, per its own docstring, requires Go consumers to
-already be running for every affected queue before it commits. Running
-`migrate` to head on a database with no Go workers running yet would have
-silently stopped background processing for every one of those job kinds. If
-a targeted `alembic upgrade <revision>` stopping short of a cutover migration
-is what you need, use that instead of `head`, and confirm first that the
+already be running for every affected queue before it commits. Direct
+`alembic upgrade head` on a database with no Go workers running would silently
+stop background processing for every one of those job kinds. The application
+`migrate postgres` command instead leaves `0066` pending unless
+`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`. If a targeted direct Alembic upgrade
+stopping short of a cutover migration is what you need, use that instead of
+`head`, and confirm first that the
 `api`/`migrate` container actually has your target revision's file available
 (root compose mounts `./ops:/app`, so it does if you're on a branch with that
 migration file; it does not against an unmodified `origin/main` checkout).
 
-### Live landmine: a mounted `ops` checkout is one `migrate` run away from an unattended cutover
+### Live landmine: direct Alembic and authorized migration runs can still cut over
 
 Independent of everything else in this document: if the compose project
 running this stack mounts a working copy of this repository into its
 `migrate` service (as the coexistence overlays and CHAOS-3142's own
 repo-root wiring do, so a nested `migrate` target and other Go/Alembic
-artifacts on a feature branch are visible without a rebuild), then **any
-`docker compose up` that (re)starts `migrate`** — not just an explicit,
-reviewed cutover — **applies every pending Alembic migration on that
-checkout, including a cutover migration, unattended, the moment one exists
-in the pending set.** There is no confirmation step, no dry run, and no
-distinction in `migrate`'s own behavior between "add a column" and "flip 23
-job kinds from Celery to River." The migration itself is the only gate, and
-by the time it's pending in a checked-out branch, that gate is one ordinary
-`up` away from being crossed by whoever runs it next, for any reason,
-possibly without realizing a cutover migration is even in the pending set.
+artifacts on a feature branch are visible without a rebuild), direct Alembic
+still applies every pending revision. The application migrator prevents an
+unattended `0066` cutover by stopping at `0065` unless
+`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`; that one-shot authorization must
+therefore be scoped to the reviewed cutover run and removed afterward. There
+is no separate interactive confirmation once the authorization is present.
 This is a general operational hazard of mounting a live checkout into a
 migration-running service, not specific to CHAOS-3142 or to this migration —
 it deserves review as its own item, independent of the Go execution path

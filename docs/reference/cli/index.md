@@ -1284,7 +1284,7 @@ Database schema migrations for PostgreSQL (Alembic) and ClickHouse.
 Run PostgreSQL (Alembic) schema migrations. Uses `POSTGRES_URI`.
 
 ```bash
-# Apply all pending migrations (upgrade to head)
+# Apply all ordinary pending migrations
 dev-hops migrate postgres
 dev-hops migrate postgres upgrade
 
@@ -1303,6 +1303,14 @@ dev-hops migrate postgres history
 # Show available heads
 dev-hops migrate postgres heads
 ```
+
+The Celery-to-River ownership cutover at PostgreSQL revision `0066` is deferred
+by default. An ordinary upgrade applies through revision `0065` and exits
+successfully, leaving `0066` pending. Set
+`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1` only on the explicitly authorized
+migration run after the River consumers are ready and Celery is drained. A
+database that has already applied `0066` continues upgrading normally when the
+one-shot variable is absent.
 
 **Backward-compatible aliases:** `dev-hops migrate upgrade`, `dev-hops migrate downgrade`, etc. still work and target PostgreSQL.
 

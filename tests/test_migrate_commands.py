@@ -9,9 +9,12 @@ import pytest
 
 from dev_health_ops.cli import _resolve_org, _should_resolve_org, build_parser
 from dev_health_ops.migrate import (
+    _database_has_revision,
+    _make_alembic_config,
     _run_clickhouse_repair,
     _run_clickhouse_status,
     _run_clickhouse_upgrade,
+    _run_upgrade,
 )
 
 # ---------------------------------------------------------------------------
@@ -146,6 +149,102 @@ class TestMigrateRouting:
     def test_upgrade_flat_accepts_revision(self):
         ns = self.parser.parse_args(["migrate", "upgrade", "abc123"])
         assert ns.revision == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# _run_upgrade
+# ---------------------------------------------------------------------------
+
+
+class TestPostgresUpgrade:
+    def test_cutover_deferral_is_revisited_when_alembic_head_changes(self) -> None:
+        from alembic.script import ScriptDirectory
+
+        cfg = _make_alembic_config(
+            "postgresql+asyncpg://unused:unused@localhost:5432/unused"
+        )
+
+        assert ScriptDirectory.from_config(cfg).get_current_head() == "0066"
+
+    def test_cutover_revision_lineage_detection_uses_real_alembic_graph(self) -> None:
+        cfg = _make_alembic_config(
+            "postgresql+asyncpg://unused:unused@localhost:5432/unused"
+        )
+
+        assert _database_has_revision(cfg, ("0066",), "0066")
+        assert not _database_has_revision(cfg, ("0065",), "0066")
+
+    @pytest.mark.parametrize("raw", [None, "", "0"])
+    def test_disabled_cutover_opt_in_defers_head_at_0065(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str | None
+    ) -> None:
+        if raw is None:
+            monkeypatch.delenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", raising=False)
+        else:
+            monkeypatch.setenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", raw)
+        cfg = MagicMock()
+        with (
+            patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
+            patch(
+                "dev_health_ops.migrate._current_postgres_heads", return_value=("0051",)
+            ),
+            patch("dev_health_ops.migrate._database_has_revision", return_value=False),
+            patch("alembic.command.upgrade") as upgrade,
+            patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
+        ):
+            assert _run_upgrade(_ns(revision="head")) == 0
+
+        upgrade.assert_called_once_with(cfg, "0065")
+
+    def test_explicit_cutover_opt_in_keeps_head(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", "1")
+        cfg = MagicMock()
+        with (
+            patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
+            patch("dev_health_ops.migrate._current_postgres_heads") as current_heads,
+            patch("alembic.command.upgrade") as upgrade,
+            patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
+        ):
+            assert _run_upgrade(_ns(revision="head")) == 0
+
+        current_heads.assert_not_called()
+        upgrade.assert_called_once_with(cfg, "head")
+
+    def test_unset_opt_in_does_not_move_an_applied_cutover_backwards(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", raising=False)
+        cfg = MagicMock()
+        with (
+            patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
+            patch(
+                "dev_health_ops.migrate._current_postgres_heads", return_value=("0066",)
+            ),
+            patch("dev_health_ops.migrate._database_has_revision", return_value=True),
+            patch("alembic.command.upgrade") as upgrade,
+            patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
+        ):
+            assert _run_upgrade(_ns(revision="head")) == 0
+
+        upgrade.assert_called_once_with(cfg, "head")
+
+    def test_explicit_revision_keeps_direct_alembic_guard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER", raising=False)
+        cfg = MagicMock()
+        with (
+            patch("dev_health_ops.migrate._make_alembic_config", return_value=cfg),
+            patch("dev_health_ops.migrate._current_postgres_heads") as current_heads,
+            patch("alembic.command.upgrade") as upgrade,
+            patch("dev_health_ops.migrate._run_river_upgrade", return_value=0),
+        ):
+            assert _run_upgrade(_ns(revision="0066")) == 0
+
+        current_heads.assert_not_called()
+        upgrade.assert_called_once_with(cfg, "0066")
 
 
 # ---------------------------------------------------------------------------

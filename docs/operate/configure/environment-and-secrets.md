@@ -105,6 +105,19 @@ not environment variables or the generic settings endpoint. A malformed stored
 emergency-disable value fails closed. Global feature disable and explicit
 entitlement denial continue to take precedence over every organization setting.
 
+The API owns two non-secret maxima for platform-managed Ask Dev usage:
+
+| Setting | Default | Hard range | Purpose |
+| --- | ---: | ---: | --- |
+| `ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX` | `1000` | `100`–`5000` | Maximum accepted platform runs per organization and UTC calendar month |
+| `ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD` | `100000000` ($100) | `10000000`–`500000000` ($10–$500) | Maximum estimated platform provider cost per organization and UTC calendar month |
+
+Organization administrators may lower their provisioned values through the Ask
+Dev controls, but cannot raise them above these operator maxima. Raising an
+operator maximum above the default does not silently raise an unconfigured
+organization's default. Limits reset at 00:00 UTC on the first day of each
+month and do not roll over.
+
 Readiness failures expose only these stable classes to users and durable state:
 disabled, provider not configured, model not supported, provider unavailable,
 invalid response, timeout, or cancelled. Inspect provider logs through the

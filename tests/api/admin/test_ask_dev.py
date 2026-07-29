@@ -190,6 +190,12 @@ async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context)
     assert body["full_page_available"] is False
     assert body["retention_options"] == [0, 30]
     assert body["fallback_options"] == ["fail_closed", "platform"]
+    assert body["platform_allowance_bounds"] == {
+        "request_minimum": 100,
+        "request_maximum": 1000,
+        "cost_minimum_microusd": 10_000_000,
+        "cost_maximum_microusd": 100_000_000,
+    }
     assert body["no_training_by_default"] is True
 
     certified = await admin_context.client.post("/api/v1/admin/ask-dev/readiness")
@@ -211,9 +217,28 @@ async def test_admin_projection_and_readiness_are_safe_and_shared(admin_context)
 
 
 @pytest.mark.asyncio
-async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
-    admin_context,
+async def test_operator_maxima_do_not_raise_the_unconfigured_org_defaults(
+    admin_context, monkeypatch: pytest.MonkeyPatch
 ):
+    monkeypatch.setenv("ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX", "5000")
+    monkeypatch.setenv("ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD", "500000000")
+
+    response = await admin_context.client.get("/api/v1/admin/ask-dev")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["settings"]["platform_monthly_request_limit"] == 1000
+    assert body["settings"]["platform_monthly_cost_limit_microusd"] == 100_000_000
+    assert body["platform_allowance_bounds"]["request_maximum"] == 5000
+    assert body["platform_allowance_bounds"]["cost_maximum_microusd"] == 500_000_000
+
+
+@pytest.mark.asyncio
+async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
+    admin_context, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX", "600")
+    monkeypatch.setenv("ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD", "50000000")
     async with admin_context.maker() as session:
         await SettingsService(session, str(admin_context.org_id)).set(
             "api_key", "tenant-secret", "llm", encrypt=False
@@ -224,6 +249,11 @@ async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
         "/api/v1/admin/ask-dev/settings", json={"retention_days": 7}
     )
     assert rejected.status_code == 422
+    over_provisioned = await admin_context.client.patch(
+        "/api/v1/admin/ask-dev/settings",
+        json={"platform_monthly_request_limit": 601},
+    )
+    assert over_provisioned.status_code == 422
 
     changed = await admin_context.client.patch(
         "/api/v1/admin/ask-dev/settings",
@@ -231,6 +261,8 @@ async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
             "retention_days": 0,
             "fallback_policy": "platform",
             "emergency_disabled": True,
+            "platform_monthly_request_limit": 500,
+            "platform_monthly_cost_limit_microusd": 20_000_000,
         },
     )
     assert changed.status_code == 200
@@ -239,6 +271,8 @@ async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
         "retention_days": 0,
         "fallback_policy": "platform",
         "emergency_disabled": True,
+        "platform_monthly_request_limit": 500,
+        "platform_monthly_cost_limit_microusd": 20_000_000,
     }
     assert body["entitlement_state"] == "org_disabled"
     assert body["ask_dev_enabled"] is False
@@ -308,6 +342,7 @@ async def test_usage_is_ask_dev_only_content_free_aggregation(admin_context):
                     input_tokens=10,
                     output_tokens=4,
                     estimated_cost_microusd=25,
+                    provider_source="platform",
                     started_at=now,
                 ),
                 DevRun(
@@ -318,6 +353,7 @@ async def test_usage_is_ask_dev_only_content_free_aggregation(admin_context):
                     state="failed",
                     input_tokens=3,
                     output_tokens=0,
+                    provider_source="platform",
                     started_at=now,
                 ),
                 DevRun(
@@ -329,6 +365,7 @@ async def test_usage_is_ask_dev_only_content_free_aggregation(admin_context):
                     input_tokens=5,
                     output_tokens=2,
                     estimated_cost_microusd=10,
+                    provider_source="byo",
                     started_at=now,
                 ),
             ]
@@ -348,6 +385,16 @@ async def test_usage_is_ask_dev_only_content_free_aggregation(admin_context):
     assert body["estimated_cost_microusd"] == 35
     assert body["failure_rate"] == pytest.approx(1 / 3)
     assert body["degraded_rate"] == pytest.approx(1 / 3)
+    allowance = body["platform_allowance"]
+    assert allowance["request_limit"] == 1000
+    assert allowance["request_used"] == 2
+    assert allowance["request_remaining"] == 998
+    assert allowance["cost_limit_microusd"] == 100_000_000
+    assert allowance["cost_used_microusd"] == 5_000_025
+    assert allowance["cost_remaining_microusd"] == 94_999_975
+    assert allowance["warning"] == "none"
+    assert allowance["window_start"].endswith("T00:00:00Z")
+    assert allowance["reset_at"].endswith("T00:00:00Z")
     assert "tenant-secret" not in response.text
 
 

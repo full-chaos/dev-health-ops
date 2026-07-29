@@ -286,6 +286,8 @@ async def test_retryable_provider_failure_is_retried_once_without_spending_a_rou
     assert result.state is RunState.REFUSED
     assert result.error is not None
     assert [event.state for event in result.events].count(RunState.MODEL_DECISION) == 1
+    assert result.usage.input_tokens > 0
+    assert result.usage.estimated_cost_microusd == 2_000_000
 
 
 @pytest.mark.asyncio
@@ -399,6 +401,29 @@ async def test_provider_usage_cannot_cross_the_server_owned_cost_budget() -> Non
     )
     assert result.state is RunState.FAILED
     assert result.error is not None and result.error.code == "cost_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_unknown_provider_cost_retains_the_pre_call_reservation() -> None:
+    script_id = "unknown-cost-reservation"
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentRefusal(code="unsupported", message="no"),
+                    usage=AgentUsage(input_tokens=10, output_tokens=5),
+                )
+            ],
+            script_id=script_id,
+            limits=DevRunLimits(
+                max_estimated_cost_microusd=1_500_000,
+                estimated_cost_per_call_microusd=1_000_000,
+            ),
+        )
+    )
+
+    assert result.state is RunState.REFUSED
+    assert result.usage.estimated_cost_microusd == 1_000_000
 
 
 @pytest.mark.asyncio

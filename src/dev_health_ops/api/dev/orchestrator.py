@@ -58,6 +58,7 @@ from .contracts import (
     ScopeResolutionOutcome,
     ToolID,
 )
+from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .prompts import PromptComposer, PromptConversationTurn
 from .tool_registry import (
     AskDevToolRegistry,
@@ -84,7 +85,7 @@ _HARD_LIMIT_MAXIMA: dict[str, int | float] = {
     "max_total_input_tokens": 100_000,
     "max_total_output_tokens": 16_384,
     "estimated_cost_per_call_microusd": 1_000_000,
-    "max_estimated_cost_microusd": 5_000_000,
+    "max_estimated_cost_microusd": ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
 }
 
 
@@ -133,7 +134,7 @@ class DevRunLimits:
     max_total_input_tokens: int = 100_000
     max_total_output_tokens: int = 16_384
     estimated_cost_per_call_microusd: int = 1_000_000
-    max_estimated_cost_microusd: int = 5_000_000
+    max_estimated_cost_microusd: int = ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 
     def __post_init__(self) -> None:
         for name, maximum in _HARD_LIMIT_MAXIMA.items():
@@ -265,25 +266,30 @@ class RunDeadlineExceeded(RuntimeError):
 class ProviderBudget:
     limits: DevRunLimits
     usage: AgentUsage = field(default_factory=AgentUsage)
+    pending_input_reservations: list[int] = field(default_factory=list)
 
     def require(self, *, prompt_bytes: int) -> None:
         estimated_input_tokens = max(1, (prompt_bytes + 3) // 4)
-        if (
-            self.usage.input_tokens + estimated_input_tokens
-            > self.limits.max_total_input_tokens
-        ):
+        next_input_tokens = self.usage.input_tokens + estimated_input_tokens
+        if next_input_tokens > self.limits.max_total_input_tokens:
             raise BudgetExceeded("input token budget exhausted")
         if (
             self.usage.output_tokens + self.limits.max_output_tokens_per_call
             > self.limits.max_total_output_tokens
         ):
             raise BudgetExceeded("output token budget exhausted")
-        if (
-            (self.usage.estimated_cost_microusd or 0)
-            + self.limits.estimated_cost_per_call_microusd
-            > self.limits.max_estimated_cost_microusd
-        ):
+        reserved_cost = self.limits.estimated_cost_per_call_microusd
+        next_cost = (self.usage.estimated_cost_microusd or 0) + reserved_cost
+        if next_cost > self.limits.max_estimated_cost_microusd:
             raise BudgetExceeded("provider cost budget exhausted")
+        # Reserve before dispatch. Provider failures and responses without a cost
+        # estimate must never become free merely because exact billing is unknown.
+        self.usage = AgentUsage(
+            input_tokens=next_input_tokens,
+            output_tokens=self.usage.output_tokens,
+            estimated_cost_microusd=next_cost,
+        )
+        self.pending_input_reservations.append(estimated_input_tokens)
 
     def add(self, usage: AgentUsage) -> None:
         if usage.input_tokens < 0 or usage.output_tokens < 0:
@@ -294,11 +300,26 @@ class ProviderBudget:
         ):
             raise BudgetExceeded("provider returned invalid cost usage")
         prior_cost = self.usage.estimated_cost_microusd or 0
-        added_cost = usage.estimated_cost_microusd or 0
+        if usage.estimated_cost_microusd is None:
+            reconciled_cost = prior_cost
+        else:
+            reconciled_cost = (
+                max(
+                    0,
+                    prior_cost - self.limits.estimated_cost_per_call_microusd,
+                )
+                + usage.estimated_cost_microusd
+            )
+        reserved_input = (
+            self.pending_input_reservations.pop()
+            if self.pending_input_reservations
+            else 0
+        )
         self.usage = AgentUsage(
-            input_tokens=self.usage.input_tokens + usage.input_tokens,
+            input_tokens=max(0, self.usage.input_tokens - reserved_input)
+            + usage.input_tokens,
             output_tokens=self.usage.output_tokens + usage.output_tokens,
-            estimated_cost_microusd=prior_cost + added_cost,
+            estimated_cost_microusd=reconciled_cost,
         )
         if self.usage.input_tokens > self.limits.max_total_input_tokens:
             raise BudgetExceeded("input token budget exhausted")

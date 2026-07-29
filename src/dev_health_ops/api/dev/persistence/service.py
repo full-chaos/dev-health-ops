@@ -17,10 +17,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
     DevConversation,
@@ -109,6 +110,22 @@ class DevRateLimitExceeded(RuntimeError):
     """The exact per-user or per-organization request window was reached."""
 
 
+class DevMonthlyRequestLimitExceeded(RuntimeError):
+    """The platform-managed organization request allowance was exhausted."""
+
+    def __init__(self, reset_at: datetime) -> None:
+        self.reset_at = reset_at
+        super().__init__("Ask Dev monthly platform request allowance reached")
+
+
+class DevMonthlyCostLimitExceeded(RuntimeError):
+    """The platform-managed organization monetary allowance was exhausted."""
+
+    def __init__(self, reset_at: datetime) -> None:
+        self.reset_at = reset_at
+        super().__init__("Ask Dev monthly platform cost allowance reached")
+
+
 @dataclass(frozen=True, slots=True)
 class MessageRunResult:
     message: DevMessage
@@ -161,6 +178,22 @@ class DevAdmissionLimits:
             or self.requests_per_org_per_hour > 100
         ):
             raise ValueError("Ask Dev admission limits may only be configured downward")
+
+
+@dataclass(frozen=True, slots=True)
+class DevPlatformAllowance:
+    monthly_request_limit: int
+    monthly_cost_limit_microusd: int
+    per_run_reservation_microusd: int = ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
+
+    def __post_init__(self) -> None:
+        if (
+            self.monthly_request_limit < 1
+            or self.monthly_cost_limit_microusd < 1
+            or self.per_run_reservation_microusd < 1
+            or self.per_run_reservation_microusd > self.monthly_cost_limit_microusd
+        ):
+            raise ValueError("Ask Dev platform allowance must be positive and bounded")
 
 
 def _utc_now() -> datetime:
@@ -619,6 +652,8 @@ class DevPersistenceService:
         request_id: uuid.UUID | None = None,
         retry_of_run_id: uuid.UUID | None = None,
         admission_limits: DevAdmissionLimits | None = None,
+        provider_source: str | None = None,
+        platform_allowance: DevPlatformAllowance | None = None,
     ) -> MessageRunResult:
         question = _bounded_text(question, field="question", max_bytes=8192) or ""
         if not question.strip():
@@ -648,7 +683,7 @@ class DevPersistenceService:
             if retry_target.state not in _TERMINAL_RUN_STATES:
                 raise DevPersistenceValidationError("retry run is not terminal")
 
-        if admission_limits is not None:
+        if admission_limits is not None or platform_allowance is not None:
             await self._lock_admission_scope(
                 org_id=org_id,
                 user_id=user_id,
@@ -662,11 +697,21 @@ class DevPersistenceService:
             )
             if existing is not None:
                 return existing
-            await self._enforce_admission_limits(
-                org_id=org_id,
-                user_id=user_id,
-                limits=admission_limits,
-            )
+            if admission_limits is not None:
+                await self._enforce_admission_limits(
+                    org_id=org_id,
+                    user_id=user_id,
+                    limits=admission_limits,
+                )
+            if platform_allowance is not None:
+                if provider_source != "platform":
+                    raise DevPersistenceValidationError(
+                        "platform allowance requires a platform provider source"
+                    )
+                await self._enforce_platform_allowance(
+                    org_id=org_id,
+                    allowance=platform_allowance,
+                )
 
         message = DevMessage(
             conversation_id=conversation_id,
@@ -684,6 +729,7 @@ class DevPersistenceService:
             org_id=org_id,
             user_id=user_id,
             state="accepted",
+            provider_source=provider_source,
             retry_of_run_id=retry_of_run_id,
             started_at=self._now(),
             created_at=self._now(),
@@ -1272,6 +1318,43 @@ class DevPersistenceService:
             or int(org_window or 0) >= limits.requests_per_org_per_hour
         ):
             raise DevRateLimitExceeded("Ask Dev request-rate limit reached")
+
+    async def _enforce_platform_allowance(
+        self,
+        *,
+        org_id: uuid.UUID,
+        allowance: DevPlatformAllowance,
+    ) -> None:
+        now = self._now()
+        window_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+        if now.month == 12:
+            reset_at = datetime(now.year + 1, 1, 1, tzinfo=UTC)
+        else:
+            reset_at = datetime(now.year, now.month + 1, 1, tzinfo=UTC)
+        terminal_with_cost = and_(
+            DevRun.state.in_(_TERMINAL_RUN_STATES),
+            DevRun.estimated_cost_microusd.is_not(None),
+        )
+        charged_cost = case(
+            (terminal_with_cost, DevRun.estimated_cost_microusd),
+            else_=allowance.per_run_reservation_microusd,
+        )
+        statement = select(
+            func.count(DevRun.id), func.coalesce(func.sum(charged_cost), 0)
+        ).where(
+            DevRun.org_id == org_id,
+            DevRun.provider_source == "platform",
+            DevRun.started_at >= window_start,
+            DevRun.started_at < reset_at,
+        )
+        request_count, charged_microusd = (await self.session.execute(statement)).one()
+        if int(request_count or 0) >= allowance.monthly_request_limit:
+            raise DevMonthlyRequestLimitExceeded(reset_at)
+        if (
+            int(charged_microusd or 0) + allowance.per_run_reservation_microusd
+            > allowance.monthly_cost_limit_microusd
+        ):
+            raise DevMonthlyCostLimitExceeded(reset_at)
 
     async def _message_run_by_client_id(
         self,

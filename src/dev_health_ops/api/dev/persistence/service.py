@@ -404,6 +404,43 @@ class DevPersistenceService:
             latest_answer_id=latest_answer_id,
         )
 
+    async def get_message_run_by_client_id(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        client_message_id: uuid.UUID,
+    ) -> MessageRunResult:
+        result = await self._message_run_by_client_id(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            client_message_id=client_message_id,
+        )
+        if result is None:
+            raise DevPersistenceNotFound("message run not found")
+        return result
+
+    async def get_answer_message(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        answer_id: uuid.UUID,
+    ) -> DevMessage:
+        answer = await self.session.scalar(
+            select(DevMessage).where(
+                DevMessage.answer_id == answer_id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+                DevMessage.role == "assistant",
+            )
+        )
+        if answer is None:
+            raise DevPersistenceNotFound("answer not found")
+        return answer
+
     async def rename_conversation(
         self,
         *,

@@ -182,6 +182,60 @@ async def test_scripted_tool_to_validated_answer_exercises_the_state_machine() -
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_overwrites_all_server_owned_answer_metadata() -> None:
+    script_id = "server-owned-answer-metadata"
+    candidate = _answer(script_id=script_id)
+    candidate.update(
+        {
+            "schema_version": "attacker_schema",
+            "answer_id": "attacker_answer",
+            "conversation_id": "attacker_conversation",
+            "resolved_scope": positive_fixtures()["dev_scope_resolution.v1"]
+            | {"outcome": "unresolved", "resolved_scope": None},
+            "versions": {
+                "prompt_version": "attacker",
+                "tool_contract_version": "attacker",
+                "metric_definition_version": "attacker",
+                "query_version": "attacker",
+            },
+            "model": {
+                "provider_source": "byo",
+                "provider_family": "attacker",
+                "model_fingerprint": "attacker",
+            },
+            "claims": [],
+            "metrics": [],
+            "evidence": [],
+            "conflicts": [],
+            "coverage": {
+                "required_source_count": 0,
+                "available_source_count": 0,
+                "unavailable_required_sources": [],
+                "stale_required_sources": [],
+                "as_of": candidate["as_of"],
+            },
+        }
+    )
+
+    result = await _run(
+        _orchestrator(
+            [ScriptedStep(decision=AgentFinalAnswer(candidate))],
+            script_id=script_id,
+        )
+    )
+
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None
+    assert result.answer.answer_id == "answer_01"
+    assert result.answer.conversation_id == "conversation_01"
+    assert result.answer.resolved_scope == _resolution()
+    assert result.answer.versions == _versions()
+    assert result.answer.model.provider_source == "platform"
+    assert result.answer.model.provider_family == "scripted"
+    assert result.answer.model.model_fingerprint == _fingerprint(script_id)
+
+
+@pytest.mark.asyncio
 async def test_schema_only_failure_gets_exactly_one_repair_attempt() -> None:
     script_id = "schema-repair"
     result = await _run(

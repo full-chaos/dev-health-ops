@@ -656,9 +656,20 @@ class DevOrchestrator:
                         model=model,
                         tool_results=tuple(tool_results),
                     )
+                    candidate = dict(decision.value)
+                    candidate.update(
+                        {
+                            "schema_version": "dev_answer.v1",
+                            "answer_id": answer_id,
+                            "conversation_id": conversation_id,
+                            "resolved_scope": resolution.model_dump(mode="json"),
+                            "versions": self._versions.model_dump(mode="json"),
+                            "model": model.model_dump(mode="json"),
+                        }
+                    )
                     try:
                         answer = validate_answer_candidate(
-                            dict(decision.value), validation_context
+                            candidate, validation_context
                         )
                     except AnswerValidationError as exc:
                         if (

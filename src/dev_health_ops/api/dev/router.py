@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
 import json
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -21,14 +24,16 @@ from fastapi import (
 )
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.permissions import get_user_permissions
 from dev_health_ops.licensing import evaluate_org_feature_async
+from dev_health_ops.llm.agent.contracts import AgentUsage
 
 from .contracts import (
     DevCapabilities,
@@ -36,19 +41,27 @@ from .contracts import (
     DevConversationSummary,
     DevError,
     DevFeedback,
+    DevMessageRequest,
     DevScope,
 )
 from .entitlement import (
     AskDevEntitlementDeniedError,
     CanonicalAskDevEntitlementAuthorizer,
 )
+from .orchestrator import OrchestratorEvent, OrchestratorResult, RunState
+from .orchestrator_persistence import PersistenceRunRecorder
 from .persistence.service import (
     ConversationRecord,
+    DevAdmissionLimits,
+    DevConcurrencyLimitExceeded,
     DevPersistenceConflict,
     DevPersistenceNotFound,
     DevPersistenceService,
     DevPersistenceValidationError,
+    DevRateLimitExceeded,
 )
+from .runtime import BoundedDevRuntime
+from .streaming import encoded_sse_stream
 
 
 def _disable_shared_cache(response: Response) -> None:
@@ -122,6 +135,12 @@ async def get_dev_capability_runtime() -> DevCapabilityRuntime:
     """Fail-closed default until a certified provider selection is injected."""
 
     return DevCapabilityRuntime()
+
+
+async def get_dev_execution_runtime() -> BoundedDevRuntime | None:
+    """Fail closed until the server-owned provider/tool factory is ready."""
+
+    return None
 
 
 class AskDevApiError(Exception):
@@ -266,6 +285,22 @@ def _parse_uuid(value: str | uuid.UUID, request_id: str | None) -> uuid.UUID:
 
 
 def _raise_persistence(exc: Exception, request_id: str | None) -> None:
+    if isinstance(exc, DevRateLimitExceeded):
+        _raise(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "rate_limited",
+            "The Ask Dev request rate limit was reached.",
+            request_id=request_id,
+            retryable=True,
+        )
+    if isinstance(exc, DevConcurrencyLimitExceeded):
+        _raise(
+            status.HTTP_409_CONFLICT,
+            "concurrency_limited",
+            "Another Ask Dev request is already running.",
+            request_id=request_id,
+            retryable=True,
+        )
     if isinstance(exc, DevPersistenceNotFound):
         _raise(
             status.HTTP_404_NOT_FOUND,
@@ -351,6 +386,78 @@ def _aware(value: datetime | None) -> datetime | None:
 
 def _aware_required(value: datetime) -> datetime:
     return _aware(value) or value.replace(tzinfo=UTC)
+
+
+def _storage_uuid(value: str, *scope: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return uuid.uuid5(uuid.NAMESPACE_URL, "\0".join((*scope, value)))
+
+
+def _permission_fingerprint(user: AuthenticatedUser) -> str:
+    payload = json.dumps(
+        {
+            "org_id": user.org_id,
+            "user_id": user.user_id,
+            "role": user.role,
+            "token_version": user.token_version,
+            "impersonated_by": user.impersonated_by,
+            "permissions": sorted(get_user_permissions(user)),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _replayed_result(
+    *, run: Any, answer_payload: dict[str, Any] | None
+) -> OrchestratorResult:
+    state = RunState(run.state)
+    answer = None
+    error = None
+    if answer_payload is not None:
+        from .contracts import DevAnswer
+
+        answer = DevAnswer.model_validate(answer_payload)
+    else:
+        code = run.safe_error_code or "internal_error"
+        try:
+            error = DevError(
+                schema_version="dev_error.v1",
+                request_id=str(run.request_id),
+                code=code,
+                safe_message=(
+                    "The prior Ask Dev request did not complete with an answer."
+                ),
+                retryable=code in {"provider_unavailable", "source_unavailable"},
+            )
+        except ValueError:
+            error = DevError(
+                schema_version="dev_error.v1",
+                request_id=str(run.request_id),
+                code="internal_error",
+                safe_message=(
+                    "The prior Ask Dev request did not complete with an answer."
+                ),
+                retryable=True,
+            )
+    return OrchestratorResult(
+        run_id=str(run.id),
+        state=state,
+        answer=answer,
+        error=error,
+        events=(OrchestratorEvent(state, error.code if error else None),),
+        usage=AgentUsage(
+            input_tokens=run.input_tokens or 0,
+            output_tokens=run.output_tokens or 0,
+            estimated_cost_microusd=run.estimated_cost_microusd,
+        ),
+        tool_call_count=run.tool_call_count,
+        provider_fingerprint=run.provider_fingerprint,
+        model_fingerprint=run.model_fingerprint,
+    )
 
 
 def _decode_cursor(
@@ -572,6 +679,177 @@ async def delete_conversation(
             request_id=request_id,
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/conversations/{conversation_id}/messages")
+async def create_message(
+    conversation_id: uuid.UUID,
+    body: DevMessageRequest,
+    auth: Annotated[
+        tuple[AuthenticatedUser, DevPersistenceService, str | None],
+        Depends(_require_ask_dev),
+    ],
+    runtime: Annotated[BoundedDevRuntime | None, Depends(get_dev_execution_runtime)],
+) -> StreamingResponse:
+    user, service, header_request_id = auth
+    request_id = body.request_id or header_request_id
+    org_id, user_id = _owned_ids(user, request_id)
+    if body.conversation_id is not None and body.conversation_id != str(
+        conversation_id
+    ):
+        _raise(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_request",
+            "The Ask Dev conversation identifier does not match the request path.",
+            request_id=request_id,
+        )
+    if body.scope.organization_id != user.org_id:
+        _raise(
+            status.HTTP_403_FORBIDDEN,
+            "scope_forbidden",
+            "The Ask Dev scope is not authorized.",
+            request_id=request_id,
+        )
+
+    storage_client_message_id = _storage_uuid(
+        body.client_message_id,
+        user.org_id,
+        user.user_id,
+        str(conversation_id),
+        "client_message",
+    )
+    storage_request_id = _storage_uuid(
+        body.request_id,
+        user.org_id,
+        user.user_id,
+        str(conversation_id),
+        "request",
+    )
+    try:
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            client_message_id=storage_client_message_id,
+            question=body.question,
+            scope_snapshot=body.scope.model_dump(mode="json"),
+            request_id=storage_request_id,
+            admission_limits=DevAdmissionLimits(),
+        )
+        await service.session.commit()
+    except Exception as exc:
+        await service.session.rollback()
+        _raise_persistence(exc, request_id)
+        raise AssertionError("unreachable")
+
+    cancellation = asyncio.Event()
+    run_id = str(accepted.run.id)
+
+    if not accepted.created:
+        if accepted.run.state not in {
+            RunState.COMPLETED.value,
+            RunState.INSUFFICIENT_EVIDENCE.value,
+            RunState.REFUSED.value,
+            RunState.FAILED.value,
+            RunState.CANCELLED.value,
+        }:
+            _raise(
+                status.HTTP_409_CONFLICT,
+                "concurrency_limited",
+                "The matching Ask Dev request is still running.",
+                request_id=request_id,
+                retryable=True,
+            )
+        answer_payload = None
+        if accepted.run.answer_id is not None:
+            try:
+                answer_message = await service.get_answer_message(
+                    org_id=org_id,
+                    user_id=user_id,
+                    answer_id=accepted.run.answer_id,
+                )
+                answer_payload = answer_message.answer_payload
+            except Exception as exc:
+                _raise_persistence(exc, request_id)
+                raise AssertionError("unreachable")
+        replayed = _replayed_result(
+            run=accepted.run,
+            answer_payload=answer_payload,
+        )
+
+        async def replay(_sink) -> OrchestratorResult:
+            return replayed
+
+        return StreamingResponse(
+            encoded_sse_stream(
+                run_id=run_id,
+                run_with_events=replay,
+                cancellation=cancellation,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "private, no-store", "Pragma": "no-cache"},
+        )
+
+    if runtime is None:
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=accepted.run.id,
+            state=RunState.FAILED.value,
+            safe_error_code="provider_not_configured",
+        )
+        await service.session.commit()
+        _raise(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "provider_not_configured",
+            "No certified Ask Dev model is ready.",
+            request_id=request_id,
+        )
+        raise AssertionError("unreachable")
+
+    answer_id = str(uuid.uuid4())
+    recorder = PersistenceRunRecorder(
+        service,
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        run_id=accepted.run.id,
+        provider_source=runtime.provider_source,
+    )
+
+    async def run_with_events(event_sink) -> OrchestratorResult:
+        return await runtime.run(
+            request=body,
+            org_id=user.org_id,
+            user_id=user.user_id,
+            permission_fingerprint=_permission_fingerprint(user),
+            run_id=run_id,
+            conversation_id=str(conversation_id),
+            answer_id=answer_id,
+            cancellation=cancellation,
+            recorder=recorder,
+            event_sink=event_sink,
+        )
+
+    async def chunks() -> AsyncGenerator[bytes, None]:
+        try:
+            async for chunk in encoded_sse_stream(
+                run_id=run_id,
+                run_with_events=run_with_events,
+                cancellation=cancellation,
+            ):
+                yield chunk
+        finally:
+            try:
+                await runtime.aclose()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        chunks(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "private, no-store", "Pragma": "no-cache"},
+    )
 
 
 @router.post("/answers/{answer_id}/feedback", response_model=DevFeedback)

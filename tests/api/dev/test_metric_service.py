@@ -28,13 +28,14 @@ UTC = timezone.utc
 
 def _scope(
     *,
+    org_id: str = "org-1",
     start: datetime = datetime(2026, 7, 1, tzinfo=UTC),
     end: datetime = datetime(2026, 7, 8, tzinfo=UTC),
 ) -> DevScope:
     duration = end - start
     return DevScope(
         schema_version="dev_scope.v1",
-        organization_id="org-1",
+        organization_id=org_id,
         direct_scope=DirectScope.ORGANIZATION,
         time_range=DevTimeRange(start=start, end=end, timezone="UTC"),
         comparison_range=DevTimeRange(
@@ -333,6 +334,27 @@ async def test_request_local_cache_includes_source_watermark() -> None:
     await service.query("org-1", "permissions", request)
     await service.query("org-1", "permissions", request)
     assert source.calls == 2  # current + prior, second query is cache hit
+
+
+@pytest.mark.asyncio
+async def test_request_local_cache_is_partitioned_by_permission_and_tenant() -> None:
+    source = _Source(_raw(4.0))
+    service = MetricQueryService(source)
+    request = MetricQueryRequest(MetricID.DEPLOYMENTS_COUNT, _scope())
+
+    await service.query("org-1", "permissions-a", request)
+    await service.query("org-1", "permissions-a", request)
+    assert source.calls == 2  # current + prior, second query is cache hit
+
+    await service.query("org-1", "permissions-b", request)
+    assert source.calls == 4
+
+    await service.query(
+        "org-2",
+        "permissions-b",
+        MetricQueryRequest(MetricID.DEPLOYMENTS_COUNT, _scope(org_id="org-2")),
+    )
+    assert source.calls == 6
 
 
 @pytest.mark.asyncio

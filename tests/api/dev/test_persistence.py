@@ -411,6 +411,18 @@ async def test_data_minimization_rejects_prohibited_metadata_and_unvalidated_ans
                 user_id=user_id,
                 current_scope={"api_key": "must-not-persist"},
             )
+        with pytest.raises(DevPersistenceValidationError):
+            await service.create_conversation(
+                org_id=org_id,
+                user_id=user_id,
+                current_scope={
+                    "nested": [
+                        {
+                            "authorization": "Bearer must-not-persist",
+                        }
+                    ]
+                },
+            )
         conversation = await service.create_conversation(
             org_id=org_id, user_id=user_id, current_scope={}
         )

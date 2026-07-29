@@ -216,9 +216,10 @@ async def get_dev_capability_runtime(
 async def get_dev_execution_runtime(
     user: Annotated[AuthenticatedUser, Depends(_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
-) -> DevExecutionRuntimeResolution:
+) -> AsyncGenerator[DevExecutionRuntimeResolution, None]:
     """Build one request-local certified runtime and exact nine-tool registry."""
 
+    runtime: BoundedDevRuntime | None = None
     try:
         runtime = await build_production_runtime(
             session,
@@ -226,19 +227,27 @@ async def get_dev_execution_runtime(
             permission_fingerprint=_permission_fingerprint(user),
             clickhouse=await get_global_client(_analytics_db_url()),
         )
-        return DevExecutionRuntimeResolution(runtime=runtime)
+        resolution = DevExecutionRuntimeResolution(runtime=runtime)
     except DevRuntimeUnavailable as exc:
-        return DevExecutionRuntimeResolution(
+        resolution = DevExecutionRuntimeResolution(
             runtime=None,
             error_code=exc.code,
             safe_message=exc.safe_message,
         )
     except Exception:
-        return DevExecutionRuntimeResolution(
+        resolution = DevExecutionRuntimeResolution(
             runtime=None,
             error_code="provider_not_configured",
             safe_message="No certified Ask Dev model is ready.",
         )
+    try:
+        yield resolution
+    finally:
+        if runtime is not None:
+            try:
+                await runtime.aclose()
+            except Exception:
+                pass
 
 
 class AskDevApiError(Exception):
@@ -1075,18 +1084,12 @@ async def create_message(
         )
 
     async def chunks() -> AsyncGenerator[bytes, None]:
-        try:
-            async for chunk in encoded_sse_stream(
-                run_id=run_id,
-                run_with_events=run_with_events,
-                cancellation=cancellation,
-            ):
-                yield chunk
-        finally:
-            try:
-                await runtime.aclose()
-            except Exception:
-                pass
+        async for chunk in encoded_sse_stream(
+            run_id=run_id,
+            run_with_events=run_with_events,
+            cancellation=cancellation,
+        ):
+            yield chunk
 
     return StreamingResponse(
         chunks(),

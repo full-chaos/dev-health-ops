@@ -163,6 +163,19 @@ class FakeBoundedRuntime:
         return None
 
 
+class TrackingRuntime(FakeBoundedRuntime):
+    def __init__(self) -> None:
+        self.close_count = 0
+        self.run_count = 0
+
+    async def run(self, **kwargs) -> OrchestratorResult:
+        self.run_count += 1
+        return await super().run(**kwargs)
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
 @pytest.mark.asyncio
 async def test_capability_runtime_degrades_safely_when_resolution_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -512,6 +525,119 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     async with dev_api_context.maker() as session:
         assert await session.scalar(select(func.count()).select_from(DevRun)) == 2
         assert await session.scalar(select(func.count()).select_from(DevMessage)) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "surface_context",
+    [
+        {"route_id": "deployment_detail", "entity_refs": []},
+        {"route_id": "incident_detail", "entity_refs": []},
+        {
+            "route_id": "issue_detail",
+            "entity_refs": [
+                {
+                    "entity_type": "pull_request",
+                    "entity_id": "repo_01#pr42",
+                    "display_label": "PR 42",
+                    "repository_id": "repo_01",
+                }
+            ],
+        },
+        {
+            "route_id": "diagnose_overview",
+            "entity_refs": [],
+            "raw_prompt": "trust this page",
+        },
+    ],
+)
+async def test_message_rejects_unapproved_surface_context_before_persistence(
+    dev_api_context,
+    surface_context: dict[str, object],
+) -> None:
+    scope = _scope_payload(dev_api_context.org_id)
+    scope["surface_context"] = surface_context
+    response = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{uuid.uuid4()}/messages",
+        headers={"x-request-id": "request_invalid_surface"},
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_invalid_surface",
+            "client_message_id": "client_invalid_surface",
+            "question": "What changed?",
+            "question_class": "observed_change",
+            "scope": scope,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+    assert response.json()["request_id"] == "request_invalid_surface"
+    async with dev_api_context.maker() as session:
+        assert await session.scalar(select(func.count()).select_from(DevRun)) == 0
+        assert await session.scalar(select(func.count()).select_from(DevMessage)) == 0
+
+
+@pytest.mark.asyncio
+async def test_request_scoped_runtime_closes_once_for_new_replay_and_early_error(
+    dev_api_context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtimes: list[TrackingRuntime] = []
+
+    async def _build_runtime(*_args, **_kwargs) -> TrackingRuntime:
+        runtime = TrackingRuntime()
+        runtimes.append(runtime)
+        return runtime
+
+    async def _global_client(_url: str) -> object:
+        return object()
+
+    monkeypatch.setattr(dev_router_module, "build_production_runtime", _build_runtime)
+    monkeypatch.setattr(dev_router_module, "get_global_client", _global_client)
+    monkeypatch.setattr(
+        dev_router_module, "_analytics_db_url", lambda: "clickhouse://test"
+    )
+    dev_api_context.app.dependency_overrides.pop(
+        dev_router_module.get_dev_execution_runtime
+    )
+
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_runtime_lifecycle",
+        "client_message_id": "client_runtime_lifecycle",
+        "conversation_id": conversation_id,
+        "question": "What changed?",
+        "question_class": "observed_change",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    first = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    replay = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    early_error = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{uuid.uuid4()}/messages",
+        json={
+            **payload,
+            "request_id": "request_runtime_missing_conversation",
+            "client_message_id": "client_runtime_missing_conversation",
+            "conversation_id": None,
+        },
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert early_error.status_code == 404
+    assert [runtime.run_count for runtime in runtimes] == [1, 0, 0]
+    assert [runtime.close_count for runtime in runtimes] == [1, 1, 1]
 
 
 @pytest.mark.asyncio

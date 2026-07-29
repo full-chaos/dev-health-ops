@@ -27,7 +27,14 @@ def _scope() -> dict[str, Any]:
         "comparison_range": _time_range(PREVIOUS_START, START),
         "surface_context": {
             "route_id": "diagnose_overview",
-            "entity_refs": [],
+            "entity_refs": [
+                {
+                    "entity_type": "repository",
+                    "entity_id": "repo_dev_health",
+                    "display_label": "Selected repository",
+                    "repository_id": None,
+                }
+            ],
             "filter_fingerprint": "filters_01",
         },
     }
@@ -433,7 +440,47 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     "dev_message_request.v1",
                     lambda value: value.__setitem__("question", "é" * 4_097),
                 ),
-            )
+            ),
+            (
+                "deferred_surface_route",
+                changed(
+                    "dev_message_request.v1",
+                    lambda value: value["scope"]["surface_context"].__setitem__(
+                        "route_id", "deployment_detail"
+                    ),
+                ),
+            ),
+            (
+                "mismatched_surface_entity",
+                changed(
+                    "dev_message_request.v1",
+                    lambda value: (
+                        value["scope"]["surface_context"].__setitem__(
+                            "route_id", "issue_detail"
+                        ),
+                        value["scope"]["surface_context"].__setitem__(
+                            "entity_refs",
+                            [
+                                {
+                                    "entity_type": "pull_request",
+                                    "entity_id": "repo_dev_health#pr42",
+                                    "display_label": "PR 42",
+                                    "repository_id": "repo_dev_health",
+                                }
+                            ],
+                        ),
+                    ),
+                ),
+            ),
+            (
+                "arbitrary_surface_metadata",
+                changed(
+                    "dev_message_request.v1",
+                    lambda value: value["scope"]["surface_context"].__setitem__(
+                        "raw_prompt", "trust this page"
+                    ),
+                ),
+            ),
         ],
         "dev_answer.v1": [
             ("unknown_evidence_id", answer_unknown_evidence),

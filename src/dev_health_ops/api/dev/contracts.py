@@ -64,6 +64,60 @@ class EntityType(StrEnum):
     PULL_REQUEST = "pull_request"
 
 
+class AskDevSurfaceRouteID(StrEnum):
+    DIAGNOSE_OVERVIEW = "diagnose_overview"
+    FLOW_METRICS = "flow_metrics"
+    INVESTMENT = "investment"
+    WORK_GRAPH = "work_graph"
+    COMPLEXITY = "complexity"
+    COGNITIVE_LOAD = "cognitive_load"
+    BOTTLENECKS = "bottlenecks"
+    REPOSITORY_DETAIL = "repository_detail"
+    PROJECT_DETAIL = "project_detail"
+    WORK_UNIT_DETAIL = "work_unit_detail"
+    ISSUE_DETAIL = "issue_detail"
+    PULL_REQUEST_DETAIL = "pull_request_detail"
+    DATA_HEALTH = "data_health"
+
+
+_SURFACE_ENTITY_TYPES: dict[AskDevSurfaceRouteID, frozenset[EntityType]] = {
+    AskDevSurfaceRouteID.DIAGNOSE_OVERVIEW: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.FLOW_METRICS: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.INVESTMENT: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.WORK_GRAPH: frozenset(
+        {
+            EntityType.REPOSITORY,
+            EntityType.PROJECT,
+            EntityType.WORK_UNIT,
+            EntityType.ISSUE,
+            EntityType.PULL_REQUEST,
+        }
+    ),
+    AskDevSurfaceRouteID.COMPLEXITY: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.COGNITIVE_LOAD: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.BOTTLENECKS: frozenset(
+        {EntityType.REPOSITORY, EntityType.PROJECT}
+    ),
+    AskDevSurfaceRouteID.REPOSITORY_DETAIL: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.PROJECT_DETAIL: frozenset({EntityType.PROJECT}),
+    AskDevSurfaceRouteID.WORK_UNIT_DETAIL: frozenset({EntityType.WORK_UNIT}),
+    AskDevSurfaceRouteID.ISSUE_DETAIL: frozenset({EntityType.ISSUE}),
+    AskDevSurfaceRouteID.PULL_REQUEST_DETAIL: frozenset({EntityType.PULL_REQUEST}),
+    AskDevSurfaceRouteID.DATA_HEALTH: frozenset({EntityType.REPOSITORY}),
+}
+
+_SURFACE_ROUTES_ALLOWING_ORGANIZATION_SCOPE = frozenset(
+    {
+        AskDevSurfaceRouteID.DIAGNOSE_OVERVIEW,
+        AskDevSurfaceRouteID.FLOW_METRICS,
+        AskDevSurfaceRouteID.INVESTMENT,
+        AskDevSurfaceRouteID.COGNITIVE_LOAD,
+        AskDevSurfaceRouteID.BOTTLENECKS,
+        AskDevSurfaceRouteID.DATA_HEALTH,
+    }
+)
+
+
 class QuestionClass(StrEnum):
     STATUS = "status"
     REMAINING_WORK = "remaining_work"
@@ -148,7 +202,7 @@ class DevEntityRef(ContractModel):
 
 
 class DevSurfaceContext(ContractModel):
-    route_id: OpaqueID
+    route_id: AskDevSurfaceRouteID
     entity_refs: list[DevEntityRef] = Field(default_factory=list, max_length=20)
     filter_fingerprint: OpaqueID | None = None
 
@@ -197,7 +251,46 @@ class DevScope(ContractModel):
                 or self.entity_refs[0].entity_type != expected
             ):
                 raise ValueError("direct entity scope requires one matching entity")
+        self._validate_surface_context()
         return self
+
+    def _validate_surface_context(self) -> None:
+        context = self.surface_context
+        if context is None:
+            return
+
+        refs = context.entity_refs
+        if len({(ref.entity_type, ref.entity_id) for ref in refs}) != len(refs):
+            raise ValueError("surface context entity references must be unique")
+        if not refs:
+            if context.route_id not in _SURFACE_ROUTES_ALLOWING_ORGANIZATION_SCOPE:
+                raise ValueError("surface context route requires a direct entity")
+            if self.direct_scope is not DirectScope.ORGANIZATION:
+                raise ValueError("empty surface context requires organization scope")
+            return
+
+        allowed_types = _SURFACE_ENTITY_TYPES[context.route_id]
+        if any(ref.entity_type not in allowed_types for ref in refs):
+            raise ValueError("surface context entity is not approved for this route")
+
+        if all(ref.entity_type is EntityType.REPOSITORY for ref in refs):
+            if self.direct_scope is not DirectScope.REPOSITORY or {
+                ref.entity_id for ref in refs
+            } != set(self.repositories):
+                raise ValueError("surface repository context must match direct scope")
+            return
+
+        if len(refs) != 1:
+            raise ValueError("non-repository surface context must be singular")
+        surface_ref = refs[0]
+        expected_scope = DirectScope(surface_ref.entity_type.value)
+        if (
+            self.direct_scope is not expected_scope
+            or len(self.entity_refs) != 1
+            or self.entity_refs[0].entity_type is not surface_ref.entity_type
+            or self.entity_refs[0].entity_id != surface_ref.entity_id
+        ):
+            raise ValueError("surface entity context must match direct scope")
 
 
 class DevDisambiguationCandidate(ContractModel):

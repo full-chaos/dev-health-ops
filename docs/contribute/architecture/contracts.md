@@ -50,6 +50,15 @@ that are absent from the same answer, a `complete` answer cannot carry a stale
 or unavailable required source, and a stream has exactly one terminal answer
 or error immediately followed by `done`.
 
+Contextual Ask Dev handoffs use a server-owned, provider-neutral V1 allowlist
+of route IDs and permitted entity types. A request is rejected before
+persistence when its surface route is unknown or deferred, carries arbitrary
+metadata, or disagrees with the request's direct scope. The browser supplies
+only an untrusted proposal: every accepted run re-resolves the matching
+canonical IDs through the authorized entity catalog before model decisions or
+tool execution. `surface_context: null` remains valid for the permanent window
+and `/dev` on pages without an approved contextual entrypoint.
+
 The permanent Ask Dev window and `/dev` read the same retained transcript from
 `GET /api/v1/dev/conversations/{conversation_id}/transcript`. The response is a
 bounded chronological page of paired persisted questions and validated
@@ -59,6 +68,10 @@ wire fields. A retry submits a new idempotency key and an optional
 organization, and conversation, and persists a distinct linked run. Closing a
 browser stream signals cancellation and waits for the recorder to persist the
 terminal `cancelled` state.
+
+The production runtime is request-scoped. FastAPI dependency cleanup closes it
+exactly once after a new stream, an idempotent replay, or an early validation or
+persistence response; replay never executes the provider a second time.
 
 Ask Dev model decisions use `AgentLLMProvider`, not the completion-oriented
 `LLMProvider.complete` contract. Canonical messages, tools, structured final

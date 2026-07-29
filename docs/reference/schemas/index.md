@@ -46,6 +46,13 @@ not-found response. `dev_message_request.v1.retry_of_run_id` is optional and
 creates a new run linked to a terminal run in the same owned conversation; it
 does not mutate or replace the prior question, answer, or run.
 
+`dev_message_request.v1.scope.surface_context` is either `null` or an approved
+V1 route/entity proposal. The server rejects deployment, incident, CI, test,
+commit, review, file, and AI-run contextual routes; rejects route/entity and
+direct-scope mismatches; and accepts no arbitrary route metadata. Labels are
+display hints only. Canonical IDs are authorized and re-resolved on every new
+run before they can influence model or tool behavior.
+
 ### Compatibility and version changes
 
 Within `v1`, changes may add optional fields or add an enum value only after all

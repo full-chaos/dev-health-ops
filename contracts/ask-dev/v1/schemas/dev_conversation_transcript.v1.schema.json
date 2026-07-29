@@ -12,6 +12,25 @@
       "title": "AnswerStatus",
       "type": "string"
     },
+    "AskDevSurfaceRouteID": {
+      "enum": [
+        "diagnose_overview",
+        "flow_metrics",
+        "investment",
+        "work_graph",
+        "complexity",
+        "cognitive_load",
+        "bottlenecks",
+        "repository_detail",
+        "project_detail",
+        "work_unit_detail",
+        "issue_detail",
+        "pull_request_detail",
+        "data_health"
+      ],
+      "title": "AskDevSurfaceRouteID",
+      "type": "string"
+    },
     "ClaimKind": {
       "enum": [
         "observed",
@@ -1079,11 +1098,7 @@
           "title": "Filter Fingerprint"
         },
         "route_id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
-          "title": "Route Id",
-          "type": "string"
+          "$ref": "#/$defs/AskDevSurfaceRouteID"
         }
       },
       "required": [

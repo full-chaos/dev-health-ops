@@ -1,11 +1,14 @@
 {
-  "evidence_ref_ids": [],
-  "include_comparison": true,
-  "limit": 12,
-  "metric_id": "items_completed",
-  "query": null,
-  "run_id": "run_01",
-  "schema_version": "dev_tool_request.v1",
+  "client_message_id": "message_01",
+  "conversation_id": "conversation_01",
+  "question": "How many items completed in this period?",
+  "question_class": "registered_statistics",
+  "request_id": "request_01",
+  "requested_metric_ids": [
+    "items_completed"
+  ],
+  "retry_of_run_id": "run_original_01",
+  "schema_version": "dev_message_request.v1",
   "scope": {
     "comparison_range": {
       "end": "2026-06-28T00:00:00Z",
@@ -22,14 +25,14 @@
     "surface_context": {
       "entity_refs": [
         {
-          "display_label": "Selected repository",
-          "entity_id": "repo_dev_health",
-          "entity_type": "repository",
-          "repository_id": null
+          "display_label": "PR 42",
+          "entity_id": "repo_dev_health#pr42",
+          "entity_type": "pull_request",
+          "repository_id": "repo_dev_health"
         }
       ],
       "filter_fingerprint": "filters_01",
-      "route_id": "diagnose_overview"
+      "route_id": "issue_detail"
     },
     "team_ids": [
       "team_platform"
@@ -39,7 +42,5 @@
       "start": "2026-06-28T00:00:00Z",
       "timezone": "America/Los_Angeles"
     }
-  },
-  "tool_call_id": "tool_call_01",
-  "tool_id": "query_metric.v1"
+  }
 }

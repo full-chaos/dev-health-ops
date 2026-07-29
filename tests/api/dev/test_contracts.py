@@ -14,6 +14,7 @@ from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     DevAnswer,
     DevCapabilities,
+    DevMessageRequest,
     DevScope,
     DevScopeResolution,
     DevStreamEvent,
@@ -78,11 +79,49 @@ def test_capability_gates_are_independent() -> None:
     assert capabilities.agent_context_runtime is False
 
 
+def test_neutral_message_scope_without_surface_context_remains_valid() -> None:
+    payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
+    payload["scope"]["direct_scope"] = "organization"
+    payload["scope"]["repositories"] = []
+    payload["scope"]["surface_context"] = None
+
+    request = DevMessageRequest.model_validate(payload)
+
+    assert request.scope.surface_context is None
+
+
+@pytest.mark.parametrize("route_id", ["deployment_detail", "incident_detail"])
+def test_deferred_contextual_routes_are_rejected(route_id: str) -> None:
+    payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
+    payload["scope"]["surface_context"]["route_id"] = route_id
+
+    with pytest.raises(ValidationError, match="route_id"):
+        DevMessageRequest.model_validate(payload)
+
+
+def test_surface_context_must_match_direct_scope() -> None:
+    payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
+    payload["scope"]["surface_context"] = {
+        "route_id": "issue_detail",
+        "entity_refs": [
+            {
+                "entity_type": "issue",
+                "entity_id": "issue_42",
+                "display_label": "Issue 42",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError, match="must match direct scope"):
+        DevMessageRequest.model_validate(payload)
+
+
 def test_scope_contract_accepts_canonical_pull_request_ids_and_repository_candidates() -> (
     None
 ):
     pull_request_scope = deepcopy(positive_fixtures()["dev_scope.v1"])
     pull_request_scope["direct_scope"] = "pull_request"
+    pull_request_scope["repositories"] = []
     pull_request_scope["entity_refs"] = [
         {
             "entity_type": "pull_request",
@@ -91,6 +130,7 @@ def test_scope_contract_accepts_canonical_pull_request_ids_and_repository_candid
             "repository_id": "repo_dev_health",
         }
     ]
+    pull_request_scope["surface_context"] = None
     DevScope.model_validate(pull_request_scope)
 
     ambiguous = deepcopy(positive_fixtures()["dev_scope_resolution.v1"])

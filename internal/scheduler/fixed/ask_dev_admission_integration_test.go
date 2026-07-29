@@ -92,7 +92,7 @@ VALUES ('20000000-0000-4000-8000-000000000001', 'community');
 		OrgOverride     *overrideCase `json:"org_override"`
 	}
 	truth, falsity := true, false
-	past, future := "2026-07-27T12:00:00Z", "2026-07-29T12:00:00Z"
+	past, future := "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"
 	community := "community"
 	cases := []featureCase{
 		{ID: "no_explicit_enable", StorageValid: true, GloballyEnabled: true, OrgTier: "community"},

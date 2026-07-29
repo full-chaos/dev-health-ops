@@ -80,6 +80,11 @@ _HARD_LIMIT_MAXIMA: dict[str, int | float] = {
     "per_tool_bytes": 64 * 1024,
     "evidence_refs": 25,
     "metrics": 12,
+    "max_output_tokens_per_call": 4_096,
+    "max_total_input_tokens": 100_000,
+    "max_total_output_tokens": 16_384,
+    "estimated_cost_per_call_microusd": 1_000_000,
+    "max_estimated_cost_microusd": 5_000_000,
 }
 
 

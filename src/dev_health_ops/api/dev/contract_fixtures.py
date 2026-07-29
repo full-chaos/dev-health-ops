@@ -220,6 +220,15 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
         "dev_claim.v1": _claim(),
         "dev_metric_ref.v1": _metric(),
         "dev_evidence_ref.v1": _evidence(),
+        "dev_evidence_expansion.v1": {
+            "schema_version": "dev_evidence_expansion.v1",
+            "evidence": _evidence(),
+            "state": "available",
+            "safe_excerpt": "UNTRUSTED_DATA\nEvidence excerpt\nEND_UNTRUSTED_DATA",
+            "serialized_bytes": 50,
+            "warning": None,
+            "query_version": "get_evidence.v1",
+        },
         "dev_scope.v1": _scope(),
         "dev_scope_resolution.v1": _scope_resolution(),
         "dev_tool_request.v1": {
@@ -241,6 +250,19 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
             "tool_id": "query_metric.v1",
             "status": "success",
             "scope_resolution": _scope_resolution(),
+            "metric_definitions": [
+                {
+                    "metric_id": "items_completed",
+                    "label": "Items completed",
+                    "description": "Completed work items in the selected window.",
+                    "unit": "items",
+                    "supported_dimensions": ["repository"],
+                    "supported_time_grains": ["window", "day"],
+                    "supported_scopes": ["organization", "project", "work_unit"],
+                    "definition_version": "items_completed.v1",
+                    "freshness_policy": "work_item_metrics_daily.daily.v1",
+                }
+            ],
             "metrics": [_metric()],
             "evidence": [_evidence()],
             "status_facts": [],
@@ -396,6 +418,15 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                 changed(
                     "dev_evidence_ref.v1",
                     lambda value: value.__setitem__("confidence", 1.1),
+                ),
+            )
+        ],
+        "dev_evidence_expansion.v1": [
+            (
+                "mismatched_byte_count",
+                changed(
+                    "dev_evidence_expansion.v1",
+                    lambda value: value.__setitem__("serialized_bytes", 0),
                 ),
             )
         ],

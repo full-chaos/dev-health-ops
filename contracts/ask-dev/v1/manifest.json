@@ -173,6 +173,24 @@
     {
       "negative": [
         {
+          "case": "mismatched_byte_count",
+          "path": "examples/negative/dev_evidence_expansion.v1.mismatched_byte_count.json",
+          "sha256": "9ca6000af143612b7671b0941cfae7867402c22f3838daa035e7b0580bd27f43"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_evidence_expansion.v1.json",
+        "sha256": "a685babfe43af765fb48fd9c670c5b9236a5e5bf090f88fcba381fff615ef473"
+      },
+      "schema": {
+        "path": "schemas/dev_evidence_expansion.v1.schema.json",
+        "sha256": "615e2e20b938e0e1181dcd5681495352f30d515f7a45f3fb0dd6879d6cdc0628"
+      },
+      "schema_version": "dev_evidence_expansion.v1"
+    },
+    {
+      "negative": [
+        {
           "case": "repository_scope_without_repository",
           "path": "examples/negative/dev_scope.v1.repository_scope_without_repository.json",
           "sha256": "50432f4a6691e295f19ecc1bc68ccd8e1fd6a4775a623d33ae6933555f7777fb"
@@ -229,16 +247,16 @@
         {
           "case": "oversized_result",
           "path": "examples/negative/dev_tool_result.v1.oversized_result.json",
-          "sha256": "3ac8f00e9665451ca383c4933a4233d1343142a92e455a4333b2bc233bbaed28"
+          "sha256": "f8ebaa19168e16f0e71ed47405fe75f91c5fbc3359dbc1e724413c2790be87fb"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_tool_result.v1.json",
-        "sha256": "55eeca34fde962941d291a83e7d8d450ebe5515e9a43c48075871c05d14b9826"
+        "sha256": "0f05c39668957e12e515ed72745149ca80fda5203c5d12ed301088ef0c74d241"
       },
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "ecc3b75d2a5db7197fd414a42ebfa3b7f3e3f6612f1175722ce901c22960dc46"
+        "sha256": "83db00e2203603e91ed40ed85056660ff28b60cfbb1aef8e67c49b79a07adf2b"
       },
       "schema_version": "dev_tool_result.v1"
     },

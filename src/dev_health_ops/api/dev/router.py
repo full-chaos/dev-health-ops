@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -28,18 +29,22 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api._health import _analytics_db_url
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.dependencies import get_postgres_session_dep
+from dev_health_ops.api.queries.client import get_global_client
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.permissions import get_user_permissions
 from dev_health_ops.licensing import evaluate_org_feature_async
 from dev_health_ops.llm.agent.contracts import AgentUsage
 
 from .contracts import (
+    DevAnswer,
     DevCapabilities,
     DevConversation,
     DevConversationSummary,
     DevError,
+    DevEvidenceExpansion,
     DevFeedback,
     DevMessageRequest,
     DevScope,
@@ -60,7 +65,12 @@ from .persistence.service import (
     DevPersistenceValidationError,
     DevRateLimitExceeded,
 )
-from .runtime import BoundedDevRuntime
+from .production_runtime import (
+    build_production_runtime,
+    expand_production_evidence,
+    resolve_production_provider,
+)
+from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .streaming import encoded_sse_stream
 
 
@@ -131,16 +141,98 @@ class DevCapabilityRuntime:
     safe_failure_reason: str | None = "No certified Ask Dev model is ready."
 
 
-async def get_dev_capability_runtime() -> DevCapabilityRuntime:
-    """Fail-closed default until a certified provider selection is injected."""
+@dataclass(frozen=True, slots=True)
+class DevExecutionRuntimeResolution:
+    runtime: BoundedDevRuntime | None
+    error_code: str | None = None
+    safe_message: str | None = None
 
-    return DevCapabilityRuntime()
+
+async def _authenticated_user(
+    authorization: Annotated[str | None, Header()] = None,
+    x_request_id: Annotated[str | None, Header()] = None,
+) -> AuthenticatedUser:
+    try:
+        return await get_current_user(authorization)
+    except HTTPException as exc:
+        _raise(
+            exc.status_code,
+            "unauthenticated",
+            "Authentication is required for Ask Dev.",
+            request_id=x_request_id,
+        )
+        raise AssertionError("unreachable")
 
 
-async def get_dev_execution_runtime() -> BoundedDevRuntime | None:
-    """Fail closed until the server-owned provider/tool factory is ready."""
+async def get_dev_capability_runtime(
+    user: Annotated[AuthenticatedUser, Depends(_authenticated_user)],
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+) -> DevCapabilityRuntime:
+    """Project the certified provider policy without exposing configuration."""
 
-    return None
+    try:
+        provider = await resolve_production_provider(session, org_id=user.org_id)
+    except DevRuntimeUnavailable as exc:
+        readiness: Literal["unsupported_model", "missing_credentials"] = (
+            "unsupported_model"
+            if exc.code == "model_not_supported"
+            else "missing_credentials"
+        )
+        return DevCapabilityRuntime(
+            readiness=readiness,
+            safe_failure_reason=exc.safe_message,
+        )
+    except Exception:
+        return DevCapabilityRuntime(
+            readiness="degraded",
+            safe_failure_reason="Ask Dev model readiness is temporarily unavailable.",
+        )
+    try:
+        evidence_ready = bool(os.getenv("JWT_SECRET_KEY"))
+        return DevCapabilityRuntime(
+            effective_provider_label=provider.provider_label,
+            effective_model_label=provider.model_label,
+            provider_source=provider.source.value,
+            readiness="ready" if evidence_ready else "degraded",
+            contextual_entrypoints=True,
+            evidence_resolver=evidence_ready,
+            safe_failure_reason=(
+                None if evidence_ready else "Ask Dev evidence signing is unavailable."
+            ),
+        )
+    finally:
+        try:
+            await provider.provider.aclose()
+        except Exception:
+            pass
+
+
+async def get_dev_execution_runtime(
+    user: Annotated[AuthenticatedUser, Depends(_authenticated_user)],
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+) -> DevExecutionRuntimeResolution:
+    """Build one request-local certified runtime and exact nine-tool registry."""
+
+    try:
+        runtime = await build_production_runtime(
+            session,
+            org_id=user.org_id,
+            permission_fingerprint=_permission_fingerprint(user),
+            clickhouse=await get_global_client(_analytics_db_url()),
+        )
+        return DevExecutionRuntimeResolution(runtime=runtime)
+    except DevRuntimeUnavailable as exc:
+        return DevExecutionRuntimeResolution(
+            runtime=None,
+            error_code=exc.code,
+            safe_message=exc.safe_message,
+        )
+    except Exception:
+        return DevExecutionRuntimeResolution(
+            runtime=None,
+            error_code="provider_not_configured",
+            safe_message="No certified Ask Dev model is ready.",
+        )
 
 
 class AskDevApiError(Exception):
@@ -215,22 +307,6 @@ def _raise(
         status_code,
         _error(request_id, code, message, retryable=retryable),
     )
-
-
-async def _authenticated_user(
-    authorization: Annotated[str | None, Header()] = None,
-    x_request_id: Annotated[str | None, Header()] = None,
-) -> AuthenticatedUser:
-    try:
-        return await get_current_user(authorization)
-    except HTTPException as exc:
-        _raise(
-            exc.status_code,
-            "unauthenticated",
-            "Authentication is required for Ask Dev.",
-            request_id=x_request_id,
-        )
-        raise AssertionError("unreachable")
 
 
 def _service(session: AsyncSession) -> DevPersistenceService:
@@ -418,8 +494,6 @@ def _replayed_result(
     answer = None
     error = None
     if answer_payload is not None:
-        from .contracts import DevAnswer
-
         answer = DevAnswer.model_validate(answer_payload)
     else:
         code = run.safe_error_code or "internal_error"
@@ -520,6 +594,7 @@ async def capabilities(
             "dev_conversation.v1",
             "dev_message_request.v1",
             "dev_answer.v1",
+            "dev_evidence_expansion.v1",
             "dev_stream_event.v1",
             "dev_error.v1",
         ],
@@ -689,7 +764,9 @@ async def create_message(
         tuple[AuthenticatedUser, DevPersistenceService, str | None],
         Depends(_require_ask_dev),
     ],
-    runtime: Annotated[BoundedDevRuntime | None, Depends(get_dev_execution_runtime)],
+    runtime_resolution: Annotated[
+        DevExecutionRuntimeResolution, Depends(get_dev_execution_runtime)
+    ],
 ) -> StreamingResponse:
     user, service, header_request_id = auth
     request_id = body.request_id or header_request_id
@@ -790,19 +867,21 @@ async def create_message(
             headers={"Cache-Control": "private, no-store", "Pragma": "no-cache"},
         )
 
+    runtime = runtime_resolution.runtime
     if runtime is None:
+        error_code = runtime_resolution.error_code or "provider_not_configured"
         await service.update_run(
             org_id=org_id,
             user_id=user_id,
             run_id=accepted.run.id,
             state=RunState.FAILED.value,
-            safe_error_code="provider_not_configured",
+            safe_error_code=error_code,
         )
         await service.session.commit()
         _raise(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "provider_not_configured",
-            "No certified Ask Dev model is ready.",
+            error_code,
+            runtime_resolution.safe_message or "No certified Ask Dev model is ready.",
             request_id=request_id,
         )
         raise AssertionError("unreachable")
@@ -849,6 +928,104 @@ async def create_message(
         chunks(),
         media_type="text/event-stream",
         headers={"Cache-Control": "private, no-store", "Pragma": "no-cache"},
+    )
+
+
+@router.get("/evidence/{evidence_ref_id}", response_model=DevEvidenceExpansion)
+async def expand_evidence(
+    evidence_ref_id: str,
+    answer_id: Annotated[uuid.UUID, Query()],
+    auth: Annotated[
+        tuple[AuthenticatedUser, DevPersistenceService, str | None],
+        Depends(_require_ask_dev),
+    ],
+) -> DevEvidenceExpansion:
+    user, service, request_id = auth
+    org_id, user_id = _owned_ids(user, request_id)
+    if not evidence_ref_id or len(evidence_ref_id.encode()) > 128:
+        _raise(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_request",
+            "The Ask Dev evidence identifier is invalid.",
+            request_id=request_id,
+        )
+    try:
+        answer_message = await service.get_answer_message(
+            org_id=org_id,
+            user_id=user_id,
+            answer_id=answer_id,
+        )
+        answer = DevAnswer.model_validate(answer_message.answer_payload)
+    except DevPersistenceNotFound:
+        _raise(
+            status.HTTP_404_NOT_FOUND,
+            "scope_not_found",
+            "The Ask Dev evidence was not found.",
+            request_id=request_id,
+        )
+        raise AssertionError("unreachable")
+    except Exception as exc:
+        _raise_persistence(exc, request_id)
+        raise AssertionError("unreachable")
+    evidence = next(
+        (item for item in answer.evidence if item.evidence_ref_id == evidence_ref_id),
+        None,
+    )
+    if evidence is None:
+        _raise(
+            status.HTTP_404_NOT_FOUND,
+            "scope_not_found",
+            "The Ask Dev evidence was not found.",
+            request_id=request_id,
+        )
+        raise AssertionError("unreachable")
+    scope = (
+        answer.resolved_scope.resolved_scope or answer.resolved_scope.requested_scope
+    )
+    try:
+        result = await expand_production_evidence(
+            service.session,
+            org_id=user.org_id,
+            permission_fingerprint=_permission_fingerprint(user),
+            clickhouse=await get_global_client(_analytics_db_url()),
+            scope=scope,
+            evidence=[evidence],
+        )
+    except DevRuntimeUnavailable as exc:
+        _raise(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "source_unavailable",
+            exc.safe_message,
+            request_id=request_id,
+            retryable=True,
+        )
+        raise AssertionError("unreachable")
+    except Exception:
+        _raise(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "source_unavailable",
+            "Ask Dev evidence expansion is temporarily unavailable.",
+            request_id=request_id,
+            retryable=True,
+        )
+        raise AssertionError("unreachable")
+    expansion = result.expansions[0]
+    if expansion.state.value == "unauthorized":
+        _raise(
+            status.HTTP_404_NOT_FOUND,
+            "scope_not_found",
+            "The Ask Dev evidence was not found.",
+            request_id=request_id,
+        )
+        raise AssertionError("unreachable")
+    return DevEvidenceExpansion(
+        schema_version="dev_evidence_expansion.v1",
+        evidence=expansion.evidence,
+        state=expansion.state.value,
+        safe_excerpt=expansion.safe_excerpt,
+        serialized_bytes=expansion.serialized_bytes,
+        warning=expansion.warning,
+        query_version=result.query_version,
     )
 
 

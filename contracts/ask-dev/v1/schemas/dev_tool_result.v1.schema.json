@@ -466,6 +466,87 @@
       "title": "DevGraphEdge",
       "type": "object"
     },
+    "DevMetricDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "definition_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Definition Version",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "freshness_policy": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Freshness Policy",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "metric_id": {
+          "$ref": "#/$defs/MetricID"
+        },
+        "supported_dimensions": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Supported Dimensions",
+          "type": "array"
+        },
+        "supported_scopes": {
+          "items": {
+            "$ref": "#/$defs/DirectScope"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Supported Scopes",
+          "type": "array"
+        },
+        "supported_time_grains": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Supported Time Grains",
+          "type": "array"
+        },
+        "unit": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric_id",
+        "label",
+        "description",
+        "unit",
+        "supported_scopes",
+        "definition_version",
+        "freshness_policy"
+      ],
+      "title": "DevMetricDefinition",
+      "type": "object"
+    },
     "DevMetricPoint": {
       "additionalProperties": false,
       "properties": {
@@ -1038,6 +1119,14 @@
       },
       "maxItems": 100,
       "title": "Graph Edges",
+      "type": "array"
+    },
+    "metric_definitions": {
+      "items": {
+        "$ref": "#/$defs/DevMetricDefinition"
+      },
+      "maxItems": 12,
+      "title": "Metric Definitions",
       "type": "array"
     },
     "metrics": {

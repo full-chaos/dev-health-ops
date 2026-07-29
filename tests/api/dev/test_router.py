@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
@@ -21,6 +21,11 @@ from dev_health_ops.api.dev.contracts import (
     DevAnswer,
     DevScopeResolution,
     ScopeResolutionOutcome,
+)
+from dev_health_ops.api.dev.evidence_service import (
+    EvidenceAvailability,
+    EvidenceExpansion,
+    EvidenceExpansionResult,
 )
 from dev_health_ops.api.dev.orchestrator import (
     OrchestratorEvent,
@@ -150,6 +155,32 @@ class FakeBoundedRuntime:
         return None
 
 
+@pytest.mark.asyncio
+async def test_capability_runtime_degrades_safely_when_resolution_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_resolution(_session, *, org_id: str):
+        assert org_id == "org_01"
+        raise RuntimeError("database details must not escape")
+
+    monkeypatch.setattr(
+        dev_router_module, "resolve_production_provider", fail_resolution
+    )
+    result = await dev_router_module.get_dev_capability_runtime(
+        AuthenticatedUser(
+            user_id="user_01",
+            email="member@example.com",
+            org_id="org_01",
+            role="member",
+        ),
+        cast(AsyncSession, object()),
+    )
+    assert result.readiness == "degraded"
+    assert result.safe_failure_reason == (
+        "Ask Dev model readiness is temporarily unavailable."
+    )
+
+
 def _scope_payload(org_id: uuid.UUID) -> dict[str, object]:
     return {
         "schema_version": "dev_scope.v1",
@@ -251,8 +282,10 @@ async def dev_api_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             safe_failure_reason=None,
         )
     )
-    app.dependency_overrides[dev_router_module.get_dev_execution_runtime] = (
-        FakeBoundedRuntime
+    app.dependency_overrides[dev_router_module.get_dev_execution_runtime] = lambda: (
+        dev_router_module.DevExecutionRuntimeResolution(
+            runtime=cast(Any, FakeBoundedRuntime())
+        )
     )
 
     transport = ASGITransport(app=app, raise_app_exceptions=True)
@@ -384,7 +417,11 @@ async def test_dev_message_fails_closed_when_no_certified_runtime_is_ready(
 ):
     dev_api_context.app.dependency_overrides[
         dev_router_module.get_dev_execution_runtime
-    ] = lambda: None
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=None,
+        error_code="provider_not_configured",
+        safe_message="No certified Ask Dev model is ready.",
+    )
     created = await dev_api_context.client.post(
         "/api/v1/dev/conversations",
         json={"current_scope": _scope_payload(dev_api_context.org_id)},
@@ -474,6 +511,139 @@ async def test_dev_feedback_is_scoped_to_the_target_conversation(dev_api_context
     )
     assert mismatch.status_code == 404
     assert mismatch.json()["code"] == "conversation_not_found"
+
+
+@pytest.mark.asyncio
+async def test_dev_evidence_expansion_requires_owned_answer_relationship(
+    dev_api_context, monkeypatch: pytest.MonkeyPatch
+):
+    client = dev_api_context.client
+    maker = dev_api_context.maker
+    org_id = dev_api_context.org_id
+    user_id = dev_api_context.user_id
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    answer_id = uuid.uuid4()
+    answer_payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    answer_payload.update(
+        {
+            "answer_id": str(answer_id),
+            "conversation_id": conversation_id,
+            "resolved_scope": {
+                "schema_version": "dev_scope_resolution.v1",
+                "requested_scope": _scope_payload(org_id),
+                "resolved_scope": _scope_payload(org_id),
+                "outcome": "exact",
+                "authorized_repository_ids": [],
+                "authorized_entity_ids": [],
+                "candidates": [],
+                "fallbacks": [],
+                "warnings": [],
+                "resolved_at": "2026-07-28T13:00:00+00:00",
+            },
+        }
+    )
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=uuid.UUID(conversation_id),
+            client_message_id=uuid.uuid4(),
+            question="Show the evidence",
+            scope_snapshot=_scope_payload(org_id),
+        )
+        await service.append_assistant_answer(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=uuid.UUID(conversation_id),
+            answer_payload=answer_payload,
+            validator=lambda payload: payload,
+            scope_snapshot=_scope_payload(org_id),
+        )
+        await session.commit()
+
+    expected = DevAnswer.model_validate(answer_payload).evidence[0]
+
+    captured = {}
+
+    async def expand(_session, **values):
+        captured.update(values)
+        excerpt = "UNTRUSTED_DATA\nEvidence excerpt\nEND_UNTRUSTED_DATA"
+        return EvidenceExpansionResult(
+            expansions=(
+                EvidenceExpansion(
+                    evidence=expected,
+                    state=EvidenceAvailability.AVAILABLE,
+                    safe_excerpt=excerpt,
+                    serialized_bytes=len(excerpt.encode()),
+                ),
+            ),
+            serialized_bytes=len(excerpt.encode()),
+        )
+
+    monkeypatch.setattr(dev_router_module, "expand_production_evidence", expand)
+
+    async def analytics_client(_dsn):
+        return object()
+
+    monkeypatch.setattr(dev_router_module, "get_global_client", analytics_client)
+    monkeypatch.setattr(
+        dev_router_module, "_analytics_db_url", lambda: "clickhouse://test"
+    )
+    response = await client.get(
+        f"/api/v1/dev/evidence/{expected.evidence_ref_id}",
+        params={"answer_id": str(answer_id)},
+    )
+    assert response.status_code == 200
+    assert captured["org_id"] == str(org_id)
+    assert captured["evidence"] == [expected]
+    assert response.json()["evidence"]["evidence_ref_id"] == expected.evidence_ref_id
+    assert response.json()["safe_excerpt"].startswith("UNTRUSTED_DATA")
+
+    other_org_id = uuid.uuid4()
+    other_user_id = uuid.uuid4()
+    async with maker() as session:
+        session.add_all(
+            [
+                Organization(id=other_org_id, slug="other-org", name="Other Org"),
+                User(id=other_user_id, email="other-user@example.com"),
+            ]
+        )
+        await session.commit()
+
+    dev_api_context.app.dependency_overrides[dev_router_module._authenticated_user] = (
+        lambda: AuthenticatedUser(
+            user_id=str(other_user_id),
+            email="other-user@example.com",
+            org_id=str(other_org_id),
+            role="member",
+        )
+    )
+    cross_tenant = await client.get(
+        f"/api/v1/dev/evidence/{expected.evidence_ref_id}",
+        params={"answer_id": str(answer_id)},
+    )
+    assert cross_tenant.status_code == 404
+
+    dev_api_context.app.dependency_overrides[dev_router_module._authenticated_user] = (
+        lambda: AuthenticatedUser(
+            user_id=str(user_id),
+            email="ask-dev@example.com",
+            org_id=str(org_id),
+            role="member",
+        )
+    )
+    unrelated = await client.get(
+        "/api/v1/dev/evidence/not_in_the_answer",
+        params={"answer_id": str(answer_id)},
+    )
+    assert unrelated.status_code == 404
+    assert unrelated.json()["code"] == cross_tenant.json()["code"]
+    assert unrelated.json()["safe_message"] == cross_tenant.json()["safe_message"]
 
 
 @pytest.mark.asyncio

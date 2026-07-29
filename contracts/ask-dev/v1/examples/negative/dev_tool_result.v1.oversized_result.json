@@ -37,6 +37,28 @@
     }
   ],
   "graph_edges": [],
+  "metric_definitions": [
+    {
+      "definition_version": "items_completed.v1",
+      "description": "Completed work items in the selected window.",
+      "freshness_policy": "work_item_metrics_daily.daily.v1",
+      "label": "Items completed",
+      "metric_id": "items_completed",
+      "supported_dimensions": [
+        "repository"
+      ],
+      "supported_scopes": [
+        "organization",
+        "project",
+        "work_unit"
+      ],
+      "supported_time_grains": [
+        "window",
+        "day"
+      ],
+      "unit": "items"
+    }
+  ],
   "metrics": [
     {
       "aggregation": "count",

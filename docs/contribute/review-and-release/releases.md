@@ -67,3 +67,24 @@ a separate product change and is not part of this V1 release.
 - **Rollback:** disable Ask Dev, roll back the binary, then remove the additive
   ClickHouse `use_case` column only if older readers require it. Existing rows
   default to `legacy`; no customer prompt or response content is introduced.
+
+## Ask Dev Wave 2 runtime integration release note
+
+- **New:** the authenticated `/api/v1/dev` surface now submits idempotent
+  conversation messages over bounded SSE, runs the exact nine server-owned
+  tools through the certified provider, and reauthorizes answer-bound evidence
+  expansion through `dev_evidence_expansion.v1`.
+- **Changed:** capabilities reflect the live provider policy and current
+  readiness record. Workspace BYO remains first and platform fallback remains
+  explicit; missing certification, signing authority, or analytics services
+  fails closed before model or tool work starts.
+- **Limits:** admission enforces one active run per user, five per organization,
+  20 user requests per 15 minutes, and 100 organization requests per hour.
+  Runtime ceilings remain four model rounds, six tool calls, 45 seconds total,
+  64 KiB per tool result, and 256 KiB across tool results.
+- **Known limited:** this Ops delivery does not enable Ask Dev or add the `/dev`
+  web experience. ACR remains an optional evidence source; native authorized
+  evidence continues to work without it.
+- **Rollback:** disable Ask Dev first, then roll back the application binary.
+  Conversation retention and tombstone policy continue to apply to already
+  admitted runs; no database downgrade is required.

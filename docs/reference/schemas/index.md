@@ -19,8 +19,8 @@ Ask Dev's provider-neutral contracts are generated from the strict Pydantic
 models in `src/dev_health_ops/api/dev/contracts.py`. The checked-in Draft
 2020-12 schemas, fixture manifest, and positive and negative goldens live in
 `contracts/ask-dev/v1/`. They cover capabilities, conversations, requests,
-answers, claims, metrics, evidence, scope resolution, bounded tool messages,
-feedback, stream events, and safe errors.
+answers, claims, metrics, evidence references and evidence expansion, scope
+resolution, bounded tool messages, feedback, stream events, and safe errors.
 
 Generate and verify the artifacts from the repository root:
 

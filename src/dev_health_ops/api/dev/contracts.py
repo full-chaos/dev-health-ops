@@ -393,9 +393,49 @@ class DevEvidenceRef(ContractModel):
     flags: DevEvidenceFlags
 
 
+class DevEvidenceExpansion(ContractModel):
+    schema_version: Literal["dev_evidence_expansion.v1"]
+    evidence: DevEvidenceRef
+    state: Literal[
+        "available",
+        "no_matches",
+        "unavailable",
+        "unconfigured",
+        "redacted",
+        "stale",
+    ]
+    safe_excerpt: (
+        Annotated[str, StringConstraints(min_length=1, max_length=65_536)] | None
+    ) = Field(default=None, json_schema_extra={"x-max-utf8-bytes": 65_536})
+    serialized_bytes: int = Field(ge=0, le=65_536)
+    warning: ShortText | None = None
+    query_version: Version
+
+    @model_validator(mode="after")
+    def enforce_excerpt_byte_count(self) -> Self:
+        excerpt_bytes = len((self.safe_excerpt or "").encode("utf-8"))
+        if excerpt_bytes > 65_536:
+            raise ValueError("safe_excerpt exceeds 64 KiB UTF-8")
+        if self.serialized_bytes != excerpt_bytes:
+            raise ValueError("serialized_bytes must equal the safe excerpt size")
+        return self
+
+
 class DevMetricPoint(ContractModel):
     timestamp: AwareDatetime
     value: FiniteFloat
+
+
+class DevMetricDefinition(ContractModel):
+    metric_id: MetricID
+    label: Label
+    description: ShortText
+    unit: OpaqueID
+    supported_dimensions: list[OpaqueID] = Field(default_factory=list, max_length=12)
+    supported_time_grains: list[OpaqueID] = Field(default_factory=list, max_length=12)
+    supported_scopes: list[DirectScope] = Field(min_length=1, max_length=8)
+    definition_version: Version
+    freshness_policy: ShortText
 
 
 class DevMetricRef(ContractModel):
@@ -599,6 +639,9 @@ class DevToolResult(ContractModel):
     tool_id: ToolID
     status: Literal["success", "partial", "unavailable", "error"]
     scope_resolution: DevScopeResolution | None = None
+    metric_definitions: list[DevMetricDefinition] = Field(
+        default_factory=list, max_length=12
+    )
     metrics: list[DevMetricRef] = Field(default_factory=list, max_length=12)
     evidence: list[DevEvidenceRef] = Field(default_factory=list, max_length=25)
     status_facts: list[DevStatusFact] = Field(default_factory=list, max_length=100)
@@ -806,6 +849,7 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
     "dev_claim.v1": DevClaim,
     "dev_metric_ref.v1": DevMetricRef,
     "dev_evidence_ref.v1": DevEvidenceRef,
+    "dev_evidence_expansion.v1": DevEvidenceExpansion,
     "dev_scope.v1": DevScope,
     "dev_scope_resolution.v1": DevScopeResolution,
     "dev_tool_request.v1": DevToolRequest,
@@ -824,9 +868,11 @@ __all__ = [
     "DevConversation",
     "DevConversationSummary",
     "DevError",
+    "DevEvidenceExpansion",
     "DevEvidenceRef",
     "DevFeedback",
     "DevMessageRequest",
+    "DevMetricDefinition",
     "DevMetricRef",
     "DevScope",
     "DevScopeResolution",

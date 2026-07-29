@@ -15,6 +15,8 @@ class AgentProviderErrorCode(str, Enum):
     INVALID_RESPONSE = "invalid_response"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    BUDGET_UNAVAILABLE = "budget_unavailable"
 
 
 _SAFE_MESSAGES = {
@@ -25,13 +27,22 @@ _SAFE_MESSAGES = {
     AgentProviderErrorCode.INVALID_RESPONSE: "The model provider returned an invalid response.",
     AgentProviderErrorCode.TIMEOUT: "The model provider timed out.",
     AgentProviderErrorCode.CANCELLED: "The model request was cancelled.",
+    AgentProviderErrorCode.BUDGET_EXHAUSTED: "The organization BYO LLM budget was reached.",
+    AgentProviderErrorCode.BUDGET_UNAVAILABLE: "BYO LLM budget accounting is temporarily unavailable.",
 }
 
 
 class AgentProviderError(RuntimeError):
-    def __init__(self, code: AgentProviderErrorCode, *, retryable: bool = False):
+    def __init__(
+        self,
+        code: AgentProviderErrorCode,
+        *,
+        retryable: bool = False,
+        provider_dispatched: bool = True,
+    ):
         self.code = code
         self.retryable = retryable
+        self.provider_dispatched = provider_dispatched
         super().__init__(_SAFE_MESSAGES[code])
 
 

@@ -267,88 +267,119 @@ def get_provider(
         provider_name, org_id=org_id, api_key=api_key, base_url=base_url
     )
 
+    def _budgeted(instance: LLMProvider) -> LLMProvider:
+        if not org_id or not org_byo_provider_matches(provider_name, org_id=org_id):
+            return instance
+        from dev_health_ops.llm.budget import attach_llm_budget_guard
+
+        return attach_llm_budget_guard(
+            instance,
+            org_id=org_id,
+            provider=provider_name,
+            model=model_name or provider_name,
+            base_url=credentials.base_url or None,
+        )
+
     if provider_name == "mock":
         from .mock import MockProvider
 
-        return MockProvider()
+        return _budgeted(MockProvider())
 
     if provider_name == "openai":
         from .openai import OpenAIProvider
 
-        return OpenAIProvider(
-            api_key=credentials.api_key,
-            base_url=credentials.base_url or None,
-            model=model_name,
+        return _budgeted(
+            OpenAIProvider(
+                api_key=credentials.api_key,
+                base_url=credentials.base_url or None,
+                model=model_name,
+            )
         )
 
     if provider_name == "anthropic":
         from .anthropic import AnthropicProvider
 
-        return AnthropicProvider(
-            api_key=credentials.api_key,
-            base_url=credentials.base_url or None,
-            model=model_name,
+        return _budgeted(
+            AnthropicProvider(
+                api_key=credentials.api_key,
+                base_url=credentials.base_url or None,
+                model=model_name,
+            )
         )
 
     if provider_name == "gemini":
         from .gemini import GeminiProvider
 
-        return GeminiProvider(
-            api_key=credentials.api_key,
-            base_url=credentials.base_url or None,
-            model=model_name,
+        return _budgeted(
+            GeminiProvider(
+                api_key=credentials.api_key,
+                base_url=credentials.base_url or None,
+                model=model_name,
+            )
         )
 
     if provider_name == "local":
         from .local import LocalProvider
 
-        return LocalProvider(
-            api_key=credentials.api_key or None,
-            base_url=credentials.base_url or None,
-            model=model_name,
+        return _budgeted(
+            LocalProvider(
+                api_key=credentials.api_key or None,
+                base_url=credentials.base_url or None,
+                model=model_name,
+            )
         )
 
     if provider_name == "ollama":
         from .local import OllamaProvider
 
-        return OllamaProvider(base_url=credentials.base_url or None, model=model_name)
+        return _budgeted(
+            OllamaProvider(base_url=credentials.base_url or None, model=model_name)
+        )
 
     if provider_name == "lmstudio":
         if model_name and model_name.startswith("openai/gpt-oss"):
             from .local import LMStudioGPT5Provider
 
-            return LMStudioGPT5Provider(
-                api_key=credentials.api_key or None,
-                base_url=credentials.base_url or None,
-                model=model_name,
-                validate_model_on_startup=_lmstudio_validate_model_on_startup(),
+            return _budgeted(
+                LMStudioGPT5Provider(
+                    api_key=credentials.api_key or None,
+                    base_url=credentials.base_url or None,
+                    model=model_name,
+                    validate_model_on_startup=_lmstudio_validate_model_on_startup(),
+                )
             )
 
         from .local import LMStudioProvider
 
-        return LMStudioProvider(base_url=credentials.base_url or None, model=model_name)
+        return _budgeted(
+            LMStudioProvider(base_url=credentials.base_url or None, model=model_name)
+        )
 
     if provider_name == "qwen":
         from .qwen import QwenProvider
 
-        return QwenProvider(
-            api_key=credentials.api_key,
-            base_url=credentials.base_url or None,
-            model=model_name,
+        return _budgeted(
+            QwenProvider(
+                api_key=credentials.api_key,
+                base_url=credentials.base_url or None,
+                model=model_name,
+            )
         )
 
     if provider_name == "qwen-local":
         from .qwen import QwenLocalProvider
 
-        return QwenLocalProvider(
-            base_url=credentials.base_url or None, model=model_name
+        return _budgeted(
+            QwenLocalProvider(base_url=credentials.base_url or None, model=model_name)
         )
 
     if provider_name == "qwen-lmstudio":
         from .qwen import QwenLMStudioProvider
 
-        return QwenLMStudioProvider(
-            base_url=credentials.base_url or None, model=model_name
+        return _budgeted(
+            QwenLMStudioProvider(
+                base_url=credentials.base_url or None, model=model_name
+            )
         )
 
     raise ValueError(f"Unknown LLM provider: {provider_name}")

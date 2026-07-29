@@ -75,6 +75,7 @@ from .licensing import (
     OrgFeatureOverride,
     OrgLicense,
 )
+from .llm_budget import BYOLLMBudgetReservation
 from .operational_deliveries import BillingNotification, WebhookDelivery
 from .org_invite import OrgInvite
 from .pagerduty_webhook_binding import PagerDutyWebhookBinding
@@ -160,6 +161,7 @@ __all__ = [
     "Base",
     "BillingAuditLog",
     "BillingNotification",
+    "BYOLLMBudgetReservation",
     "GitBlame",
     "GitBlameMixin",
     "GitCommit",

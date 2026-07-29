@@ -52,7 +52,11 @@ def response(*, content: str | None = None, tool_call: Any = None) -> Any:
                 )
             )
         ],
-        usage=SimpleNamespace(prompt_tokens=11, completion_tokens=7),
+        usage=SimpleNamespace(
+            prompt_tokens=11,
+            completion_tokens=7,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=3),
+        ),
     )
 
 
@@ -82,6 +86,7 @@ async def test_normalizes_native_tool_decision_and_usage() -> None:
     assert result.decision == AgentToolRequest("lookup", {"id": "WU-1"}, "call-1")
     assert (result.usage.input_tokens, result.usage.output_tokens) == (11, 7)
     assert result.usage.estimated_cost_microusd is None
+    assert result.usage.cached_input_tokens == 3
     sent = client.chat.completions.calls[0]
     assert sent["tools"][0]["function"]["name"] == "lookup"
     assert sent["response_format"]["json_schema"]["strict"] is True
@@ -176,6 +181,35 @@ async def test_timeout_is_enforced_by_adapter() -> None:
             256,
         )
     assert caught.value.code is AgentProviderErrorCode.TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_pre_dispatch_cancellation_is_explicitly_identified() -> None:
+    class CancelledSignal:
+        def is_cancelled(self) -> bool:
+            return True
+
+        async def wait(self) -> None:
+            return None
+
+    client = Client([])
+    provider = OpenAICompatibleAgentProvider(
+        api_key="not-used", model="agent-model", client=client
+    )
+
+    with pytest.raises(AgentProviderError) as caught:
+        await provider.decide(
+            [AgentMessage(AgentMessageRole.USER, "question")],
+            [],
+            {"type": "object"},
+            1,
+            256,
+            CancelledSignal(),
+        )
+
+    assert caught.value.code is AgentProviderErrorCode.CANCELLED
+    assert caught.value.provider_dispatched is False
+    assert client.chat.completions.calls == []
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,7 @@ class AgentUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost_microusd: int | None = None
+    cached_input_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

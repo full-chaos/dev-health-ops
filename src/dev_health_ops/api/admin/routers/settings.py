@@ -18,8 +18,9 @@ from dev_health_ops.api.admin.llm_settings import (
 from dev_health_ops.api.admin.llm_settings import (
     upsert_llm_settings as upsert_llm_settings_values,
 )
-from dev_health_ops.api.admin.middleware import get_admin_org_id
+from dev_health_ops.api.admin.middleware import get_admin_org_id, get_admin_user
 from dev_health_ops.api.admin.schemas import (
+    LLMBudgetResponse,
     LLMSettingsResponse,
     LLMSettingsStatusResponse,
     LLMSettingsUpsert,
@@ -29,12 +30,15 @@ from dev_health_ops.api.admin.schemas import (
     SettingsListResponse,
     SettingUpdate,
 )
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.db import require_clickhouse_uri
+from dev_health_ops.llm.budget import BUDGET_CATEGORY, get_budget_status
 from dev_health_ops.llm.credentials import (
     evaluate_org_llm_status,
     latest_recent_org_byo_base_url_fallback_at,
 )
+from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
 from dev_health_ops.metrics.schemas import LLMTokenSpendSummaryRecord
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.models.settings import SettingCategory
@@ -72,14 +76,14 @@ def _reject_llm_category(category: str) -> None:
     # be managed via the dedicated /llm-settings endpoints. The generic settings
     # routes would otherwise let any org admin write/read category='llm' rows
     # (bypassing the BYO-LLM tier gate and exposing the raw api_key).
-    if category == SettingCategory.LLM.value:
+    if category in {SettingCategory.LLM.value, BUDGET_CATEGORY}:
         raise HTTPException(
             status_code=403,
             detail={
                 "error": "use_llm_settings_endpoint",
                 "message": (
-                    "LLM settings must be managed via /admin/llm-settings "
-                    "(tier-gated, encrypted, masked)."
+                    "LLM settings and budgets must be managed via "
+                    "/admin/llm-settings (tier-gated, validated, and masked)."
                 ),
             },
         )
@@ -160,6 +164,30 @@ async def get_llm_settings_status(
 
 
 @router.get(
+    "/llm-settings/budget",
+    response_model=LLMBudgetResponse,
+)
+async def get_llm_settings_budget(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> LLMBudgetResponse:
+    await _require_byo_llm_tier(session, org_id)
+    svc = SettingsService(session, org_id)
+    provider = await svc.get("provider", SettingCategory.LLM.value) or ""
+    model = await svc.get("model", SettingCategory.LLM.value) or (
+        DEFAULT_MODEL_BY_PROVIDER.get(provider, "")
+    )
+    base_url = await svc.get("base_url", SettingCategory.LLM.value)
+    status = await get_budget_status(
+        svc,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+    )
+    return LLMBudgetResponse.model_validate(asdict(status))
+
+
+@router.get(
     "/llm-settings/spend",
     response_model=LLMSpendResponse,
 )
@@ -192,8 +220,17 @@ async def upsert_llm_settings(
     payload: LLMSettingsUpsert,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
+    current_user: AuthenticatedUser = Depends(get_admin_user),
 ) -> LLMSettingsResponse:
     await _require_byo_llm_tier(session, org_id)
+    if payload.budget_limit_micro_usd is not None and current_user.impersonated_by:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "impersonated_write_forbidden",
+                "message": "BYO LLM budget changes are unavailable while impersonating",
+            },
+        )
     svc = SettingsService(session, org_id)
     try:
         return await upsert_llm_settings_values(svc, payload)

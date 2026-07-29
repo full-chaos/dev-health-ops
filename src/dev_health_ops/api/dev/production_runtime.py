@@ -28,6 +28,7 @@ from dev_health_ops.llm.agent.policy import (
 )
 from dev_health_ops.llm.agent.readiness import SettingsAgentReadinessStore
 from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
+from dev_health_ops.llm.budget import attach_agent_budget_guard
 from dev_health_ops.llm.credentials import LLMCredentials
 from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
 from dev_health_ops.models.settings import SettingCategory
@@ -187,7 +188,13 @@ async def resolve_production_provider(
     readiness = await SettingsAgentReadinessStore(settings).load()
 
     byo, platform, policy = await _provider_candidates(settings, readiness=readiness)
-    return _resolve_provider_selection(byo=byo, platform=platform, policy=policy)
+    return _resolve_provider_selection(
+        byo=byo,
+        platform=platform,
+        policy=policy,
+        session=session,
+        org_id=org_id,
+    )
 
 
 async def resolve_certification_provider(
@@ -199,7 +206,13 @@ async def resolve_certification_provider(
     byo, platform, policy = await _provider_candidates(
         settings, readiness=None, certification=True
     )
-    return _resolve_provider_selection(byo=byo, platform=platform, policy=policy)
+    return _resolve_provider_selection(
+        byo=byo,
+        platform=platform,
+        policy=policy,
+        session=session,
+        org_id=org_id,
+    )
 
 
 async def _provider_candidates(
@@ -274,6 +287,8 @@ def _resolve_provider_selection(
     byo: AgentProviderCandidate | None,
     platform: AgentProviderCandidate | None,
     policy: AgentProviderPolicy,
+    session: AsyncSession,
+    org_id: str,
 ) -> ProductionProviderResolution:
     try:
         selected = resolve_agent_provider_selection(
@@ -293,6 +308,15 @@ def _resolve_provider_selection(
         raise DevRuntimeUnavailable(code, message) from None
 
     provider = _provider(selected)
+    if selected.source is AgentProviderSource.BYO:
+        provider = attach_agent_budget_guard(
+            provider,
+            session=session,
+            org_id=org_id,
+            provider=selected.provider,
+            model=selected.model,
+            base_url=selected.credentials.base_url or None,
+        )
     return ProductionProviderResolution(
         provider=provider,
         source=selected.source,

@@ -456,6 +456,26 @@ class TestExtractGitLabDependencies:
         assert len(deps) == 1
         assert deps[0].relationship_type == "relates_to"
 
+    def test_explicit_blocked_by_link_reverses_to_canonical_blocks(self) -> None:
+        deps = extract_gitlab_dependencies(
+            work_item_id="gitlab:group/project#1",
+            issue={"iid": 1, "description": ""},
+            project_full_path="group/project",
+            linked_issues=[
+                {
+                    "iid": 2,
+                    "link_type": "is_blocked_by",
+                    "references": {"full": "group/project#2"},
+                }
+            ],
+        )
+
+        assert len(deps) == 1
+        assert deps[0].source_work_item_id == "gitlab:group/project#2"
+        assert deps[0].target_work_item_id == "gitlab:group/project#1"
+        assert deps[0].relationship_type == "blocks"
+        assert deps[0].relationship_semantics_version == "canonical-blocks.v2"
+
     def test_description_reference(self) -> None:
         issue = {
             "iid": 1,
@@ -470,8 +490,9 @@ class TestExtractGitLabDependencies:
         )
 
         assert len(deps) == 1
-        assert deps[0].target_work_item_id == "gitlab:group/project#3"
-        assert deps[0].relationship_type == "blocked_by"
+        assert deps[0].source_work_item_id == "gitlab:group/project#3"
+        assert deps[0].target_work_item_id == "gitlab:group/project#1"
+        assert deps[0].relationship_type == "blocks"
 
 
 class TestGitLabMilestoneToSprint:

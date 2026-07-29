@@ -9,7 +9,11 @@ from typing import Any
 import httpx
 
 from dev_health_ops.exceptions import APIException, AuthenticationException
-from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
+from dev_health_ops.metrics.testops_schemas import (
+    CIAcceptanceCheckRow,
+    JobRunRow,
+    PipelineRunExtendedRow,
+)
 from dev_health_ops.providers.usage import OperationResolver, UsageRecorder
 
 
@@ -17,6 +21,7 @@ from dev_health_ops.providers.usage import OperationResolver, UsageRecorder
 class PipelineSyncBatch:
     pipeline_runs: list[PipelineRunExtendedRow] = field(default_factory=list)
     job_runs: list[JobRunRow] = field(default_factory=list)
+    acceptance_checks: list[CIAcceptanceCheckRow] = field(default_factory=list)
     last_synced_cursor: datetime | None = None
 
 

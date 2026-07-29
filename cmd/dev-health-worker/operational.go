@@ -111,13 +111,17 @@ func buildOperationalWorker(
 	externalIngestRetention, externalIngestErr := systemjobs.NewExternalIngestBatchStore(
 		postgresDatabase.pools.Domain,
 	)
-	if terminalErr != nil || rateLimitErr != nil || externalIngestErr != nil {
+	askDevRetention, askDevErr := systemjobs.NewAskDevConversationStore(
+		postgresDatabase.pools.Domain,
+	)
+	if terminalErr != nil || rateLimitErr != nil || externalIngestErr != nil || askDevErr != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	retentionStores := map[string]systemjobs.RetentionStore{
 		jobcontract.RetentionWorkerTerminal:        terminalRetention,
 		jobcontract.RetentionRateLimitObservations: rateLimitRetention,
 		jobcontract.RetentionExternalIngestBatches: externalIngestRetention,
+		jobcontract.RetentionAskDevConversations:   askDevRetention,
 	}
 	idempotency, err := jobruntime.NewPostgresIdempotency(postgresDatabase.pools.Domain)
 	if err != nil {

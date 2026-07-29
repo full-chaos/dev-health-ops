@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// The two retention ports replace Celery tasks that deleted directly from
-// operational tables. The properties that matter are the ones an operator
+// The retention ports remove expired operational state. The properties that
+// matter are the ones an operator
 // cannot recover from if they are wrong: the cutoff, the terminal-status
 // guard, the cascade, and the target table itself. Every one is proved here
 // against real PostgreSQL rather than a fake.
@@ -108,6 +108,55 @@ func TestExternalIngestRetentionDeletesOnlyTerminalBatchesAndCascades(t *testing
 	}
 }
 
+func TestAskDevRetentionPurgesContentAndKeepsOnlyMinimalTombstones(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := startRetentionPostgres(t, ctx)
+	createRetentionTables(t, ctx, pool)
+
+	cutoff := time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC)
+	insertAskDevConversation(t, ctx, pool, 1, 0, cutoff.Add(-time.Second), "secret question")
+	insertAskDevConversation(t, ctx, pool, 2, 30, cutoff, "another secret question")
+	insertAskDevConversation(t, ctx, pool, 3, 30, cutoff.Add(time.Second), "keep me")
+
+	store, err := NewAskDevConversationStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteBefore(ctx, cutoff, 1)
+	if err != nil {
+		t.Fatalf("DeleteBefore: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted = %d, want both conversations due at or before the cutoff", deleted)
+	}
+	if got := countRows(t, ctx, pool, "dev_conversations"); got != 1 {
+		t.Fatalf("surviving conversations = %d, want the in-window conversation", got)
+	}
+	if got := countRows(t, ctx, pool, "dev_messages"); got != 1 {
+		t.Fatalf("surviving messages = %d, want only the in-window content", got)
+	}
+	if got := countRows(t, ctx, pool, "dev_conversation_tombstones"); got != 2 {
+		t.Fatalf("tombstones = %d, want one minimal lifecycle row per purge", got)
+	}
+	var leakedContent int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*)
+FROM dev_conversation_tombstones
+WHERE to_jsonb(dev_conversation_tombstones)::text LIKE '%secret question%'`,
+	).Scan(&leakedContent); err != nil {
+		t.Fatal(err)
+	}
+	if leakedContent != 0 {
+		t.Fatal("a tombstone retained deleted conversation content")
+	}
+
+	replayed, err := store.DeleteBefore(ctx, cutoff, 1)
+	if err != nil || replayed != 0 {
+		t.Fatalf("replay deleted = %d, %v", replayed, err)
+	}
+}
+
 func TestRetentionStoresRejectUnboundedRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -119,6 +168,10 @@ func TestRetentionStoresRejectUnboundedRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	external, err := NewExternalIngestBatchStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	askDev, err := NewAskDevConversationStore(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +191,9 @@ func TestRetentionStoresRejectUnboundedRequests(t *testing.T) {
 			}
 			if _, err := external.DeleteBefore(ctx, test.before, test.batchSize); err == nil {
 				t.Fatal("external-ingest retention accepted an unbounded request")
+			}
+			if _, err := askDev.DeleteBefore(ctx, test.before, test.batchSize); err == nil {
+				t.Fatal("Ask Dev retention accepted an unbounded request")
 			}
 		})
 	}
@@ -206,7 +262,58 @@ CREATE TABLE external_ingest_rejections (
 	code text NOT NULL,
 	message text NOT NULL,
 	created_at timestamptz NOT NULL
+);
+CREATE TABLE dev_conversations (
+	id uuid PRIMARY KEY,
+	org_id uuid NOT NULL,
+	user_id uuid NOT NULL,
+	retention_days smallint NOT NULL,
+	created_at timestamptz NOT NULL,
+	expires_at timestamptz
+);
+CREATE TABLE dev_messages (
+	id uuid PRIMARY KEY,
+	conversation_id uuid NOT NULL REFERENCES dev_conversations(id) ON DELETE CASCADE,
+	content text NOT NULL
+);
+CREATE TABLE dev_conversation_tombstones (
+	id uuid PRIMARY KEY,
+	conversation_id uuid NOT NULL UNIQUE,
+	org_id uuid NOT NULL,
+	user_id uuid NOT NULL,
+	actor_user_id uuid,
+	reason text NOT NULL,
+	retention_days smallint NOT NULL,
+	conversation_created_at timestamptz NOT NULL,
+	deleted_at timestamptz NOT NULL
 )`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertAskDevConversation(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	index int,
+	retentionDays int,
+	expiresAt time.Time,
+	content string,
+) {
+	t.Helper()
+	conversationID := retentionUUID(t, "0000001a", index)
+	orgID := retentionUUID(t, "0000001b", 1)
+	userID := retentionUUID(t, "0000001c", 1)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO dev_conversations (
+	id, org_id, user_id, retention_days, created_at, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6)`, conversationID, orgID, userID,
+		retentionDays, expiresAt.Add(-24*time.Hour), expiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO dev_messages (id, conversation_id, content)
+VALUES ($1, $2, $3)`, retentionUUID(t, "0000001d", index), conversationID, content); err != nil {
 		t.Fatal(err)
 	}
 }

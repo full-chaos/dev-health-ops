@@ -74,7 +74,8 @@ func reconciliationTables() []domainTable {
 			// entirely under the Option B split and no longer appear here —
 			// the domain role has no grant on any of them.
 			name: "organizations",
-			ddl:  "CREATE TABLE public.organizations (id uuid PRIMARY KEY, is_active boolean NOT NULL)",
+			ddl: "CREATE TABLE public.organizations (id uuid PRIMARY KEY, " +
+				"is_active boolean NOT NULL, tier text NOT NULL DEFAULT 'community')",
 			exercise: []string{
 				"SELECT id::text FROM public.organizations WHERE is_active = TRUE ORDER BY id LIMIT 10",
 			},
@@ -307,9 +308,20 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		`CREATE TABLE public.feature_flags (
+			id uuid PRIMARY KEY, key text NOT NULL UNIQUE, min_tier text NOT NULL,
+			is_enabled boolean NOT NULL
+		)`,
+		`CREATE TABLE public.org_feature_overrides (
+			id uuid PRIMARY KEY, org_id uuid NOT NULL, feature_id uuid NOT NULL,
+			is_enabled boolean NOT NULL, expires_at timestamptz
+		)`,
+		`CREATE TABLE public.org_licenses (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), org_id uuid NOT NULL UNIQUE,
+			tier text NOT NULL, features_override json
+		)`,
+		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.webhook_deliveries (id bigint PRIMARY KEY)",

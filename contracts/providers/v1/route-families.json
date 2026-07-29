@@ -352,6 +352,15 @@
     },
     {
       "provider": "linear",
+      "route_family": "relations",
+      "dimensions": [
+        "graphql_cost"
+      ],
+      "covers": "Issue relation and inverse-relation edges, including blocker pagination",
+      "confidence": "low"
+    },
+    {
+      "provider": "linear",
       "route_family": "team_members",
       "dimensions": [
         "graphql_cost"

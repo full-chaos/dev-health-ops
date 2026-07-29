@@ -140,11 +140,17 @@ def extract_jira_issue_dependencies(
             )
             if target_key:
                 raw = str(outward_raw or "")
+                relationship = _normalize_relationship_type(raw)
+                source_id = work_item_id
+                target_id = f"jira:{target_key}"
+                if relationship == "blocked_by":
+                    source_id, target_id = target_id, source_id
+                    relationship = "blocks"
                 dependencies.append(
                     WorkItemDependency(
-                        source_work_item_id=work_item_id,
-                        target_work_item_id=f"jira:{target_key}",
-                        relationship_type=_normalize_relationship_type(raw),
+                        source_work_item_id=source_id,
+                        target_work_item_id=target_id,
+                        relationship_type=relationship,
                         relationship_type_raw=raw,
                     )
                 )
@@ -154,11 +160,18 @@ def extract_jira_issue_dependencies(
             )
             if source_key:
                 raw = str(inward_raw or "")
+                relationship = _normalize_relationship_type(raw)
+                source_id = f"jira:{source_key}"
+                target_id = work_item_id
+                if relationship == "blocked_by":
+                    relationship = "blocks"
+                elif relationship == "blocks":
+                    source_id, target_id = target_id, source_id
                 dependencies.append(
                     WorkItemDependency(
-                        source_work_item_id=f"jira:{source_key}",
-                        target_work_item_id=work_item_id,
-                        relationship_type=_normalize_relationship_type(raw),
+                        source_work_item_id=source_id,
+                        target_work_item_id=target_id,
+                        relationship_type=relationship,
                         relationship_type_raw=raw,
                     )
                 )

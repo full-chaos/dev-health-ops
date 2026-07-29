@@ -1,0 +1,39 @@
+{
+  "conversation_id": "conversation_01",
+  "created_at": "2026-07-28T12:00:00Z",
+  "current_scope": {
+    "comparison_range": {
+      "end": "2026-06-28T00:00:00Z",
+      "start": "2026-05-29T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    },
+    "direct_scope": "repository",
+    "entity_refs": [],
+    "organization_id": "org_fullchaos",
+    "repositories": [
+      "repo_dev_health"
+    ],
+    "schema_version": "dev_scope.v1",
+    "surface_context": {
+      "entity_refs": [],
+      "filter_fingerprint": "filters_01",
+      "route_id": "diagnose_overview"
+    },
+    "team_ids": [
+      "team_platform"
+    ],
+    "time_range": {
+      "end": "2026-07-28T00:00:00Z",
+      "start": "2026-06-28T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    }
+  },
+  "expires_at": "2026-08-27T12:00:00Z",
+  "latest_answer_id": "answer_01",
+  "message_count": 2,
+  "retention_days": 30,
+  "schema_version": "dev_conversation.v1",
+  "state": "active",
+  "title": "Repository delivery status",
+  "updated_at": "2026-07-28T12:00:00Z"
+}

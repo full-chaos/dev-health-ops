@@ -138,6 +138,7 @@ def test_budget_estimate_missing_window_falls_back_to_fixed_floor() -> None:
         "comments": 2,
         "attachments": 1,
         "history": 2,
+        "relations": 2,
     }
 
 

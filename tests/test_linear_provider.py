@@ -711,6 +711,74 @@ class TestLinearClientWindowFilter:
         }
         client.close()
 
+    @pytest.mark.parametrize(
+        ("inverse", "field", "operation"),
+        (
+            (False, "relations", "IssueRelations"),
+            (True, "inverseRelations", "IssueInverseRelations"),
+        ),
+    )
+    def test_issue_relations_are_paginated_and_bounded(
+        self, inverse: bool, field: str, operation: str
+    ) -> None:
+        from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+
+        client = LinearClient(auth=LinearAuth(api_key="test"))
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _fake_execute(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+            calls.append((query, variables))
+            page = len(calls)
+            return {
+                "issue": {
+                    field: {
+                        "nodes": [{"id": f"rel-{page}", "type": "blocks"}],
+                        "pageInfo": {
+                            "hasNextPage": page == 1,
+                            "endCursor": "cursor-1" if page == 1 else None,
+                        },
+                    }
+                }
+            }
+
+        with patch.object(client, "_execute", side_effect=_fake_execute):
+            rows = client.get_issue_relations("issue-1", inverse=inverse, limit=2)
+
+        assert [row["id"] for row in rows] == ["rel-1", "rel-2"]
+        assert operation in calls[0][0]
+        assert calls[0][1]["after"] is None
+        assert calls[1][1]["after"] == "cursor-1"
+        client.close()
+
+    def test_issue_relations_fail_when_the_bounded_read_is_truncated(self) -> None:
+        from dev_health_ops.providers.linear.client import (
+            LinearAuth,
+            LinearClient,
+            LinearGraphQLError,
+        )
+
+        client = LinearClient(auth=LinearAuth(api_key="test"))
+
+        def _fake_execute(_query: str, _variables: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "issue": {
+                    "relations": {
+                        "nodes": [{"id": "rel-1", "type": "blocks"}],
+                        "pageInfo": {
+                            "hasNextPage": True,
+                            "endCursor": "cursor-1",
+                        },
+                    }
+                }
+            }
+
+        with (
+            patch.object(client, "_execute", side_effect=_fake_execute),
+            pytest.raises(LinearGraphQLError, match="bounded 1-relation limit"),
+        ):
+            client.get_issue_relations("issue-1", limit=1)
+        client.close()
+
 
 class TestLinearProviderIngest:
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
@@ -919,6 +987,52 @@ class TestLinearProviderIngest:
         assert len(batch.status_transitions) > 0
         assert len(batch.reopen_events) == 1
         assert len(batch.interactions) == 1
+
+    @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
+    def test_ingest_fetches_truncated_native_blocker_relations(
+        self,
+        mock_from_env: MagicMock,
+        mock_identity: IdentityResolver,
+        mock_status_mapping: StatusMapping,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.iter_teams.return_value = [
+            {"id": "team-1", "key": "ENG", "name": "Engineering"}
+        ]
+        mock_client.iter_cycles.return_value = []
+        issue = _mock_linear_issue(identifier="ENG-1")
+        issue["relations"] = {
+            "nodes": [],
+            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+        }
+        issue["inverseRelations"] = {
+            "nodes": [],
+            "pageInfo": {"hasNextPage": False},
+        }
+        mock_client.iter_issues_pages.return_value = [[issue]]
+        mock_client.get_issue_relations.return_value = [
+            {
+                "id": "rel-1",
+                "type": "blocks",
+                "issue": {"identifier": "ENG-1"},
+                "relatedIssue": {"identifier": "ENG-2"},
+            }
+        ]
+
+        batch = LinearProvider(
+            status_mapping=mock_status_mapping, identity=mock_identity
+        ).ingest(IngestionContext(window=IngestionWindow(), repo=None))
+
+        blocker = next(
+            dep for dep in batch.dependencies if dep.relationship_type == "blocks"
+        )
+        assert blocker.source_work_item_id == "linear:ENG-1"
+        assert blocker.target_work_item_id == "linear:ENG-2"
+        mock_client.get_issue_relations.assert_called_once_with(
+            str(issue["id"]), inverse=False
+        )
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
     @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")

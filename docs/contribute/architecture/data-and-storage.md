@@ -99,4 +99,67 @@ Migrations run through one controlled process. Workers, APIs, and schedulers do 
 
 Every identity, dedupe key, outbox row, queue admission, query, and canonical write must preserve organization authority before aggregation. Provider payloads, URL parameters, or guessed namespace names cannot override server-owned organization and source bindings.
 
+## Ask Dev persistence boundary
+
+The `/dev` page and `/dev` application window use one canonical PostgreSQL
+conversation service. Every read and write is scoped by server-owned
+`org_id + user_id`; clients and model output cannot choose those values.
+
+Retention admission has two independent inputs: the canonical Ask Dev feature
+decision controls a never-used installation, while the existence of persisted
+conversation state preserves lifecycle cleanup after feature rollback. Contract
+route compatibility is a separate gate: a v3 cleanup envelope cannot be
+constructed while the active migration producer version is still v2.
+
+```mermaid
+erDiagram
+    DEV_CONVERSATIONS ||--o{ DEV_MESSAGES : contains
+    DEV_CONVERSATIONS ||--o{ DEV_RUNS : records
+    DEV_RUNS ||--o{ DEV_TOOL_CALLS : audits
+    DEV_MESSAGES ||--o| DEV_FEEDBACK : receives
+    DEV_CONVERSATIONS ||--o| DEV_CONVERSATION_TOMBSTONES : purges_to
+
+    DEV_CONVERSATIONS {
+        uuid id PK
+        uuid org_id
+        uuid user_id
+        smallint retention_days "0 or 30"
+        timestamptz expires_at
+    }
+    DEV_MESSAGES {
+        uuid id PK
+        uuid client_message_id "idempotency"
+        json answer_payload "validated dev_answer.v1 only"
+    }
+    DEV_RUNS {
+        uuid id PK
+        uuid request_id "idempotency"
+        text state
+        bigint estimated_cost_microusd
+    }
+    DEV_TOOL_CALLS {
+        uuid id PK
+        text canonical_input_hash
+        json safe_scope_summary
+        json evidence_ref_ids
+    }
+    DEV_FEEDBACK {
+        uuid id PK
+        uuid answer_id
+        text rating
+    }
+    DEV_CONVERSATION_TOMBSTONES {
+        uuid conversation_id UK
+        text reason
+        timestamptz deleted_at
+    }
+```
+
+Only the validated structured answer crosses the answer persistence seam.
+Prompts, provider payloads, chain-of-thought, raw tool results, copied source
+evidence, and secrets are forbidden. Retention and explicit deletion cascade
+from the conversation; the tombstone is deliberately outside the user and
+organization foreign-key graph so account deletion can retain content-free
+proof that the purge completed.
+
 Use [Databases and storage](../../operate/configure/databases-and-storage.md) for operator configuration and [Platform architecture](platform.md) for the end-to-end execution path.

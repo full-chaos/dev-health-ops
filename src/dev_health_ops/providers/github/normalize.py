@@ -917,13 +917,17 @@ def extract_github_dependencies(
 
         # Determine direction and dependency type
         if any(k in keyword for k in ["depends on", "blocked by"]):
-            dep_type = "blocks"  # The referenced issue blocks this one
+            dep_type = "blocks"
+            reverse = True  # referenced issue blocks this one
         elif "blocks" in keyword:
-            dep_type = "is_blocked_by"  # This issue blocks the referenced one
+            dep_type = "blocks"
+            reverse = False  # this issue blocks the referenced one
         elif any(k in keyword for k in ["fixes", "closes", "resolves"]):
             dep_type = "relates_to"
+            reverse = False
         else:
             dep_type = "relates_to"
+            reverse = False
 
         # Parse reference
         same_repo_num = match.group(1)
@@ -939,10 +943,10 @@ def extract_github_dependencies(
 
         dependencies.append(
             WorkItemDependency(
-                source_work_item_id=work_item_id,
-                target_work_item_id=target_id,
+                source_work_item_id=target_id if reverse else work_item_id,
+                target_work_item_id=work_item_id if reverse else target_id,
                 relationship_type=dep_type,
-                relationship_type_raw=dep_type,
+                relationship_type_raw=keyword,
                 last_synced=datetime.now(timezone.utc),
             )
         )

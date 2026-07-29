@@ -348,6 +348,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             target_work_item_id,
             relationship_type,
             relationship_type_raw,
+            relationship_semantics_version,
             last_synced,
             org_id
         FROM work_item_dependencies FINAL

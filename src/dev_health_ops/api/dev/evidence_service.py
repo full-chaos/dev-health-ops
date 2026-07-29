@@ -1,0 +1,577 @@
+"""Authorized, bounded evidence search and expansion for Ask Dev.
+
+Evidence references are durable descriptors, not cached payloads.  Their opaque
+IDs are deterministic HMACs over the tenant and canonical source locator.  A
+retained ``dev_answer.v1`` therefore contains everything needed to locate the
+record again without duplicating source content.  Expansion still re-resolves
+the current scope and permissions for every reference; a valid signature is
+never an authorization decision.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import html
+import json
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from html.parser import HTMLParser
+from typing import Protocol
+from urllib.parse import urlsplit
+
+from .contracts import (
+    DevCitationLink,
+    DevEvidenceFlags,
+    DevEvidenceRef,
+    FreshnessState,
+)
+from .entitlement import AskDevEntitlementAuthorizer
+from .scope_service import (
+    EntityKind,
+    ScopeRef,
+    ScopeResolution,
+    ScopeResolutionOutcome,
+    ScopeResolveRequest,
+)
+
+SEARCH_EVIDENCE_VERSION = "search-evidence.v1"
+EVIDENCE_RANKING_VERSION = "evidence-ranking.v1"
+GET_EVIDENCE_VERSION = "get-evidence.v1"
+MAX_SEARCH_REFS = 25
+MAX_EXPANSION_REFS = 10
+MAX_EXPANSION_BYTES = 64 * 1024
+MAX_SOURCE_CANDIDATES = 100
+MAX_RAW_EXCERPT_CHARS = 32 * 1024
+UNTRUSTED_DATA_START = "UNTRUSTED_DATA\n"
+UNTRUSTED_DATA_END = "\nEND_UNTRUSTED_DATA"
+
+
+class EvidenceAvailability(StrEnum):
+    AVAILABLE = "available"
+    NO_MATCHES = "no_matches"
+    UNAVAILABLE = "unavailable"
+    UNCONFIGURED = "unconfigured"
+    UNAUTHORIZED = "unauthorized"
+    REDACTED = "redacted"
+    STALE = "stale"
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceRecord:
+    source_system: str
+    source_version: str
+    entity_type: str
+    entity_id: str
+    display_label: str
+    observed_at: datetime
+    freshness: FreshnessState
+    provenance: str
+    confidence: float
+    repository_ids: tuple[str, ...] = ()
+    raw_excerpt: str | None = None
+    internal_path: str | None = None
+    source_url: str | None = None
+    authorized_link_hosts: tuple[str, ...] = ()
+    stale: bool = False
+    unavailable: bool = False
+    redacted: bool = False
+    deleted: bool = False
+    uncertain: bool = False
+    conflicting: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSearchResult:
+    source_system: str
+    state: EvidenceAvailability
+    records: tuple[EvidenceRecord, ...] = ()
+    watermark: str | None = None
+    warning: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceSearchResult:
+    evidence: tuple[DevEvidenceRef, ...]
+    source_states: tuple[SourceSearchResult, ...]
+    query_version: str = SEARCH_EVIDENCE_VERSION
+    ranking_version: str = EVIDENCE_RANKING_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceExpansion:
+    evidence: DevEvidenceRef
+    state: EvidenceAvailability
+    safe_excerpt: str | None
+    serialized_bytes: int
+    warning: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceExpansionResult:
+    expansions: tuple[EvidenceExpansion, ...]
+    serialized_bytes: int
+    query_version: str = GET_EVIDENCE_VERSION
+
+
+class EvidenceSourceAdapter(Protocol):
+    source_system: str
+
+    async def search(
+        self,
+        *,
+        org_id: str,
+        scope: ScopeResolution,
+        query: str,
+        limit: int,
+    ) -> SourceSearchResult: ...
+
+    async def expand(
+        self,
+        *,
+        org_id: str,
+        scope: ScopeResolution,
+        evidence: DevEvidenceRef,
+    ) -> EvidenceRecord | None: ...
+
+
+class EvidenceScopeAuthorizer(Protocol):
+    async def resolve(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        request: ScopeResolveRequest,
+    ) -> ScopeResolution: ...
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+_MARKDOWN_LINK = re.compile(r"!?\[([^\]\n]{0,512})\]\([^\)\n]{0,2048}\)")
+_MARKDOWN_AUTOLINK = re.compile(r"<(?:(?:https?|mailto):)[^>\n]{1,2048}>", re.I)
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|password|secret|authorization)\s*[:=]\s*([^\s,;]{1,512})"
+)
+_BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,512}")
+_TOKEN_PREFIX = re.compile(r"\b(?:gh[opsu]_|sk-)[A-Za-z0-9_-]{8,512}")
+
+
+def sanitize_untrusted_text(value: str | None, *, max_chars: int = 2_048) -> str | None:
+    """Return inert plain text with HTML, links, and common secrets removed."""
+    if not value:
+        return None
+    bounded = value[:MAX_RAW_EXCERPT_CHARS]
+    parser = _TextExtractor()
+    try:
+        parser.feed(bounded)
+        parser.close()
+        text = " ".join(parser.parts)
+    except Exception:
+        text = bounded.replace("<", " ").replace(">", " ")
+    text = html.unescape(text)
+    text = _MARKDOWN_LINK.sub(lambda match: match.group(1), text)
+    text = _MARKDOWN_AUTOLINK.sub("[link removed]", text)
+    text = _BEARER.sub("Bearer [REDACTED]", text)
+    text = _SECRET_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _TOKEN_PREFIX.sub("[REDACTED]", text)
+    text = " ".join(text.split())
+    if not text:
+        return None
+    return text[:max_chars]
+
+
+def render_untrusted_excerpt(value: str | None) -> str | None:
+    """Delimit sanitized source text for safe model/tool-result composition."""
+    sanitized = sanitize_untrusted_text(value, max_chars=MAX_RAW_EXCERPT_CHARS)
+    if sanitized is None:
+        return None
+    return f"{UNTRUSTED_DATA_START}{sanitized}{UNTRUSTED_DATA_END}"
+
+
+def _safe_link(record: EvidenceRecord) -> DevCitationLink | None:
+    if record.internal_path:
+        parsed = urlsplit(record.internal_path)
+        if (
+            record.internal_path.startswith("/")
+            and not record.internal_path.startswith("//")
+            and not parsed.scheme
+            and not parsed.netloc
+            and "\\" not in record.internal_path
+        ):
+            return DevCitationLink(internal_path=record.internal_path)
+    if record.source_url:
+        parsed = urlsplit(record.source_url)
+        allowed = {host.casefold() for host in record.authorized_link_hosts}
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname
+            and parsed.hostname.casefold() in allowed
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.fragment
+        ):
+            return DevCitationLink(source_url=record.source_url)
+    return None
+
+
+def _authorized_outcome(resolution: ScopeResolution) -> bool:
+    return resolution.outcome in {
+        ScopeResolutionOutcome.EXACT,
+        ScopeResolutionOutcome.FILTERED,
+        ScopeResolutionOutcome.INHERITED,
+        ScopeResolutionOutcome.ORGANIZATION_FALLBACK,
+    }
+
+
+def _authorized_repository_ids(resolution: ScopeResolution) -> set[str]:
+    result: set[str] = set()
+    for entity in resolution.entities:
+        if entity.kind is EntityKind.REPOSITORY:
+            result.add(entity.canonical_id)
+        if entity.repository_id:
+            result.add(entity.repository_id)
+    return result
+
+
+def _authorized_entity_ids(resolution: ScopeResolution) -> set[str]:
+    return {
+        entity.canonical_id
+        for entity in resolution.entities
+        if entity.kind not in {EntityKind.ORGANIZATION, EntityKind.REPOSITORY}
+    }
+
+
+class EvidenceReferenceSigner:
+    """Issue and verify stable non-enumerable evidence handles."""
+
+    def __init__(self, secret: str | bytes) -> None:
+        key = secret.encode() if isinstance(secret, str) else secret
+        if len(key) < 32:
+            raise ValueError(
+                "Evidence reference signing secret must be at least 32 bytes"
+            )
+        self._key = hashlib.sha256(b"ask-dev-evidence-v1\0" + key).digest()
+
+    @staticmethod
+    def _payload(org_id: str, evidence: DevEvidenceRef | EvidenceRecord) -> bytes:
+        repository_ids = sorted(evidence.repository_ids)
+        payload = {
+            "org": org_id,
+            "source": evidence.source_system,
+            "source_version": evidence.source_version,
+            "entity_type": evidence.entity_type,
+            "entity_id": evidence.entity_id,
+            "repositories": repository_ids,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+    def issue(self, org_id: str, record: EvidenceRecord) -> str:
+        digest = hmac.new(self._key, self._payload(org_id, record), hashlib.sha256)
+        return f"ev1_{digest.hexdigest()[:40]}"
+
+    def verify(self, org_id: str, evidence: DevEvidenceRef) -> bool:
+        expected = hmac.new(
+            self._key, self._payload(org_id, evidence), hashlib.sha256
+        ).hexdigest()[:40]
+        return hmac.compare_digest(evidence.evidence_ref_id, f"ev1_{expected}")
+
+
+class EvidenceService:
+    def __init__(
+        self,
+        *,
+        entitlement: AskDevEntitlementAuthorizer,
+        authorizer: EvidenceScopeAuthorizer,
+        signer: EvidenceReferenceSigner,
+        native_adapters: Sequence[EvidenceSourceAdapter],
+        acr_adapter: EvidenceSourceAdapter | None = None,
+    ) -> None:
+        adapters = [*native_adapters]
+        if len({adapter.source_system for adapter in adapters}) != len(adapters):
+            raise ValueError("Evidence adapter source systems must be unique")
+        self._entitlement = entitlement
+        self._authorizer = authorizer
+        self._signer = signer
+        self._native = tuple(adapters)
+        self._acr = acr_adapter
+
+    async def search(
+        self,
+        *,
+        org_id: str,
+        permission_fingerprint: str,
+        scope_request: ScopeResolveRequest,
+        query: str,
+        limit: int = MAX_SEARCH_REFS,
+    ) -> EvidenceSearchResult:
+        await self._entitlement.require(org_id)
+        query = " ".join(query.split())
+        if not query or len(query) > 2_048:
+            raise ValueError("Evidence query must contain 1 to 2048 characters")
+        if limit < 1 or limit > MAX_SEARCH_REFS:
+            raise ValueError(
+                f"Evidence search limit must be between 1 and {MAX_SEARCH_REFS}"
+            )
+        resolution = await self._authorizer.resolve(
+            org_id, permission_fingerprint, scope_request
+        )
+        if not _authorized_outcome(resolution):
+            return EvidenceSearchResult(
+                evidence=(),
+                source_states=(
+                    SourceSearchResult(
+                        source_system="authorized_scope",
+                        state=EvidenceAvailability.UNAUTHORIZED,
+                    ),
+                ),
+            )
+
+        source_results: list[SourceSearchResult] = []
+        for adapter in self._native:
+            try:
+                result = await adapter.search(
+                    org_id=org_id,
+                    scope=resolution,
+                    query=query,
+                    limit=MAX_SOURCE_CANDIDATES,
+                )
+            except Exception:
+                result = SourceSearchResult(
+                    source_system=adapter.source_system,
+                    state=EvidenceAvailability.UNAVAILABLE,
+                    warning="source_unavailable",
+                )
+            source_results.append(result)
+
+        if self._acr is not None:
+            try:
+                source_results.append(
+                    await self._acr.search(
+                        org_id=org_id,
+                        scope=resolution,
+                        query=query,
+                        limit=MAX_SOURCE_CANDIDATES,
+                    )
+                )
+            except Exception:
+                source_results.append(
+                    SourceSearchResult(
+                        source_system=self._acr.source_system,
+                        state=EvidenceAvailability.UNAVAILABLE,
+                        warning="optional_acr_unavailable",
+                    )
+                )
+        else:
+            source_results.append(
+                SourceSearchResult(
+                    source_system="acr",
+                    state=EvidenceAvailability.UNCONFIGURED,
+                )
+            )
+
+        valid_entity_ids = tuple(sorted(_authorized_entity_ids(resolution)))
+        records = [record for result in source_results for record in result.records]
+        records.sort(key=lambda record: self._rank_key(query, record))
+        refs = tuple(
+            self._to_ref(org_id, record, valid_entity_ids=valid_entity_ids)
+            for record in records[:limit]
+        )
+        return EvidenceSearchResult(
+            evidence=refs,
+            source_states=tuple(source_results),
+        )
+
+    async def expand(
+        self,
+        *,
+        org_id: str,
+        permission_fingerprint: str,
+        scope_request: ScopeResolveRequest,
+        evidence: Sequence[DevEvidenceRef],
+    ) -> EvidenceExpansionResult:
+        await self._entitlement.require(org_id)
+        if len(evidence) > MAX_EXPANSION_REFS:
+            raise ValueError(
+                f"At most {MAX_EXPANSION_REFS} evidence refs may be expanded"
+            )
+        adapters = {adapter.source_system: adapter for adapter in self._native}
+        if self._acr is not None:
+            adapters[self._acr.source_system] = self._acr
+
+        expansions: list[EvidenceExpansion] = []
+        total = 0
+        for ref in evidence:
+            # Deliberately re-resolve for every ref so one denied locator cannot
+            # inherit another ref's successful authorization decision.
+            resolution = await self._authorizer.resolve(
+                org_id, permission_fingerprint, scope_request
+            )
+            state, warning = await self._authorize_expansion(
+                org_id,
+                permission_fingerprint,
+                scope_request,
+                resolution,
+                ref,
+            )
+            record: EvidenceRecord | None = None
+            if state is EvidenceAvailability.AVAILABLE:
+                adapter = adapters.get(ref.source_system)
+                if adapter is None:
+                    state = EvidenceAvailability.UNCONFIGURED
+                    warning = "source_unconfigured"
+                else:
+                    try:
+                        record = await adapter.expand(
+                            org_id=org_id,
+                            scope=resolution,
+                            evidence=ref,
+                        )
+                    except Exception:
+                        state = EvidenceAvailability.UNAVAILABLE
+                        warning = "source_unavailable"
+                    if record is None and state is EvidenceAvailability.AVAILABLE:
+                        state = EvidenceAvailability.NO_MATCHES
+                        warning = "evidence_deleted_or_unavailable"
+            excerpt = render_untrusted_excerpt(record.raw_excerpt) if record else None
+            if record and record.redacted:
+                state = EvidenceAvailability.REDACTED
+            if record and record.freshness is FreshnessState.STALE:
+                state = EvidenceAvailability.STALE
+            encoded = len((excerpt or "").encode("utf-8"))
+            if total + encoded > MAX_EXPANSION_BYTES:
+                remaining = MAX_EXPANSION_BYTES - total
+                if remaining <= 0:
+                    excerpt = None
+                    encoded = 0
+                    warning = "expansion_byte_limit_reached"
+                else:
+                    excerpt = (
+                        (excerpt or "")
+                        .encode("utf-8")[:remaining]
+                        .decode("utf-8", errors="ignore")
+                    )
+                    encoded = len(excerpt.encode("utf-8"))
+                    warning = "expansion_byte_limit_reached"
+            total += encoded
+            expansions.append(
+                EvidenceExpansion(
+                    evidence=ref,
+                    state=state,
+                    safe_excerpt=excerpt,
+                    serialized_bytes=encoded,
+                    warning=warning,
+                )
+            )
+        return EvidenceExpansionResult(tuple(expansions), total)
+
+    async def _authorize_expansion(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        scope_request: ScopeResolveRequest,
+        resolution: ScopeResolution,
+        evidence: DevEvidenceRef,
+    ) -> tuple[EvidenceAvailability, str | None]:
+        if not _authorized_outcome(resolution) or not self._signer.verify(
+            org_id, evidence
+        ):
+            return EvidenceAvailability.UNAUTHORIZED, "not_found"
+        allowed_entities = _authorized_entity_ids(resolution)
+        if (
+            evidence.valid_entity_ids
+            and not set(evidence.valid_entity_ids) <= allowed_entities
+        ):
+            return EvidenceAvailability.UNAUTHORIZED, "not_found"
+        if evidence.repository_ids:
+            repository_resolution = await self._authorizer.resolve(
+                org_id,
+                permission_fingerprint,
+                ScopeResolveRequest(
+                    explicit_refs=tuple(
+                        ScopeRef(EntityKind.REPOSITORY, repository_id)
+                        for repository_id in evidence.repository_ids
+                    ),
+                    team_filter_refs=scope_request.team_filter_refs,
+                    time_range=scope_request.time_range,
+                    allow_organization_fallback=False,
+                ),
+            )
+            if not _authorized_outcome(repository_resolution) or not set(
+                evidence.repository_ids
+            ) <= _authorized_repository_ids(repository_resolution):
+                return EvidenceAvailability.UNAUTHORIZED, "not_found"
+        return EvidenceAvailability.AVAILABLE, None
+
+    def _to_ref(
+        self,
+        org_id: str,
+        record: EvidenceRecord,
+        *,
+        valid_entity_ids: tuple[str, ...],
+    ) -> DevEvidenceRef:
+        return DevEvidenceRef(
+            schema_version="dev_evidence_ref.v1",
+            evidence_ref_id=self._signer.issue(org_id, record),
+            source_system=record.source_system,
+            source_version=record.source_version,
+            entity_type=record.entity_type,
+            entity_id=record.entity_id,
+            display_label=sanitize_untrusted_text(record.display_label, max_chars=256)
+            or "Evidence",
+            link=_safe_link(record),
+            observed_at=record.observed_at,
+            freshness=record.freshness,
+            provenance=record.provenance,
+            confidence=record.confidence,
+            citation_text=sanitize_untrusted_text(record.raw_excerpt),
+            repository_ids=list(record.repository_ids),
+            valid_entity_ids=list(valid_entity_ids),
+            flags=DevEvidenceFlags(
+                stale=record.stale or record.freshness is FreshnessState.STALE,
+                unavailable=record.unavailable,
+                redacted=record.redacted,
+                deleted=record.deleted,
+                uncertain=record.uncertain,
+                conflicting=record.conflicting,
+                untrusted_content=True,
+            ),
+        )
+
+    @staticmethod
+    def _rank_key(query: str, record: EvidenceRecord) -> tuple[object, ...]:
+        query_terms = tuple(part.casefold() for part in query.split())
+        label = record.display_label.casefold()
+        excerpt = (record.raw_excerpt or "").casefold()
+        matches = sum(3 for term in query_terms if term in label) + sum(
+            1 for term in query_terms if term in excerpt
+        )
+        source_precedence: Mapping[str, int] = {
+            "work_items": 0,
+            "work_units": 1,
+            "pull_requests": 2,
+            "reviews": 3,
+            "ci_runs": 4,
+            "deployments": 5,
+            "incidents": 6,
+            "commits": 7,
+            "acr": 8,
+        }
+        freshness_penalty = 0 if record.freshness is FreshnessState.FRESH else 1
+        observed = record.observed_at.astimezone(UTC).timestamp()
+        return (
+            -matches,
+            source_precedence.get(record.source_system, 99),
+            freshness_penalty,
+            -observed,
+            record.entity_type,
+            record.entity_id,
+        )

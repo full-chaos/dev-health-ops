@@ -73,6 +73,68 @@ type ExternalIngestBatchStore struct {
 	pool *pgxpool.Pool
 }
 
+// AskDevConversationStore removes expired conversation content while keeping
+// only the minimal lifecycle tombstone. Expiry is persisted per conversation,
+// so the fixed scheduler passes its occurrence time as the cutoff; it never
+// applies a second retention horizon that could turn 30 days into 60.
+type AskDevConversationStore struct {
+	pool *pgxpool.Pool
+}
+
+func NewAskDevConversationStore(pool *pgxpool.Pool) (*AskDevConversationStore, error) {
+	if pool == nil {
+		return nil, ErrRetentionUnavailable
+	}
+	return &AskDevConversationStore{pool: pool}, nil
+}
+
+func (store *AskDevConversationStore) DeleteBefore(
+	ctx context.Context,
+	before time.Time,
+	batchSize int,
+) (int64, error) {
+	if store == nil || store.pool == nil {
+		return 0, ErrRetentionUnavailable
+	}
+	return deleteInChunks(ctx, store.pool, `
+		WITH candidates AS MATERIALIZED (
+			SELECT candidate.id, candidate.org_id, candidate.user_id,
+				candidate.retention_days, candidate.created_at
+			FROM public.dev_conversations AS candidate
+			WHERE candidate.expires_at IS NOT NULL AND candidate.expires_at <= $1
+			ORDER BY candidate.expires_at, candidate.id
+			FOR UPDATE OF candidate SKIP LOCKED
+			LIMIT $2
+		), inserted_tombstones AS (
+			INSERT INTO public.dev_conversation_tombstones (
+				id, conversation_id, org_id, user_id, actor_user_id, reason,
+				retention_days, conversation_created_at, deleted_at
+			)
+			SELECT id, id, org_id, user_id, NULL,
+				CASE WHEN retention_days = 0
+					THEN 'ephemeral_completed'
+					ELSE 'retention_expired'
+				END,
+				retention_days, created_at, $1
+			FROM candidates
+			ON CONFLICT (conversation_id) DO NOTHING
+			RETURNING conversation_id
+		)
+		DELETE FROM public.dev_conversations AS conversations
+		USING candidates
+		WHERE conversations.id = candidates.id
+			AND (
+				EXISTS (
+					SELECT 1 FROM inserted_tombstones
+					WHERE conversation_id = candidates.id
+				)
+				OR EXISTS (
+					SELECT 1 FROM public.dev_conversation_tombstones
+					WHERE conversation_id = candidates.id
+				)
+			)`, before, batchSize)
+}
+
 func NewExternalIngestBatchStore(pool *pgxpool.Pool) (*ExternalIngestBatchStore, error) {
 	if pool == nil {
 		return nil, ErrRetentionUnavailable

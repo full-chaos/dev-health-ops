@@ -1,0 +1,11 @@
+{
+  "code": "source_unavailable",
+  "provider_exception": "raw database error",
+  "remediation": [
+    "Retry after source health recovers."
+  ],
+  "request_id": "request_01",
+  "retryable": true,
+  "safe_message": "A required source is temporarily unavailable.",
+  "schema_version": "dev_error.v1"
+}

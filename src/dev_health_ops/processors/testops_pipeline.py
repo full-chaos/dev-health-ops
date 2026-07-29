@@ -15,6 +15,7 @@ from dev_health_ops.providers._base import (
 class PipelineIngestionResult:
     pipeline_runs: int
     job_runs: int
+    acceptance_checks: int
     last_synced_cursor: datetime | None
 
 
@@ -47,6 +48,7 @@ class TestOpsPipelineProcessor:
         return PipelineIngestionResult(
             pipeline_runs=len(batch.pipeline_runs),
             job_runs=len(batch.job_runs),
+            acceptance_checks=len(batch.acceptance_checks),
             last_synced_cursor=batch.last_synced_cursor,
         )
 
@@ -59,3 +61,7 @@ class TestOpsPipelineProcessor:
         if batch.job_runs:
             insert_job_runs = getattr(self.ingestion_sink, "insert_testops_job_runs")
             await insert_job_runs(batch.job_runs)
+        if batch.acceptance_checks:
+            await self.ingestion_sink.insert_ci_acceptance_checks(
+                batch.acceptance_checks
+            )

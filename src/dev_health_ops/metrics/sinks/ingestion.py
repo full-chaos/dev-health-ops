@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from dev_health_ops.metrics.testops_schemas import (
+    CIAcceptanceCheckRow,
     CoverageSnapshotRow,
     JobRunRow,
     PipelineRunExtendedRow,
@@ -76,6 +77,11 @@ class IngestionSink:
 
     async def insert_testops_job_runs(self, jobs: list[JobRunRow]) -> None:
         await self._store.insert_testops_job_runs(jobs)
+
+    async def insert_ci_acceptance_checks(
+        self, checks: list[CIAcceptanceCheckRow]
+    ) -> None:
+        await self._store.insert_ci_acceptance_checks(checks)
 
     async def insert_test_suite_results(self, suites: list[TestSuiteResultRow]) -> None:
         await self._store.insert_test_suite_results(suites)

@@ -87,6 +87,8 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversation_tombstones (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_batch_payloads (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
@@ -379,6 +381,8 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		"billing_notifications",
 		"daily_metrics_partitions",
 		"daily_metrics_runs",
+		"dev_conversations",
+		"dev_conversation_tombstones",
 		"external_ingest_batch_payloads",
 		"external_ingest_batches",
 		"external_ingest_recompute_jobs",
@@ -399,6 +403,26 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	}
 	if _, err := domainPool.Exec(ctx, "UPDATE public.sync_run_units SET state='updated'"); err != nil {
 		t.Fatalf("domain role cannot UPDATE sync run units: %v", err)
+	}
+	// Ask Dev retention needs UPDATE only to acquire SELECT ... FOR UPDATE row
+	// locks, plus DELETE for the expired parent row. It must not gain INSERT.
+	if _, err := domainPool.Exec(ctx, "UPDATE public.dev_conversations SET id=id"); err != nil {
+		t.Fatalf("domain role cannot row-lock Ask Dev conversations: %v", err)
+	}
+	if _, err := domainPool.Exec(ctx, "DELETE FROM public.dev_conversations"); err != nil {
+		t.Fatalf("domain role cannot delete expired Ask Dev conversations: %v", err)
+	}
+	if _, err := domainPool.Exec(ctx, "INSERT INTO public.dev_conversation_tombstones (id) VALUES (1)"); err != nil {
+		t.Fatalf("domain role cannot insert Ask Dev tombstones: %v", err)
+	}
+	for _, statement := range []string{
+		"INSERT INTO public.dev_conversations (id) VALUES (1)",
+		"UPDATE public.dev_conversation_tombstones SET id=id",
+		"DELETE FROM public.dev_conversation_tombstones",
+	} {
+		if _, err := domainPool.Exec(ctx, statement); !isInsufficientPrivilege(err) {
+			t.Fatalf("domain role Ask Dev privilege for %q = %v, want 42501 insufficient_privilege", statement, err)
+		}
 	}
 	if _, err := domainPool.Exec(ctx, "INSERT INTO public.sync_watermarks (key, value) VALUES ('privilege', 'ready')"); err != nil {
 		t.Fatalf("domain role cannot INSERT sync watermarks: %v", err)

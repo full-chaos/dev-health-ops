@@ -112,6 +112,31 @@ class JobRunRow(TypedDict):
     org_id: NotRequired[str]
 
 
+class CIAcceptanceCheckRow(TypedDict):
+    """Provider-neutral required/optional CI acceptance classification.
+
+    ``requirement`` and ``result`` deliberately retain ``unknown``.  A provider
+    response that omits branch/project policy is not evidence that a check was
+    optional, and an absent check result is not evidence that it passed.
+    """
+
+    repo_id: uuid.UUID
+    run_id: str
+    check_key: str
+    check_name: str
+    provider: str
+    requirement: str  # required | optional | unknown
+    result: str  # passed | failed | skipped | pending | unknown
+    rule_version: str
+    provenance: str
+    observed_at: datetime
+    target_branch: NotRequired[str | None]
+    pr_number: NotRequired[int | None]
+    source_url: NotRequired[str | None]
+    org_id: NotRequired[str]
+    last_synced: NotRequired[datetime]
+
+
 # ---------------------------------------------------------------------------
 # 2. Test Execution Schemas (CHAOS-1106)
 # ---------------------------------------------------------------------------

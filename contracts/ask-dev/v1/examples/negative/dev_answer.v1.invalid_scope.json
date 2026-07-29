@@ -1,0 +1,242 @@
+{
+  "answer_id": "answer_01",
+  "as_of": "2026-07-28T12:00:00Z",
+  "claims": [
+    {
+      "claim_id": "claim_01",
+      "confidence": 1.0,
+      "evidence_ref_ids": [
+        "ev_01"
+      ],
+      "flags": {
+        "conflicting": false,
+        "stale": false,
+        "uncertain": false,
+        "untrusted_source": false
+      },
+      "kind": "observed",
+      "metric_ref_ids": [
+        "metric_01"
+      ],
+      "recommendation_rule_version": null,
+      "schema_version": "dev_claim.v1",
+      "text": "Twelve work items completed in the selected period.",
+      "validity_scope": {
+        "comparison_range": {
+          "end": "2026-06-28T00:00:00Z",
+          "start": "2026-05-29T00:00:00Z",
+          "timezone": "America/Los_Angeles"
+        },
+        "direct_scope": "repository",
+        "entity_refs": [],
+        "organization_id": "org_fullchaos",
+        "repositories": [
+          "repo_dev_health"
+        ],
+        "schema_version": "dev_scope.v1",
+        "surface_context": {
+          "entity_refs": [],
+          "filter_fingerprint": "filters_01",
+          "route_id": "diagnose_overview"
+        },
+        "team_ids": [
+          "team_platform"
+        ],
+        "time_range": {
+          "end": "2026-07-28T00:00:00Z",
+          "start": "2026-06-28T00:00:00Z",
+          "timezone": "America/Los_Angeles"
+        }
+      }
+    }
+  ],
+  "conflicts": [],
+  "conversation_id": "conversation_01",
+  "coverage": {
+    "as_of": "2026-07-28T12:00:00Z",
+    "available_source_count": 1,
+    "required_source_count": 1,
+    "stale_required_sources": [],
+    "unavailable_required_sources": []
+  },
+  "direct_summary": "Twelve work items completed in the selected period.",
+  "evidence": [
+    {
+      "citation_text": "The contract implementation remains in progress.",
+      "confidence": 1.0,
+      "display_label": "Implement contract baseline",
+      "entity_id": "item_01",
+      "entity_type": "work_item",
+      "evidence_ref_id": "ev_01",
+      "flags": {
+        "conflicting": false,
+        "deleted": false,
+        "redacted": false,
+        "stale": false,
+        "unavailable": false,
+        "uncertain": false,
+        "untrusted_content": true
+      },
+      "freshness": "fresh",
+      "link": {
+        "internal_path": "/work/items/item_01",
+        "source_url": null
+      },
+      "observed_at": "2026-07-28T12:00:00Z",
+      "provenance": "Canonical work graph projection",
+      "repository_ids": [
+        "repo_dev_health"
+      ],
+      "schema_version": "dev_evidence_ref.v1",
+      "source_system": "work_graph",
+      "source_version": "work_graph.v1",
+      "valid_entity_ids": [
+        "item_01"
+      ]
+    }
+  ],
+  "generated_at": "2026-07-28T12:00:00Z",
+  "metrics": [
+    {
+      "aggregation": "count",
+      "comparison_value": 10,
+      "comparison_window": {
+        "end": "2026-06-28T00:00:00Z",
+        "start": "2026-05-29T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      },
+      "coverage": 1.0,
+      "current_window": {
+        "end": "2026-07-28T00:00:00Z",
+        "start": "2026-06-28T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      },
+      "definition_version": "items_completed.v1",
+      "dimensions": [
+        "repository"
+      ],
+      "display_precision": 0,
+      "evidence_ref_ids": [
+        "ev_01"
+      ],
+      "freshness": "fresh",
+      "label": "Items completed",
+      "metric_id": "items_completed",
+      "metric_ref_id": "metric_01",
+      "query_version": "query_metric.v1",
+      "resolved_scope": {
+        "comparison_range": {
+          "end": "2026-06-28T00:00:00Z",
+          "start": "2026-05-29T00:00:00Z",
+          "timezone": "America/Los_Angeles"
+        },
+        "direct_scope": "repository",
+        "entity_refs": [],
+        "organization_id": "org_fullchaos",
+        "repositories": [
+          "repo_dev_health"
+        ],
+        "schema_version": "dev_scope.v1",
+        "surface_context": {
+          "entity_refs": [],
+          "filter_fingerprint": "filters_01",
+          "route_id": "diagnose_overview"
+        },
+        "team_ids": [
+          "team_platform"
+        ],
+        "time_range": {
+          "end": "2026-07-28T00:00:00Z",
+          "start": "2026-06-28T00:00:00Z",
+          "timezone": "America/Los_Angeles"
+        }
+      },
+      "schema_version": "dev_metric_ref.v1",
+      "series": [],
+      "source_version": "work_item_metrics_daily.v1",
+      "unit": "items",
+      "value": 12
+    }
+  ],
+  "model": {
+    "model_fingerprint": "model_certified_01",
+    "provider_family": "openai_compatible",
+    "provider_source": "platform"
+  },
+  "resolved_scope": {
+    "authorized_entity_ids": [],
+    "authorized_repository_ids": [
+      "repo_dev_health"
+    ],
+    "candidates": [],
+    "fallbacks": [],
+    "outcome": "exact",
+    "requested_scope": {
+      "comparison_range": {
+        "end": "2026-06-28T00:00:00Z",
+        "start": "2026-05-29T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      },
+      "direct_scope": "repository",
+      "entity_refs": [],
+      "organization_id": "org_fullchaos",
+      "repositories": [
+        "repo_dev_health"
+      ],
+      "schema_version": "dev_scope.v1",
+      "surface_context": {
+        "entity_refs": [],
+        "filter_fingerprint": "filters_01",
+        "route_id": "diagnose_overview"
+      },
+      "team_ids": [
+        "team_platform"
+      ],
+      "time_range": {
+        "end": "2026-07-28T00:00:00Z",
+        "start": "2026-06-28T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      }
+    },
+    "resolved_at": "2026-07-28T12:00:00Z",
+    "resolved_scope": {
+      "comparison_range": {
+        "end": "2026-06-28T00:00:00Z",
+        "start": "2026-05-29T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      },
+      "direct_scope": "repository",
+      "entity_refs": [],
+      "organization_id": "org_fullchaos",
+      "repositories": [],
+      "schema_version": "dev_scope.v1",
+      "surface_context": {
+        "entity_refs": [],
+        "filter_fingerprint": "filters_01",
+        "route_id": "diagnose_overview"
+      },
+      "team_ids": [
+        "team_platform"
+      ],
+      "time_range": {
+        "end": "2026-07-28T00:00:00Z",
+        "start": "2026-06-28T00:00:00Z",
+        "timezone": "America/Los_Angeles"
+      }
+    },
+    "schema_version": "dev_scope_resolution.v1",
+    "warnings": []
+  },
+  "schema_version": "dev_answer.v1",
+  "status": "complete",
+  "suggested_follow_up_questions": [
+    "What changed from the previous period?"
+  ],
+  "versions": {
+    "metric_definition_version": "ask_dev_metrics.v1",
+    "prompt_version": "ask_dev_prompt.v1",
+    "query_version": "ask_dev_queries.v1",
+    "tool_contract_version": "ask_dev_tools.v1"
+  },
+  "warnings": []
+}

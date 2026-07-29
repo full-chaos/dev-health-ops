@@ -77,6 +77,8 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",
@@ -93,7 +95,8 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + authorizedDomainRole,
 		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + authorizedDomainRole,
-		"GRANT SELECT, UPDATE, DELETE ON TABLE public.external_ingest_batches, public.provider_rate_limit_observations TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + authorizedDomainRole,
+		"GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations, public.external_ingest_batches, public.provider_rate_limit_observations TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {

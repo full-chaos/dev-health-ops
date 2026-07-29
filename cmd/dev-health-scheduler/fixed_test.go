@@ -6,7 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	schedulerfixed "github.com/full-chaos/dev-health-ops/internal/scheduler/fixed"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -72,6 +74,54 @@ func TestFixedScheduleProducersAreConstructedForEveryDeclaredSchedule(t *testing
 	}
 	if missing := producers.Missing(schedules); len(missing) != 0 {
 		t.Fatalf("schedules with no constructed producer: %v", missing)
+	}
+}
+
+// The v3 consumer and schema land before the producer version is activated.
+// Until capability reports prove every live ops consumer accepts v3, the
+// production composition must skip the native Ask Dev schedule without ever
+// constructing a v3 envelope.
+func TestAskDevRetentionWaitsForTheActiveProducerVersion(t *testing.T) {
+	registry, err := jobruntime.Load(testContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, ok := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	if !ok {
+		t.Fatal("retention contract is not registered")
+	}
+	if descriptor.CurrentVersion != jobcontract.ContractVersionV2 ||
+		descriptor.ProducerVersion != jobcontract.ContractVersionV2 ||
+		!slices.Contains(descriptor.SupportedVersions, jobcontract.ContractVersionV3) {
+		t.Fatalf(
+			"retention versions = current %d producer %d supported %v, want v3 supported with current and producer held at v2",
+			descriptor.CurrentVersion,
+			descriptor.ProducerVersion,
+			descriptor.SupportedVersions,
+		)
+	}
+	producers, err := buildFixedScheduleProducers(unconnectedPool(t), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedules, err := schedulerfixed.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := scheduleWithID(t, schedules, "prune_ask_dev_conversations")
+	producer, ok := producers.Producer(schedule.ProducerID)
+	if !ok {
+		t.Fatal("Ask Dev retention producer is not constructed")
+	}
+	outcome, err := producer.Produce(
+		t.Context(), nil, schedule,
+		schedulerfixed.NewOccurrence(schedule, time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC), time.Date(2026, 7, 28, 5, 30, 0, 0, time.UTC)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcome.Requests) != 0 || outcome.SkipReason != "consumer_version_incompatible" {
+		t.Fatalf("outcome = %+v, v3 emitted before producer activation", outcome)
 	}
 }
 

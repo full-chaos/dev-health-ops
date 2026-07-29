@@ -6,11 +6,12 @@ from dataclasses import dataclass
 from typing import ClassVar, Protocol, TypeAlias
 
 CONTRACT_VERSION_V1 = 1
-# v2 exists only for system.retention_cleanup, which widened retention_policy
-# to carry the two prune policies the Go fixed scheduler owns. Producers here
-# still emit v1: this side reaches Celery directly rather than through the
-# envelope, and v1 remains supported.
+# v2 and v3 exist only for system.retention_cleanup. Each widens the
+# retention_policy domain through a new published version; Python producers
+# still emit v1 because this side reaches Celery directly rather than through
+# the envelope, while the decoder accepts all three frozen domains.
 CONTRACT_VERSION_V2 = 2
+CONTRACT_VERSION_V3 = 3
 KIND_HEARTBEAT = "system.heartbeat"
 KIND_BILLING_NOTIFICATION = "operational.billing_notification"
 KIND_WEBHOOK_DELIVERY = "operational.webhook_delivery"
@@ -41,11 +42,13 @@ RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 # a contract change, not a payload change.
 RETENTION_RATE_LIMIT_OBSERVATIONS = "rate_limit_observations"
 RETENTION_EXTERNAL_INGEST_BATCHES = "external_ingest_batches"
+RETENTION_ASK_DEV_CONVERSATIONS = "ask_dev_conversations"
 RETENTION_POLICIES = frozenset(
     {
         RETENTION_WORKER_TERMINAL,
         RETENTION_RATE_LIMIT_OBSERVATIONS,
         RETENTION_EXTERNAL_INGEST_BATCHES,
+        RETENTION_ASK_DEV_CONVERSATIONS,
     }
 )
 MAX_ENVELOPE_BYTES = 16 * 1024
@@ -80,7 +83,7 @@ class HeartbeatPayload:
 
 @dataclass(frozen=True, slots=True)
 class RetentionCleanupPayload:
-    """Version 1 bounded terminal-job retention request."""
+    """Bounded table-owned retention request."""
 
     KIND: ClassVar[str] = KIND_RETENTION_CLEANUP
     CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1

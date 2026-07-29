@@ -37,7 +37,11 @@ PipelineProcessor = TestOpsPipelineProcessor
 PipelineProcessor.__test__ = False
 
 if TYPE_CHECKING:
-    from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
+    from dev_health_ops.metrics.testops_schemas import (
+        CIAcceptanceCheckRow,
+        JobRunRow,
+        PipelineRunExtendedRow,
+    )
     from dev_health_ops.providers._base import (
         PipelineSyncBatch as PipelineSyncBatchType,
     )
@@ -74,11 +78,16 @@ async def test_github_actions_adapter_maps_runs_and_jobs() -> None:
                             "event": "pull_request",
                             "head_sha": "abc123",
                             "head_branch": "feature/testops",
-                            "pull_requests": [{"number": 17}],
+                            "pull_requests": [{"number": 17, "base": {"ref": "main"}}],
                         }
                     ]
                 },
             )
+        if (
+            request.url.path
+            == "/repos/acme/api/branches/main/protection/required_status_checks"
+        ):
+            return httpx.Response(200, json={"checks": [{"context": "pytest"}]})
         if request.url.path == "/repos/acme/api/actions/runs/101/jobs":
             return httpx.Response(
                 200,
@@ -127,10 +136,13 @@ async def test_github_actions_adapter_maps_runs_and_jobs() -> None:
     assert job["status"] == "success"
     assert job["duration_seconds"] == 150.0
     assert job["runner_type"] == "hosted"
+    assert len(batch.acceptance_checks) == 1
+    assert batch.acceptance_checks[0]["requirement"] == "required"
+    assert batch.acceptance_checks[0]["result"] == "passed"
     assert batch.last_synced_cursor == _dt("2026-04-01T10:07:00Z")
     assert len(observations) == 1
     assert observations[0]["route_family"] == "tests"
-    assert observations[0]["request_count"] == 2
+    assert observations[0]["request_count"] == 3
 
 
 @pytest.mark.asyncio
@@ -139,6 +151,10 @@ async def test_gitlab_ci_adapter_handles_pagination_and_incremental_sync() -> No
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
+        if "projects/group%2Fapi" in url and "/pipelines" not in url:
+            return httpx.Response(
+                200, json={"only_allow_merge_if_pipeline_succeeds": True}
+            )
         if "/projects/group%2Fapi/pipelines?" in url:
             page = request.url.params.get("page")
             if page == "1":
@@ -202,19 +218,85 @@ async def test_gitlab_ci_adapter_handles_pagination_and_incremental_sync() -> No
     assert job["status"] == "failure"
     assert job["retry_attempt"] == 1
     assert job["runner_type"] == "self-hosted"
+    checks = {item["check_name"]: item for item in batch.acceptance_checks}
+    assert checks["pipeline"]["requirement"] == "required"
+    assert checks["pipeline"]["result"] == "failed"
+    assert checks["unit"]["requirement"] == "optional"
     assert batch.last_synced_cursor == _dt("2026-04-02T09:03:00Z")
+
+
+@pytest.mark.asyncio
+async def test_gitlab_mr_pipeline_persists_resolved_iid_on_acceptance_rows() -> None:
+    repo_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        url = str(request.url)
+        if (
+            "projects/group%2Fapi" in url
+            and "/pipelines" not in url
+            and "/repository/" not in url
+        ):
+            return httpx.Response(
+                200, json={"only_allow_merge_if_pipeline_succeeds": True}
+            )
+        if "/projects/group%2Fapi/pipelines?" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 302,
+                        "status": "success",
+                        "created_at": "2026-04-02T10:00:00Z",
+                        "started_at": "2026-04-02T10:01:00Z",
+                        "finished_at": "2026-04-02T10:03:00Z",
+                        "source": "merge_request_event",
+                        "sha": "mrsha",
+                        "ref": "feature/mr",
+                    }
+                ],
+            )
+        if path.endswith("/repository/commits/mrsha/merge_requests"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "iid": 42,
+                        "diff_refs": {"head_sha": "mrsha"},
+                    }
+                ],
+            )
+        if path.endswith("/pipelines/302/jobs"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    adapter = GitLabCIAdapter(
+        base_url="https://gitlab.example/api/v4",
+        token="token",
+        transport=httpx.MockTransport(handler),
+    )
+    batch = await adapter.fetch_pipeline_data(project_id="group/api", repo_id=repo_id)
+    await adapter.close()
+
+    assert batch.pipeline_runs[0]["pr_number"] == 42
+    assert batch.acceptance_checks[0]["pr_number"] == 42
+    assert batch.acceptance_checks[0]["requirement"] == "required"
 
 
 class _FakeStore:
     def __init__(self) -> None:
         self.pipeline_runs: list[PipelineRunExtendedRow] = []
         self.job_runs: list[JobRunRow] = []
+        self.acceptance_checks: list[CIAcceptanceCheckRow] = []
 
     async def insert_testops_pipeline_runs(self, runs):
         self.pipeline_runs.extend(runs)
 
     async def insert_testops_job_runs(self, jobs):
         self.job_runs.extend(jobs)
+
+    async def insert_ci_acceptance_checks(self, checks):
+        self.acceptance_checks.extend(checks)
 
 
 class _FakeAdapter:
@@ -273,6 +355,7 @@ async def test_pipeline_processor_uses_backfill_or_incremental_cursor() -> None:
     assert adapter.received_kwargs["since_date"] == _dt("2026-04-01T00:00:00Z")
     assert result.pipeline_runs == 1
     assert result.job_runs == 1
+    assert result.acceptance_checks == 0
     assert result.last_synced_cursor == _dt("2026-04-03T10:02:00Z")
     assert len(store.pipeline_runs) == 1
     assert len(store.job_runs) == 1

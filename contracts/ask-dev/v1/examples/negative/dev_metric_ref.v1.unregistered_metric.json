@@ -1,0 +1,60 @@
+{
+  "aggregation": "count",
+  "comparison_value": 10,
+  "comparison_window": {
+    "end": "2026-06-28T00:00:00Z",
+    "start": "2026-05-29T00:00:00Z",
+    "timezone": "America/Los_Angeles"
+  },
+  "coverage": 1.0,
+  "current_window": {
+    "end": "2026-07-28T00:00:00Z",
+    "start": "2026-06-28T00:00:00Z",
+    "timezone": "America/Los_Angeles"
+  },
+  "definition_version": "items_completed.v1",
+  "dimensions": [
+    "repository"
+  ],
+  "display_precision": 0,
+  "evidence_ref_ids": [
+    "ev_01"
+  ],
+  "freshness": "fresh",
+  "label": "Items completed",
+  "metric_id": "invented_velocity",
+  "metric_ref_id": "metric_01",
+  "query_version": "query_metric.v1",
+  "resolved_scope": {
+    "comparison_range": {
+      "end": "2026-06-28T00:00:00Z",
+      "start": "2026-05-29T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    },
+    "direct_scope": "repository",
+    "entity_refs": [],
+    "organization_id": "org_fullchaos",
+    "repositories": [
+      "repo_dev_health"
+    ],
+    "schema_version": "dev_scope.v1",
+    "surface_context": {
+      "entity_refs": [],
+      "filter_fingerprint": "filters_01",
+      "route_id": "diagnose_overview"
+    },
+    "team_ids": [
+      "team_platform"
+    ],
+    "time_range": {
+      "end": "2026-07-28T00:00:00Z",
+      "start": "2026-06-28T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    }
+  },
+  "schema_version": "dev_metric_ref.v1",
+  "series": [],
+  "source_version": "work_item_metrics_daily.v1",
+  "unit": "items",
+  "value": 12
+}

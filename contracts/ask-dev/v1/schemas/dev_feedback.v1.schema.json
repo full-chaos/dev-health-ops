@@ -1,0 +1,81 @@
+{
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_feedback.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "answer_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Answer Id",
+      "type": "string"
+    },
+    "comment": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Comment",
+      "x-max-utf8-bytes": 2048
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "feedback_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Feedback Id",
+      "type": "string"
+    },
+    "rating": {
+      "enum": [
+        "up",
+        "down"
+      ],
+      "title": "Rating",
+      "type": "string"
+    },
+    "reasons": {
+      "items": {
+        "enum": [
+          "incorrect",
+          "missing_evidence",
+          "wrong_scope",
+          "stale_data",
+          "unclear",
+          "useful"
+        ],
+        "type": "string"
+      },
+      "maxItems": 6,
+      "minItems": 1,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "dev_feedback.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "feedback_id",
+    "answer_id",
+    "rating",
+    "reasons",
+    "created_at"
+  ],
+  "title": "DevFeedback",
+  "type": "object"
+}

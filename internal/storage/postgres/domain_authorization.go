@@ -495,10 +495,15 @@ type RolePosture struct {
 //     is a real requirement here, not just rolePostureQuery's
 //     insert-without-select limitation.
 //   - external_ingest_batch_payloads, external_ingest_batches,
-//     provider_rate_limit_observations: the three tables needing AllowDelete
+//     provider_rate_limit_observations, dev_conversations: the four tables
+//     needing AllowDelete
 //     — all domain-role retention/cleanup callers
 //     (internal/streamhandlers/external_postgres.go,
 //     internal/jobs/system/retention_postgres.go).
+//     dev_conversations also needs UPDATE solely for PostgreSQL's
+//     SELECT ... FOR UPDATE row lock; no retention statement updates a
+//     conversation column. dev_conversation_tombstones is the corresponding
+//     insert-once lifecycle ledger and needs SELECT+INSERT only.
 //
 // worker_job_completion_fences is deliberately NOT in RequiredTables:
 // completed_at is server-owned (DEFAULT statement_timestamp()) and no domain
@@ -542,6 +547,8 @@ func domainPosture() RolePosture {
 			{"billing_notifications", false, false, false},
 			{"daily_metrics_partitions", true, true, false},
 			{"daily_metrics_runs", true, true, false},
+			{"dev_conversations", false, true, true},
+			{"dev_conversation_tombstones", true, false, false},
 			{"external_ingest_batch_payloads", false, false, true},
 			{"external_ingest_batches", false, true, true},
 			{"external_ingest_recompute_jobs", true, false, false},
@@ -662,6 +669,13 @@ func domainPosture() RolePosture {
 //     the domain role would destroy it. The coordinator login is used only by
 //     the scheduler, the reconciler, and workerctl. Celery Beat, which this
 //     replaces, already spans both table sets under ONE identity.
+//
+//   - feature_flags, org_feature_overrides, org_licenses, dev_conversations:
+//     the fixed scheduler's Ask Dev retention admission reads the canonical
+//     explicit-entitlement inputs and an independent persisted-state existence
+//     fact inside the occurrence transaction. These are SELECT-only on the
+//     coordinator side. The domain retention handler separately owns the
+//     row-lock, tombstone insert, and conversation delete privileges.
 func coordinatorPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
@@ -679,6 +693,10 @@ func coordinatorPosture() RolePosture {
 			{"sync_dispatch_transport_routes", false, true, false},
 			{"worker_job_runs", false, true, false},
 			{"organizations", false, false, false},
+			{"feature_flags", false, false, false},
+			{"org_feature_overrides", false, false, false},
+			{"org_licenses", false, false, false},
+			{"dev_conversations", false, false, false},
 			{"sync_configurations", false, true, false},
 			{"worker_job_outbox", true, true, false},
 			{"remaining_metric_runs", true, false, false},

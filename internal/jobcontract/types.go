@@ -16,6 +16,7 @@ const (
 
 	ContractVersionV1            = 1
 	ContractVersionV2            = 2
+	ContractVersionV3            = 3
 	KindBillingNotification      = "operational.billing_notification"
 	KindWebhookDelivery          = "operational.webhook_delivery"
 	KindHeartbeat                = "system.heartbeat"
@@ -46,6 +47,7 @@ const (
 	// widening a policy is a contract change, not a payload change.
 	RetentionRateLimitObservations = "rate_limit_observations"
 	RetentionExternalIngestBatches = "external_ingest_batches"
+	RetentionAskDevConversations   = "ask_dev_conversations"
 )
 
 // RetentionPolicies enumerates every retention policy the contract accepts.
@@ -54,6 +56,7 @@ func RetentionPolicies() []string {
 		RetentionWorkerTerminal,
 		RetentionRateLimitObservations,
 		RetentionExternalIngestBatches,
+		RetentionAskDevConversations,
 	}
 }
 
@@ -64,6 +67,17 @@ func RetentionPolicies() []string {
 // list must never grow.
 func FrozenRetentionPoliciesV1() []string {
 	return []string{RetentionWorkerTerminal}
+}
+
+// FrozenRetentionPoliciesV2 is the retention_policy value domain as v2
+// shipped. Ask Dev expiry is added through v3 so older consumers never receive
+// a required-field enum value their published contract did not declare.
+func FrozenRetentionPoliciesV2() []string {
+	return []string{
+		RetentionWorkerTerminal,
+		RetentionRateLimitObservations,
+		RetentionExternalIngestBatches,
+	}
 }
 
 // SupportedRetentionPolicy reports whether policy is contract-declared.
@@ -244,13 +258,13 @@ var definitions = map[string]contractDefinition{
 	KindRetentionCleanup: {
 		Kind: KindRetentionCleanup,
 		// v2 widened retention_policy to carry the two prune policies the Go
-		// fixed scheduler owns (see internal/scheduler/fixed/producers.go).
+		// fixed scheduler owns; v3 adds the Ask Dev expiry policy.
 		// v1 stays supported and unchanged: widening the value domain of a
 		// required field is a breaking change for a v1 consumer, so it cannot
 		// be edited in place under the registry's additive_optional_only
 		// policy.
 		CurrentVersion:    ContractVersionV2,
-		SupportedVersions: []int{ContractVersionV1, ContractVersionV2},
+		SupportedVersions: []int{ContractVersionV1, ContractVersionV2, ContractVersionV3},
 		DomainLink:        "maintenance_run",
 		OrganizationScope: "global",
 	},
@@ -379,7 +393,7 @@ func Decode(kind string, data []byte) (Envelope, error) {
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
 			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
 		}
-		if err := value.validate(); err != nil {
+		if err := value.validateVersion(wire.ContractVersion); err != nil {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
@@ -631,14 +645,20 @@ func (payload HeartbeatPayload) validate() error {
 	return validateUTCTimestamp("scheduled_for", payload.ScheduledFor)
 }
 
-func (payload RetentionCleanupPayload) validate() error {
+func (payload RetentionCleanupPayload) validateVersion(version int) error {
 	if payload.BatchSize < 1 || payload.BatchSize > 1000 {
 		return errors.New("batch_size must be between 1 and 1000")
 	}
 	if err := validateUTCTimestamp("delete_before", payload.DeleteBefore); err != nil {
 		return err
 	}
-	if !SupportedRetentionPolicy(payload.RetentionPolicy) {
+	policies := RetentionPolicies()
+	if version == ContractVersionV1 {
+		policies = FrozenRetentionPoliciesV1()
+	} else if version == ContractVersionV2 {
+		policies = FrozenRetentionPoliciesV2()
+	}
+	if !containsString(policies, payload.RetentionPolicy) {
 		return errors.New("unsupported retention_policy")
 	}
 	return nil

@@ -11,6 +11,7 @@ from typing import Any
 from .models import (
     CONTRACT_VERSION_V1,
     CONTRACT_VERSION_V2,
+    CONTRACT_VERSION_V3,
     KIND_BILLING_NOTIFICATION,
     KIND_DAILY_METRICS_DISPATCH,
     KIND_DAILY_METRICS_FINALIZE,
@@ -28,7 +29,10 @@ from .models import (
     KIND_WEBHOOK_DELIVERY,
     KIND_WORK_GRAPH_BUILD,
     MAX_ENVELOPE_BYTES,
+    RETENTION_EXTERNAL_INGEST_BATCHES,
     RETENTION_POLICIES,
+    RETENTION_RATE_LIMIT_OBSERVATIONS,
+    RETENTION_WORKER_TERMINAL,
     BillingNotificationPayload,
     ContractPayload,
     DailyMetricsDispatchPayload,
@@ -85,7 +89,11 @@ _REMAINING_PAYLOAD_BY_KIND = {
 # step with supported_versions in contracts/jobs/v1/registry.json; the registry
 # drift check in registry.py fails closed when the two disagree.
 _SUPPORTED_DECODE_VERSIONS: dict[str, tuple[int, ...]] = {
-    KIND_RETENTION_CLEANUP: (CONTRACT_VERSION_V1, CONTRACT_VERSION_V2),
+    KIND_RETENTION_CLEANUP: (
+        CONTRACT_VERSION_V1,
+        CONTRACT_VERSION_V2,
+        CONTRACT_VERSION_V3,
+    ),
 }
 
 
@@ -193,7 +201,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
     elif kind == KIND_RETENTION_CLEANUP:
         if domain_type != RetentionCleanupPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
-        payload = _decode_retention(envelope["payload"])
+        payload = _decode_retention(envelope["payload"], version=version)
     elif kind == KIND_REPORT_EXECUTE_ON_DEMAND:
         if domain_type != OnDemandReportExecutionPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
@@ -421,7 +429,7 @@ def _decode_heartbeat(value: Any) -> HeartbeatPayload:
     return HeartbeatPayload(scheduled_for=scheduled_for)
 
 
-def _decode_retention(value: Any) -> RetentionCleanupPayload:
+def _decode_retention(value: Any, *, version: int) -> RetentionCleanupPayload:
     payload = _expect_object(
         value,
         required={"batch_size", "delete_before", "retention_policy"},
@@ -434,7 +442,18 @@ def _decode_retention(value: Any) -> RetentionCleanupPayload:
     delete_before = _expect_string(payload["delete_before"], "delete_before")
     _validate_utc_timestamp("delete_before", delete_before)
     retention_policy = _expect_string(payload["retention_policy"], "retention_policy")
-    if retention_policy not in RETENTION_POLICIES:
+    policies = RETENTION_POLICIES
+    if version == CONTRACT_VERSION_V1:
+        policies = frozenset({RETENTION_WORKER_TERMINAL})
+    elif version == CONTRACT_VERSION_V2:
+        policies = frozenset(
+            {
+                RETENTION_WORKER_TERMINAL,
+                RETENTION_RATE_LIMIT_OBSERVATIONS,
+                RETENTION_EXTERNAL_INGEST_BATCHES,
+            }
+        )
+    if retention_policy not in policies:
         raise ContractDecodeError("unsupported retention_policy")
     return RetentionCleanupPayload(
         batch_size=batch_size,

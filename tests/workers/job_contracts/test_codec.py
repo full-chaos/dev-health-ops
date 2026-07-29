@@ -23,6 +23,7 @@ from dev_health_ops.workers.job_contracts import (
     KIND_RETENTION_CLEANUP,
     KIND_SYNC_PROVIDER_UNIT,
     MAX_ENVELOPE_BYTES,
+    RETENTION_ASK_DEV_CONVERSATIONS,
     RETENTION_WORKER_TERMINAL,
     ContractDecodeError,
     DailyMetricsDispatchPayload,
@@ -64,6 +65,15 @@ from dev_health_ops.workers.job_contracts import (
                 batch_size=250,
                 delete_before="2026-07-14T12:00:00Z",
                 retention_policy=RETENTION_WORKER_TERMINAL,
+            ),
+        ),
+        (
+            KIND_RETENTION_CLEANUP,
+            "system.retention_cleanup.v3.json",
+            RetentionCleanupPayload(
+                batch_size=500,
+                delete_before="2026-07-28T05:30:00Z",
+                retention_policy=RETENTION_ASK_DEV_CONVERSATIONS,
             ),
         ),
         (
@@ -141,6 +151,18 @@ def test_registry_fixtures_all_cross_decode() -> None:
             for fixture in fixtures:
                 data = (root / fixture).read_bytes()
                 assert encode_envelope(decode_envelope(job["kind"], data)) == data
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_retention_policy_domains_stay_frozen_by_version(version: int) -> None:
+    document = json.loads(
+        (
+            default_contract_root() / "examples" / "system.retention_cleanup.v3.json"
+        ).read_text()
+    )
+    document["contract_version"] = version
+    with pytest.raises(ContractDecodeError):
+        decode_envelope(KIND_RETENTION_CLEANUP, json.dumps(document))
 
 
 @pytest.mark.parametrize(

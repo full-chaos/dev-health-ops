@@ -594,6 +594,7 @@ def test_run_sync_unit_success_attaches_linear_budget_estimate(db_session, monke
         "cycles",
         "history",
         "issues",
+        "relations",
         "teams",
     }
 

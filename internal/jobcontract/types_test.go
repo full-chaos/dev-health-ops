@@ -18,6 +18,7 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 	}{
 		{KindHeartbeat, "examples/system.heartbeat.v1.json", HeartbeatPayload{ScheduledFor: "2026-07-21T12:00:00Z"}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v1.json", RetentionCleanupPayload{BatchSize: 250, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: RetentionWorkerTerminal}},
+		{KindRetentionCleanup, "examples/system.retention_cleanup.v3.json", RetentionCleanupPayload{BatchSize: 500, DeleteBefore: "2026-07-28T05:30:00Z", RetentionPolicy: RetentionAskDevConversations}},
 		{KindReportExecuteOnDemand, "examples/report.execute_on_demand.v1.json", OnDemandReportExecutionPayload{ReportID: "00000000-0000-4000-8000-000000000002"}},
 		{KindReportExecuteScheduled, "examples/report.execute_scheduled.v1.json", ScheduledReportExecutionPayload{ReportID: "00000000-0000-4000-8000-000000000004"}},
 		{KindDailyMetricsDispatch, "examples/metrics.daily_dispatch.v1.json", DailyMetricsDispatchPayload{RunID: "00000000-0000-4000-8000-000000000001"}},
@@ -131,6 +132,20 @@ func TestRetentionPayloadBounds(t *testing.T) {
 		}
 		if _, err := Decode(KindRetentionCleanup, []byte(candidate)); err == nil {
 			t.Fatalf("Decode() accepted %s", replacement)
+		}
+	}
+}
+
+func TestRetentionPolicyDomainsStayFrozenByVersion(t *testing.T) {
+	t.Parallel()
+	fixture, err := os.ReadFile(filepath.Join(contractRoot(t), "examples/system.retention_cleanup.v3.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"1", "2"} {
+		candidate := strings.Replace(string(fixture), `"contract_version": 3`, `"contract_version": `+version, 1)
+		if _, err := Decode(KindRetentionCleanup, []byte(candidate)); err == nil {
+			t.Fatalf("v%s accepted the v3 Ask Dev retention policy", version)
 		}
 	}
 }

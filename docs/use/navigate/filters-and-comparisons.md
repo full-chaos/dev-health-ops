@@ -21,3 +21,5 @@ Filters narrow the evidence included in a result. They do not repair missing sou
 ## Compare responsibly
 
 Compare equivalent scopes, periods, source coverage, and feature availability. Call out changes in any of those conditions. Treat a small delta as a reason to inspect evidence, not as proof of improvement or regression.
+
+If filters changed the comparison, restore the previous filter set before interpreting the difference. Then change one filter at a time so the result remains traceable to a specific scope change.

@@ -19,6 +19,15 @@ from .checkpoints import (
     SyncComputeCheckpointStatus,
     SyncComputeType,
 )
+from .dev_persistence import (
+    DEV_RETENTION_DAYS,
+    DevConversation,
+    DevConversationTombstone,
+    DevFeedback,
+    DevMessage,
+    DevRun,
+    DevToolCall,
+)
 from .external_ingest import (
     MAX_STORED_REJECTIONS_PER_BATCH,
     TERMINAL_STATUSES,
@@ -134,6 +143,13 @@ __all__ = [
     "BillingPrice",
     "BatchStatus",
     "CheckpointStatus",
+    "DEV_RETENTION_DAYS",
+    "DevConversation",
+    "DevConversationTombstone",
+    "DevFeedback",
+    "DevMessage",
+    "DevRun",
+    "DevToolCall",
     "ExternalIngestBatch",
     "ExternalIngestBatchPayload",
     "ExternalIngestRejection",

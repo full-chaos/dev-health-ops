@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
+from dev_health_ops.metrics.testops_schemas import (
+    CIAcceptanceCheckRow,
+    JobRunRow,
+    PipelineRunExtendedRow,
+)
 
 from .base import SQLAlchemyStoreMixinProtocol
 
@@ -221,6 +225,59 @@ async def clickhouse_insert_testops_job_runs(
             "runner_type",
             "retry_attempt",
             "org_id",
+            "last_synced",
+        ],
+        rows,
+    )
+
+
+async def clickhouse_insert_ci_acceptance_checks(
+    self: Any,
+    checks: list[CIAcceptanceCheckRow],
+) -> None:
+    if not checks:
+        return
+    synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+    rows: list[dict[str, Any]] = []
+    for item in checks:
+        rows.append(
+            {
+                "org_id": str(item.get("org_id") or ""),
+                "repo_id": self._normalize_uuid(item.get("repo_id")),
+                "run_id": str(item.get("run_id") or ""),
+                "check_key": str(item.get("check_key") or ""),
+                "check_name": str(item.get("check_name") or ""),
+                "provider": str(item.get("provider") or ""),
+                "requirement": str(item.get("requirement") or "unknown"),
+                "result": str(item.get("result") or "unknown"),
+                "rule_version": str(item.get("rule_version") or ""),
+                "provenance": str(item.get("provenance") or ""),
+                "target_branch": item.get("target_branch"),
+                "pr_number": item.get("pr_number"),
+                "source_url": item.get("source_url"),
+                "observed_at": self._normalize_datetime(item.get("observed_at")),
+                "last_synced": self._normalize_datetime(
+                    item.get("last_synced") or synced_at_default
+                ),
+            }
+        )
+    await self._insert_rows(
+        "ci_acceptance_checks",
+        [
+            "org_id",
+            "repo_id",
+            "run_id",
+            "check_key",
+            "check_name",
+            "provider",
+            "requirement",
+            "result",
+            "rule_version",
+            "provenance",
+            "target_branch",
+            "pr_number",
+            "source_url",
+            "observed_at",
             "last_synced",
         ],
         rows,

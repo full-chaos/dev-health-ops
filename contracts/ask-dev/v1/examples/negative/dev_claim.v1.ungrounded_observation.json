@@ -1,0 +1,43 @@
+{
+  "claim_id": "claim_01",
+  "confidence": 1.0,
+  "evidence_ref_ids": [],
+  "flags": {
+    "conflicting": false,
+    "stale": false,
+    "uncertain": false,
+    "untrusted_source": false
+  },
+  "kind": "observed",
+  "metric_ref_ids": [],
+  "recommendation_rule_version": null,
+  "schema_version": "dev_claim.v1",
+  "text": "Twelve work items completed in the selected period.",
+  "validity_scope": {
+    "comparison_range": {
+      "end": "2026-06-28T00:00:00Z",
+      "start": "2026-05-29T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    },
+    "direct_scope": "repository",
+    "entity_refs": [],
+    "organization_id": "org_fullchaos",
+    "repositories": [
+      "repo_dev_health"
+    ],
+    "schema_version": "dev_scope.v1",
+    "surface_context": {
+      "entity_refs": [],
+      "filter_fingerprint": "filters_01",
+      "route_id": "diagnose_overview"
+    },
+    "team_ids": [
+      "team_platform"
+    ],
+    "time_range": {
+      "end": "2026-07-28T00:00:00Z",
+      "start": "2026-06-28T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    }
+  }
+}

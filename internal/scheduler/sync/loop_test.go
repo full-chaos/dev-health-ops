@@ -83,6 +83,21 @@ func openLoopReadiness(t *testing.T, registry *health.Registry) {
 	}
 }
 
+func waitForLoopReadiness(t *testing.T, registry *health.Registry, wantReady bool) health.Readiness {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var status health.Readiness
+	for time.Now().Before(deadline) {
+		status = registry.Readiness(context.Background())
+		if status.Ready == wantReady {
+			return status
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for scheduler readiness %t; last status = %#v", wantReady, status)
+	return status
+}
+
 // stubOccurrences is a no-work occurrence consumer. The loop requires one, so
 // every loop test supplies it; the reconciler's own behavior is covered by its
 // integration tests.
@@ -209,7 +224,7 @@ func TestLoopFailureBacksOffClosesReadinessAndRecovers(t *testing.T) {
 	clock.mu.Unlock()
 	ticker.ticks <- firstTick
 	<-failed
-	if status := registry.Readiness(context.Background()); status.Ready || !strings.Contains(strings.Join(status.Failed, ","), "scheduler_loop") {
+	if status := waitForLoopReadiness(t, registry, false); !strings.Contains(strings.Join(status.Failed, ","), "scheduler_loop") {
 		t.Fatalf("failed readiness = %#v", status)
 	}
 	var failedMetrics bytes.Buffer
@@ -232,9 +247,7 @@ func TestLoopFailureBacksOffClosesReadinessAndRecovers(t *testing.T) {
 	clock.mu.Unlock()
 	ticker.ticks <- retryTick
 	<-recovered
-	if status := registry.Readiness(context.Background()); !status.Ready {
-		t.Fatalf("recovered readiness = %#v", status)
-	}
+	waitForLoopReadiness(t, registry, true)
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}

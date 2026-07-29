@@ -110,6 +110,34 @@ func fixedEngineStatements() []fixedEngineStatement {
 				WHERE is_active = TRUE ORDER BY id LIMIT 5001`,
 		},
 		{
+			name:      "Ask Dev retention admission reads explicit entitlement and persisted state",
+			site:      "internal/scheduler/fixed/ask_dev_admission.go postgresAskDevRetentionAdmission.State",
+			privilege: "feature_flags, organizations, org_licenses, org_feature_overrides, dev_conversations SELECT",
+			sql: `WITH ask_dev_feature AS (
+					SELECT id FROM public.feature_flags
+					WHERE key = 'ask_dev' AND is_enabled = TRUE
+					  AND min_tier IN ('community', 'team', 'enterprise')
+				), enabled_organization AS (
+					SELECT 1
+					FROM ask_dev_feature AS feature
+					JOIN public.organizations AS organization ON TRUE
+					LEFT JOIN public.org_licenses AS license ON license.org_id = organization.id
+					LEFT JOIN public.org_feature_overrides AS feature_override
+					  ON feature_override.org_id = organization.id
+					 AND feature_override.feature_id = feature.id
+					WHERE CASE
+						WHEN feature_override.id IS NOT NULL AND
+							(feature_override.expires_at IS NULL OR feature_override.expires_at > CURRENT_TIMESTAMP)
+						THEN feature_override.is_enabled
+						WHEN jsonb_typeof((license.features_override::jsonb) -> 'ask_dev') = 'boolean'
+						THEN ((license.features_override::jsonb) ->> 'ask_dev')::boolean
+						ELSE FALSE
+					END LIMIT 1
+				)
+				SELECT EXISTS (SELECT 1 FROM enabled_organization),
+					EXISTS (SELECT 1 FROM public.dev_conversations LIMIT 1)`,
+		},
+		{
 			name:                   "fan-out producer starts a remaining-metrics run",
 			site:                   "internal/jobs/metrics/remaining/postgres.go StartRunTx, reached from internal/scheduler/fixed/producers.go Produce",
 			privilege:              "remaining_metric_runs INSERT",

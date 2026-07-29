@@ -163,8 +163,10 @@ class TestPostgresUpgrade:
         cfg = _make_alembic_config(
             "postgresql+asyncpg://unused:unused@localhost:5432/unused"
         )
+        current_head = ScriptDirectory.from_config(cfg).get_current_head()
 
-        assert ScriptDirectory.from_config(cfg).get_current_head() == "0066"
+        assert current_head == "0068"
+        assert _database_has_revision(cfg, (current_head,), "0066")
 
     def test_cutover_revision_lineage_detection_uses_real_alembic_graph(self) -> None:
         cfg = _make_alembic_config(

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
@@ -99,9 +100,20 @@ func buildFixedScheduleProducers(
 	if err != nil {
 		return nil, err
 	}
+	retentionDescriptor, ok := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	if !ok {
+		return nil, errFixedScheduleUnbuilt
+	}
+	retention, err := schedulerfixed.NewRetentionProducerForRoute(
+		schedulerfixed.NewPostgresAskDevRetentionAdmission(),
+		retentionDescriptor.ProducerVersion,
+	)
+	if err != nil {
+		return nil, err
+	}
 	return schedulerfixed.NewProducerSet(
 		schedulerfixed.NewHeartbeatProducer(),
-		schedulerfixed.NewRetentionProducer(),
+		retention,
 		remainingFanout,
 		scheduledReports,
 		schedulerfixed.NewNotImplementedProducer(

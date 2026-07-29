@@ -697,6 +697,8 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_licenses (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversations (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.dev_conversation_tombstones (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.provider_rate_limit_observations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.report_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.saved_reports (id bigint PRIMARY KEY)",

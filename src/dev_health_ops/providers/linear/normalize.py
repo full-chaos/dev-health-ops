@@ -175,6 +175,42 @@ def extract_linear_dependencies(
                 relationship_type_raw="linear_attachment",
             )
         )
+
+    # Linear's IssueRelation object carries both endpoints. Normalize both the
+    # forward and inverse connections using the same object-level orientation,
+    # so pagination direction never changes source --blocks--> target.
+    for connection_name in ("relations", "inverseRelations"):
+        for relation in _get(issue, connection_name, "nodes") or []:
+            relation_type = str(_get(relation, "type") or "").strip().lower()
+            issue_identifier = _get(relation, "issue", "identifier")
+            related_identifier = _get(relation, "relatedIssue", "identifier")
+            if not issue_identifier or not related_identifier:
+                continue
+            source_id = f"linear:{issue_identifier}"
+            target_id = f"linear:{related_identifier}"
+            if relation_type in {"blocked_by", "is_blocked_by", "blocked"}:
+                source_id, target_id = target_id, source_id
+                normalized_type = "blocks"
+            elif relation_type in {"blocks", "blocking"}:
+                normalized_type = "blocks"
+            elif relation_type in {"duplicate", "duplicates"}:
+                normalized_type = "duplicates"
+            elif relation_type in {"related", "relates", "relates_to"}:
+                normalized_type = "relates_to"
+            else:
+                continue
+            identity = f"{source_id}:{normalized_type}:{target_id}"
+            if identity in seen:
+                continue
+            seen.add(identity)
+            deps.append(
+                WorkItemDependency(
+                    source_work_item_id=source_id,
+                    target_work_item_id=target_id,
+                    relationship_type=normalized_type,
+                    relationship_type_raw=f"linear_relation:{relation_type}",
+                )
+            )
     # The attachments connection is fetched as a single page; if it is
     # truncated, a PR/MR link beyond the page is silently missed. Surface that
     # so a missed link is observable rather than a silent attribution gap.
@@ -184,6 +220,13 @@ def extract_linear_dependencies(
             "may be missed for team inheritance.",
             work_item_id,
         )
+    for connection_name in ("relations", "inverseRelations"):
+        if _get(issue, connection_name, "pageInfo", "hasNextPage"):
+            logger.warning(
+                "Linear issue %s has more %s than fetched; a dependency may be missed.",
+                work_item_id,
+                connection_name,
+            )
     return deps
 
 

@@ -408,6 +408,10 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.billing_notifications') IS NOT NULL THEN GRANT SELECT ON TABLE public.billing_notifications TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.daily_metrics_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_partitions TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.daily_metrics_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_runs TO " + domainRole + "; END IF; END $$",
+		// UPDATE is required by PostgreSQL for SELECT ... FOR UPDATE row
+		// locking; retention never updates conversation columns.
+		"DO $$ BEGIN IF to_regclass('public.dev_conversations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.dev_conversation_tombstones') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.external_ingest_batch_payloads') IS NOT NULL THEN GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.external_ingest_batches') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.external_ingest_batches TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.external_ingest_recompute_jobs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.external_ingest_recompute_jobs TO " + domainRole + "; END IF; END $$",

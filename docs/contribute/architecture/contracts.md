@@ -36,6 +36,20 @@ Jira Service Management incident code is not a supported public capability until
 - Nullability, pagination, rate limits, errors, and authorization are part of the contract—not implementation details.
 - A frontend label is not a backend enum unless the public mapping says so.
 
+Ask Dev v1 follows a cross-repository generated-contract chain: canonical
+Pydantic models in ops produce Draft 2020-12 schemas and golden fixtures; the
+web repository vendors the pinned artifacts and mechanically produces strict
+TypeScript declarations. Both repositories run no-drift checks. The canonical
+contracts contain server-issued IDs, generic source metadata, and typed bounded
+payloads; provider credentials, provider-specific tool fields, arbitrary JSON,
+and unbounded collections are outside the contract.
+
+Cross-object invariants are part of the contract even when JSON Schema cannot
+express them alone. In particular, an answer cannot cite evidence or metrics
+that are absent from the same answer, a `complete` answer cannot carry a stale
+or unavailable required source, and a stream has exactly one terminal answer
+or error immediately followed by `done`.
+
 ## Job contracts
 
 Versioned Go job contracts live under `contracts/jobs/v1/` and define:

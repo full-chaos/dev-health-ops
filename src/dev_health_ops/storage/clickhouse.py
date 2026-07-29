@@ -2919,6 +2919,9 @@ class ClickHouseStore:
                     "target_work_item_id": str(get("target_work_item_id")),
                     "relationship_type": str(get("relationship_type") or ""),
                     "relationship_type_raw": str(get("relationship_type_raw") or ""),
+                    "relationship_semantics_version": str(
+                        get("relationship_semantics_version") or "canonical-blocks.v2"
+                    ),
                     "last_synced": self._normalize_datetime(
                         get("last_synced") or synced_at_default
                     ),
@@ -2932,6 +2935,7 @@ class ClickHouseStore:
                 "target_work_item_id",
                 "relationship_type",
                 "relationship_type_raw",
+                "relationship_semantics_version",
                 "last_synced",
             ],
             rows,

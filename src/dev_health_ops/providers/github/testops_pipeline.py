@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 from dev_health_ops.providers._base import BasePipelineAdapter, PipelineSyncBatch
 from dev_health_ops.providers._http import GITHUB_DIAGNOSTIC_HEADER_NAMES
+from dev_health_ops.providers.ci_acceptance import project_checks
 from dev_health_ops.providers.github.budget import GITHUB_USAGE_RESOLVER
 
 
@@ -55,6 +57,32 @@ class GitHubActionsAdapter(BasePipelineAdapter):
             return "hosted"
         return None
 
+    async def _required_contexts(
+        self, *, owner: str, repo: str, branch: str
+    ) -> tuple[set[str] | None, str]:
+        """Read branch policy without converting denial/absence into optional."""
+
+        client = await self._get_client()
+        path = (
+            f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/branches/"
+            f"{quote(branch, safe='')}/protection/required_status_checks"
+        )
+        response = await client.get(path)
+        self._record_response_usage(
+            response,
+            operation="tests:GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",
+        )
+        if response.status_code != 200:
+            return None, f"github.branch_protection.http_{response.status_code}"
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return None, "github.branch_protection.invalid_payload"
+        names = {str(value) for value in payload.get("contexts") or [] if value}
+        for item in payload.get("checks") or []:
+            if isinstance(item, dict) and item.get("context"):
+                names.add(str(item["context"]))
+        return names, "github.branch_protection.required_status_checks"
+
     async def fetch_pipeline_data(  # type: ignore[override]
         self,
         *,
@@ -85,7 +113,9 @@ class GitHubActionsAdapter(BasePipelineAdapter):
 
         pipeline_rows: list[PipelineRunExtendedRow] = []
         job_rows: list[JobRunRow] = []
+        acceptance_rows = []
         cursor_candidates: list[datetime] = []
+        required_by_branch: dict[str, tuple[set[str] | None, str]] = {}
 
         for workflow_run in workflow_runs:
             created_at = self.parse_datetime(workflow_run.get("created_at"))
@@ -142,6 +172,7 @@ class GitHubActionsAdapter(BasePipelineAdapter):
                 data_key="jobs",
                 operation=f"tests:GET /repos/{owner}/{repo}/actions/runs/{{id}}/jobs",
             )
+            projected_jobs: list[dict[str, Any]] = []
             for job in jobs:
                 job_started_at = self.parse_datetime(job.get("started_at"))
                 job_finished_at = self.parse_datetime(job.get("completed_at"))
@@ -167,10 +198,48 @@ class GitHubActionsAdapter(BasePipelineAdapter):
                 if org_id:
                     job_row["org_id"] = org_id
                 job_rows.append(job_row)
+                projected_jobs.append(
+                    {
+                        "name": job_row["job_name"],
+                        "status": job_row["status"],
+                    }
+                )
+
+            target_branch = None
+            if pull_requests and isinstance(pull_requests[0], dict):
+                base = pull_requests[0].get("base")
+                if isinstance(base, dict) and base.get("ref"):
+                    target_branch = str(base["ref"])
+            required_names: set[str] | None = None
+            provenance = "github.branch_protection.target_branch_unavailable"
+            if target_branch:
+                if target_branch not in required_by_branch:
+                    required_by_branch[target_branch] = await self._required_contexts(
+                        owner=owner, repo=repo, branch=target_branch
+                    )
+                required_names, provenance = required_by_branch[target_branch]
+            acceptance_rows.extend(
+                project_checks(
+                    repo_id=repo_id,
+                    org_id=org_id,
+                    run_id=str(workflow_run.get("id")),
+                    provider=self.provider,
+                    observed_at=finished_at or started_at,
+                    jobs=projected_jobs,
+                    required_names=required_names,
+                    provenance=provenance,
+                    target_branch=target_branch,
+                    pr_number=int(pr_number) if pr_number is not None else None,
+                    source_url=str(workflow_run.get("html_url"))
+                    if workflow_run.get("html_url")
+                    else None,
+                )
+            )
 
         cursor = max(cursor_candidates) if cursor_candidates else effective_since
         return PipelineSyncBatch(
             pipeline_runs=pipeline_rows,
             job_runs=job_rows,
+            acceptance_checks=acceptance_rows,
             last_synced_cursor=cursor,
         )

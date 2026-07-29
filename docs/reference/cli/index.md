@@ -195,6 +195,14 @@ dev-hops sync work-items --provider linear \
 
 Sync CI/CD pipeline data. Uses `CLICKHOUSE_URI`.
 
+The sync also writes the versioned, provider-neutral CI acceptance projection
+used by Ask Dev status checks. GitHub derives required check names only from the
+target branch's required-status-check policy; GitLab derives the required
+pipeline outcome only from the project's merge policy. A denied, missing, or
+unsupported policy is stored as `unknown`, never optional. Required work that
+the provider reports as skipped remains skipped even when the enclosing
+pipeline is green.
+
 ```bash
 # GitHub
 dev-hops sync cicd --provider github \
@@ -208,6 +216,13 @@ dev-hops sync cicd --provider gitlab \
   --gitlab-url "https://gitlab.com" \
   --project-id 123
 ```
+
+Rows ingested before ClickHouse migration `070_ci_acceptance_checks` remain
+explicitly unknown to Ask Dev. Re-run the existing CI sync for only the required
+repository and time window to populate them; there is no automatic unbounded
+history backfill. Replaying the same range is idempotent. Rolling a producer
+back preserves prior projection rows and their freshness timestamps, so stale
+rows degrade status instead of silently proving completion.
 
 ### `sync deployments`
 

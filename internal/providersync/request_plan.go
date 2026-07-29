@@ -73,6 +73,7 @@ func linearRequestPlan(dataset string, spanDays int) []RequestEstimate {
 			{BudgetGraphQLCost, scaled(2), "low", "comments"},
 			{BudgetGraphQLCost, scaled(1), "low", "attachments"},
 			{BudgetGraphQLCost, scaled(2), "low", "history"},
+			{BudgetGraphQLCost, scaled(2), "low", "relations"},
 		}
 	case "work-item-labels":
 		return []RequestEstimate{

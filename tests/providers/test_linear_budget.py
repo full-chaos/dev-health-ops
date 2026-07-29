@@ -50,7 +50,7 @@ def _context(
 def test_linear_budget_estimator_returns_graphql_budget_for_work_items() -> None:
     estimates = LinearBudgetEstimator().estimate(_context(dataset_key="work-items"))
 
-    assert len(estimates) == 6
+    assert len(estimates) == 7
     estimate = estimates[0]
     assert estimate.bucket.provider == "linear"
     assert estimate.bucket.org_id == "org-1"
@@ -71,6 +71,7 @@ def test_linear_budget_work_item_routes_model_cursor_paginated_edges() -> None:
         BudgetDimension.GRAPHQL_COST,
         BudgetDimension.GRAPHQL_COST,
         BudgetDimension.GRAPHQL_COST,
+        BudgetDimension.GRAPHQL_COST,
     ]
     assert {estimate.route_family for estimate in estimates} == {
         "attachments",
@@ -78,6 +79,7 @@ def test_linear_budget_work_item_routes_model_cursor_paginated_edges() -> None:
         "cycles",
         "history",
         "issues",
+        "relations",
         "teams",
     }
 
@@ -156,6 +158,7 @@ def test_linear_budget_all_route_families_can_override_graphql_default() -> None
         '"linear:graphql_cost:comments": 4,'
         '"linear:graphql_cost:attachments": 5,'
         '"linear:graphql_cost:history": 6,'
+        '"linear:graphql_cost:relations": 7,'
         '"linear:graphql_cost": 99'
         "}"
     )
@@ -175,6 +178,7 @@ def test_linear_budget_all_route_families_can_override_graphql_default() -> None
         "comments": 4,
         "attachments": 5,
         "history": 6,
+        "relations": 7,
     }
 
 
@@ -267,7 +271,7 @@ def test_linear_budget_estimator_returns_empty_for_unknown_dataset() -> None:
 def test_estimate_provider_budget_delegates_to_linear_estimator() -> None:
     estimates = estimate_provider_budget(_context(dataset_key="work-items"))
 
-    assert len(estimates) == 6
+    assert len(estimates) == 7
     assert estimates[0].bucket.provider == "linear"
 
 

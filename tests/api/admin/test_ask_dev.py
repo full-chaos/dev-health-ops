@@ -245,6 +245,12 @@ async def test_settings_are_bounded_preserve_byo_and_disable_both_surfaces(
     assert body["chat_window_available"] is False
     assert body["full_page_available"] is False
 
+    readiness = await admin_context.client.post("/api/v1/admin/ask-dev/readiness")
+    assert readiness.status_code == 403
+    assert readiness.json()["detail"] == (
+        "Ask Dev readiness cannot run while the organization emergency disable is active"
+    )
+
     async with admin_context.maker() as session:
         stored = await session.scalar(
             select(Setting).where(

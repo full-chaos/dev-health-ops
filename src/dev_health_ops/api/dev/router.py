@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
@@ -39,6 +39,7 @@ from dev_health_ops.api.services.permissions import get_user_permissions
 from dev_health_ops.licensing import evaluate_org_feature_async
 from dev_health_ops.licensing.registry import ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentUsage
+from dev_health_ops.models.dev_persistence import DevMessage as PersistedDevMessage
 
 from .contracts import (
     DevAnswer,
@@ -75,6 +76,11 @@ from .production_runtime import (
     build_production_runtime,
     expand_production_evidence,
     resolve_production_provider,
+)
+from .prompts import (
+    MAX_PRIOR_CONTENT_BYTES,
+    MAX_PRIOR_TURNS,
+    PromptConversationTurn,
 )
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .streaming import encoded_sse_stream
@@ -579,6 +585,37 @@ def _replayed_result(
     )
 
 
+def _bounded_prompt_history(
+    messages: Sequence[PersistedDevMessage],
+) -> tuple[PromptConversationTurn, ...]:
+    """Project only user questions and validated answer summaries into the prompt."""
+
+    turns: list[PromptConversationTurn] = []
+    for message in messages:
+        if message.role == "user":
+            content = message.content
+        else:
+            content = DevAnswer.model_validate(message.answer_payload).direct_summary
+        if content is None:
+            raise DevPersistenceConflict("prompt history message has no safe content")
+        turns.append(PromptConversationTurn(role=message.role, content=content))
+
+    bounded = turns[-MAX_PRIOR_TURNS:]
+    while bounded:
+        payload = [{"role": turn.role, "content": turn.content} for turn in bounded]
+        if (
+            len(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            )
+            <= MAX_PRIOR_CONTENT_BYTES
+        ):
+            break
+        bounded = bounded[1:]
+    return tuple(bounded)
+
+
 def _decode_cursor(
     cursor: str | None, request_id: str | None
 ) -> tuple[datetime | None, uuid.UUID | None]:
@@ -970,6 +1007,7 @@ async def create_message(
         str(conversation_id),
         "request",
     )
+    prior_turns: tuple[PromptConversationTurn, ...] = ()
     try:
         accepted = await service.append_user_message_and_run(
             org_id=org_id,
@@ -986,6 +1024,15 @@ async def create_message(
             ),
             admission_limits=DevAdmissionLimits(),
         )
+        if accepted.created:
+            history = await service.list_prompt_history_messages(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                exclude_message_id=accepted.message.id,
+                limit=MAX_PRIOR_TURNS,
+            )
+            prior_turns = _bounded_prompt_history(history)
         await service.session.commit()
     except Exception as exc:
         await service.session.rollback()
@@ -1081,6 +1128,7 @@ async def create_message(
             cancellation=cancellation,
             recorder=recorder,
             event_sink=event_sink,
+            prior_turns=prior_turns,
         )
 
     async def chunks() -> AsyncGenerator[bytes, None]:

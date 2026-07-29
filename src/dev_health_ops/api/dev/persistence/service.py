@@ -553,6 +553,44 @@ class DevPersistenceService:
             raise DevPersistenceNotFound("answer not found")
         return answer
 
+    async def list_prompt_history_messages(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        exclude_message_id: uuid.UUID,
+        limit: int,
+    ) -> Sequence[DevMessage]:
+        """Return a bounded chronological suffix for safe prompt projection."""
+
+        if limit < 1 or limit > 100:
+            raise DevPersistenceValidationError(
+                "history limit must be between 1 and 100"
+            )
+        await self.get_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        messages = list(
+            (
+                await self.session.scalars(
+                    select(DevMessage)
+                    .where(
+                        DevMessage.conversation_id == conversation_id,
+                        DevMessage.org_id == org_id,
+                        DevMessage.user_id == user_id,
+                        DevMessage.id != exclude_message_id,
+                    )
+                    .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
+                    .limit(limit)
+                )
+            ).all()
+        )
+        messages.reverse()
+        return messages
+
     async def rename_conversation(
         self,
         *,
@@ -668,6 +706,7 @@ class DevPersistenceService:
                 raise
             return existing
 
+        conversation.current_scope = scope
         self._touch(conversation)
         return MessageRunResult(message=message, run=run, created=True)
 

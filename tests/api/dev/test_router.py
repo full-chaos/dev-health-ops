@@ -19,6 +19,7 @@ from dev_health_ops.api.dev import router as dev_router_module
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     DevAnswer,
+    DevScope,
     DevScopeResolution,
     ScopeResolutionOutcome,
 )
@@ -174,6 +175,15 @@ class TrackingRuntime(FakeBoundedRuntime):
 
     async def aclose(self) -> None:
         self.close_count += 1
+
+
+class HistoryCapturingRuntime(FakeBoundedRuntime):
+    def __init__(self) -> None:
+        self.prior_turns: list[tuple[Any, ...]] = []
+
+    async def run(self, **kwargs) -> OrchestratorResult:
+        self.prior_turns.append(tuple(kwargs.get("prior_turns", ())))
+        return await super().run(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -525,6 +535,167 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     async with dev_api_context.maker() as session:
         assert await session.scalar(select(func.count()).select_from(DevRun)) == 2
         assert await session.scalar(select(func.count()).select_from(DevMessage)) == 4
+
+
+@pytest.mark.asyncio
+async def test_second_turn_uses_only_safe_bounded_persisted_prompt_history(
+    dev_api_context,
+) -> None:
+    runtime = HistoryCapturingRuntime()
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, runtime)
+    )
+    scope = _scope_payload(dev_api_context.org_id)
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations", json={"current_scope": scope}
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    first = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_history_01",
+            "client_message_id": "client_history_01",
+            "conversation_id": conversation_id,
+            "question": "What changed?",
+            "question_class": "observed_change",
+            "scope": scope,
+        },
+    )
+    assert first.status_code == 200
+
+    async with dev_api_context.maker() as session:
+        assistant = await session.scalar(
+            select(DevMessage).where(DevMessage.role == "assistant")
+        )
+        assert assistant is not None
+        safe_summary = assistant.answer_payload["direct_summary"]
+        assistant.content = "provider_response=unsafe-internal-trace"
+        await session.commit()
+
+    second = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_history_02",
+            "client_message_id": "client_history_02",
+            "conversation_id": conversation_id,
+            "question": "Why did it change?",
+            "question_class": "investigation",
+            "scope": scope,
+        },
+    )
+    assert second.status_code == 200
+    assert len(runtime.prior_turns) == 2
+    assert runtime.prior_turns[0] == ()
+    assert [(turn.role, turn.content) for turn in runtime.prior_turns[1]] == [
+        ("user", "What changed?"),
+        ("assistant", safe_summary),
+    ]
+    assert "unsafe-internal-trace" not in {
+        turn.content for turn in runtime.prior_turns[1]
+    }
+
+
+@pytest.mark.asyncio
+async def test_scope_changes_only_after_a_new_message_is_accepted(
+    dev_api_context,
+) -> None:
+    original_scope = _scope_payload(dev_api_context.org_id)
+    repository_scope = {
+        **original_scope,
+        "direct_scope": "repository",
+        "repositories": ["repo_01"],
+    }
+    other_repository_scope = {
+        **original_scope,
+        "direct_scope": "repository",
+        "repositories": ["repo_02"],
+    }
+    expected_original_scope = DevScope.model_validate(original_scope).model_dump(
+        mode="json"
+    )
+    expected_repository_scope = DevScope.model_validate(repository_scope).model_dump(
+        mode="json"
+    )
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations", json={"current_scope": original_scope}
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    invalid_scope = {
+        **repository_scope,
+        "direct_scope": "project",
+        "entity_refs": [],
+    }
+    rejected = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_scope_invalid",
+            "client_message_id": "client_scope_invalid",
+            "conversation_id": conversation_id,
+            "question": "Use an invalid scope",
+            "question_class": "status",
+            "scope": invalid_scope,
+        },
+    )
+    assert rejected.status_code == 422
+    unchanged = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert unchanged.json()["current_scope"] == expected_original_scope
+
+    failed = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_scope_rejected",
+            "client_message_id": "client_scope_rejected",
+            "conversation_id": conversation_id,
+            "retry_of_run_id": str(uuid.uuid4()),
+            "question": "Use the repository scope",
+            "question_class": "status",
+            "scope": repository_scope,
+        },
+    )
+    assert failed.status_code == 404
+    unchanged = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert unchanged.json()["current_scope"] == expected_original_scope
+
+    accepted_payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_scope_accepted",
+        "client_message_id": "client_scope_accepted",
+        "conversation_id": conversation_id,
+        "question": "Use the repository scope",
+        "question_class": "status",
+        "scope": repository_scope,
+    }
+    accepted = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json=accepted_payload,
+    )
+    assert accepted.status_code == 200
+    reopened = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert reopened.json()["current_scope"] == expected_repository_scope
+
+    replay = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={**accepted_payload, "scope": other_repository_scope},
+    )
+    assert replay.status_code == 200
+    after_replay = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert after_replay.json()["current_scope"] == expected_repository_scope
 
 
 @pytest.mark.asyncio

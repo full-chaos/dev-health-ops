@@ -333,9 +333,14 @@ async def run_ask_dev_readiness(
     policy = await load_ask_dev_org_policy(SettingsService(session, org_id))
     entitlement_state, entitled, _ = await _feature_state(session, org_id)
     if not entitled or policy.emergency_disabled:
+        reason = (
+            "the organization emergency disable is active"
+            if policy.emergency_disabled
+            else entitlement_state
+        )
         raise HTTPException(
             status_code=403,
-            detail=f"Ask Dev readiness cannot run while {entitlement_state}",
+            detail=f"Ask Dev readiness cannot run while {reason}",
         )
     try:
         resolution = await resolve_certification_provider(session, org_id=org_id)

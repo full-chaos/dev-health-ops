@@ -71,6 +71,7 @@ _HARD_LIMIT_MAXIMA: dict[str, int | float] = {
     "tool_calls": 6,
     "identical_tool_calls": 2,
     "wall_seconds": 45.0,
+    "tool_seconds": 15.0,
     "provider_seconds": 30.0,
     "provider_retries": 1,
     "schema_repairs": 1,
@@ -114,6 +115,7 @@ class DevRunLimits:
     tool_calls: int = 6
     identical_tool_calls: int = 2
     wall_seconds: float = 45.0
+    tool_seconds: float = 15.0
     provider_seconds: float = 30.0
     provider_retries: int = 1
     schema_repairs: int = 1
@@ -587,15 +589,32 @@ class DevOrchestrator:
                             ),
                         )
                     await transition(RunState.TOOL_EXECUTION)
+                    tool_remaining = min(remaining(), self._limits.tool_seconds)
+                    if tool_remaining <= 0:
+                        return await finish(
+                            RunState.FAILED,
+                            error=error(
+                                "tool_limit_reached",
+                                "The request time limit was reached.",
+                            ),
+                        )
                     context = ToolExecutionContext(
                         org_id=org_id,
                         user_id=user_id,
                         permission_fingerprint=permission_fingerprint,
                         authorized_scope=authorized_scope,
                         cancellation=cancellation,
-                        remaining_seconds=remaining(),
+                        remaining_seconds=tool_remaining,
                     )
                     execution = await self._registry.execute(tool_request, context)
+                    if execution.serialized_bytes > self._limits.per_tool_bytes:
+                        return await finish(
+                            RunState.FAILED,
+                            error=error(
+                                "tool_limit_reached",
+                                "The tool-result budget was reached.",
+                            ),
+                        )
                     next_total = tool_bytes_total + execution.serialized_bytes
                     if next_total > self._limits.total_tool_bytes:
                         return await finish(

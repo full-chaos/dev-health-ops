@@ -392,6 +392,48 @@ async def test_disambiguation_is_a_typed_insufficient_evidence_terminal() -> Non
     assert result.error is not None and result.error.code == "scope_ambiguous"
 
 
+@pytest.mark.asyncio
+async def test_provider_timeout_is_caller_enforced_and_terminal_once() -> None:
+    recorder = Recorder()
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentRefusal(code="late", message="late"),
+                    delay_seconds=1,
+                )
+            ],
+            script_id="provider-timeout",
+            recorder=recorder,
+            limits=DevRunLimits(provider_seconds=0.01, provider_retries=0),
+        )
+    )
+    assert result.state is RunState.FAILED
+    assert result.error is not None and result.error.code == "provider_unavailable"
+    assert recorder.terminals == [RunState.FAILED]
+
+
+@pytest.mark.asyncio
+async def test_operator_downward_per_tool_byte_limit_is_enforced() -> None:
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={"metric_id": "items_completed", "limit": 12},
+                        call_id="tool_call_01",
+                    )
+                )
+            ],
+            script_id="small-tool-budget",
+            limits=DevRunLimits(per_tool_bytes=1),
+        )
+    )
+    assert result.state is RunState.FAILED
+    assert result.error is not None and result.error.code == "tool_limit_reached"
+
+
 def test_hard_defaults_can_only_be_configured_downward() -> None:
     assert DevRunLimits().model_rounds == 4
     assert DevRunLimits(model_rounds=2).model_rounds == 2

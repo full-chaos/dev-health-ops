@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .contracts import (
+    DevError,
     DevStreamEvent,
     ProgressState,
     StreamEventType,
@@ -95,7 +96,19 @@ async def stream_orchestrator(
                 last_progress = progress
                 yield public_event(StreamEventType.PROGRESS, progress=progress)
 
-        result = await run_task
+        try:
+            result = await run_task
+        except Exception:
+            error = DevError(
+                schema_version="dev_error.v1",
+                request_id=run_id,
+                code="internal_error",
+                safe_message="The request could not be completed.",
+                retryable=True,
+            )
+            yield public_event(StreamEventType.ERROR, error=error)
+            yield public_event(StreamEventType.DONE, terminal_kind="error")
+            return
         if result.answer is not None:
             yield public_event(
                 StreamEventType.SCOPE_RESOLVED,

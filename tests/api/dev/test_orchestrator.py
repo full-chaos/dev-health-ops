@@ -468,6 +468,37 @@ async def test_in_flight_scope_resolution_is_cancelled_by_the_caller() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scope_resolution_is_bounded_by_the_total_wall_clock() -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def stalled_scope(**_values):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    result = await asyncio.wait_for(
+        _run(
+            _orchestrator(
+                [],
+                script_id="scope-timeout",
+                scope_resolver=stalled_scope,
+                limits=DevRunLimits(wall_seconds=0.01),
+            )
+        ),
+        timeout=1,
+    )
+
+    assert entered.is_set()
+    assert cancelled.is_set()
+    assert result.state is RunState.FAILED
+    assert result.error is not None
+    assert result.error.code == "tool_limit_reached"
+
+
+@pytest.mark.asyncio
 async def test_noncooperative_provider_is_cancelled_by_the_orchestrator() -> None:
     entered = asyncio.Event()
     cancelled = asyncio.Event()

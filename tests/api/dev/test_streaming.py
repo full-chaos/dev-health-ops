@@ -107,6 +107,29 @@ async def test_error_stream_has_one_error_then_done() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unexpected_runner_failure_still_has_one_safe_terminal_pair() -> None:
+    async def run(sink):
+        await sink(OrchestratorEvent(RunState.ACCEPTED))
+        raise RuntimeError("private provider failure details")
+
+    events = [
+        event
+        async for event in stream_orchestrator(
+            run_id="run_01", run_with_events=run, cancellation=asyncio.Event()
+        )
+    ]
+
+    validate_completed_stream(events)
+    assert [event.event for event in events[-2:]] == [
+        StreamEventType.ERROR,
+        StreamEventType.DONE,
+    ]
+    assert events[-2].error is not None
+    assert events[-2].error.code == "internal_error"
+    assert "private provider failure details" not in events[-2].error.safe_message
+
+
+@pytest.mark.asyncio
 async def test_closing_stream_signals_cancellation_and_waits_for_safe_terminal() -> (
     None
 ):

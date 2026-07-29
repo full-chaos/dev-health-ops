@@ -257,6 +257,10 @@ class BudgetExceeded(RuntimeError):
     pass
 
 
+class RunDeadlineExceeded(RuntimeError):
+    pass
+
+
 @dataclass(slots=True)
 class ProviderBudget:
     limits: DevRunLimits
@@ -461,6 +465,7 @@ class DevOrchestrator:
                 user_id=user_id,
                 requested_scope=request.scope,
                 cancellation=cancellation,
+                timeout_seconds=max(0, remaining()),
             )
             if resolution.outcome is ScopeResolutionOutcome.AMBIGUOUS:
                 return await finish(
@@ -742,6 +747,13 @@ class DevOrchestrator:
                 RunState.FAILED,
                 error=error("cost_limit_reached", "The provider budget was reached."),
             )
+        except RunDeadlineExceeded:
+            return await finish(
+                RunState.FAILED,
+                error=error(
+                    "tool_limit_reached", "The request time limit was reached."
+                ),
+            )
         except ToolRegistryError:
             return await finish(
                 RunState.FAILED,
@@ -764,7 +776,10 @@ class DevOrchestrator:
         user_id: str,
         requested_scope: DevScope,
         cancellation: asyncio.Event,
+        timeout_seconds: float,
     ) -> DevScopeResolution:
+        if timeout_seconds <= 0:
+            raise RunDeadlineExceeded("scope resolution exceeded the run deadline")
         resolver_task: asyncio.Future[DevScopeResolution] = asyncio.ensure_future(
             self._scope_resolver(
                 org_id=org_id, user_id=user_id, requested_scope=requested_scope
@@ -773,11 +788,19 @@ class DevOrchestrator:
         cancellation_task = asyncio.create_task(cancellation.wait())
         wait_set: set[asyncio.Future[Any]] = {resolver_task, cancellation_task}
         try:
-            done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(
+                wait_set,
+                timeout=timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
             if cancellation_task in done:
                 resolver_task.cancel()
                 await asyncio.gather(resolver_task, return_exceptions=True)
                 raise ToolExecutionCancelled("scope resolution cancelled")
+            if resolver_task not in done:
+                resolver_task.cancel()
+                await asyncio.gather(resolver_task, return_exceptions=True)
+                raise RunDeadlineExceeded("scope resolution exceeded the run deadline")
             return resolver_task.result()
         finally:
             cancellation_task.cancel()

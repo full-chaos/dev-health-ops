@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ from dev_health_ops.models.dev_persistence import (
     DevRun,
     DevToolCall,
 )
+from dev_health_ops.models.users import Organization, User
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,14 @@ class DevPersistenceValidationError(ValueError):
     """Input is outside the approved bounded persistence contract."""
 
 
+class DevConcurrencyLimitExceeded(RuntimeError):
+    """The exact per-user or per-organization active-run limit was reached."""
+
+
+class DevRateLimitExceeded(RuntimeError):
+    """The exact per-user or per-organization request window was reached."""
+
+
 @dataclass(frozen=True, slots=True)
 class MessageRunResult:
     message: DevMessage
@@ -112,6 +121,34 @@ class CleanupResult:
     reason: str
     selected: int
     purged: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRecord:
+    conversation: DevConversation
+    message_count: int
+    latest_answer_id: uuid.UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class DevAdmissionLimits:
+    active_runs_per_user: int = 1
+    active_runs_per_org: int = 5
+    requests_per_user_per_15_minutes: int = 20
+    requests_per_org_per_hour: int = 100
+
+    def __post_init__(self) -> None:
+        if (
+            self.active_runs_per_user < 1
+            or self.active_runs_per_user > 1
+            or self.active_runs_per_org < 1
+            or self.active_runs_per_org > 5
+            or self.requests_per_user_per_15_minutes < 1
+            or self.requests_per_user_per_15_minutes > 20
+            or self.requests_per_org_per_hour < 1
+            or self.requests_per_org_per_hour > 100
+        ):
+            raise ValueError("Ask Dev admission limits may only be configured downward")
 
 
 def _utc_now() -> datetime:
@@ -224,16 +261,21 @@ class DevPersistenceService:
         await self.session.flush()
         return conversation
 
-    async def list_conversations(
+    async def list_conversation_records(
         self,
         *,
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         limit: int = 50,
         before: datetime | None = None,
-    ) -> Sequence[DevConversation]:
+        before_id: uuid.UUID | None = None,
+    ) -> Sequence[ConversationRecord]:
         if limit < 1 or limit > 100:
             raise DevPersistenceValidationError("limit must be between 1 and 100")
+        if (before is None) != (before_id is None):
+            raise DevPersistenceValidationError(
+                "before and before_id must be provided together"
+            )
         now = self._now()
         conditions = [
             DevConversation.org_id == org_id,
@@ -241,15 +283,74 @@ class DevPersistenceService:
             DevConversation.deleted_at.is_(None),
             (DevConversation.expires_at.is_(None) | (DevConversation.expires_at > now)),
         ]
-        if before is not None:
-            conditions.append(DevConversation.updated_at < before)
+        if before is not None and before_id is not None:
+            conditions.append(
+                or_(
+                    DevConversation.updated_at < before,
+                    and_(
+                        DevConversation.updated_at == before,
+                        DevConversation.id < before_id,
+                    ),
+                )
+            )
+        latest_answer_id = (
+            select(DevMessage.answer_id)
+            .where(
+                DevMessage.conversation_id == DevConversation.id,
+                DevMessage.org_id == DevConversation.org_id,
+                DevMessage.user_id == DevConversation.user_id,
+                DevMessage.role == "assistant",
+                DevMessage.answer_id.is_not(None),
+            )
+            .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        message_count = (
+            select(func.count(DevMessage.id))
+            .where(
+                DevMessage.conversation_id == DevConversation.id,
+                DevMessage.org_id == DevConversation.org_id,
+                DevMessage.user_id == DevConversation.user_id,
+            )
+            .scalar_subquery()
+        )
         rows = await self.session.execute(
-            select(DevConversation)
+            select(
+                DevConversation,
+                message_count.label("message_count"),
+                latest_answer_id.label("latest_answer_id"),
+            )
             .where(and_(*conditions))
-            .order_by(DevConversation.updated_at.desc(), DevConversation.id)
+            .order_by(DevConversation.updated_at.desc(), DevConversation.id.desc())
             .limit(limit)
         )
-        return rows.scalars().all()
+        return [
+            ConversationRecord(
+                conversation=row[0],
+                message_count=int(row[1] or 0),
+                latest_answer_id=row[2],
+            )
+            for row in rows.all()
+        ]
+
+    async def list_conversations(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        limit: int = 50,
+        before: datetime | None = None,
+        before_id: uuid.UUID | None = None,
+    ) -> Sequence[DevConversation]:
+        records = await self.list_conversation_records(
+            org_id=org_id,
+            user_id=user_id,
+            limit=limit,
+            before=before,
+            before_id=before_id,
+        )
+        return [record.conversation for record in records]
 
     async def get_conversation(
         self,
@@ -267,6 +368,78 @@ class DevPersistenceService:
         if conversation is None:
             raise DevPersistenceNotFound("conversation not found")
         return conversation
+
+    async def get_conversation_record(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+    ) -> ConversationRecord:
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        message_count = await self.session.scalar(
+            select(func.count(DevMessage.id)).where(
+                DevMessage.conversation_id == conversation.id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+            )
+        )
+        latest_answer_id = await self.session.scalar(
+            select(DevMessage.answer_id)
+            .where(
+                DevMessage.conversation_id == conversation.id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+                DevMessage.role == "assistant",
+                DevMessage.answer_id.is_not(None),
+            )
+            .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
+            .limit(1)
+        )
+        return ConversationRecord(
+            conversation=conversation,
+            message_count=int(message_count or 0),
+            latest_answer_id=latest_answer_id,
+        )
+
+    async def get_message_run_by_client_id(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        client_message_id: uuid.UUID,
+    ) -> MessageRunResult:
+        result = await self._message_run_by_client_id(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            client_message_id=client_message_id,
+        )
+        if result is None:
+            raise DevPersistenceNotFound("message run not found")
+        return result
+
+    async def get_answer_message(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        answer_id: uuid.UUID,
+    ) -> DevMessage:
+        answer = await self.session.scalar(
+            select(DevMessage).where(
+                DevMessage.answer_id == answer_id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+                DevMessage.role == "assistant",
+            )
+        )
+        if answer is None:
+            raise DevPersistenceNotFound("answer not found")
+        return answer
 
     async def rename_conversation(
         self,
@@ -295,6 +468,7 @@ class DevPersistenceService:
         scope_snapshot: Mapping[str, Any],
         request_id: uuid.UUID | None = None,
         retry_of_run_id: uuid.UUID | None = None,
+        admission_limits: DevAdmissionLimits | None = None,
     ) -> MessageRunResult:
         question = _bounded_text(question, field="question", max_bytes=8192) or ""
         if not question.strip():
@@ -312,6 +486,26 @@ class DevPersistenceService:
         )
         if existing is not None:
             return existing
+
+        if admission_limits is not None:
+            await self._lock_admission_scope(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
+            existing = await self._message_run_by_client_id(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                client_message_id=client_message_id,
+            )
+            if existing is not None:
+                return existing
+            await self._enforce_admission_limits(
+                org_id=org_id,
+                user_id=user_id,
+                limits=admission_limits,
+            )
 
         message = DevMessage(
             conversation_id=conversation_id,
@@ -841,6 +1035,81 @@ class DevPersistenceService:
                 DevRun.user_id == user_id,
             )
         )
+
+    async def _lock_admission_scope(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+    ) -> None:
+        """Serialize admission in one fixed organization/user/conversation order."""
+
+        locked_org = await self.session.scalar(
+            select(Organization.id).where(Organization.id == org_id).with_for_update()
+        )
+        locked_user = await self.session.scalar(
+            select(User.id).where(User.id == user_id).with_for_update()
+        )
+        locked_conversation = await self.session.scalar(
+            select(DevConversation.id)
+            .where(
+                DevConversation.id == conversation_id,
+                DevConversation.org_id == org_id,
+                DevConversation.user_id == user_id,
+                DevConversation.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if locked_org is None or locked_user is None or locked_conversation is None:
+            raise DevPersistenceNotFound("admission scope not found")
+
+    async def _enforce_admission_limits(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        limits: DevAdmissionLimits,
+    ) -> None:
+        now = self._now()
+        active = DevRun.state.not_in(_TERMINAL_RUN_STATES)
+        active_user = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                DevRun.user_id == user_id,
+                active,
+            )
+        )
+        active_org = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                active,
+            )
+        )
+        if (
+            int(active_user or 0) >= limits.active_runs_per_user
+            or int(active_org or 0) >= limits.active_runs_per_org
+        ):
+            raise DevConcurrencyLimitExceeded("Ask Dev active-run limit reached")
+
+        user_window = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                DevRun.user_id == user_id,
+                DevRun.started_at >= now - timedelta(minutes=15),
+            )
+        )
+        org_window = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                DevRun.started_at >= now - timedelta(hours=1),
+            )
+        )
+        if (
+            int(user_window or 0) >= limits.requests_per_user_per_15_minutes
+            or int(org_window or 0) >= limits.requests_per_org_per_hour
+        ):
+            raise DevRateLimitExceeded("Ask Dev request-rate limit reached")
 
     async def _message_run_by_client_id(
         self,

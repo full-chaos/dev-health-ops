@@ -88,6 +88,7 @@ def test_llm_token_sink_writes_run_id_and_defaults_legacy_empty():
         provider="openai",
         model="gpt-5-mini",
         source="investment_materialize",
+        use_case="ask_dev",
         input_tokens=10,
         output_tokens=5,
         calls=1,
@@ -112,7 +113,9 @@ def test_llm_token_sink_writes_run_id_and_defaults_legacy_empty():
     first_values = dict(zip(first_columns, client.inserts[0][1][0]))
     second_values = dict(zip(client.inserts[1][2], client.inserts[1][1][0]))
     assert first_values["run_id"] == "run-1"
+    assert first_values["use_case"] == "ask_dev"
     assert second_values["run_id"] == ""
+    assert second_values["use_case"] == "legacy"
 
 
 class FakeQueryResult:

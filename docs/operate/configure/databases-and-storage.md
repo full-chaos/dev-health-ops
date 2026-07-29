@@ -121,6 +121,12 @@ content as soon as a request terminalizes. A daily bounded cleanup at 05:30 UTC
 is staged to repair expired rows with `FOR UPDATE SKIP LOCKED` batches and is
 replay-safe after the v3 producer compatibility cutover.
 
+Migration `0069` adds the `(org_id, user_id, started_at)` and
+`(org_id, started_at)` run indexes used by the serialized per-user and
+per-organization admission checks. It is additive and contains no content
+rewrite. Downgrading `0069` removes only those indexes; disabling Ask Dev
+remains the normal rollback and preserves retained conversations.
+
 Disabling the Ask Dev feature is the normal application rollback. The additive
 tables remain dormant, existing LLM workflows are unchanged, and previously
 saved conversations continue through their selected retention or explicit

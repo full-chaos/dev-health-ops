@@ -247,6 +247,20 @@ class DevScopeResolution(ContractModel):
         return self
 
 
+class DevCapabilityLimits(ContractModel):
+    active_runs_per_user: int = Field(default=1, ge=1, le=1)
+    active_runs_per_organization: int = Field(default=5, ge=1, le=5)
+    requests_per_user_per_15_minutes: int = Field(default=20, ge=1, le=20)
+    requests_per_organization_per_hour: int = Field(default=100, ge=1, le=100)
+    model_decision_rounds: int = Field(default=4, ge=1, le=4)
+    total_tool_calls: int = Field(default=6, ge=1, le=6)
+    wall_seconds: int = Field(default=45, ge=1, le=45)
+
+
+def _default_retention_options() -> list[Literal[0, 30]]:
+    return [0, 30]
+
+
 class DevCapabilities(ContractModel):
     schema_version: Literal["dev_capabilities.v1"]
     ask_dev: bool = False
@@ -254,6 +268,39 @@ class DevCapabilities(ContractModel):
     agent_context_runtime: bool = False
     can_read: bool = False
     can_manage: bool = False
+    effective_provider_label: Label | None = None
+    effective_model_label: Label | None = None
+    provider_source: Literal["platform", "byo"] | None = None
+    readiness: Literal[
+        "ready",
+        "unsupported_model",
+        "missing_credentials",
+        "disabled",
+        "degraded",
+    ] = "disabled"
+    supported_contract_versions: list[Version] = Field(
+        default_factory=list, max_length=20
+    )
+    retention_options: list[Literal[0, 30]] = Field(
+        default_factory=_default_retention_options, min_length=2, max_length=2
+    )
+    request_limits: DevCapabilityLimits = Field(default_factory=DevCapabilityLimits)
+    supported_question_classes: list[QuestionClass] = Field(
+        default_factory=lambda: list(QuestionClass), min_length=1, max_length=6
+    )
+    contextual_entrypoints: bool = False
+    evidence_resolver: bool = False
+    administrator_safe_failure_reason: ShortText | None = None
+
+    @model_validator(mode="after")
+    def validate_capability_sets(self) -> Self:
+        if self.retention_options != [0, 30]:
+            raise ValueError("retention options must be exactly 0 and 30 days")
+        if len(self.supported_question_classes) != len(
+            set(self.supported_question_classes)
+        ):
+            raise ValueError("supported question classes must be unique")
+        return self
 
 
 class DevConversation(ContractModel):
@@ -346,9 +393,49 @@ class DevEvidenceRef(ContractModel):
     flags: DevEvidenceFlags
 
 
+class DevEvidenceExpansion(ContractModel):
+    schema_version: Literal["dev_evidence_expansion.v1"]
+    evidence: DevEvidenceRef
+    state: Literal[
+        "available",
+        "no_matches",
+        "unavailable",
+        "unconfigured",
+        "redacted",
+        "stale",
+    ]
+    safe_excerpt: (
+        Annotated[str, StringConstraints(min_length=1, max_length=65_536)] | None
+    ) = Field(default=None, json_schema_extra={"x-max-utf8-bytes": 65_536})
+    serialized_bytes: int = Field(ge=0, le=65_536)
+    warning: ShortText | None = None
+    query_version: Version
+
+    @model_validator(mode="after")
+    def enforce_excerpt_byte_count(self) -> Self:
+        excerpt_bytes = len((self.safe_excerpt or "").encode("utf-8"))
+        if excerpt_bytes > 65_536:
+            raise ValueError("safe_excerpt exceeds 64 KiB UTF-8")
+        if self.serialized_bytes != excerpt_bytes:
+            raise ValueError("serialized_bytes must equal the safe excerpt size")
+        return self
+
+
 class DevMetricPoint(ContractModel):
     timestamp: AwareDatetime
     value: FiniteFloat
+
+
+class DevMetricDefinition(ContractModel):
+    metric_id: MetricID
+    label: Label
+    description: ShortText
+    unit: OpaqueID
+    supported_dimensions: list[OpaqueID] = Field(default_factory=list, max_length=12)
+    supported_time_grains: list[OpaqueID] = Field(default_factory=list, max_length=12)
+    supported_scopes: list[DirectScope] = Field(min_length=1, max_length=8)
+    definition_version: Version
+    freshness_policy: ShortText
 
 
 class DevMetricRef(ContractModel):
@@ -552,6 +639,9 @@ class DevToolResult(ContractModel):
     tool_id: ToolID
     status: Literal["success", "partial", "unavailable", "error"]
     scope_resolution: DevScopeResolution | None = None
+    metric_definitions: list[DevMetricDefinition] = Field(
+        default_factory=list, max_length=12
+    )
     metrics: list[DevMetricRef] = Field(default_factory=list, max_length=12)
     evidence: list[DevEvidenceRef] = Field(default_factory=list, max_length=25)
     status_facts: list[DevStatusFact] = Field(default_factory=list, max_length=100)
@@ -574,7 +664,7 @@ class DevFeedback(ContractModel):
     schema_version: Literal["dev_feedback.v1"]
     feedback_id: OpaqueID
     answer_id: OpaqueID
-    rating: Literal["up", "down"]
+    rating: Literal["helpful", "not_helpful"]
     reasons: list[
         Literal[
             "incorrect",
@@ -759,6 +849,7 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
     "dev_claim.v1": DevClaim,
     "dev_metric_ref.v1": DevMetricRef,
     "dev_evidence_ref.v1": DevEvidenceRef,
+    "dev_evidence_expansion.v1": DevEvidenceExpansion,
     "dev_scope.v1": DevScope,
     "dev_scope_resolution.v1": DevScopeResolution,
     "dev_tool_request.v1": DevToolRequest,
@@ -771,14 +862,17 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
 __all__ = [
     "CONTRACT_MODELS",
     "DevAnswer",
+    "DevCapabilityLimits",
     "DevCapabilities",
     "DevClaim",
     "DevConversation",
     "DevConversationSummary",
     "DevError",
+    "DevEvidenceExpansion",
     "DevEvidenceRef",
     "DevFeedback",
     "DevMessageRequest",
+    "DevMetricDefinition",
     "DevMetricRef",
     "DevScope",
     "DevScopeResolution",

@@ -66,8 +66,9 @@ entitlement.
 Evidence IDs are deterministic HMAC handles derived with `JWT_SECRET_KEY` and
 the persisted canonical evidence descriptor. Rotation of that key invalidates
 previous handles, so coordinate key rotation with retained-conversation policy
-and the later evidence-expansion API rollout. Rollback removes the additive
-fields and services without a storage rollback. Verify native evidence remains
+and the evidence-expansion API. The authenticated expansion route requires the
+owning `answer_id`, returns `dev_evidence_expansion.v1`, and reauthorizes every
+reference before reading source content. Rollback removes the additive fields,
+services, and route without a storage rollback. Verify native evidence remains
 available when ACR is absent or unavailable, and keep Ask Dev interaction
-surfaces disabled until the authenticated runtime and evidence-expansion route
-are delivered.
+surfaces disabled until the matching web contract artifacts are deployed.

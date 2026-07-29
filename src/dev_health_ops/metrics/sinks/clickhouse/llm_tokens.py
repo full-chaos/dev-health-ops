@@ -37,6 +37,7 @@ class LLMTokenUsageMixin(_ClickHouseSinkBase):
                 "provider",
                 "model",
                 "source",
+                "use_case",
                 "input_tokens",
                 "output_tokens",
                 "calls",

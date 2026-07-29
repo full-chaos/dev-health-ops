@@ -289,6 +289,8 @@ class DevRun(Base):
             "conversation_id",
             "started_at",
         ),
+        Index("ix_dev_runs_owner_started", "org_id", "user_id", "started_at"),
+        Index("ix_dev_runs_org_started", "org_id", "started_at"),
         Index("ix_dev_runs_state_started", "state", "started_at"),
     )
 

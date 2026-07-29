@@ -19,8 +19,8 @@ Ask Dev's provider-neutral contracts are generated from the strict Pydantic
 models in `src/dev_health_ops/api/dev/contracts.py`. The checked-in Draft
 2020-12 schemas, fixture manifest, and positive and negative goldens live in
 `contracts/ask-dev/v1/`. They cover capabilities, conversations, requests,
-answers, claims, metrics, evidence, scope resolution, bounded tool messages,
-feedback, stream events, and safe errors.
+answers, claims, metrics, evidence references and evidence expansion, scope
+resolution, bounded tool messages, feedback, stream events, and safe errors.
 
 Generate and verify the artifacts from the repository root:
 
@@ -59,3 +59,13 @@ delimited `UNTRUSTED_DATA` excerpts. The stable evidence ID protects the
 canonical source descriptor against tampering; it is not an authorization
 grant. Every expansion re-resolves current organization, repository, entity,
 and user access before reading the native or optional ACR source.
+
+### Provider decision boundary
+
+The provider SDK contract is internal and intentionally does not add
+provider-specific fields to `dev_answer.v1`. A provider decision is normalized
+to exactly one tool request, final structured answer, disambiguation, or
+refusal. Usage, latency, provider/model fingerprints, cancellation, capability
+limits, and safe error codes remain operational metadata. The public answer's
+model disclosure uses only the canonical provider, model, and `platform | byo`
+source fields.

@@ -13,9 +13,12 @@ from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.dev.persistence import (
+    DevAdmissionLimits,
+    DevConcurrencyLimitExceeded,
     DevPersistenceNotFound,
     DevPersistenceService,
     DevPersistenceValidationError,
+    DevRateLimitExceeded,
 )
 from dev_health_ops.models.dev_persistence import (
     DevConversation,
@@ -218,6 +221,119 @@ async def test_client_message_id_is_idempotent_for_message_and_run(persistence):
 
 
 @pytest.mark.asyncio
+async def test_submission_admission_enforces_concurrency_rate_and_replay(
+    persistence,
+):
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    clock = Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        conversation = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+        )
+        client_message_id = uuid.uuid4()
+        limits = DevAdmissionLimits(
+            requests_per_user_per_15_minutes=1,
+            requests_per_org_per_hour=1,
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=client_message_id,
+            question="What changed?",
+            scope_snapshot={},
+            admission_limits=limits,
+        )
+
+        replay = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=client_message_id,
+            question="What changed?",
+            scope_snapshot={},
+            admission_limits=limits,
+        )
+        assert replay.created is False
+        assert replay.run.id == accepted.run.id
+
+        with pytest.raises(DevConcurrencyLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="What remains?",
+                scope_snapshot={},
+                admission_limits=limits,
+            )
+
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=accepted.run.id,
+            state="cancelled",
+        )
+        with pytest.raises(DevRateLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="What remains?",
+                scope_snapshot={},
+                admission_limits=limits,
+            )
+
+
+@pytest.mark.asyncio
+async def test_conversation_listing_uses_the_id_tie_breaker_for_cursor_pages(
+    persistence,
+):
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    clock = Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        first = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+            title="first",
+        )
+        second = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+            title="second",
+        )
+        first_page = await service.list_conversation_records(
+            org_id=org_id,
+            user_id=user_id,
+            limit=1,
+        )
+        assert len(first_page) == 1
+
+        second_page = await service.list_conversation_records(
+            org_id=org_id,
+            user_id=user_id,
+            limit=1,
+            before=first_page[0].conversation.updated_at,
+            before_id=first_page[0].conversation.id,
+        )
+        assert len(second_page) == 1
+
+        seen = {first_page[0].conversation.id, second_page[0].conversation.id}
+        assert seen == {first.id, second.id}
+        assert (
+            first_page[0].conversation.updated_at
+            == second_page[0].conversation.updated_at
+        )
+
+
+@pytest.mark.asyncio
 async def test_every_service_read_and_write_is_tenant_and_user_scoped(persistence):
     maker, org_id, other_org_id, user_id, other_user_id = persistence
     async with maker() as session:
@@ -410,6 +526,18 @@ async def test_data_minimization_rejects_prohibited_metadata_and_unvalidated_ans
                 org_id=org_id,
                 user_id=user_id,
                 current_scope={"api_key": "must-not-persist"},
+            )
+        with pytest.raises(DevPersistenceValidationError):
+            await service.create_conversation(
+                org_id=org_id,
+                user_id=user_id,
+                current_scope={
+                    "nested": [
+                        {
+                            "authorization": "Bearer must-not-persist",
+                        }
+                    ]
+                },
             )
         conversation = await service.create_conversation(
             org_id=org_id, user_id=user_id, current_scope={}

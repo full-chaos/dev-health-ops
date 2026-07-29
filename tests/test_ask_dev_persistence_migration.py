@@ -90,3 +90,39 @@ def test_ask_dev_schema_has_only_the_approved_retention_domain_and_safe_columns(
         assert f'Column("{column}"' not in source
     assert "retention_days IN (0, 30)" in source
     assert "retention_days IN (0, 7, 30, 90)" not in source
+
+
+def test_0069_adds_and_removes_bounded_admission_indexes():
+    persistence = importlib.import_module(
+        "dev_health_ops.alembic.versions.0068_add_ask_dev_persistence"
+    )
+    admission = importlib.import_module(
+        "dev_health_ops.alembic.versions.0069_add_ask_dev_admission_indexes"
+    )
+    assert admission.revision == "0069"
+    assert admission.down_revision == "0068"
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.connect() as connection:
+            _parent_tables(connection)
+            context = MigrationContext.configure(connection)
+            with Operations.context(context):
+                persistence.upgrade()
+                admission.upgrade()
+                indexes = {
+                    item["name"]
+                    for item in sa.inspect(connection).get_indexes("dev_runs")
+                }
+                assert "ix_dev_runs_owner_started" in indexes
+                assert "ix_dev_runs_org_started" in indexes
+
+                admission.downgrade()
+                indexes = {
+                    item["name"]
+                    for item in sa.inspect(connection).get_indexes("dev_runs")
+                }
+                assert "ix_dev_runs_owner_started" not in indexes
+                assert "ix_dev_runs_org_started" not in indexes
+    finally:
+        engine.dispose()

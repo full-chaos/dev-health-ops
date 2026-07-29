@@ -85,3 +85,23 @@ For every secret, record:
 - how to revoke the old authority after recovery is confirmed.
 
 A configuration rollout is complete only after all required processes use the same intended revision and the relevant health, permission, and bounded-work checks pass.
+
+## Ask Dev model credentials
+
+Ask Dev reuses the existing source-bound LLM credential bundles: workspace BYO
+key and base URL stay together, and platform key and base URL stay together.
+Never combine a platform key with a workspace endpoint. OpenAI-compatible BYO
+base URLs pass the existing public-HTTPS and SSRF validation before they can be
+certified.
+
+Enabling Ask Dev is not sufficient to admit model traffic. Admission also
+requires a current readiness result for the exact provider/model fingerprint.
+Global LLM disable, the Ask Dev emergency disable, and provider/model deny rules
+must remain available during rollout. Workspace-to-platform fallback is an
+explicit policy choice; absence of that choice is fail-closed.
+
+Readiness failures expose only these stable classes to users and durable state:
+disabled, provider not configured, model not supported, provider unavailable,
+invalid response, timeout, or cancelled. Inspect provider logs through the
+approved secret-redacting path; do not copy raw provider bodies into settings or
+support records.

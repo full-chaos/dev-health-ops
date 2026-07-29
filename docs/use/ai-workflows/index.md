@@ -82,3 +82,24 @@ You can delete a saved conversation before it expires. Dev Health does not use
 Ask Dev conversation content to train models. Disabling Ask Dev stops new use;
 it does not silently delete saved history, whose selected retention and delete
 controls continue to apply.
+
+## Ask Dev model availability
+
+Ask Dev starts a run only after the selected model connection has passed its
+current capability check. The check proves structured answers, one bounded tool
+request, continuation after the tool result, a final answer, timeouts,
+cancellation, and usage reporting. A completion-only model connection is not
+automatically suitable for Ask Dev.
+
+If a workspace-selected model is unsupported or no longer ready, Ask Dev shows
+a safe availability error and starts no model or tool work. The rejected
+submission may remain as a failed run record for audit and idempotent retry; it
+contains no raw provider response. Ask Dev does not silently send the question
+through a platform model. A workspace administrator can explicitly allow that
+fallback after reviewing the data-processing implications.
+
+Ask Dev answers contain opaque evidence references, not arbitrary source URLs.
+Opening evidence rechecks that the answer belongs to the signed-in user and
+organization, then reauthorizes the current repository and entity scope. A
+missing, unrelated, or no-longer-authorized reference appears as not found.
+Safe excerpts are limited to 64 KiB and are treated as untrusted source text.

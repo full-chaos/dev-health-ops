@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,6 +74,14 @@ from .auth import router as auth_router
 from .auth.router import get_current_user
 from .billing import router as billing_router
 from .dependencies import get_postgres_session_dep
+from .dev.router import (
+    AskDevApiError,
+    ask_dev_error_handler,
+    ask_dev_validation_error_handler,
+)
+from .dev.router import (
+    router as dev_router,
+)
 from .graphql.app import create_graphql_app
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
@@ -210,6 +219,8 @@ app = FastAPI(
 app.state.limiter = limiter
 register_exception_handlers(app)
 register_external_ingest_error_handlers(app)
+app.add_exception_handler(AskDevApiError, ask_dev_error_handler)
+app.add_exception_handler(RequestValidationError, ask_dev_validation_error_handler)
 
 register_middleware(app)
 
@@ -220,6 +231,7 @@ app.include_router(admin_router)
 app.include_router(impersonation_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
+app.include_router(dev_router)
 app.include_router(licensing_router)
 app.include_router(telemetry_router)
 app.include_router(product_telemetry_router)

@@ -96,3 +96,17 @@ def test_uncertified_candidate_is_not_usable() -> None:
             platform=None,
         )
     assert caught.value.code is AgentProviderErrorCode.PROVIDER_NOT_CONFIGURED
+
+
+def test_internal_scripted_adapter_is_not_a_product_provider_family() -> None:
+    with pytest.raises(AgentProviderError) as caught:
+        resolve_agent_provider_selection(
+            policy=AgentProviderPolicy(ask_dev_enabled=True),
+            byo=None,
+            platform=candidate(
+                provider="scripted",
+                source=AgentProviderSource.PLATFORM,
+                key="",
+            ),
+        )
+    assert caught.value.code is AgentProviderErrorCode.MODEL_NOT_SUPPORTED

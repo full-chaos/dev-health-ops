@@ -1,0 +1,99 @@
+services:
+  postgres:
+    container_name: ask-dev-acceptance-postgres
+    ports: !reset []
+
+  pgbouncer:
+    container_name: ask-dev-acceptance-pgbouncer
+    ports: !reset []
+
+  clickhouse:
+    container_name: ask-dev-acceptance-clickhouse
+    ports: !reset []
+
+  valkey:
+    container_name: ask-dev-acceptance-valkey
+    ports: !reset []
+
+  migrate:
+    container_name: ask-dev-acceptance-migrate
+    environment:
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
+
+  api:
+    container_name: ask-dev-acceptance-api
+    ports: !override
+      - "127.0.0.1:18080:8000"
+    environment:
+      ENVIRONMENT: acceptance
+      ASK_DEV_LIVE_ACCEPTANCE: "1"
+      LLM_PROVIDER: openai
+      ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL: http://ask-dev-scripted-openai:8001/v1
+      ASK_DEV_ACCEPTANCE_OPENAI_API_KEY: ask-dev-acceptance-local-v1
+      JWT_SECRET_KEY: ask-dev-acceptance-jwt-secret-key-v1
+    depends_on:
+      ask-dev-scripted-openai:
+        condition: service_healthy
+    networks:
+      - default
+      - ask-dev-acceptance
+
+  ask-dev-scripted-openai:
+    container_name: ask-dev-acceptance-scripted-openai
+    profiles: ["ask-dev-acceptance"]
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    entrypoint:
+      - python
+      - -m
+      - dev_health_ops.llm.agent.scripted_openai_service
+    environment:
+      ENVIRONMENT: acceptance
+      ASK_DEV_LIVE_ACCEPTANCE: "1"
+      ASK_DEV_ACCEPTANCE_OPENAI_API_KEY: ask-dev-acceptance-local-v1
+      ASK_DEV_ACCEPTANCE_OPENAI_PORT: "8001"
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8001/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
+    restart: "no"
+    networks:
+      - ask-dev-acceptance
+
+  web:
+    profiles: ["ask-dev-acceptance"]
+    container_name: ask-dev-acceptance-web
+    build:
+      context: ${ASK_DEV_WEB_CONTEXT:?pass --web-root to the acceptance launcher}
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        BACKEND_URL: http://api:8000
+    environment:
+      BACKEND_URL: http://api:8000
+      AUTH_SECRET: ask-dev-acceptance-web-auth-secret-v1
+      AUTH_URL: http://127.0.0.1:3002
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3002:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    restart: "no"
+
+networks:
+  ask-dev-acceptance:
+    internal: true

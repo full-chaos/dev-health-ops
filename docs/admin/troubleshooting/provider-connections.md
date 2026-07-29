@@ -93,10 +93,12 @@ Unknown events and malformed authority must fail closed.
 Ask Dev uses a separate multi-turn model contract; a provider that works for
 categorization or explanation can still be unavailable for Ask Dev. The V1
 certified surfaces are the platform OpenAI-compatible connection, a workspace
-BYO OpenAI-compatible connection, and the deterministic scripted certification
-provider. Other provider families return `model_not_supported`; no model or
-tool work starts, and an admitted submission is closed as a safe failed run for
-audit and idempotent retry.
+BYO OpenAI-compatible connection, and the scripted OpenAI-compatible service
+used only by deterministic release acceptance. The scripted service is not a
+customer-selectable provider family and cannot be enabled through organization
+settings. Other provider families return `model_not_supported`; no model or tool
+work starts, and an admitted submission is closed as a safe failed run for audit
+and idempotent retry.
 
 Re-run readiness after changing provider, model, endpoint, credentials, or the
 capability-test version. The stored result contains only a derived fingerprint,

@@ -52,3 +52,18 @@ a separate product change and is not part of this V1 release.
   pre-release environment after new binaries are stopped because it deletes
   all Ask Dev tables and their contents. Disabling the feature never disables
   retention for conversations already stored.
+
+## Ask Dev Wave 2 provider foundation release note
+
+- **New:** a provider-neutral multi-turn decision contract, OpenAI-compatible
+  agent adapter, deterministic scripted provider, current-readiness seam, safe
+  provider errors, and `use_case=ask_dev` token telemetry.
+- **Changed:** none of the existing `LLMProvider.complete` callers or fallback
+  behavior changes. Ask Dev has an independent fail-closed resolver: workspace
+  BYO cannot silently fall through to platform credentials.
+- **Known limited:** this foundation does not expose the Ask Dev REST or stream
+  routes and does not enable the feature. Provider/model construction and the
+  orchestration loop land in their owning Wave 2 integration lanes.
+- **Rollback:** disable Ask Dev, roll back the binary, then remove the additive
+  ClickHouse `use_case` column only if older readers require it. Existing rows
+  default to `legacy`; no customer prompt or response content is introduced.

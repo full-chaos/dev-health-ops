@@ -59,3 +59,13 @@ delimited `UNTRUSTED_DATA` excerpts. The stable evidence ID protects the
 canonical source descriptor against tampering; it is not an authorization
 grant. Every expansion re-resolves current organization, repository, entity,
 and user access before reading the native or optional ACR source.
+
+### Provider decision boundary
+
+The provider SDK contract is internal and intentionally does not add
+provider-specific fields to `dev_answer.v1`. A provider decision is normalized
+to exactly one tool request, final structured answer, disambiguation, or
+refusal. Usage, latency, provider/model fingerprints, cancellation, capability
+limits, and safe error codes remain operational metadata. The public answer's
+model disclosure uses only the canonical provider, model, and `platform | byo`
+source fields.

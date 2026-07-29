@@ -87,3 +87,22 @@ For PagerDuty V3:
 - create and verify a replacement binding before revoking the old one.
 
 Unknown events and malformed authority must fail closed.
+
+## Ask Dev model readiness
+
+Ask Dev uses a separate multi-turn model contract; a provider that works for
+categorization or explanation can still be unavailable for Ask Dev. The V1
+certified surfaces are the platform OpenAI-compatible connection, a workspace
+BYO OpenAI-compatible connection, and the deterministic scripted certification
+provider. Other provider families return `model_not_supported` and no run is
+created.
+
+Re-run readiness after changing provider, model, endpoint, credentials, or the
+capability-test version. The stored result contains only a derived fingerprint,
+test version, timestamp, outcome, and safe error code. It never contains the
+synthetic exchange, credentials, provider response, or customer question.
+
+Workspace BYO is evaluated first. If it is unusable, Ask Dev fails closed unless
+the workspace explicitly permits platform fallback. Global disable and
+provider/model deny rules always win. Usage created by both readiness checks and
+live calls is attributed to the `ask_dev` use case.

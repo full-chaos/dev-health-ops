@@ -50,6 +50,20 @@ that are absent from the same answer, a `complete` answer cannot carry a stale
 or unavailable required source, and a stream has exactly one terminal answer
 or error immediately followed by `done`.
 
+Ask Dev model decisions use `AgentLLMProvider`, not the completion-oriented
+`LLMProvider.complete` contract. Canonical messages, tools, structured final
+answers, disambiguation, refusals, usage, latency, cancellation, and safe errors
+remain provider-neutral. Adapters alone translate native wire tool calls. The
+OpenAI-compatible and deterministic scripted adapters therefore exercise the
+same decision seam; scripted mode is not an orchestrator bypass.
+
+Provider selection is a separate fail-closed policy. A current certified BYO
+connection wins, followed by a certified platform connection only when no BYO
+is selected or platform fallback was explicitly allowed. Disable controls and
+deny rules win before readiness. The scripted adapter is disclosed as its own
+provider but maps to the canonical `platform` model-source value in generated
+answer metadata; public model source remains `platform | byo`.
+
 ## Job contracts
 
 Versioned Go job contracts live under `contracts/jobs/v1/` and define:

@@ -982,6 +982,7 @@ class LLMTokenUsageRecord:
     calls: int
     computed_at: datetime
     run_id: str = ""
+    use_case: str = "legacy"
 
 
 @dataclass(frozen=True)

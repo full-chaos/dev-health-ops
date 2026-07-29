@@ -1,0 +1,50 @@
+"""Safe, stable error vocabulary for Ask Dev provider calls."""
+
+from __future__ import annotations
+
+from enum import Enum
+
+from dev_health_ops.llm.errors import classify_provider_error
+
+
+class AgentProviderErrorCode(str, Enum):
+    DISABLED = "disabled"
+    PROVIDER_NOT_CONFIGURED = "provider_not_configured"
+    MODEL_NOT_SUPPORTED = "model_not_supported"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    INVALID_RESPONSE = "invalid_response"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+
+
+_SAFE_MESSAGES = {
+    AgentProviderErrorCode.DISABLED: "Ask Dev is disabled.",
+    AgentProviderErrorCode.PROVIDER_NOT_CONFIGURED: "No usable model provider is configured.",
+    AgentProviderErrorCode.MODEL_NOT_SUPPORTED: "The selected model is not supported for Ask Dev.",
+    AgentProviderErrorCode.PROVIDER_UNAVAILABLE: "The model provider is temporarily unavailable.",
+    AgentProviderErrorCode.INVALID_RESPONSE: "The model provider returned an invalid response.",
+    AgentProviderErrorCode.TIMEOUT: "The model provider timed out.",
+    AgentProviderErrorCode.CANCELLED: "The model request was cancelled.",
+}
+
+
+class AgentProviderError(RuntimeError):
+    def __init__(self, code: AgentProviderErrorCode, *, retryable: bool = False):
+        self.code = code
+        self.retryable = retryable
+        super().__init__(_SAFE_MESSAGES[code])
+
+
+def safe_agent_provider_error(exc: Exception) -> AgentProviderError:
+    """Map provider failures without retaining provider text or credentials."""
+    if isinstance(exc, AgentProviderError):
+        return exc
+    classified = classify_provider_error(exc)
+    name = type(classified).__name__.lower()
+    if "timeout" in name:
+        return AgentProviderError(AgentProviderErrorCode.TIMEOUT, retryable=True)
+    if "auth" in name or "credential" in name:
+        return AgentProviderError(AgentProviderErrorCode.PROVIDER_NOT_CONFIGURED)
+    return AgentProviderError(
+        AgentProviderErrorCode.PROVIDER_UNAVAILABLE, retryable=True
+    )

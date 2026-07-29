@@ -28,3 +28,9 @@ a2c0fc1ce:docs/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/bri
 f3b6feeba:tests/test_ingest_api.py:generic-api-key:71
 81d688d02:tests/api/auth/test_login_rate_limit.py:generic-api-key:29
 69bb1e2f7:tests/api/admin/test_credential_repos.py:private-key:193
+
+# Ask Dev runtime test: deterministic pytest-only signing input. The PR scan
+# examines the historical addition, so both full and short commit fingerprint
+# forms are required for gitleaks matcher compatibility.
+e586dede374a01e80414f7960ab72fdd5ee93f41:tests/api/dev/test_production_runtime.py:generic-api-key:113
+e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113

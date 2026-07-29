@@ -355,6 +355,7 @@ class DevOrchestrator:
         answer_id: str,
         cancellation: asyncio.Event,
         prior_turns: tuple[PromptConversationTurn, ...] = (),
+        event_sink: EventSink | None = None,
     ) -> OrchestratorResult:
         started = self._monotonic()
         events: list[OrchestratorEvent] = []
@@ -369,13 +370,14 @@ class DevOrchestrator:
         terminal_written = False
         repair_count = 0
         retry_count = 0
+        selected_event_sink = event_sink or self._event_sink
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
             events.append(event)
             await self._recorder.transition(state)
-            if self._event_sink is not None:
-                await self._event_sink(event)
+            if selected_event_sink is not None:
+                await selected_event_sink(event)
 
         async def finish(
             state: RunState,
@@ -414,8 +416,8 @@ class DevOrchestrator:
                 state=state, safe_code=error.code if error else None
             )
             events.append(event)
-            if self._event_sink is not None:
-                await self._event_sink(event)
+            if selected_event_sink is not None:
+                await selected_event_sink(event)
             return OrchestratorResult(
                 run_id=run_id,
                 state=state,

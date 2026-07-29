@@ -126,7 +126,10 @@ class OpenAICompatibleAgentProvider:
         signal: CancellationSignal | None = None,
     ) -> AgentDecisionResult:
         if signal is not None and signal.is_cancelled():
-            raise AgentProviderError(AgentProviderErrorCode.CANCELLED)
+            raise AgentProviderError(
+                AgentProviderErrorCode.CANCELLED,
+                provider_dispatched=False,
+            )
         started = time.monotonic()
         create_completion = cast(Any, self._client.chat.completions.create)
         provider_task = asyncio.create_task(
@@ -185,11 +188,16 @@ class OpenAICompatibleAgentProvider:
         usage = getattr(response, "usage", None)
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        cached_tokens = getattr(prompt_details, "cached_tokens", None)
         return AgentDecisionResult(
             decision=decision,
             usage=AgentUsage(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cached_input_tokens=(
+                    int(cached_tokens) if cached_tokens is not None else None
+                ),
                 estimated_cost_microusd=_estimated_cost_microusd(
                     model=self.model,
                     input_tokens=input_tokens,

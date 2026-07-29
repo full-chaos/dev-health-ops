@@ -61,6 +61,37 @@ def test_org_byo_provider_beats_platform_env_in_auto():
     assert provider._impl.cfg.base_url == "https://api.openai.com/v1"
 
 
+def test_org_byo_provider_factory_attaches_shared_budget_guard():
+    org = {
+        "org-1": {
+            "provider": "openai",
+            "model": "gpt-5-mini",
+            "api_key": "sk-org",
+            "base_url": "https://api.openai.com/v1",
+        }
+    }
+    attached: list[dict[str, object]] = []
+
+    def attach(value, **kwargs):
+        attached.append(kwargs)
+        return value
+
+    with patch.dict(os.environ, {}, clear=True):
+        with _patch_org(org):
+            with patch("dev_health_ops.llm.budget.attach_llm_budget_guard", attach):
+                provider = get_provider("auto", org_id="org-1")
+
+    assert isinstance(provider, OpenAIProvider)
+    assert attached == [
+        {
+            "org_id": "org-1",
+            "provider": "openai",
+            "model": "gpt-5-mini",
+            "base_url": "https://api.openai.com/v1",
+        }
+    ]
+
+
 def test_platform_env_used_when_org_absent():
     """Org with no BYO settings falls through to the platform/env default."""
     with patch.dict(

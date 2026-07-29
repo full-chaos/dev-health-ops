@@ -35,6 +35,7 @@ from dev_health_ops.llm.agent.errors import (
     AgentProviderErrorCode,
     safe_agent_provider_error,
 )
+from dev_health_ops.llm.budget import budget_idempotency_scope
 
 from .answer_validator import (
     AnswerValidationContext,
@@ -555,12 +556,15 @@ class DevOrchestrator:
                             ),
                         )
                     try:
-                        decision_result = await self._decide_with_cancellation(
-                            messages=messages,
-                            tools=tools,
-                            timeout_seconds=provider_timeout,
-                            cancellation=cancellation,
-                        )
+                        with budget_idempotency_scope(
+                            f"ask-dev:{request.request_id}:{retry_count}:{len(tool_results)}"
+                        ):
+                            decision_result = await self._decide_with_cancellation(
+                                messages=messages,
+                                tools=tools,
+                                timeout_seconds=provider_timeout,
+                                cancellation=cancellation,
+                            )
                         break
                     except Exception as exc:
                         provider_error = safe_agent_provider_error(exc)
@@ -1014,6 +1018,8 @@ class DevOrchestrator:
             AgentProviderErrorCode.INVALID_RESPONSE: "internal_error",
             AgentProviderErrorCode.TIMEOUT: "provider_unavailable",
             AgentProviderErrorCode.CANCELLED: "cancelled",
+            AgentProviderErrorCode.BUDGET_EXHAUSTED: "cost_limit_reached",
+            AgentProviderErrorCode.BUDGET_UNAVAILABLE: "provider_unavailable",
         }
         return DevError(
             schema_version="dev_error.v1",

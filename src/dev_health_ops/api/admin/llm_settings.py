@@ -10,6 +10,7 @@ from dev_health_ops.api.admin.schemas import LLMSettingsResponse, LLMSettingsUps
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.api.services.licensing import byo_llm_flag_state, resolve_org_tier
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
+from dev_health_ops.llm.budget import set_budget_limit
 from dev_health_ops.llm.credentials import validate_llm_base_url
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import SettingCategory
@@ -184,6 +185,18 @@ async def upsert_llm_settings(
             SettingCategory.LLM.value,
             description="BYO LLM maximum concurrent categorizations for this organization",
         )
+    if payload.budget_limit_micro_usd is not None:
+        try:
+            await set_budget_limit(svc, payload.budget_limit_micro_usd)
+        except ValueError as exc:
+            raise LLMSettingsAccessError(
+                status_code=400,
+                detail={
+                    "error": "budget_limit_exceeds_maximum",
+                    "feature": "byo_llm",
+                    "message": str(exc),
+                },
+            ) from exc
     return await get_llm_settings_response(svc)
 
 

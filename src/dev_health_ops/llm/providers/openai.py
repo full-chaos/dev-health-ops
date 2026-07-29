@@ -17,10 +17,12 @@ import asyncio
 import io
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from dev_health_ops.llm.errors import (
+    LLMError,
     LLMRateLimitError,
     classify_provider_error,
     is_retryable,
@@ -46,6 +48,10 @@ from .batch import (
 )
 
 logger = logging.getLogger(__name__)
+
+OpenAIAttemptExecutor = Callable[
+    [int, int, int, Callable[[], Awaitable[Any]]], Awaitable[Any]
+]
 
 CATEGORIZATION_RESPONSE_FORMAT = "investment_categorization"
 INVESTMENT_MIX_RESPONSE_FORMAT = "investment_mix_explanation"
@@ -462,6 +468,11 @@ class OpenAIProvider(LLMProviderBase):
     async def complete(self, prompt: str) -> CompletionResult:
         return await self._impl.complete(prompt)
 
+    def set_attempt_executor(self, executor: OpenAIAttemptExecutor) -> None:
+        """Install accounting around each actual synchronous API attempt."""
+
+        self._impl.set_attempt_executor(executor)
+
     def batch_capability(self, model: str | None = None) -> BatchCapability:
         return self._impl.batch_capability(model)
 
@@ -499,8 +510,42 @@ class _OpenAIProviderBase(LLMProviderBase):
     def __init__(self, cfg: OpenAIProviderConfig) -> None:
         self.cfg = cfg
         self._client: Any | None = None
+        self._attempt_executor: OpenAIAttemptExecutor | None = None
         if cfg.validate_model_on_startup:
             self._validate_model_on_startup()
+
+    def set_attempt_executor(self, executor: OpenAIAttemptExecutor) -> None:
+        self._attempt_executor = executor
+
+    async def _execute_attempt(
+        self,
+        *,
+        attempt_number: int,
+        request: dict[str, Any],
+        maximum_output_tokens: int,
+        invoke: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        if self._attempt_executor is None:
+            return await invoke()
+        # UTF-8 request bytes are a conservative upper bound for input tokens,
+        # including system instructions and structured-output schema overhead.
+        maximum_input_tokens = max(
+            1,
+            len(
+                json.dumps(
+                    request,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ),
+        )
+        return await self._attempt_executor(
+            attempt_number,
+            maximum_input_tokens,
+            maximum_output_tokens,
+            invoke,
+        )
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -707,7 +752,11 @@ class _OpenAIProviderBase(LLMProviderBase):
         max_retries: int,
         api_name: str,
     ) -> bool:
-        llm_exc = classify_provider_error(exc, provider="openai", model=self.cfg.model)
+        llm_exc = (
+            exc
+            if isinstance(exc, LLMError)
+            else classify_provider_error(exc, provider="openai", model=self.cfg.model)
+        )
         if is_retryable(llm_exc) and retry_count < max_retries:
             delay = retry_delay(retry_count)
             if isinstance(llm_exc, LLMRateLimitError) and llm_exc.retry_after:
@@ -728,6 +777,14 @@ class _OpenAIProviderBase(LLMProviderBase):
     def _completion_result(
         self, text: str, usage: object | None = None
     ) -> CompletionResult:
+        if isinstance(usage, dict):
+            input_details = usage.get("input_tokens_details") or usage.get(
+                "prompt_tokens_details"
+            )
+        else:
+            input_details = getattr(usage, "input_tokens_details", None) or getattr(
+                usage, "prompt_tokens_details", None
+            )
         return CompletionResult(
             text=text,
             input_tokens=usage_token_count(usage, "input_tokens", "prompt_tokens"),
@@ -735,6 +792,7 @@ class _OpenAIProviderBase(LLMProviderBase):
                 usage, "output_tokens", "completion_tokens"
             ),
             model=self.cfg.model,
+            cached_input_tokens=usage_token_count(input_details, "cached_tokens"),
         )
 
     async def aclose(self) -> None:
@@ -804,7 +862,12 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                 if self._supports_temperature():
                     kwargs["temperature"] = self.cfg.temperature
 
-                response = await client.responses.create(**kwargs)
+                response = await self._execute_attempt(
+                    attempt_number=retry_count + 1,
+                    request=kwargs,
+                    maximum_output_tokens=token_budget,
+                    invoke=lambda: client.responses.create(**kwargs),
+                )
                 usage = getattr(response, "usage", None)
 
                 # Best-effort extraction
@@ -904,7 +967,12 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                 if self._supports_temperature():
                     kwargs["temperature"] = self.cfg.temperature
 
-                response = await client.chat.completions.create(**kwargs)
+                response = await self._execute_attempt(
+                    attempt_number=retry_count + 1,
+                    request=kwargs,
+                    maximum_output_tokens=max_tokens,
+                    invoke=lambda: client.chat.completions.create(**kwargs),
+                )
                 usage = getattr(response, "usage", None)
 
                 choice = response.choices[0]

@@ -10,6 +10,7 @@ class CompletionResult:
     input_tokens: int | None
     output_tokens: int | None
     model: str
+    cached_input_tokens: int | None = None
 
 
 @runtime_checkable

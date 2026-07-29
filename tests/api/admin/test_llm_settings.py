@@ -26,6 +26,7 @@ from dev_health_ops.llm.credentials import (
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
+from dev_health_ops.models.llm_budget import BYOLLMBudgetReservation
 from dev_health_ops.models.settings import Setting, SettingCategory
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
@@ -43,6 +44,7 @@ _TABLES = tables_of(
     OrgFeatureOverride,
     Setting,
     AuditLog,
+    BYOLLMBudgetReservation,
 )
 
 
@@ -111,7 +113,13 @@ async def _seed_org(
     return {"org_id": str(org_id), "user_id": str(user_id)}
 
 
-def _make_app(session_maker, state: dict[str, str]) -> FastAPI:
+def _make_app(
+    session_maker,
+    state: dict[str, str],
+    *,
+    role: str = "owner",
+    impersonated_by: str | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(admin_router_module.router)
 
@@ -119,8 +127,9 @@ def _make_app(session_maker, state: dict[str, str]) -> FastAPI:
         user_id=state["user_id"],
         email="admin@example.com",
         org_id=state["org_id"],
-        role="owner",
+        role=role,
         is_superuser=False,
+        impersonated_by=impersonated_by,
     )
 
     async def _session_override():
@@ -478,6 +487,145 @@ async def test_admin_llm_settings_rejects_excessive_concurrency(session_maker):
 
 
 @pytest.mark.asyncio
+async def test_admin_llm_budget_persists_separately_and_exposes_contract(
+    session_maker, monkeypatch
+):
+    monkeypatch.setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", "5000000")
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(session_maker, state)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        updated = await ac.put(
+            "/api/v1/admin/llm-settings",
+            json={
+                "provider": "openai",
+                "model": "gpt-5-mini",
+                "api_key": "sk-secret-value",
+                "budget_limit_micro_usd": 2000000,
+            },
+        )
+        budget = await ac.get("/api/v1/admin/llm-settings/budget")
+
+    assert updated.status_code == 200, updated.text
+    assert budget.status_code == 200, budget.text
+    body = budget.json()
+    assert body == {
+        "used_micro_usd": 0,
+        "limit_micro_usd": 2000000,
+        "remaining_micro_usd": 2000000,
+        "window": "calendar_month_utc",
+        "reset_at": body["reset_at"],
+        "enforcement_available": True,
+        "reason": "available",
+        "maximum_limit_micro_usd": 5000000,
+        "pricing_version": "openai-public-2025-08-07.v1",
+    }
+
+    async with session_maker() as session:
+        svc = SettingsService(session, state["org_id"])
+        credentials = await svc.list_by_category(SettingCategory.LLM.value)
+        monetary = await svc.list_by_category("llm_budget")
+    assert {row["key"] for row in credentials}.isdisjoint(
+        {row["key"] for row in monetary}
+    )
+    assert monetary[0]["value"] == "2000000"
+
+
+@pytest.mark.asyncio
+async def test_admin_llm_budget_rejects_above_operator_maximum(
+    session_maker, monkeypatch
+):
+    monkeypatch.setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", "1000")
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(session_maker, state)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.put(
+            "/api/v1/admin/llm-settings",
+            json={
+                "provider": "openai",
+                "model": "gpt-5-mini",
+                "api_key": "sk-secret-value",
+                "budget_limit_micro_usd": 1001,
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "budget_limit_exceeds_maximum"
+
+
+@pytest.mark.asyncio
+async def test_admin_llm_budget_rejects_above_licensed_maximum(
+    session_maker, monkeypatch
+):
+    monkeypatch.setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", "5000")
+    state = await _seed_org(session_maker, "team")
+    async with session_maker() as session:
+        license_result = await session.execute(
+            select(OrgLicense).where(OrgLicense.org_id == uuid.UUID(state["org_id"]))
+        )
+        license_result.scalar_one().limits_override = {"byo_llm_budget_micro_usd": 750}
+        await session.commit()
+    app = _make_app(session_maker, state)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.put(
+            "/api/v1/admin/llm-settings",
+            json={
+                "provider": "openai",
+                "model": "gpt-5-mini",
+                "api_key": "sk-secret-value",
+                "budget_limit_micro_usd": 751,
+            },
+        )
+        budget = await ac.get("/api/v1/admin/llm-settings/budget")
+
+    assert response.status_code == 400
+    assert budget.status_code == 200
+    assert budget.json()["maximum_limit_micro_usd"] == 750
+
+
+@pytest.mark.asyncio
+async def test_llm_budget_rejects_non_admin(session_maker):
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(session_maker, state, role="member")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.get("/api/v1/admin/llm-settings/budget")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_llm_budget_blocks_impersonated_admin_write(session_maker):
+    state = await _seed_org(session_maker, "team")
+    app = _make_app(
+        session_maker,
+        state,
+        impersonated_by=str(uuid.uuid4()),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.put(
+            "/api/v1/admin/llm-settings",
+            json={"provider": "openai", "budget_limit_micro_usd": 1000},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "impersonated_write_forbidden"
+
+
+@pytest.mark.asyncio
 async def test_admin_llm_settings_requires_team_or_enterprise(session_maker):
     state = await _seed_org(session_maker, "community")
     app = _make_app(session_maker, state)
@@ -494,7 +642,10 @@ async def test_admin_llm_settings_requires_team_or_enterprise(session_maker):
 
 
 @pytest.mark.asyncio
-async def test_generic_settings_routes_reject_llm_category(session_maker):
+@pytest.mark.parametrize("category", ["llm", "llm_budget"])
+async def test_generic_settings_routes_reject_llm_categories(
+    session_maker, category: str
+):
     # Review finding: the generic settings routes must NOT be a back door for
     # category='llm' (would bypass the BYO-LLM tier gate + forced encryption).
     state = await _seed_org(session_maker, "team")
@@ -502,21 +653,21 @@ async def test_generic_settings_routes_reject_llm_category(session_maker):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         put_resp = await ac.put(
-            "/api/v1/admin/settings/llm/api_key",
+            f"/api/v1/admin/settings/{category}/api_key",
             json={"value": "sk-leak", "encrypt": False},
         )
         assert put_resp.status_code == 403
         assert put_resp.json()["detail"]["error"] == "use_llm_settings_endpoint"
         post_resp = await ac.post(
             "/api/v1/admin/settings",
-            json={"key": "api_key", "value": "sk-leak", "category": "llm"},
+            json={"key": "api_key", "value": "sk-leak", "category": category},
         )
         assert post_resp.status_code == 403
-        get_resp = await ac.get("/api/v1/admin/settings/llm/api_key")
+        get_resp = await ac.get(f"/api/v1/admin/settings/{category}/api_key")
         assert get_resp.status_code == 403
-        del_resp = await ac.delete("/api/v1/admin/settings/llm/api_key")
+        del_resp = await ac.delete(f"/api/v1/admin/settings/{category}/api_key")
         assert del_resp.status_code == 403
-        list_resp = await ac.get("/api/v1/admin/settings/llm")
+        list_resp = await ac.get(f"/api/v1/admin/settings/{category}")
         assert list_resp.status_code == 403
 
 

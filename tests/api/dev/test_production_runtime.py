@@ -99,6 +99,48 @@ async def test_provider_resolution_requires_current_certification(
 
 
 @pytest.mark.asyncio
+async def test_byo_provider_resolution_attaches_shared_budget_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(production_runtime, "SettingsService", FakeSettingsService)
+    provider = FakeProvider()
+    monkeypatch.setattr(production_runtime, "_provider", lambda _candidate: provider)
+    attached: list[dict[str, Any]] = []
+
+    def attach(value, **kwargs):
+        attached.append(kwargs)
+        return value
+
+    monkeypatch.setattr(production_runtime, "attach_agent_budget_guard", attach)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    FakeSettingsService.values = {
+        "provider": "openai",
+        "model": "gpt-5-mini",
+        "api_key": "sk-org",
+        "base_url": "https://api.openai.com/v1",
+    }
+    session = cast(Any, object())
+
+    resolved = await production_runtime.resolve_certification_provider(
+        session, org_id="org_01"
+    )
+
+    assert resolved.source is AgentProviderSource.BYO
+    assert resolved.provider is provider
+    assert attached == [
+        {
+            "session": session,
+            "org_id": "org_01",
+            "provider": "openai",
+            "model": "gpt-5-mini",
+            "base_url": "https://api.openai.com/v1",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_production_runtime_wires_exactly_the_nine_registered_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

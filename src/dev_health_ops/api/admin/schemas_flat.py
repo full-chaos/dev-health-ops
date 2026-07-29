@@ -35,6 +35,24 @@ class SettingsListResponse(BaseModel):
     settings: list[SettingResponse]
 
 
+class LLMBudgetResponse(BaseModel):
+    used_micro_usd: int | None = None
+    limit_micro_usd: int | None = None
+    remaining_micro_usd: int | None = None
+    window: Literal["calendar_month_utc"] = "calendar_month_utc"
+    reset_at: datetime
+    enforcement_available: bool
+    reason: Literal[
+        "available",
+        "budget_not_configured",
+        "pricing_unavailable",
+        "usage_unavailable",
+        "budget_exhausted",
+    ]
+    maximum_limit_micro_usd: int
+    pricing_version: str | None = None
+
+
 class LLMSettingsResponse(BaseModel):
     provider: str | None = None
     model: str | None = None
@@ -63,6 +81,7 @@ class LLMSettingsUpsert(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     concurrency: int | None = Field(default=None, ge=1, le=32)
+    budget_limit_micro_usd: int | None = Field(default=None, ge=0)
 
 
 class LLMSpendRun(BaseModel):

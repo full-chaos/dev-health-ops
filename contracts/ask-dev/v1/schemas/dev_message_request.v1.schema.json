@@ -1,5 +1,24 @@
 {
   "$defs": {
+    "AskDevSurfaceRouteID": {
+      "enum": [
+        "diagnose_overview",
+        "flow_metrics",
+        "investment",
+        "work_graph",
+        "complexity",
+        "cognitive_load",
+        "bottlenecks",
+        "repository_detail",
+        "project_detail",
+        "work_unit_detail",
+        "issue_detail",
+        "pull_request_detail",
+        "data_health"
+      ],
+      "title": "AskDevSurfaceRouteID",
+      "type": "string"
+    },
     "DevEntityRef": {
       "additionalProperties": false,
       "properties": {
@@ -153,11 +172,7 @@
           "title": "Filter Fingerprint"
         },
         "route_id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
-          "title": "Route Id",
-          "type": "string"
+          "$ref": "#/$defs/AskDevSurfaceRouteID"
         }
       },
       "required": [
@@ -294,6 +309,21 @@
       "maxItems": 8,
       "title": "Requested Metric Ids",
       "type": "array"
+    },
+    "retry_of_run_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retry Of Run Id"
     },
     "schema_version": {
       "const": "dev_message_request.v1",

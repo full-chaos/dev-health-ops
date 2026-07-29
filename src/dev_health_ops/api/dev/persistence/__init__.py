@@ -11,6 +11,8 @@ from .service import (
     DevPersistenceValidationError,
     DevRateLimitExceeded,
     MessageRunResult,
+    TranscriptPage,
+    TranscriptRecord,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "DevPersistenceValidationError",
     "DevRateLimitExceeded",
     "MessageRunResult",
+    "TranscriptPage",
+    "TranscriptRecord",
 ]

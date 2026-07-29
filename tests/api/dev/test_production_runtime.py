@@ -39,9 +39,9 @@ class FakeSettingsService:
         return self.values.get(key, default)
 
 
-def _fingerprint(base_url: str = "") -> str:
+def _fingerprint(base_url: str = "", model: str = "certified-model") -> str:
     return hashlib.sha256(
-        "\0".join(("openai-compatible", base_url, READINESS_VERSION)).encode()
+        "\0".join(("platform", "openai", model, base_url, READINESS_VERSION)).encode()
     ).hexdigest()[:24]
 
 
@@ -77,6 +77,12 @@ async def test_provider_resolution_requires_current_certification(
     assert resolved.source is AgentProviderSource.PLATFORM
     assert resolved.family == "openai"
     assert resolved.model == "certified-model"
+
+    monkeypatch.setenv("LLM_MODEL", "changed-model")
+    with pytest.raises(DevRuntimeUnavailable) as model_change:
+        await production_runtime.resolve_production_provider(session, org_id="org_01")
+    assert model_change.value.code == "provider_not_configured"
+    monkeypatch.setenv("LLM_MODEL", "certified-model")
 
     FakeSettingsService.values["ask_dev_agent_readiness"] = json.dumps(
         {

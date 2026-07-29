@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from dev_health_ops.api.admin.middleware import require_admin
 
 from .routers import (
+    ask_dev_router,
     credentials_router,
     customer_push_router,
     features_router,
@@ -41,6 +42,7 @@ router = APIRouter(
 )
 
 router.include_router(settings_router)
+router.include_router(ask_dev_router)
 router.include_router(setup_router)
 router.include_router(credentials_router)
 router.include_router(customer_push_router)

@@ -1239,9 +1239,10 @@ class TestGetFeaturesForTier:
         enterprise = get_features_for_tier(LicenseTier.ENTERPRISE)
         assert set(community.keys()) == set(team.keys()) == set(enterprise.keys())
 
-    def test_returns_30_features(self):
+    def test_returns_31_features_including_contextual_entrypoints(self):
         features = get_features_for_tier(LicenseTier.COMMUNITY)
-        assert len(features) == 30
+        assert len(features) == 31
+        assert features["ask_dev_contextual_entrypoints"] is False
 
     def test_sign_license_uses_canonical_registry(self):
         """sign_license() with no explicit features uses get_features_for_tier."""

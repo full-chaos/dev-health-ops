@@ -64,6 +64,60 @@ class EntityType(StrEnum):
     PULL_REQUEST = "pull_request"
 
 
+class AskDevSurfaceRouteID(StrEnum):
+    DIAGNOSE_OVERVIEW = "diagnose_overview"
+    FLOW_METRICS = "flow_metrics"
+    INVESTMENT = "investment"
+    WORK_GRAPH = "work_graph"
+    COMPLEXITY = "complexity"
+    COGNITIVE_LOAD = "cognitive_load"
+    BOTTLENECKS = "bottlenecks"
+    REPOSITORY_DETAIL = "repository_detail"
+    PROJECT_DETAIL = "project_detail"
+    WORK_UNIT_DETAIL = "work_unit_detail"
+    ISSUE_DETAIL = "issue_detail"
+    PULL_REQUEST_DETAIL = "pull_request_detail"
+    DATA_HEALTH = "data_health"
+
+
+_SURFACE_ENTITY_TYPES: dict[AskDevSurfaceRouteID, frozenset[EntityType]] = {
+    AskDevSurfaceRouteID.DIAGNOSE_OVERVIEW: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.FLOW_METRICS: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.INVESTMENT: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.WORK_GRAPH: frozenset(
+        {
+            EntityType.REPOSITORY,
+            EntityType.PROJECT,
+            EntityType.WORK_UNIT,
+            EntityType.ISSUE,
+            EntityType.PULL_REQUEST,
+        }
+    ),
+    AskDevSurfaceRouteID.COMPLEXITY: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.COGNITIVE_LOAD: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.BOTTLENECKS: frozenset(
+        {EntityType.REPOSITORY, EntityType.PROJECT}
+    ),
+    AskDevSurfaceRouteID.REPOSITORY_DETAIL: frozenset({EntityType.REPOSITORY}),
+    AskDevSurfaceRouteID.PROJECT_DETAIL: frozenset({EntityType.PROJECT}),
+    AskDevSurfaceRouteID.WORK_UNIT_DETAIL: frozenset({EntityType.WORK_UNIT}),
+    AskDevSurfaceRouteID.ISSUE_DETAIL: frozenset({EntityType.ISSUE}),
+    AskDevSurfaceRouteID.PULL_REQUEST_DETAIL: frozenset({EntityType.PULL_REQUEST}),
+    AskDevSurfaceRouteID.DATA_HEALTH: frozenset({EntityType.REPOSITORY}),
+}
+
+_SURFACE_ROUTES_ALLOWING_ORGANIZATION_SCOPE = frozenset(
+    {
+        AskDevSurfaceRouteID.DIAGNOSE_OVERVIEW,
+        AskDevSurfaceRouteID.FLOW_METRICS,
+        AskDevSurfaceRouteID.INVESTMENT,
+        AskDevSurfaceRouteID.COGNITIVE_LOAD,
+        AskDevSurfaceRouteID.BOTTLENECKS,
+        AskDevSurfaceRouteID.DATA_HEALTH,
+    }
+)
+
+
 class QuestionClass(StrEnum):
     STATUS = "status"
     REMAINING_WORK = "remaining_work"
@@ -148,7 +202,7 @@ class DevEntityRef(ContractModel):
 
 
 class DevSurfaceContext(ContractModel):
-    route_id: OpaqueID
+    route_id: AskDevSurfaceRouteID
     entity_refs: list[DevEntityRef] = Field(default_factory=list, max_length=20)
     filter_fingerprint: OpaqueID | None = None
 
@@ -197,7 +251,46 @@ class DevScope(ContractModel):
                 or self.entity_refs[0].entity_type != expected
             ):
                 raise ValueError("direct entity scope requires one matching entity")
+        self._validate_surface_context()
         return self
+
+    def _validate_surface_context(self) -> None:
+        context = self.surface_context
+        if context is None:
+            return
+
+        refs = context.entity_refs
+        if len({(ref.entity_type, ref.entity_id) for ref in refs}) != len(refs):
+            raise ValueError("surface context entity references must be unique")
+        if not refs:
+            if context.route_id not in _SURFACE_ROUTES_ALLOWING_ORGANIZATION_SCOPE:
+                raise ValueError("surface context route requires a direct entity")
+            if self.direct_scope is not DirectScope.ORGANIZATION:
+                raise ValueError("empty surface context requires organization scope")
+            return
+
+        allowed_types = _SURFACE_ENTITY_TYPES[context.route_id]
+        if any(ref.entity_type not in allowed_types for ref in refs):
+            raise ValueError("surface context entity is not approved for this route")
+
+        if all(ref.entity_type is EntityType.REPOSITORY for ref in refs):
+            if self.direct_scope is not DirectScope.REPOSITORY or {
+                ref.entity_id for ref in refs
+            } != set(self.repositories):
+                raise ValueError("surface repository context must match direct scope")
+            return
+
+        if len(refs) != 1:
+            raise ValueError("non-repository surface context must be singular")
+        surface_ref = refs[0]
+        expected_scope = DirectScope(surface_ref.entity_type.value)
+        if (
+            self.direct_scope is not expected_scope
+            or len(self.entity_refs) != 1
+            or self.entity_refs[0].entity_type is not surface_ref.entity_type
+            or self.entity_refs[0].entity_id != surface_ref.entity_id
+        ):
+            raise ValueError("surface entity context must match direct scope")
 
 
 class DevDisambiguationCandidate(ContractModel):
@@ -333,6 +426,7 @@ class DevMessageRequest(ContractModel):
     request_id: OpaqueID
     client_message_id: OpaqueID
     conversation_id: OpaqueID | None = None
+    retry_of_run_id: OpaqueID | None = None
     question: Annotated[
         str,
         StringConstraints(min_length=1, max_length=8_192),
@@ -596,6 +690,82 @@ class DevAnswer(ContractModel):
         return self
 
 
+DevTranscriptRunState = Literal[
+    "accepted",
+    "resolving_scope",
+    "model_decision",
+    "tool_validation",
+    "tool_execution",
+    "answer_validation",
+    "completed",
+    "insufficient_evidence",
+    "refused",
+    "failed",
+    "cancelled",
+]
+
+
+class DevTranscriptEntry(ContractModel):
+    """One safe persisted turn artifact in the canonical conversation history."""
+
+    schema_version: Literal["dev_transcript_entry.v1"]
+    message_id: OpaqueID
+    role: Literal["user", "assistant"]
+    created_at: AwareDatetime
+    run_id: OpaqueID
+    retry_of_run_id: OpaqueID | None = None
+    run_state: DevTranscriptRunState
+    question: (
+        Annotated[
+            str,
+            StringConstraints(min_length=1, max_length=8_192),
+        ]
+        | None
+    ) = Field(default=None, json_schema_extra={"x-max-utf8-bytes": 8_192})
+    scope: DevScope | None = None
+    answer: DevAnswer | None = None
+
+    @model_validator(mode="after")
+    def validate_role_payload(self) -> Self:
+        if self.role == "user":
+            if self.question is None or self.scope is None or self.answer is not None:
+                raise ValueError(
+                    "user transcript entries require question and scope only"
+                )
+            if len(self.question.encode("utf-8")) > 8_192:
+                raise ValueError("question exceeds 8 KiB UTF-8")
+        elif self.question is not None or self.scope is not None or self.answer is None:
+            raise ValueError("assistant transcript entries require answer only")
+        return self
+
+
+class DevConversationTranscript(ContractModel):
+    """A bounded page from one retained, owned canonical conversation."""
+
+    schema_version: Literal["dev_conversation_transcript.v1"]
+    conversation_id: OpaqueID
+    items: list[DevTranscriptEntry] = Field(default_factory=list, max_length=100)
+    next_cursor: (
+        Annotated[str, StringConstraints(min_length=1, max_length=512)] | None
+    ) = None
+
+    @model_validator(mode="after")
+    def validate_page(self) -> Self:
+        message_ids = [item.message_id for item in self.items]
+        if len(message_ids) != len(set(message_ids)):
+            raise ValueError("transcript message IDs must be unique")
+        ordering = [(item.created_at, item.message_id) for item in self.items]
+        if ordering != sorted(ordering):
+            raise ValueError("transcript entries must be chronological")
+        for item in self.items:
+            if (
+                item.answer is not None
+                and item.answer.conversation_id != self.conversation_id
+            ):
+                raise ValueError("transcript answer belongs to another conversation")
+        return self
+
+
 class DevStatusFact(ContractModel):
     fact_id: OpaqueID
     text: ShortText
@@ -844,6 +1014,7 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
     "dev_capabilities.v1": DevCapabilities,
     "dev_conversation.v1": DevConversation,
     "dev_conversation_summary.v1": DevConversationSummary,
+    "dev_conversation_transcript.v1": DevConversationTranscript,
     "dev_message_request.v1": DevMessageRequest,
     "dev_answer.v1": DevAnswer,
     "dev_claim.v1": DevClaim,
@@ -867,6 +1038,7 @@ __all__ = [
     "DevClaim",
     "DevConversation",
     "DevConversationSummary",
+    "DevConversationTranscript",
     "DevError",
     "DevEvidenceExpansion",
     "DevEvidenceRef",
@@ -879,5 +1051,6 @@ __all__ = [
     "DevStreamEvent",
     "DevToolRequest",
     "DevToolResult",
+    "DevTranscriptEntry",
     "validate_stream",
 ]

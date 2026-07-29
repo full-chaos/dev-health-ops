@@ -37,6 +37,12 @@ references. They must not contain prompts, provider request or response
 payloads, chain-of-thought, raw source evidence, query results, or credentials.
 Conversation content is not used for model training.
 
+The Ask Dev administrator usage response aggregates only the dedicated Ask Dev
+run rows and labels the result `use_case=ask_dev`. It may return request/run,
+token, estimated micro-USD cost, failure, and insufficient-evidence counts. It
+does not read or return questions, answers, feedback, evidence, tool results,
+prompts, packet internals, credentials, or provider endpoints.
+
 Users may delete their own conversations. An organization administrator may
 purge a target user's Ask Dev content, and user or organization deletion
 cascades through all conversation content. Cleanup leaves only a minimal

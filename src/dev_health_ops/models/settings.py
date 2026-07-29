@@ -43,6 +43,7 @@ class SettingCategory(str, Enum):
     LINEAR = "linear"
     ATLASSIAN = "atlassian"
     LLM = "llm"
+    ASK_DEV = "ask_dev"
     SYNC = "sync"
     NOTIFICATIONS = "notifications"
     RETENTION = "retention"

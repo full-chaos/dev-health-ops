@@ -7,6 +7,7 @@
   "requested_metric_ids": [
     "items_completed"
   ],
+  "retry_of_run_id": "run_original_01",
   "schema_version": "dev_message_request.v1",
   "scope": {
     "comparison_range": {
@@ -22,7 +23,14 @@
     ],
     "schema_version": "dev_scope.v1",
     "surface_context": {
-      "entity_refs": [],
+      "entity_refs": [
+        {
+          "display_label": "Selected repository",
+          "entity_id": "repo_dev_health",
+          "entity_type": "repository",
+          "repository_id": null
+        }
+      ],
       "filter_fingerprint": "filters_01",
       "route_id": "diagnose_overview"
     },

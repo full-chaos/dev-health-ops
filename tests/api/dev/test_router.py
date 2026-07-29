@@ -19,6 +19,7 @@ from dev_health_ops.api.dev import router as dev_router_module
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import (
     DevAnswer,
+    DevScope,
     DevScopeResolution,
     ScopeResolutionOutcome,
 )
@@ -32,9 +33,15 @@ from dev_health_ops.api.dev.orchestrator import (
     OrchestratorResult,
     RunState,
 )
+from dev_health_ops.api.dev.org_policy import (
+    ASK_DEV_EMERGENCY_DISABLED_KEY,
+    ASK_DEV_RETENTION_KEY,
+)
 from dev_health_ops.api.dev.persistence import DevPersistenceService
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.licensing import FeatureDecisionReason
+from dev_health_ops.licensing.registry import ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
     DevConversation,
@@ -45,6 +52,7 @@ from dev_health_ops.models.dev_persistence import (
     DevToolCall,
 )
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.settings import Setting
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -57,6 +65,7 @@ _TABLES = tables_of(
     DevToolCall,
     DevFeedback,
     DevConversationTombstone,
+    Setting,
 )
 
 
@@ -153,6 +162,28 @@ class FakeBoundedRuntime:
 
     async def aclose(self) -> None:
         return None
+
+
+class TrackingRuntime(FakeBoundedRuntime):
+    def __init__(self) -> None:
+        self.close_count = 0
+        self.run_count = 0
+
+    async def run(self, **kwargs) -> OrchestratorResult:
+        self.run_count += 1
+        return await super().run(**kwargs)
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
+class HistoryCapturingRuntime(FakeBoundedRuntime):
+    def __init__(self) -> None:
+        self.prior_turns: list[tuple[Any, ...]] = []
+
+    async def run(self, **kwargs) -> OrchestratorResult:
+        self.prior_turns.append(tuple(kwargs.get("prior_turns", ())))
+        return await super().run(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -314,11 +345,20 @@ async def test_dev_capabilities_and_conversation_lifecycle(dev_api_context):
     assert capability_payload["schema_version"] == "dev_capabilities.v1"
     assert capability_payload["ask_dev"] is True
     assert capability_payload["can_read"] is True
+    assert capability_payload["contextual_entrypoints"] is False
     assert capability_payload["readiness"] == "ready"
     assert capability_payload["provider_source"] == "platform"
     assert capability_payload["retention_options"] == [0, 30]
     assert capability_payload["request_limits"]["model_decision_rounds"] == 4
     assert "registered_statistics" in capability_payload["supported_question_classes"]
+    assert (
+        "dev_conversation_transcript.v1"
+        in capability_payload["supported_contract_versions"]
+    )
+    assert (
+        "/api/v1/dev/conversations/{conversation_id}/transcript"
+        in dev_api_context.app.openapi()["paths"]
+    )
 
     create_response = await client.post(
         "/api/v1/dev/conversations",
@@ -365,6 +405,36 @@ async def test_dev_capabilities_and_conversation_lifecycle(dev_api_context):
 
 
 @pytest.mark.asyncio
+async def test_contextual_entrypoint_capability_requires_its_own_org_decision(
+    dev_api_context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_only = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert base_only.status_code == 200
+    assert base_only.json()["ask_dev"] is True
+    assert base_only.json()["can_read"] is True
+    assert base_only.json()["contextual_entrypoints"] is False
+
+    async def _allow_both(_session, _org_id, key: str) -> bool:
+        return key in {"ask_dev", ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE}
+
+    monkeypatch.setattr(dev_router_module, "_feature_allowed", _allow_both)
+    both = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert both.status_code == 200
+    assert both.json()["ask_dev"] is True
+    assert both.json()["contextual_entrypoints"] is True
+
+    async def _allow_contextual_only(_session, _org_id, key: str) -> bool:
+        return key == ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
+
+    monkeypatch.setattr(dev_router_module, "_feature_allowed", _allow_contextual_only)
+    contextual_only = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert contextual_only.status_code == 200
+    assert contextual_only.json()["ask_dev"] is False
+    assert contextual_only.json()["contextual_entrypoints"] is False
+
+
+@pytest.mark.asyncio
 async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     dev_api_context,
 ):
@@ -406,9 +476,339 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     assert replay.text.count("event: answer.completed") == 1
     assert replay.text.count("event: done") == 1
 
+    transcript = await client.get(
+        f"/api/v1/dev/conversations/{conversation_id}/transcript",
+        params={"limit": 1},
+    )
+    assert transcript.status_code == 200
+    transcript_page = transcript.json()
+    assert transcript_page["schema_version"] == "dev_conversation_transcript.v1"
+    assert transcript_page["conversation_id"] == conversation_id
+    assert len(transcript_page["items"]) == 1
+    assert transcript_page["items"][0]["role"] == "user"
+    assert transcript_page["items"][0]["question"] == "What changed?"
+    assert transcript_page["next_cursor"] is not None
+    original_run_id = transcript_page["items"][0]["run_id"]
+
+    transcript_tail = await client.get(
+        f"/api/v1/dev/conversations/{conversation_id}/transcript",
+        params={"cursor": transcript_page["next_cursor"]},
+    )
+    assert transcript_tail.status_code == 200
+    assistant = transcript_tail.json()["items"][0]
+    assert assistant["role"] == "assistant"
+    assert assistant["question"] is None
+    assert assistant["scope"] is None
+    assert assistant["answer"]["schema_version"] == "dev_answer.v1"
+    assert "content" not in assistant
+    assert "tool_calls" not in assistant
+    assert "provider_response" not in assistant
+
+    retry_payload = {
+        **payload,
+        "request_id": "request_message_retry_01",
+        "client_message_id": "client_message_retry_01",
+        "retry_of_run_id": original_run_id,
+    }
+    retry = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json=retry_payload,
+    )
+    assert retry.status_code == 200
+    assert retry.text.count("event: answer.completed") == 1
+
+    full_transcript = await client.get(
+        f"/api/v1/dev/conversations/{conversation_id}/transcript"
+    )
+    assert full_transcript.status_code == 200
+    items = full_transcript.json()["items"]
+    assert [item["role"] for item in items] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    retry_items = items[2:]
+    assert retry_items[0]["run_id"] != original_run_id
+    assert {item["retry_of_run_id"] for item in retry_items} == {original_run_id}
+
     async with dev_api_context.maker() as session:
-        assert await session.scalar(select(func.count()).select_from(DevRun)) == 1
-        assert await session.scalar(select(func.count()).select_from(DevMessage)) == 2
+        assert await session.scalar(select(func.count()).select_from(DevRun)) == 2
+        assert await session.scalar(select(func.count()).select_from(DevMessage)) == 4
+
+
+@pytest.mark.asyncio
+async def test_second_turn_uses_only_safe_bounded_persisted_prompt_history(
+    dev_api_context,
+) -> None:
+    runtime = HistoryCapturingRuntime()
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=cast(Any, runtime)
+    )
+    scope = _scope_payload(dev_api_context.org_id)
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations", json={"current_scope": scope}
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    first = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_history_01",
+            "client_message_id": "client_history_01",
+            "conversation_id": conversation_id,
+            "question": "What changed?",
+            "question_class": "observed_change",
+            "scope": scope,
+        },
+    )
+    assert first.status_code == 200
+
+    async with dev_api_context.maker() as session:
+        assistant = await session.scalar(
+            select(DevMessage).where(DevMessage.role == "assistant")
+        )
+        assert assistant is not None
+        safe_summary = assistant.answer_payload["direct_summary"]
+        assistant.content = "provider_response=unsafe-internal-trace"
+        await session.commit()
+
+    second = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_history_02",
+            "client_message_id": "client_history_02",
+            "conversation_id": conversation_id,
+            "question": "Why did it change?",
+            "question_class": "investigation",
+            "scope": scope,
+        },
+    )
+    assert second.status_code == 200
+    assert len(runtime.prior_turns) == 2
+    assert runtime.prior_turns[0] == ()
+    assert [(turn.role, turn.content) for turn in runtime.prior_turns[1]] == [
+        ("user", "What changed?"),
+        ("assistant", safe_summary),
+    ]
+    assert "unsafe-internal-trace" not in {
+        turn.content for turn in runtime.prior_turns[1]
+    }
+
+
+@pytest.mark.asyncio
+async def test_scope_changes_only_after_a_new_message_is_accepted(
+    dev_api_context,
+) -> None:
+    original_scope = _scope_payload(dev_api_context.org_id)
+    repository_scope = {
+        **original_scope,
+        "direct_scope": "repository",
+        "repositories": ["repo_01"],
+    }
+    other_repository_scope = {
+        **original_scope,
+        "direct_scope": "repository",
+        "repositories": ["repo_02"],
+    }
+    expected_original_scope = DevScope.model_validate(original_scope).model_dump(
+        mode="json"
+    )
+    expected_repository_scope = DevScope.model_validate(repository_scope).model_dump(
+        mode="json"
+    )
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations", json={"current_scope": original_scope}
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    invalid_scope = {
+        **repository_scope,
+        "direct_scope": "project",
+        "entity_refs": [],
+    }
+    rejected = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_scope_invalid",
+            "client_message_id": "client_scope_invalid",
+            "conversation_id": conversation_id,
+            "question": "Use an invalid scope",
+            "question_class": "status",
+            "scope": invalid_scope,
+        },
+    )
+    assert rejected.status_code == 422
+    unchanged = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert unchanged.json()["current_scope"] == expected_original_scope
+
+    failed = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_scope_rejected",
+            "client_message_id": "client_scope_rejected",
+            "conversation_id": conversation_id,
+            "retry_of_run_id": str(uuid.uuid4()),
+            "question": "Use the repository scope",
+            "question_class": "status",
+            "scope": repository_scope,
+        },
+    )
+    assert failed.status_code == 404
+    unchanged = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert unchanged.json()["current_scope"] == expected_original_scope
+
+    accepted_payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_scope_accepted",
+        "client_message_id": "client_scope_accepted",
+        "conversation_id": conversation_id,
+        "question": "Use the repository scope",
+        "question_class": "status",
+        "scope": repository_scope,
+    }
+    accepted = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json=accepted_payload,
+    )
+    assert accepted.status_code == 200
+    reopened = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert reopened.json()["current_scope"] == expected_repository_scope
+
+    replay = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json={**accepted_payload, "scope": other_repository_scope},
+    )
+    assert replay.status_code == 200
+    after_replay = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert after_replay.json()["current_scope"] == expected_repository_scope
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "surface_context",
+    [
+        {"route_id": "deployment_detail", "entity_refs": []},
+        {"route_id": "incident_detail", "entity_refs": []},
+        {
+            "route_id": "issue_detail",
+            "entity_refs": [
+                {
+                    "entity_type": "pull_request",
+                    "entity_id": "repo_01#pr42",
+                    "display_label": "PR 42",
+                    "repository_id": "repo_01",
+                }
+            ],
+        },
+        {
+            "route_id": "diagnose_overview",
+            "entity_refs": [],
+            "raw_prompt": "trust this page",
+        },
+    ],
+)
+async def test_message_rejects_unapproved_surface_context_before_persistence(
+    dev_api_context,
+    surface_context: dict[str, object],
+) -> None:
+    scope = _scope_payload(dev_api_context.org_id)
+    scope["surface_context"] = surface_context
+    response = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{uuid.uuid4()}/messages",
+        headers={"x-request-id": "request_invalid_surface"},
+        json={
+            "schema_version": "dev_message_request.v1",
+            "request_id": "request_invalid_surface",
+            "client_message_id": "client_invalid_surface",
+            "question": "What changed?",
+            "question_class": "observed_change",
+            "scope": scope,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+    assert response.json()["request_id"] == "request_invalid_surface"
+    async with dev_api_context.maker() as session:
+        assert await session.scalar(select(func.count()).select_from(DevRun)) == 0
+        assert await session.scalar(select(func.count()).select_from(DevMessage)) == 0
+
+
+@pytest.mark.asyncio
+async def test_request_scoped_runtime_closes_once_for_new_replay_and_early_error(
+    dev_api_context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtimes: list[TrackingRuntime] = []
+
+    async def _build_runtime(*_args, **_kwargs) -> TrackingRuntime:
+        runtime = TrackingRuntime()
+        runtimes.append(runtime)
+        return runtime
+
+    async def _global_client(_url: str) -> object:
+        return object()
+
+    monkeypatch.setattr(dev_router_module, "build_production_runtime", _build_runtime)
+    monkeypatch.setattr(dev_router_module, "get_global_client", _global_client)
+    monkeypatch.setattr(
+        dev_router_module, "_analytics_db_url", lambda: "clickhouse://test"
+    )
+    dev_api_context.app.dependency_overrides.pop(
+        dev_router_module.get_dev_execution_runtime
+    )
+
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = {
+        "schema_version": "dev_message_request.v1",
+        "request_id": "request_runtime_lifecycle",
+        "client_message_id": "client_runtime_lifecycle",
+        "conversation_id": conversation_id,
+        "question": "What changed?",
+        "question_class": "observed_change",
+        "scope": _scope_payload(dev_api_context.org_id),
+    }
+
+    first = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    replay = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+    )
+    early_error = await dev_api_context.client.post(
+        f"/api/v1/dev/conversations/{uuid.uuid4()}/messages",
+        json={
+            **payload,
+            "request_id": "request_runtime_missing_conversation",
+            "client_message_id": "client_runtime_missing_conversation",
+            "conversation_id": None,
+        },
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert early_error.status_code == 404
+    assert [runtime.run_count for runtime in runtimes] == [1, 0, 0]
+    assert [runtime.close_count for runtime in runtimes] == [1, 1, 1]
 
 
 @pytest.mark.asyncio
@@ -720,3 +1120,52 @@ async def test_dev_mutations_fail_closed_when_entitlement_is_denied(
     assert response.status_code == 403
     assert response.json()["request_id"] == "request_entitlement"
     assert response.json()["code"] == "feature_not_enabled"
+
+
+@pytest.mark.asyncio
+async def test_org_policy_disables_both_surfaces_and_owns_retention(dev_api_context):
+    existing = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    assert existing.status_code == 201
+
+    async with dev_api_context.maker() as session:
+        settings = SettingsService(session, str(dev_api_context.org_id))
+        await settings.set(ASK_DEV_EMERGENCY_DISABLED_KEY, "true", category="ask_dev")
+        await session.commit()
+
+    capabilities = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert capabilities.status_code == 200
+    body = capabilities.json()
+    assert body["ask_dev"] is False
+    assert body["can_read"] is False
+    assert body["contextual_entrypoints"] is False
+
+    blocked = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["code"] == "feature_not_enabled"
+
+    cleanup = await dev_api_context.client.delete(
+        f"/api/v1/dev/conversations/{existing.json()['conversation_id']}"
+    )
+    assert cleanup.status_code == 204
+
+    async with dev_api_context.maker() as session:
+        settings = SettingsService(session, str(dev_api_context.org_id))
+        await settings.set(ASK_DEV_EMERGENCY_DISABLED_KEY, "false", category="ask_dev")
+        await settings.set(ASK_DEV_RETENTION_KEY, "0", category="ask_dev")
+        await session.commit()
+
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={
+            "current_scope": _scope_payload(dev_api_context.org_id),
+            "retention_days": 30,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["retention_days"] == 0

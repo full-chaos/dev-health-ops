@@ -9,7 +9,7 @@ from dev_health_ops.llm.credentials import LLMCredentials, validate_llm_base_url
 
 from .errors import AgentProviderError, AgentProviderErrorCode
 
-CERTIFIED_AGENT_PROVIDERS = frozenset({"openai", "scripted"})
+CERTIFIED_AGENT_PROVIDERS = frozenset({"openai"})
 
 
 class AgentProviderSource(str, Enum):
@@ -33,9 +33,7 @@ class AgentProviderCandidate:
     @property
     def usable(self) -> bool:
         valid_url, _ = validate_llm_base_url(self.credentials.base_url)
-        credentials_present = (
-            bool(self.credentials.api_key) or self.provider == "scripted"
-        )
+        credentials_present = bool(self.credentials.api_key)
         return (
             self.provider in CERTIFIED_AGENT_PROVIDERS
             and bool(self.model)

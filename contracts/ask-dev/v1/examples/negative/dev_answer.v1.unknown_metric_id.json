@@ -35,7 +35,14 @@
         ],
         "schema_version": "dev_scope.v1",
         "surface_context": {
-          "entity_refs": [],
+          "entity_refs": [
+            {
+              "display_label": "Selected repository",
+              "entity_id": "repo_dev_health",
+              "entity_type": "repository",
+              "repository_id": null
+            }
+          ],
           "filter_fingerprint": "filters_01",
           "route_id": "diagnose_overview"
         },
@@ -138,7 +145,14 @@
         ],
         "schema_version": "dev_scope.v1",
         "surface_context": {
-          "entity_refs": [],
+          "entity_refs": [
+            {
+              "display_label": "Selected repository",
+              "entity_id": "repo_dev_health",
+              "entity_type": "repository",
+              "repository_id": null
+            }
+          ],
           "filter_fingerprint": "filters_01",
           "route_id": "diagnose_overview"
         },
@@ -185,7 +199,14 @@
       ],
       "schema_version": "dev_scope.v1",
       "surface_context": {
-        "entity_refs": [],
+        "entity_refs": [
+          {
+            "display_label": "Selected repository",
+            "entity_id": "repo_dev_health",
+            "entity_type": "repository",
+            "repository_id": null
+          }
+        ],
         "filter_fingerprint": "filters_01",
         "route_id": "diagnose_overview"
       },
@@ -213,7 +234,14 @@
       ],
       "schema_version": "dev_scope.v1",
       "surface_context": {
-        "entity_refs": [],
+        "entity_refs": [
+          {
+            "display_label": "Selected repository",
+            "entity_id": "repo_dev_health",
+            "entity_type": "repository",
+            "repository_id": null
+          }
+        ],
         "filter_fingerprint": "filters_01",
         "route_id": "diagnose_overview"
       },

@@ -50,19 +50,78 @@ that are absent from the same answer, a `complete` answer cannot carry a stale
 or unavailable required source, and a stream has exactly one terminal answer
 or error immediately followed by `done`.
 
+Contextual Ask Dev handoffs use a server-owned, provider-neutral V1 allowlist
+of route IDs and permitted entity types. A request is rejected before
+persistence when its surface route is unknown or deferred, carries arbitrary
+metadata, or disagrees with the request's direct scope. The browser supplies
+only an untrusted proposal: every accepted run re-resolves the matching
+canonical IDs through the authorized entity catalog before model decisions or
+tool execution. `surface_context: null` remains valid for the permanent window
+and `/dev` on pages without an approved contextual entrypoint.
+
+The permanent Ask Dev window and `/dev` read the same retained transcript from
+`GET /api/v1/dev/conversations/{conversation_id}/transcript`. The response is a
+bounded chronological page of paired persisted questions and validated
+answers; internal rendered content, tool calls, and provider payloads are not
+wire fields. A retry submits a new idempotency key and an optional
+`retry_of_run_id`; the server accepts only a terminal run owned by the same user,
+organization, and conversation, and persists a distinct linked run. Closing a
+browser stream signals cancellation and waits for the recorder to persist the
+terminal `cancelled` state.
+
+The production runtime is request-scoped. FastAPI dependency cleanup closes it
+exactly once after a new stream, an idempotent replay, or an early validation or
+persistence response; replay never executes the provider a second time.
+
 Ask Dev model decisions use `AgentLLMProvider`, not the completion-oriented
 `LLMProvider.complete` contract. Canonical messages, tools, structured final
 answers, disambiguation, refusals, usage, latency, cancellation, and safe errors
 remain provider-neutral. Adapters alone translate native wire tool calls. The
 OpenAI-compatible and deterministic scripted adapters therefore exercise the
-same decision seam; scripted mode is not an orchestrator bypass.
+same decision seam in unit and offline tests; scripted mode is not an
+orchestrator bypass and is not a selectable product provider family.
 
 Provider selection is a separate fail-closed policy. A current certified BYO
 connection wins, followed by a certified platform connection only when no BYO
 is selected or platform fallback was explicitly allowed. Disable controls and
-deny rules win before readiness. The scripted adapter is disclosed as its own
-provider but maps to the canonical `platform` model-source value in generated
-answer metadata; public model source remains `platform | byo`.
+deny rules win before readiness. Deterministic full-stack acceptance instead
+boots a scripted OpenAI Chat Completions wire service behind the explicit
+acceptance-only environment gate. The production adapter still discloses that
+endpoint as provider family `openai` and source `platform`; public model source
+remains `platform | byo`. Partial acceptance configuration fails closed, and
+ordinary platform and BYO base URLs retain the public-HTTPS SSRF policy.
+
+The acceptance endpoint is admitted only when all of these operator-owned
+values are present together: `ASK_DEV_LIVE_ACCEPTANCE=1`,
+`ENVIRONMENT=acceptance`, `LLM_PROVIDER=openai`,
+`ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL`, and
+`ASK_DEV_ACCEPTANCE_OPENAI_API_KEY`. The base URL must use `/v1` over HTTP on
+the exact host `127.0.0.1`, `localhost`, or the checked-in Compose service name
+`ask-dev-scripted-openai`; suffix matches and other private or metadata targets
+are rejected. The acceptance model and internal disclosure key are fixed as
+`ask-dev-scripted-v1` and `ask_dev_scripted_acceptance`. A partial activation
+after `ASK_DEV_LIVE_ACCEPTANCE=1` is asserted does not fall back to ordinary
+platform credentials.
+
+The reusable Compose boundary is
+`tests/acceptance/compose.ask-dev.yml`; it publishes no provider host port and
+places `ask-dev-scripted-openai` only on an internal acceptance network. Run it
+through `scripts/acceptance/run_ask_dev_compose.sh --web-root <web-checkout>`.
+The launcher owns deterministic graph, metric, and evidence seeding, the
+canonical organization and user, only the Ask Dev and contextual-entrypoint
+entitlement overrides, the real
+organization-admin readiness action, the Compose-built Web service, and Web's
+fixed authenticated REST/SSE browser oracle. The provider must call
+`query_metric.v1`, `search_evidence.v1`, and `data_health.v1` in that order; the
+final answer fails the versioned oracle unless metric, evidence, and
+provider-health results are all non-empty. The oracle fixture owns the browser
+question and exact expected summary independently of the provider
+implementation. Missing services, credentials, preparation, or substantive
+browser execution are failures, not skips.
+
+Agent Context Runtime remains independently gated and is not an Ask Dev
+prerequisite. The acceptance oracle requires signed Ask Dev evidence resolution
+while `agent_context_runtime` remains disabled.
 
 ## Job contracts
 

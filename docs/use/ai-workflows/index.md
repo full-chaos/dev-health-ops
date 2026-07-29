@@ -5,6 +5,7 @@ content_type: landing
 owner: product-analytics
 source_of_truth:
   - current /ai product surfaces
+  - current /dev and app-shell Ask Dev surfaces
   - docs/user-guide/views/ai-impact.md
   - docs/user-guide/views/ai-review-load.md
   - docs/user-guide/views/ai-risk.md
@@ -66,6 +67,33 @@ Where the product exposes **Last computed**, persisted evidence, or an attributi
 
 AI Attribution remains a preview route and is intentionally omitted from the public navigation until it becomes a supported customer destination.
 
+## Ask Dev: window and full-page workspace
+
+When Ask Dev is enabled for your workspace, you can use the permanent **Ask
+Dev** action from authenticated product pages without leaving the page you are
+investigating. The window shows the proposed page context before you ask. Merely
+opening it does not send a question, page text, screenshot, or model request.
+Changing pages may change that proposed context, but it does not silently change
+the scope already committed to an active conversation.
+
+Choose **Workspace** to expand the same conversation into `/dev` for a longer
+investigation, history, evidence, and metric detail. The window and `/dev` share
+one conversation, scope, streamed run, answer, feedback record, and retention
+choice; expanding or minimizing does not run the question again. **Ask Dev about
+this** actions use an approved route and entity allowlist and show the inherited
+scope before submission. They never copy arbitrary page content or submit a
+suggested question automatically.
+
+An answer labels AI-generated content and keeps its as-of time, coverage,
+freshness, conflicts, unavailable sources, observed facts, inferences,
+recommendations, metrics, and evidence visible. A partial, degraded, refused, or
+insufficient-evidence answer is a result with limitations, not a silent success.
+Evidence links are authorized again when opened.
+
+Ask Dev is the customer interaction layer powered by Context Fabric. **Context
+Fabric Validation** is a separate platform-administrator diagnostic surface; an
+Ask Dev or organization-administrator entitlement does not grant access to it.
+
 ## Ask Dev conversation history
 
 Ask Dev keeps a conversation only under the retention choice shown when the
@@ -82,6 +110,14 @@ You can delete a saved conversation before it expires. Dev Health does not use
 Ask Dev conversation content to train models. Disabling Ask Dev stops new use;
 it does not silently delete saved history, whose selected retention and delete
 controls continue to apply.
+
+The permanent window and `/dev` load this same saved transcript; opening the
+workspace does not copy or fork it. History contains the question and committed
+scope plus the validated answer and its safe run status. It does not expose
+internal prompts, provider messages, or tool payloads. Retrying a terminal run
+adds a new linked question/run/answer turn and leaves the earlier turn intact.
+If a browser stream disconnects while work is active, that run is cancelled and
+recorded as cancelled rather than silently continuing as a duplicate.
 
 ## Ask Dev model availability
 

@@ -1,0 +1,13 @@
+{
+  "schema_version": "ask_dev_acceptance_oracle.v1",
+  "question": "How did completed work change in this scope during the selected time range, and what evidence supports it?",
+  "expected_metric_id": "items_completed",
+  "expected_evidence_entity_fragment": "meridian/web-app",
+  "expected_claim_kind": "observed",
+  "model": "ask-dev-scripted-v1",
+  "required_tool_ids": [
+    "query_metric.v1",
+    "search_evidence.v1",
+    "data_health.v1"
+  ]
+}

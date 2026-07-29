@@ -83,6 +83,14 @@ def _reject_llm_category(category: str) -> None:
                 ),
             },
         )
+    if category == SettingCategory.ASK_DEV.value:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "use_ask_dev_settings_endpoint",
+                "message": "Ask Dev settings must be managed via /admin/ask-dev/settings.",
+            },
+        )
 
 
 async def _require_byo_llm_tier(

@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +27,7 @@ from dev_health_ops.llm.agent.policy import (
     resolve_agent_provider_selection,
 )
 from dev_health_ops.llm.agent.readiness import SettingsAgentReadinessStore
+from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.credentials import LLMCredentials
 from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
 from dev_health_ops.models.settings import SettingCategory
@@ -62,6 +64,7 @@ from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
 from .native_status_change import ClickHouseStatusChangeSource
+from .org_policy import load_ask_dev_org_policy
 from .prompts import PROMPT_VERSION
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
@@ -92,6 +95,11 @@ from .work_graph_neighbors_service import (
 _LLM_CATEGORY = SettingCategory.LLM.value
 _METRIC_REGISTRY_VERSION = "ask-dev-metrics.v1"
 _QUERY_BUNDLE_VERSION = "ask-dev-query-bundle.v1"
+ACCEPTANCE_OPENAI_MODEL = SCRIPTED_OPENAI_MODEL
+_ACCEPTANCE_OPENAI_DISCLOSURE_KEY = "ask_dev_scripted_acceptance"
+_ACCEPTANCE_OPENAI_HOSTS = frozenset(
+    {"127.0.0.1", "localhost", "ask-dev-scripted-openai"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +110,74 @@ class ProductionProviderResolution:
     model: str
     provider_label: str
     model_label: str
+    readiness_fingerprint: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _AcceptanceOpenAIConfiguration:
+    api_key: str
+    base_url: str
+
+
+class _AcceptanceOpenAICandidate(AgentProviderCandidate):
+    """Pre-admitted private endpoint for the deterministic acceptance stack only."""
+
+    @property
+    def usable(self) -> bool:
+        return bool(
+            self.provider == "openai"
+            and self.model == ACCEPTANCE_OPENAI_MODEL
+            and self.credentials.api_key
+            and self.credentials.base_url
+            and self.readiness_current
+        )
+
+
+def _acceptance_openai_configuration() -> _AcceptanceOpenAIConfiguration | None:
+    """Admit the checked-in scripted endpoint only under the full acceptance gate.
+
+    This is deliberately separate from ``LLM_BASE_URL``. Customer and ordinary
+    platform endpoints continue through ``validate_llm_base_url`` in provider
+    policy; the only private targets admitted here are the exact test-loopback
+    hosts and the exact Compose service name used by deterministic acceptance.
+    A partial acceptance activation fails closed instead of silently selecting a
+    live provider and producing a false-green acceptance run.
+    """
+
+    if os.getenv("ASK_DEV_LIVE_ACCEPTANCE") != "1":
+        return None
+    environment = os.getenv("ENVIRONMENT", "").strip().lower()
+    provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    api_key = os.getenv("ASK_DEV_ACCEPTANCE_OPENAI_API_KEY", "")
+    base_url = os.getenv("ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL", "").strip()
+    try:
+        parsed = urlsplit(base_url)
+        port = parsed.port
+    except ValueError:
+        parsed = None
+        port = None
+    valid_url = bool(
+        parsed is not None
+        and parsed.scheme == "http"
+        and parsed.hostname in _ACCEPTANCE_OPENAI_HOSTS
+        and parsed.username is None
+        and parsed.password is None
+        and port is not None
+        and parsed.path.rstrip("/") == "/v1"
+        and not parsed.query
+        and not parsed.fragment
+        and not any(ord(char) <= 0x20 or ord(char) == 0x7F for char in base_url)
+    )
+    if (
+        environment != "acceptance"
+        or provider != "openai"
+        or not api_key
+        or not valid_url
+    ):
+        raise DevRuntimeUnavailable(
+            "provider_not_configured", "No certified Ask Dev model is ready."
+        )
+    return _AcceptanceOpenAIConfiguration(api_key=api_key, base_url=base_url)
 
 
 async def resolve_production_provider(
@@ -109,6 +185,33 @@ async def resolve_production_provider(
 ) -> ProductionProviderResolution:
     settings = SettingsService(session, org_id)
     readiness = await SettingsAgentReadinessStore(settings).load()
+
+    byo, platform, policy = await _provider_candidates(settings, readiness=readiness)
+    return _resolve_provider_selection(byo=byo, platform=platform, policy=policy)
+
+
+async def resolve_certification_provider(
+    session: AsyncSession, *, org_id: str
+) -> ProductionProviderResolution:
+    """Resolve the configured candidate without requiring prior certification."""
+
+    settings = SettingsService(session, org_id)
+    byo, platform, policy = await _provider_candidates(
+        settings, readiness=None, certification=True
+    )
+    return _resolve_provider_selection(byo=byo, platform=platform, policy=policy)
+
+
+async def _provider_candidates(
+    settings: SettingsService,
+    *,
+    readiness: Any,
+    certification: bool = False,
+) -> tuple[
+    AgentProviderCandidate | None,
+    AgentProviderCandidate | None,
+    AgentProviderPolicy,
+]:
 
     byo_provider_name = (await settings.get("provider", _LLM_CATEGORY) or "").strip()
     byo_model = (await settings.get("model", _LLM_CATEGORY) or "").strip()
@@ -124,39 +227,54 @@ async def resolve_production_provider(
         credentials=byo_credentials,
         source=AgentProviderSource.BYO,
         readiness=readiness,
+        certification=certification,
     )
 
+    acceptance = _acceptance_openai_configuration()
     platform_provider_name = os.getenv("LLM_PROVIDER", "").strip().lower()
-    platform_model = (
-        os.getenv("LLM_MODEL", "").strip() or os.getenv("OPENAI_MODEL", "").strip()
-    )
-    if platform_provider_name in {"", "openai"} and not platform_model:
-        platform_model = DEFAULT_MODEL_BY_PROVIDER["openai"]
-    platform_credentials = LLMCredentials(
-        api_key=(os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or ""),
-        base_url=(os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or ""),
-    )
+    if acceptance is not None:
+        platform_model = ACCEPTANCE_OPENAI_MODEL
+        platform_credentials = LLMCredentials(
+            api_key=acceptance.api_key, base_url=acceptance.base_url
+        )
+    else:
+        platform_model = (
+            os.getenv("LLM_MODEL", "").strip() or os.getenv("OPENAI_MODEL", "").strip()
+        )
+        if platform_provider_name in {"", "openai"} and not platform_model:
+            platform_model = DEFAULT_MODEL_BY_PROVIDER["openai"]
+        platform_credentials = LLMCredentials(
+            api_key=(os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or ""),
+            base_url=(os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or ""),
+        )
     platform = _candidate(
         provider_name=platform_provider_name,
         model=platform_model,
         credentials=platform_credentials,
         source=AgentProviderSource.PLATFORM,
         readiness=readiness,
+        certification=certification,
+        acceptance=acceptance is not None,
     )
-    fallback_setting = (
-        (await settings.get("ask_dev_platform_fallback", _LLM_CATEGORY) or "")
-        .strip()
-        .lower()
-    )
+    org_policy = await load_ask_dev_org_policy(settings)
     policy = AgentProviderPolicy(
         ask_dev_enabled=True,
         llm_globally_disabled=platform_provider_name == "none",
         fallback=(
             AgentFallbackPolicy.ALLOW_PLATFORM
-            if fallback_setting == "true"
+            if org_policy.fallback_policy == "platform"
             else AgentFallbackPolicy.FAIL_CLOSED
         ),
     )
+    return byo, platform, policy
+
+
+def _resolve_provider_selection(
+    *,
+    byo: AgentProviderCandidate | None,
+    platform: AgentProviderCandidate | None,
+    policy: AgentProviderPolicy,
+) -> ProductionProviderResolution:
     try:
         selected = resolve_agent_provider_selection(
             policy=policy, byo=byo, platform=platform
@@ -182,6 +300,7 @@ async def resolve_production_provider(
         model=selected.model,
         provider_label="OpenAI compatible",
         model_label=selected.model.replace("\r", "").replace("\n", "")[:256],
+        readiness_fingerprint=_readiness_fingerprint(selected),
     )
 
 
@@ -192,6 +311,8 @@ def _candidate(
     credentials: LLMCredentials,
     source: AgentProviderSource,
     readiness: Any,
+    certification: bool = False,
+    acceptance: bool = False,
 ) -> AgentProviderCandidate | None:
     if (
         not provider_name
@@ -209,25 +330,50 @@ def _candidate(
             source=source,
             readiness_current=False,
         )
-    provider_fingerprint = hashlib.sha256(
-        "\0".join(
-            ("openai-compatible", credentials.base_url, READINESS_VERSION)
-        ).encode()
-    ).hexdigest()[:24]
-    current = bool(
-        readiness
-        and readiness.is_current(
-            fingerprint=provider_fingerprint,
-            readiness_version=READINESS_VERSION,
-        )
+    candidate_type = (
+        _AcceptanceOpenAICandidate if acceptance else AgentProviderCandidate
     )
-    return AgentProviderCandidate(
+    candidate = candidate_type(
         provider=provider_name,
         model=model,
         credentials=credentials,
         source=source,
+        readiness_current=certification,
+    )
+    provider_fingerprint = _readiness_fingerprint(candidate)
+    current = bool(
+        certification
+        or (
+            readiness
+            and readiness.is_current(
+                fingerprint=provider_fingerprint,
+                readiness_version=READINESS_VERSION,
+            )
+        )
+    )
+    return candidate_type(
+        provider=candidate.provider,
+        model=candidate.model,
+        credentials=candidate.credentials,
+        source=candidate.source,
         readiness_current=current,
     )
+
+
+def _readiness_fingerprint(candidate: AgentProviderCandidate) -> str:
+    """Fingerprint every capability input that invalidates certification."""
+
+    return hashlib.sha256(
+        "\0".join(
+            (
+                candidate.source.value,
+                candidate.provider,
+                candidate.model,
+                candidate.credentials.base_url,
+                READINESS_VERSION,
+            )
+        ).encode()
+    ).hexdigest()[:24]
 
 
 def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
@@ -239,6 +385,11 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
         api_key=candidate.credentials.api_key,
         model=candidate.model,
         base_url=candidate.credentials.base_url or None,
+        disclosure_key=(
+            _ACCEPTANCE_OPENAI_DISCLOSURE_KEY
+            if isinstance(candidate, _AcceptanceOpenAICandidate)
+            else "openai_compatible"
+        ),
     )
 
 

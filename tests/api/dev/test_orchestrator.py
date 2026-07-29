@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -115,16 +116,18 @@ def _orchestrator(
     recorder: Recorder | None = None,
     registry: AskDevToolRegistry | None = None,
     limits: DevRunLimits | None = None,
+    provider: Any | None = None,
+    scope_resolver: Any | None = None,
 ) -> DevOrchestrator:
     async def resolve(**_values) -> DevScopeResolution:
         return _resolution()
 
     return DevOrchestrator(
-        provider=ScriptedAgentProvider(steps, script_id=script_id),
+        provider=provider or ScriptedAgentProvider(steps, script_id=script_id),
         provider_source="platform",
         provider_family="scripted",
         registry=registry or _registry(),
-        scope_resolver=resolve,
+        scope_resolver=scope_resolver or resolve,
         versions=_versions(),
         recorder=recorder,
         limits=limits,
@@ -432,6 +435,70 @@ async def test_operator_downward_per_tool_byte_limit_is_enforced() -> None:
     )
     assert result.state is RunState.FAILED
     assert result.error is not None and result.error.code == "tool_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_in_flight_scope_resolution_is_cancelled_by_the_caller() -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def slow_scope(**_values):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    cancellation = asyncio.Event()
+    run_task = asyncio.create_task(
+        _run(
+            _orchestrator(
+                [],
+                script_id="scope-cancel",
+                scope_resolver=slow_scope,
+            ),
+            cancellation,
+        )
+    )
+    await entered.wait()
+    cancellation.set()
+    result = await asyncio.wait_for(run_task, timeout=1)
+    assert result.state is RunState.CANCELLED
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_noncooperative_provider_is_cancelled_by_the_orchestrator() -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class IgnoringProvider:
+        async def decide(self, **_values):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        async def aclose(self) -> None:
+            return None
+
+    cancellation = asyncio.Event()
+    run_task = asyncio.create_task(
+        _run(
+            _orchestrator(
+                [],
+                script_id="provider-cancel",
+                provider=IgnoringProvider(),
+            ),
+            cancellation,
+        )
+    )
+    await entered.wait()
+    cancellation.set()
+    result = await asyncio.wait_for(run_task, timeout=1)
+    assert result.state is RunState.CANCELLED
+    assert cancelled.is_set()
 
 
 def test_hard_defaults_can_only_be_configured_downward() -> None:

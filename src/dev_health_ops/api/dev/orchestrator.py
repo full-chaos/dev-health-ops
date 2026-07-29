@@ -19,6 +19,7 @@ from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 from dev_health_ops.llm.agent.contracts import (
+    AgentDecisionResult,
     AgentDisambiguation,
     AgentFinalAnswer,
     AgentLLMProvider,
@@ -450,10 +451,11 @@ class DevOrchestrator:
                     error=error("cancelled", "The request was cancelled."),
                 )
             await transition(RunState.RESOLVING_SCOPE)
-            resolution = await self._scope_resolver(
+            resolution = await self._resolve_with_cancellation(
                 org_id=org_id,
                 user_id=user_id,
                 requested_scope=request.scope,
+                cancellation=cancellation,
             )
             if resolution.outcome is ScopeResolutionOutcome.AMBIGUOUS:
                 return await finish(
@@ -522,18 +524,11 @@ class DevOrchestrator:
                             ),
                         )
                     try:
-                        decision_result = await asyncio.wait_for(
-                            self._provider.decide(
-                                messages=messages,
-                                tools=tools,
-                                response_schema=DevAnswer.model_json_schema(
-                                    mode="validation"
-                                ),
-                                timeout_seconds=provider_timeout,
-                                max_output_tokens=self._limits.max_output_tokens_per_call,
-                                signal=EventCancellationSignal(cancellation),
-                            ),
-                            timeout=provider_timeout,
+                        decision_result = await self._decide_with_cancellation(
+                            messages=messages,
+                            tools=tools,
+                            timeout_seconds=provider_timeout,
+                            cancellation=cancellation,
                         )
                         break
                     except Exception as exc:
@@ -756,6 +751,71 @@ class DevOrchestrator:
                 RunState.FAILED,
                 error=error("internal_error", "The request could not be completed."),
             )
+
+    async def _resolve_with_cancellation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        requested_scope: DevScope,
+        cancellation: asyncio.Event,
+    ) -> DevScopeResolution:
+        resolver_task: asyncio.Future[DevScopeResolution] = asyncio.ensure_future(
+            self._scope_resolver(
+                org_id=org_id, user_id=user_id, requested_scope=requested_scope
+            )
+        )
+        cancellation_task = asyncio.create_task(cancellation.wait())
+        wait_set: set[asyncio.Future[Any]] = {resolver_task, cancellation_task}
+        try:
+            done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
+            if cancellation_task in done:
+                resolver_task.cancel()
+                await asyncio.gather(resolver_task, return_exceptions=True)
+                raise ToolExecutionCancelled("scope resolution cancelled")
+            return resolver_task.result()
+        finally:
+            cancellation_task.cancel()
+            await asyncio.gather(cancellation_task, return_exceptions=True)
+
+    async def _decide_with_cancellation(
+        self,
+        *,
+        messages: tuple[AgentMessage, ...],
+        tools: tuple[AgentToolDefinition, ...],
+        timeout_seconds: float,
+        cancellation: asyncio.Event,
+    ) -> AgentDecisionResult:
+        provider_task: asyncio.Future[AgentDecisionResult] = asyncio.ensure_future(
+            self._provider.decide(
+                messages=messages,
+                tools=tools,
+                response_schema=DevAnswer.model_json_schema(mode="validation"),
+                timeout_seconds=timeout_seconds,
+                max_output_tokens=self._limits.max_output_tokens_per_call,
+                signal=EventCancellationSignal(cancellation),
+            )
+        )
+        cancellation_task = asyncio.create_task(cancellation.wait())
+        wait_set: set[asyncio.Future[Any]] = {provider_task, cancellation_task}
+        try:
+            done, _ = await asyncio.wait(
+                wait_set,
+                timeout=timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancellation_task in done:
+                provider_task.cancel()
+                await asyncio.gather(provider_task, return_exceptions=True)
+                raise AgentProviderError(AgentProviderErrorCode.CANCELLED)
+            if provider_task not in done:
+                provider_task.cancel()
+                await asyncio.gather(provider_task, return_exceptions=True)
+                raise AgentProviderError(AgentProviderErrorCode.TIMEOUT, retryable=True)
+            return provider_task.result()
+        finally:
+            cancellation_task.cancel()
+            await asyncio.gather(cancellation_task, return_exceptions=True)
 
     def _provider_tools(self) -> tuple[AgentToolDefinition, ...]:
         manifest = self._registry.manifest()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import os
 import uuid
+from argparse import Namespace
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -146,6 +147,22 @@ def test_0066_real_postgres_refuses_without_opt_in_without_advancing_revision(
     assert _routes(migrated_to_0065.engine, migration) == before
 
 
+def test_application_migrator_defers_0066_without_opt_in(
+    migrated_to_0065: PostgresMigrationHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = _migration()
+    before = _routes(migrated_to_0065.engine, migration)
+    monkeypatch.delenv(_CUTOVER_ENV, raising=False)
+
+    from dev_health_ops.migrate import _run_upgrade
+
+    assert _run_upgrade(Namespace(db=None, revision="head")) == 0
+
+    assert _revision(migrated_to_0065.engine) == "0065"
+    assert _routes(migrated_to_0065.engine, migration) == before
+
+
 def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     migrated_to_0065: PostgresMigrationHarness,
     monkeypatch: pytest.MonkeyPatch,
@@ -155,6 +172,15 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
 
     command.upgrade(_migration_config(), "head")
 
+    assert _revision(migrated_to_0065.engine) == "0066"
+    assert _routes(migrated_to_0065.engine, migration) == [
+        (kind, "river", False, 2) for kind in sorted(migration._KINDS)
+    ]
+
+    monkeypatch.delenv(_CUTOVER_ENV, raising=False)
+    from dev_health_ops.migrate import _run_upgrade
+
+    assert _run_upgrade(Namespace(db=None, revision="head")) == 0
     assert _revision(migrated_to_0065.engine) == "0066"
     assert _routes(migrated_to_0065.engine, migration) == [
         (kind, "river", False, 2) for kind in sorted(migration._KINDS)

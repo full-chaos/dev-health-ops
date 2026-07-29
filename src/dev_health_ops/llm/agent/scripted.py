@@ -36,9 +36,10 @@ class ScriptedStep:
 
 
 class ScriptedAgentProvider:
-    def __init__(self, steps: Sequence[ScriptedStep]):
+    def __init__(self, steps: Sequence[ScriptedStep], *, script_id: str | None = None):
         self._steps = deque(steps)
-        self._fingerprint = hashlib.sha256(repr(tuple(steps)).encode()).hexdigest()[:24]
+        fingerprint_source = script_id if script_id is not None else repr(tuple(steps))
+        self._fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()[:24]
         self._capabilities = AgentProviderCapabilities(
             structured_output=StructuredOutputMode.JSON_SCHEMA,
             tool_decisions=ToolDecisionMode.NATIVE,

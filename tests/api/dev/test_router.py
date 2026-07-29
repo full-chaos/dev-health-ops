@@ -40,6 +40,7 @@ from dev_health_ops.api.dev.persistence import DevPersistenceService
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.licensing import FeatureDecisionReason
+from dev_health_ops.licensing.registry import ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
     DevConversation,
@@ -321,6 +322,7 @@ async def test_dev_capabilities_and_conversation_lifecycle(dev_api_context):
     assert capability_payload["schema_version"] == "dev_capabilities.v1"
     assert capability_payload["ask_dev"] is True
     assert capability_payload["can_read"] is True
+    assert capability_payload["contextual_entrypoints"] is False
     assert capability_payload["readiness"] == "ready"
     assert capability_payload["provider_source"] == "platform"
     assert capability_payload["retention_options"] == [0, 30]
@@ -377,6 +379,36 @@ async def test_dev_capabilities_and_conversation_lifecycle(dev_api_context):
     empty_list = await client.get("/api/v1/dev/conversations")
     assert empty_list.status_code == 200
     assert empty_list.json() == {"items": [], "next_cursor": None}
+
+
+@pytest.mark.asyncio
+async def test_contextual_entrypoint_capability_requires_its_own_org_decision(
+    dev_api_context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_only = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert base_only.status_code == 200
+    assert base_only.json()["ask_dev"] is True
+    assert base_only.json()["can_read"] is True
+    assert base_only.json()["contextual_entrypoints"] is False
+
+    async def _allow_both(_session, _org_id, key: str) -> bool:
+        return key in {"ask_dev", ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE}
+
+    monkeypatch.setattr(dev_router_module, "_feature_allowed", _allow_both)
+    both = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert both.status_code == 200
+    assert both.json()["ask_dev"] is True
+    assert both.json()["contextual_entrypoints"] is True
+
+    async def _allow_contextual_only(_session, _org_id, key: str) -> bool:
+        return key == ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
+
+    monkeypatch.setattr(dev_router_module, "_feature_allowed", _allow_contextual_only)
+    contextual_only = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert contextual_only.status_code == 200
+    assert contextual_only.json()["ask_dev"] is False
+    assert contextual_only.json()["contextual_entrypoints"] is False
 
 
 @pytest.mark.asyncio

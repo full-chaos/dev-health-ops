@@ -37,6 +37,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.api.services.permissions import get_user_permissions
 from dev_health_ops.licensing import evaluate_org_feature_async
+from dev_health_ops.licensing.registry import ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
 from dev_health_ops.llm.agent.contracts import AgentUsage
 
 from .contracts import (
@@ -633,6 +634,9 @@ async def capabilities(
 ) -> DevCapabilities:
     org_id, _ = _owned_ids(user, None)
     ask_dev = await _feature_allowed(session, org_id, "ask_dev")
+    contextual_entrypoints = await _feature_allowed(
+        session, org_id, ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE
+    )
     byo_llm = await _feature_allowed(session, org_id, "byo_llm")
     agent_context_runtime = await _feature_allowed(
         session, org_id, "agent_context_runtime"
@@ -670,7 +674,11 @@ async def capabilities(
             "dev_stream_event.v1",
             "dev_error.v1",
         ],
-        contextual_entrypoints=effective_ask_dev and runtime.contextual_entrypoints,
+        contextual_entrypoints=(
+            effective_ask_dev
+            and contextual_entrypoints
+            and runtime.contextual_entrypoints
+        ),
         evidence_resolver=effective_ask_dev and runtime.evidence_resolver,
         administrator_safe_failure_reason=safe_failure,
     )

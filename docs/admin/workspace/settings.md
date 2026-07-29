@@ -21,12 +21,12 @@ Do not store provider secrets, private keys, or infrastructure credentials in ge
 
 ## Ask Dev access
 
-Ask Dev access, BYO LLM configuration, and Agent Context Runtime access are
-separate entitlements. An administrator must not infer Ask Dev availability
-from either existing AI-related gate. A missing or false `ask_dev` decision is
-denied. The initial contract release registers `ask_dev` as disabled by default
-for every tier. Future inclusion in paid plans requires separate product change
-control and is not part of the current V1 entitlement.
+Ask Dev access, Ask Dev contextual entrypoints, BYO LLM configuration, and
+Agent Context Runtime access are separate entitlements. An administrator must
+not infer one from another. Missing or false `ask_dev` and
+`ask_dev_contextual_entrypoints` decisions are denied independently. Both are
+disabled by default for every tier. Future inclusion in paid plans requires
+separate product change control and is not part of the current V1 entitlement.
 
 The Ask Dev administration workflow controls one policy shared by the
 persistent app-shell chat window and the full `/dev` workspace. Administrators
@@ -36,6 +36,11 @@ organization emergency disable. The emergency disable hides and blocks both
 interaction surfaces and new runs; it does not delete BYO credentials or change
 other LLM workflows. Existing content remains subject to its retention and
 deletion policy.
+
+The `ask_dev_contextual_entrypoints` entitlement controls only the reviewed
+handoff triggers on approved product surfaces. Disabling it leaves the
+persistent app-shell chat window and `/dev` workspace available when the base
+`ask_dev` entitlement and runtime readiness allow them.
 
 Administrative reads and usage summaries are content-free. Settings changes
 and readiness tests are unavailable while impersonating. The supported API is

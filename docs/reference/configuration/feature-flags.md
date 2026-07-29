@@ -42,21 +42,30 @@ Provider availability still applies:
 
 ## Ask Dev and AI gates
 
-Ask Dev has three independent feature decisions:
+Ask Dev has four independent feature decisions:
 
 | Key | Controls | Default |
 | --- | --- | --- |
 | `ask_dev` | The in-app Ask Dev interaction layer for Context Fabric | Disabled until explicitly enabled for an organization or license |
+| `ask_dev_contextual_entrypoints` | Typed, review-before-submit handoffs from approved product surfaces into Ask Dev | Disabled until explicitly enabled for an organization or license |
 | `byo_llm` | Organization-managed LLM provider configuration | Existing tier and override behavior, unchanged |
 | `agent_context_runtime` | Hosted ACR/MCP context capability | Existing explicit-purchase behavior, unchanged |
 
-No gate grants either of the others. Enabling `ask_dev` does not expose BYO LLM
-settings or Context Fabric Validation, and enabling either existing gate does
-not make Ask Dev available. The `ask_dev` registry row is globally enabled only
-so the existing global feature decision remains an emergency kill switch; its
-effective tier default is false for every tier. Inclusion in paid plans may be
-considered later only through separate product change control; it is not part
-of the current V1 entitlement.
+No gate grants any of the others. Enabling `ask_dev` does not enable contextual
+entrypoints, expose BYO LLM settings, or expose Context Fabric Validation, and
+enabling any of those gates does not make base Ask Dev available. The
+`ask_dev` and `ask_dev_contextual_entrypoints` registry rows are globally
+enabled only so their global feature decisions remain emergency kill switches;
+their effective tier defaults are false for every tier. Inclusion in paid plans
+may be considered later only through separate product change control; it is not
+part of the current V1 entitlement.
+
+When `ask_dev_contextual_entrypoints` is disabled, the permanent Ask Dev chat
+window and `/dev` route continue to follow the base `ask_dev` decision. Approved
+product surfaces do not offer contextual handoff triggers. The API capability
+reports contextual entrypoints only when the base Ask Dev decision, the
+independent contextual-entrypoints decision, and runtime readiness all permit
+them; it never infers the contextual decision from `ask_dev`.
 
 Do not infer Ask Dev access from a paid plan. Bundling it into all paid plans is
 a deferred commercial possibility and requires a new accepted product decision,

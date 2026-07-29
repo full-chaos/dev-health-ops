@@ -15,8 +15,13 @@ STANDARD_FEATURE_ROW = tuple[str, str, FeatureCategory, LicenseTier, str]
 
 CANONICAL_INCIDENT_INGESTION_FEATURE: Final = "canonical_incident_ingestion"
 ASK_DEV_FEATURE: Final = "ask_dev"
+ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE: Final = "ask_dev_contextual_entrypoints"
 EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset(
-    {"agent_context_runtime", ASK_DEV_FEATURE}
+    {
+        "agent_context_runtime",
+        ASK_DEV_FEATURE,
+        ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE,
+    }
 )
 ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset()
 
@@ -176,6 +181,13 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         FeatureCategory.ANALYTICS,
         LicenseTier.COMMUNITY,
         "Evidence-backed conversational interaction with Context Fabric",
+    ),
+    (
+        ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE,
+        "Ask Dev Contextual Entrypoints",
+        FeatureCategory.ANALYTICS,
+        LicenseTier.COMMUNITY,
+        "Typed Ask Dev handoffs from approved product surfaces",
     ),
     (
         "scheduled_jobs",

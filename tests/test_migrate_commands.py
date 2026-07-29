@@ -165,7 +165,7 @@ class TestPostgresUpgrade:
         )
         current_head = ScriptDirectory.from_config(cfg).get_current_head()
 
-        assert current_head == "0069"
+        assert current_head == "0070"
         assert _database_has_revision(cfg, (current_head,), "0066")
 
     def test_cutover_revision_lineage_detection_uses_real_alembic_graph(self) -> None:

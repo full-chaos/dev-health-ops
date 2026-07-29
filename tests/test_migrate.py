@@ -175,6 +175,15 @@ class TestRegisterCommands:
 class TestCommandDispatch:
     """Verify each _run_* function calls the correct alembic.command."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_revision_selection(self):
+        """Keep command-dispatch tests independent of live database state."""
+        with patch(
+            "dev_health_ops.migrate._effective_postgres_upgrade_revision",
+            side_effect=lambda _cfg, requested_revision: requested_revision,
+        ):
+            yield
+
     @patch("dev_health_ops.migrate._run_river_upgrade", return_value=0)
     @patch("alembic.command")
     def test_run_upgrade(self, mock_cmd, mock_river):

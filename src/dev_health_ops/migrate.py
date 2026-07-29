@@ -32,9 +32,10 @@ _ALEMBIC_DIR = Path(__file__).resolve().parent / "alembic"
 _CELERY_RIVER_CUTOVER_ENV = "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
 _CELERY_RIVER_CUTOVER_REVISION = "0066"
 _PRE_CELERY_RIVER_CUTOVER_REVISION = "0065"
-# tests/test_migrate_commands.py pins 0066 as the sole head. A later revision
-# must deliberately decide whether it is also deferred or needs a separate
-# Alembic branch that can advance without crossing this ownership cutover.
+# tests/test_migrate_commands.py pins the current head and requires it to descend
+# from 0066. Descendants are intentionally deferred with the cutover because an
+# ordinary pre-cutover upgrade remains capped at 0065. A separate Alembic branch
+# would be required for migrations that must advance without crossing 0066.
 
 
 def _get_migration_database_uri() -> str | None:

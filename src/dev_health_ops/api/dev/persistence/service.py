@@ -30,6 +30,7 @@ from dev_health_ops.models.dev_persistence import (
     DevRun,
     DevToolCall,
 )
+from dev_health_ops.models.users import Organization, User
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,14 @@ class DevPersistenceValidationError(ValueError):
     """Input is outside the approved bounded persistence contract."""
 
 
+class DevConcurrencyLimitExceeded(RuntimeError):
+    """The exact per-user or per-organization active-run limit was reached."""
+
+
+class DevRateLimitExceeded(RuntimeError):
+    """The exact per-user or per-organization request window was reached."""
+
+
 @dataclass(frozen=True, slots=True)
 class MessageRunResult:
     message: DevMessage
@@ -119,6 +128,27 @@ class ConversationRecord:
     conversation: DevConversation
     message_count: int
     latest_answer_id: uuid.UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class DevAdmissionLimits:
+    active_runs_per_user: int = 1
+    active_runs_per_org: int = 5
+    requests_per_user_per_15_minutes: int = 20
+    requests_per_org_per_hour: int = 100
+
+    def __post_init__(self) -> None:
+        if (
+            self.active_runs_per_user < 1
+            or self.active_runs_per_user > 1
+            or self.active_runs_per_org < 1
+            or self.active_runs_per_org > 5
+            or self.requests_per_user_per_15_minutes < 1
+            or self.requests_per_user_per_15_minutes > 20
+            or self.requests_per_org_per_hour < 1
+            or self.requests_per_org_per_hour > 100
+        ):
+            raise ValueError("Ask Dev admission limits may only be configured downward")
 
 
 def _utc_now() -> datetime:
@@ -401,6 +431,7 @@ class DevPersistenceService:
         scope_snapshot: Mapping[str, Any],
         request_id: uuid.UUID | None = None,
         retry_of_run_id: uuid.UUID | None = None,
+        admission_limits: DevAdmissionLimits | None = None,
     ) -> MessageRunResult:
         question = _bounded_text(question, field="question", max_bytes=8192) or ""
         if not question.strip():
@@ -418,6 +449,26 @@ class DevPersistenceService:
         )
         if existing is not None:
             return existing
+
+        if admission_limits is not None:
+            await self._lock_admission_scope(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
+            existing = await self._message_run_by_client_id(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                client_message_id=client_message_id,
+            )
+            if existing is not None:
+                return existing
+            await self._enforce_admission_limits(
+                org_id=org_id,
+                user_id=user_id,
+                limits=admission_limits,
+            )
 
         message = DevMessage(
             conversation_id=conversation_id,
@@ -947,6 +998,81 @@ class DevPersistenceService:
                 DevRun.user_id == user_id,
             )
         )
+
+    async def _lock_admission_scope(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+    ) -> None:
+        """Serialize admission in one fixed organization/user/conversation order."""
+
+        locked_org = await self.session.scalar(
+            select(Organization.id).where(Organization.id == org_id).with_for_update()
+        )
+        locked_user = await self.session.scalar(
+            select(User.id).where(User.id == user_id).with_for_update()
+        )
+        locked_conversation = await self.session.scalar(
+            select(DevConversation.id)
+            .where(
+                DevConversation.id == conversation_id,
+                DevConversation.org_id == org_id,
+                DevConversation.user_id == user_id,
+                DevConversation.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if locked_org is None or locked_user is None or locked_conversation is None:
+            raise DevPersistenceNotFound("admission scope not found")
+
+    async def _enforce_admission_limits(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        limits: DevAdmissionLimits,
+    ) -> None:
+        now = self._now()
+        active = DevRun.state.not_in(_TERMINAL_RUN_STATES)
+        active_user = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                DevRun.user_id == user_id,
+                active,
+            )
+        )
+        active_org = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                active,
+            )
+        )
+        if (
+            int(active_user or 0) >= limits.active_runs_per_user
+            or int(active_org or 0) >= limits.active_runs_per_org
+        ):
+            raise DevConcurrencyLimitExceeded("Ask Dev active-run limit reached")
+
+        user_window = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                DevRun.user_id == user_id,
+                DevRun.started_at >= now - timedelta(minutes=15),
+            )
+        )
+        org_window = await self.session.scalar(
+            select(func.count(DevRun.id)).where(
+                DevRun.org_id == org_id,
+                DevRun.started_at >= now - timedelta(hours=1),
+            )
+        )
+        if (
+            int(user_window or 0) >= limits.requests_per_user_per_15_minutes
+            or int(org_window or 0) >= limits.requests_per_org_per_hour
+        ):
+            raise DevRateLimitExceeded("Ask Dev request-rate limit reached")
 
     async def _message_run_by_client_id(
         self,

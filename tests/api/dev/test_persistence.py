@@ -13,9 +13,12 @@ from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.dev.persistence import (
+    DevAdmissionLimits,
+    DevConcurrencyLimitExceeded,
     DevPersistenceNotFound,
     DevPersistenceService,
     DevPersistenceValidationError,
+    DevRateLimitExceeded,
 )
 from dev_health_ops.models.dev_persistence import (
     DevConversation,
@@ -215,6 +218,75 @@ async def test_client_message_id_is_idempotent_for_message_and_run(persistence):
         assert replay.message.content == "What remains?"
         assert await session.scalar(select(func.count()).select_from(DevMessage)) == 1
         assert await session.scalar(select(func.count()).select_from(DevRun)) == 1
+
+
+@pytest.mark.asyncio
+async def test_submission_admission_enforces_concurrency_rate_and_replay(
+    persistence,
+):
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    clock = Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        conversation = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+        )
+        client_message_id = uuid.uuid4()
+        limits = DevAdmissionLimits(
+            requests_per_user_per_15_minutes=1,
+            requests_per_org_per_hour=1,
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=client_message_id,
+            question="What changed?",
+            scope_snapshot={},
+            admission_limits=limits,
+        )
+
+        replay = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=client_message_id,
+            question="What changed?",
+            scope_snapshot={},
+            admission_limits=limits,
+        )
+        assert replay.created is False
+        assert replay.run.id == accepted.run.id
+
+        with pytest.raises(DevConcurrencyLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="What remains?",
+                scope_snapshot={},
+                admission_limits=limits,
+            )
+
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=accepted.run.id,
+            state="cancelled",
+        )
+        with pytest.raises(DevRateLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="What remains?",
+                scope_snapshot={},
+                admission_limits=limits,
+            )
 
 
 @pytest.mark.asyncio

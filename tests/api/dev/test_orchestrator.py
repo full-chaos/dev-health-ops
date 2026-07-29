@@ -24,6 +24,7 @@ from dev_health_ops.api.dev.orchestrator import (
 )
 from dev_health_ops.api.dev.tool_registry import AskDevToolRegistry
 from dev_health_ops.llm.agent.contracts import (
+    AgentDisambiguation,
     AgentFinalAnswer,
     AgentRefusal,
     AgentToolRequest,
@@ -341,6 +342,54 @@ async def test_provider_usage_cannot_cross_the_server_owned_cost_budget() -> Non
     )
     assert result.state is RunState.FAILED
     assert result.error is not None and result.error.code == "cost_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_after_grounded_tool_data_returns_bounded_partial() -> (
+    None
+):
+    script_id = "grounded-budget-partial"
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="query_metric.v1",
+                        arguments={"metric_id": "items_completed", "limit": 12},
+                        call_id="tool_call_01",
+                    ),
+                    usage=AgentUsage(estimated_cost_microusd=600_000),
+                )
+            ],
+            script_id=script_id,
+            limits=DevRunLimits(
+                max_estimated_cost_microusd=1_500_000,
+                estimated_cost_per_call_microusd=1_000_000,
+            ),
+        )
+    )
+    assert result.state is RunState.COMPLETED
+    assert result.answer is not None and result.answer.status.value == "partial"
+    assert result.answer.metrics[0].metric_id.value == "items_completed"
+    assert result.answer.claims == []
+
+
+@pytest.mark.asyncio
+async def test_disambiguation_is_a_typed_insufficient_evidence_terminal() -> None:
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentDisambiguation(
+                        prompt="Which repository?", candidates=("repo_a", "repo_b")
+                    )
+                )
+            ],
+            script_id="disambiguation",
+        )
+    )
+    assert result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert result.error is not None and result.error.code == "scope_ambiguous"
 
 
 def test_hard_defaults_can_only_be_configured_downward() -> None:

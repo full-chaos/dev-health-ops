@@ -14,6 +14,7 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
@@ -40,10 +41,14 @@ from .answer_validator import (
     validate_answer_candidate,
 )
 from .contracts import (
+    AnswerStatus,
     DevAnswer,
     DevContractVersions,
+    DevCoverage,
     DevError,
+    DevEvidenceRef,
     DevMessageRequest,
+    DevMetricRef,
     DevModelMetadata,
     DevScope,
     DevScopeResolution,
@@ -358,6 +363,7 @@ class DevOrchestrator:
         provider_fingerprint: str | None = None
         model_fingerprint: str | None = None
         prompt_checksum: str | None = None
+        resolution: DevScopeResolution | None = None
         terminal_written = False
         repair_count = 0
         retry_count = 0
@@ -697,6 +703,20 @@ class DevOrchestrator:
                 error=error("cancelled", "The request was cancelled."),
             )
         except BudgetExceeded:
+            if (
+                resolution is not None
+                and provider_fingerprint is not None
+                and model_fingerprint is not None
+            ):
+                partial = self._budget_answer(
+                    answer_id=answer_id,
+                    conversation_id=conversation_id,
+                    resolution=resolution,
+                    tool_results=tuple(tool_results),
+                    model_fingerprint=model_fingerprint,
+                )
+                if partial is not None:
+                    return await finish(RunState.COMPLETED, answer=partial)
             return await finish(
                 RunState.FAILED,
                 error=error("cost_limit_reached", "The provider budget was reached."),
@@ -728,6 +748,80 @@ class DevOrchestrator:
             )
             for item in tools
             if isinstance(item, Mapping)
+        )
+
+    def _budget_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        tool_results: tuple[DevToolResult, ...],
+        model_fingerprint: str,
+    ) -> DevAnswer | None:
+        """Return only canonical retrieved data when a later model call is blocked."""
+
+        evidence: dict[str, DevEvidenceRef] = {}
+        metrics: dict[str, DevMetricRef] = {}
+        for result in tool_results:
+            for evidence_item in result.evidence:
+                current_evidence = evidence.setdefault(
+                    evidence_item.evidence_ref_id, evidence_item
+                )
+                if current_evidence != evidence_item:
+                    return None
+            for metric_item in result.metrics:
+                current_metric = metrics.setdefault(
+                    metric_item.metric_ref_id, metric_item
+                )
+                if current_metric != metric_item:
+                    return None
+        if not evidence and not metrics:
+            return None
+        canonical_evidence = list(evidence.values())[: self._limits.evidence_refs]
+        allowed_evidence_ids = {item.evidence_ref_id for item in canonical_evidence}
+        canonical_metrics = [
+            item
+            for item in metrics.values()
+            if set(item.evidence_ref_ids) <= allowed_evidence_ids
+        ][: self._limits.metrics]
+        now = datetime.now(UTC)
+        degraded = any(
+            result.status in {"unavailable", "error"} for result in tool_results
+        )
+        return DevAnswer(
+            schema_version="dev_answer.v1",
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            generated_at=now,
+            resolved_scope=resolution,
+            as_of=now,
+            status=AnswerStatus.DEGRADED if degraded else AnswerStatus.PARTIAL,
+            direct_summary=(
+                "The provider budget was reached. This answer contains only the "
+                "validated data retrieved before the limit."
+            ),
+            claims=[],
+            metrics=canonical_metrics,
+            evidence=canonical_evidence,
+            conflicts=[],
+            coverage=DevCoverage(
+                required_source_count=1,
+                available_source_count=0 if degraded else 1,
+                unavailable_required_sources=["tool_results"] if degraded else [],
+                stale_required_sources=[],
+                as_of=now,
+            ),
+            warnings=[
+                "The provider budget was reached; no additional model call was made."
+            ],
+            suggested_follow_up_questions=[],
+            versions=self._versions,
+            model=DevModelMetadata(
+                provider_source=self._provider_source,
+                provider_family=self._provider_family,
+                model_fingerprint=model_fingerprint,
+            ),
         )
 
     @staticmethod

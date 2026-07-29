@@ -247,6 +247,20 @@ class DevScopeResolution(ContractModel):
         return self
 
 
+class DevCapabilityLimits(ContractModel):
+    active_runs_per_user: int = Field(default=1, ge=1, le=1)
+    active_runs_per_organization: int = Field(default=5, ge=1, le=5)
+    requests_per_user_per_15_minutes: int = Field(default=20, ge=1, le=20)
+    requests_per_organization_per_hour: int = Field(default=100, ge=1, le=100)
+    model_decision_rounds: int = Field(default=4, ge=1, le=4)
+    total_tool_calls: int = Field(default=6, ge=1, le=6)
+    wall_seconds: int = Field(default=45, ge=1, le=45)
+
+
+def _default_retention_options() -> list[Literal[0, 30]]:
+    return [0, 30]
+
+
 class DevCapabilities(ContractModel):
     schema_version: Literal["dev_capabilities.v1"]
     ask_dev: bool = False
@@ -254,6 +268,39 @@ class DevCapabilities(ContractModel):
     agent_context_runtime: bool = False
     can_read: bool = False
     can_manage: bool = False
+    effective_provider_label: Label | None = None
+    effective_model_label: Label | None = None
+    provider_source: Literal["platform", "byo"] | None = None
+    readiness: Literal[
+        "ready",
+        "unsupported_model",
+        "missing_credentials",
+        "disabled",
+        "degraded",
+    ] = "disabled"
+    supported_contract_versions: list[Version] = Field(
+        default_factory=list, max_length=20
+    )
+    retention_options: list[Literal[0, 30]] = Field(
+        default_factory=_default_retention_options, min_length=2, max_length=2
+    )
+    request_limits: DevCapabilityLimits = Field(default_factory=DevCapabilityLimits)
+    supported_question_classes: list[QuestionClass] = Field(
+        default_factory=lambda: list(QuestionClass), min_length=1, max_length=6
+    )
+    contextual_entrypoints: bool = False
+    evidence_resolver: bool = False
+    administrator_safe_failure_reason: ShortText | None = None
+
+    @model_validator(mode="after")
+    def validate_capability_sets(self) -> Self:
+        if self.retention_options != [0, 30]:
+            raise ValueError("retention options must be exactly 0 and 30 days")
+        if len(self.supported_question_classes) != len(
+            set(self.supported_question_classes)
+        ):
+            raise ValueError("supported question classes must be unique")
+        return self
 
 
 class DevConversation(ContractModel):
@@ -771,6 +818,7 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
 __all__ = [
     "CONTRACT_MODELS",
     "DevAnswer",
+    "DevCapabilityLimits",
     "DevCapabilities",
     "DevClaim",
     "DevConversation",

@@ -1,8 +1,92 @@
 {
+  "$defs": {
+    "DevCapabilityLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "active_runs_per_organization": {
+          "default": 5,
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Active Runs Per Organization",
+          "type": "integer"
+        },
+        "active_runs_per_user": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Active Runs Per User",
+          "type": "integer"
+        },
+        "model_decision_rounds": {
+          "default": 4,
+          "maximum": 4,
+          "minimum": 1,
+          "title": "Model Decision Rounds",
+          "type": "integer"
+        },
+        "requests_per_organization_per_hour": {
+          "default": 100,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Requests Per Organization Per Hour",
+          "type": "integer"
+        },
+        "requests_per_user_per_15_minutes": {
+          "default": 20,
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Requests Per User Per 15 Minutes",
+          "type": "integer"
+        },
+        "total_tool_calls": {
+          "default": 6,
+          "maximum": 6,
+          "minimum": 1,
+          "title": "Total Tool Calls",
+          "type": "integer"
+        },
+        "wall_seconds": {
+          "default": 45,
+          "maximum": 45,
+          "minimum": 1,
+          "title": "Wall Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "DevCapabilityLimits",
+      "type": "object"
+    },
+    "QuestionClass": {
+      "enum": [
+        "status",
+        "remaining_work",
+        "observed_change",
+        "registered_statistics",
+        "data_trust",
+        "investigation"
+      ],
+      "title": "QuestionClass",
+      "type": "string"
+    }
+  },
   "$id": "https://api.fullchaos.dev/contracts/ask-dev/v1/dev_capabilities.v1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "administrator_safe_failure_reason": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Administrator Safe Failure Reason"
+    },
     "agent_context_runtime": {
       "default": false,
       "title": "Agent Context Runtime",
@@ -28,10 +112,111 @@
       "title": "Can Read",
       "type": "boolean"
     },
+    "contextual_entrypoints": {
+      "default": false,
+      "title": "Contextual Entrypoints",
+      "type": "boolean"
+    },
+    "effective_model_label": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effective Model Label"
+    },
+    "effective_provider_label": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effective Provider Label"
+    },
+    "evidence_resolver": {
+      "default": false,
+      "title": "Evidence Resolver",
+      "type": "boolean"
+    },
+    "provider_source": {
+      "anyOf": [
+        {
+          "enum": [
+            "platform",
+            "byo"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Source"
+    },
+    "readiness": {
+      "default": "disabled",
+      "enum": [
+        "ready",
+        "unsupported_model",
+        "missing_credentials",
+        "disabled",
+        "degraded"
+      ],
+      "title": "Readiness",
+      "type": "string"
+    },
+    "request_limits": {
+      "$ref": "#/$defs/DevCapabilityLimits"
+    },
+    "retention_options": {
+      "items": {
+        "enum": [
+          0,
+          30
+        ],
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Retention Options",
+      "type": "array"
+    },
     "schema_version": {
       "const": "dev_capabilities.v1",
       "title": "Schema Version",
       "type": "string"
+    },
+    "supported_contract_versions": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Supported Contract Versions",
+      "type": "array"
+    },
+    "supported_question_classes": {
+      "items": {
+        "$ref": "#/$defs/QuestionClass"
+      },
+      "maxItems": 6,
+      "minItems": 1,
+      "title": "Supported Question Classes",
+      "type": "array"
     }
   },
   "required": [

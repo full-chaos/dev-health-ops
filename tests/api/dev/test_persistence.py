@@ -218,6 +218,50 @@ async def test_client_message_id_is_idempotent_for_message_and_run(persistence):
 
 
 @pytest.mark.asyncio
+async def test_conversation_listing_uses_the_id_tie_breaker_for_cursor_pages(
+    persistence,
+):
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    clock = Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        first = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+            title="first",
+        )
+        second = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+            title="second",
+        )
+        first_page = await service.list_conversation_records(
+            org_id=org_id,
+            user_id=user_id,
+            limit=1,
+        )
+        assert len(first_page) == 1
+
+        second_page = await service.list_conversation_records(
+            org_id=org_id,
+            user_id=user_id,
+            limit=1,
+            before=first_page[0].conversation.updated_at,
+            before_id=first_page[0].conversation.id,
+        )
+        assert len(second_page) == 1
+
+        seen = {first_page[0].conversation.id, second_page[0].conversation.id}
+        assert seen == {first.id, second.id}
+        assert (
+            first_page[0].conversation.updated_at
+            == second_page[0].conversation.updated_at
+        )
+
+
+@pytest.mark.asyncio
 async def test_every_service_read_and_write_is_tenant_and_user_scoped(persistence):
     maker, org_id, other_org_id, user_id, other_user_id = persistence
     async with maker() as session:

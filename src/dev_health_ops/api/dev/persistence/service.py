@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -112,6 +112,13 @@ class CleanupResult:
     reason: str
     selected: int
     purged: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRecord:
+    conversation: DevConversation
+    message_count: int
+    latest_answer_id: uuid.UUID | None
 
 
 def _utc_now() -> datetime:
@@ -224,16 +231,21 @@ class DevPersistenceService:
         await self.session.flush()
         return conversation
 
-    async def list_conversations(
+    async def list_conversation_records(
         self,
         *,
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         limit: int = 50,
         before: datetime | None = None,
-    ) -> Sequence[DevConversation]:
+        before_id: uuid.UUID | None = None,
+    ) -> Sequence[ConversationRecord]:
         if limit < 1 or limit > 100:
             raise DevPersistenceValidationError("limit must be between 1 and 100")
+        if (before is None) != (before_id is None):
+            raise DevPersistenceValidationError(
+                "before and before_id must be provided together"
+            )
         now = self._now()
         conditions = [
             DevConversation.org_id == org_id,
@@ -241,15 +253,74 @@ class DevPersistenceService:
             DevConversation.deleted_at.is_(None),
             (DevConversation.expires_at.is_(None) | (DevConversation.expires_at > now)),
         ]
-        if before is not None:
-            conditions.append(DevConversation.updated_at < before)
+        if before is not None and before_id is not None:
+            conditions.append(
+                or_(
+                    DevConversation.updated_at < before,
+                    and_(
+                        DevConversation.updated_at == before,
+                        DevConversation.id < before_id,
+                    ),
+                )
+            )
+        latest_answer_id = (
+            select(DevMessage.answer_id)
+            .where(
+                DevMessage.conversation_id == DevConversation.id,
+                DevMessage.org_id == DevConversation.org_id,
+                DevMessage.user_id == DevConversation.user_id,
+                DevMessage.role == "assistant",
+                DevMessage.answer_id.is_not(None),
+            )
+            .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        message_count = (
+            select(func.count(DevMessage.id))
+            .where(
+                DevMessage.conversation_id == DevConversation.id,
+                DevMessage.org_id == DevConversation.org_id,
+                DevMessage.user_id == DevConversation.user_id,
+            )
+            .scalar_subquery()
+        )
         rows = await self.session.execute(
-            select(DevConversation)
+            select(
+                DevConversation,
+                message_count.label("message_count"),
+                latest_answer_id.label("latest_answer_id"),
+            )
             .where(and_(*conditions))
-            .order_by(DevConversation.updated_at.desc(), DevConversation.id)
+            .order_by(DevConversation.updated_at.desc(), DevConversation.id.desc())
             .limit(limit)
         )
-        return rows.scalars().all()
+        return [
+            ConversationRecord(
+                conversation=row[0],
+                message_count=int(row[1] or 0),
+                latest_answer_id=row[2],
+            )
+            for row in rows.all()
+        ]
+
+    async def list_conversations(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        limit: int = 50,
+        before: datetime | None = None,
+        before_id: uuid.UUID | None = None,
+    ) -> Sequence[DevConversation]:
+        records = await self.list_conversation_records(
+            org_id=org_id,
+            user_id=user_id,
+            limit=limit,
+            before=before,
+            before_id=before_id,
+        )
+        return [record.conversation for record in records]
 
     async def get_conversation(
         self,
@@ -267,6 +338,41 @@ class DevPersistenceService:
         if conversation is None:
             raise DevPersistenceNotFound("conversation not found")
         return conversation
+
+    async def get_conversation_record(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+    ) -> ConversationRecord:
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        message_count = await self.session.scalar(
+            select(func.count(DevMessage.id)).where(
+                DevMessage.conversation_id == conversation.id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+            )
+        )
+        latest_answer_id = await self.session.scalar(
+            select(DevMessage.answer_id)
+            .where(
+                DevMessage.conversation_id == conversation.id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+                DevMessage.role == "assistant",
+                DevMessage.answer_id.is_not(None),
+            )
+            .order_by(DevMessage.created_at.desc(), DevMessage.id.desc())
+            .limit(1)
+        )
+        return ConversationRecord(
+            conversation=conversation,
+            message_count=int(message_count or 0),
+            latest_answer_id=latest_answer_id,
+        )
 
     async def rename_conversation(
         self,

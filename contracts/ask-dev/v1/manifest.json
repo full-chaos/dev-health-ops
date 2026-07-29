@@ -15,7 +15,7 @@
       },
       "schema": {
         "path": "schemas/dev_capabilities.v1.schema.json",
-        "sha256": "a99dcb10891cf01d86254ef4650e93999a36826df3710f0074890e697b67f94c"
+        "sha256": "66f9dd47b340f1ca3b3d545761912e69a0833b1550868a8f45a6ab2836ec2050"
       },
       "schema_version": "dev_capabilities.v1"
     },

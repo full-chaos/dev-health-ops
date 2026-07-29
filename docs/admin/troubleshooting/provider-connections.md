@@ -102,6 +102,10 @@ Re-run readiness after changing provider, model, endpoint, credentials, or the
 capability-test version. The stored result contains only a derived fingerprint,
 test version, timestamp, outcome, and safe error code. It never contains the
 synthetic exchange, credentials, provider response, or customer question.
+The organization-administrator readiness action uses a fixed synthetic nonce
+and tool contract; it never retrieves tenant evidence. A changed provider,
+model, base URL, or readiness-test version produces `stale_readiness` until the
+test is rerun.
 
 Workspace BYO is evaluated first. If it is unusable, Ask Dev fails closed unless
 the workspace explicitly permits platform fallback. Global disable and

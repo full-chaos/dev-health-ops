@@ -7,6 +7,7 @@
   "requested_metric_ids": [
     "items_completed"
   ],
+  "retry_of_run_id": "run_original_01",
   "schema_version": "dev_message_request.v1",
   "scope": {
     "comparison_range": {

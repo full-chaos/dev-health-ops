@@ -58,18 +58,41 @@
     {
       "negative": [
         {
+          "case": "assistant_contains_user_question",
+          "path": "examples/negative/dev_conversation_transcript.v1.assistant_contains_user_question.json",
+          "sha256": "619e5a8c56aaacc869853c80af864cfa113feafe565e40cd472bc14b8231b520"
+        },
+        {
+          "case": "answer_from_another_conversation",
+          "path": "examples/negative/dev_conversation_transcript.v1.answer_from_another_conversation.json",
+          "sha256": "10315425e94b64012912e54ef747685fdb8e69aa9d4b84e5e812ff35874b7044"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/dev_conversation_transcript.v1.json",
+        "sha256": "a01e9e9e074ac7d1082cb40ade4faf8d272afa877e3782c6a144425228798ee8"
+      },
+      "schema": {
+        "path": "schemas/dev_conversation_transcript.v1.schema.json",
+        "sha256": "79da6031f4cec882e8b1d26cdf00b978e48603cd9c5de7cc1e1b01d0a514a6d9"
+      },
+      "schema_version": "dev_conversation_transcript.v1"
+    },
+    {
+      "negative": [
+        {
           "case": "oversized_question",
           "path": "examples/negative/dev_message_request.v1.oversized_question.json",
-          "sha256": "92a6aafd34b766debfa18f351cd977368a43bf15799e4fa5ec1d9ae12311b425"
+          "sha256": "dbbe46c682858d9a48a8f2dd7258e13c7c3e721b07f25b8602e36ab6e0f0af53"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_message_request.v1.json",
-        "sha256": "3c034357146db46c2e0627bde1fb0f8f5852dae48201e78c986e1a4d3632e135"
+        "sha256": "76c9af8ec1f0c12d95ae9975bfe49ac04ced9cf8f13f079254c2cba5ca7891bd"
       },
       "schema": {
         "path": "schemas/dev_message_request.v1.schema.json",
-        "sha256": "124aec423fd4e3fc176ad6c91afb4d526a8b710e1910007250a6e004f4e64519"
+        "sha256": "890540fe3653bc926b914997f91f69dc89adbf0e1a952319a72b206d386f837f"
       },
       "schema_version": "dev_message_request.v1"
     },

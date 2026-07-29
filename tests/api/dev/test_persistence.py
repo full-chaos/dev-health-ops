@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ import pytest_asyncio
 from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.dev.contracts import DevError, StreamEventType
+from dev_health_ops.api.dev.orchestrator import OrchestratorResult, RunState
+from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
 from dev_health_ops.api.dev.persistence import (
     DevAdmissionLimits,
     DevConcurrencyLimitExceeded,
@@ -20,6 +24,8 @@ from dev_health_ops.api.dev.persistence import (
     DevPersistenceValidationError,
     DevRateLimitExceeded,
 )
+from dev_health_ops.api.dev.streaming import stream_orchestrator
+from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
     DevConversation,
     DevConversationTombstone,
@@ -218,6 +224,234 @@ async def test_client_message_id_is_idempotent_for_message_and_run(persistence):
         assert replay.message.content == "What remains?"
         assert await session.scalar(select(func.count()).select_from(DevMessage)) == 1
         assert await session.scalar(select(func.count()).select_from(DevRun)) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_creates_a_linked_run_without_mutating_history(persistence):
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        original = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Original question",
+            scope_snapshot={},
+        )
+        with pytest.raises(DevPersistenceValidationError):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="Too early",
+                scope_snapshot={},
+                retry_of_run_id=original.run.id,
+            )
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=original.run.id,
+            state="cancelled",
+        )
+
+        retry_client_id = uuid.uuid4()
+        retry = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=retry_client_id,
+            question="Original question",
+            scope_snapshot={},
+            retry_of_run_id=original.run.id,
+        )
+        assert retry.run.id != original.run.id
+        assert retry.message.id != original.message.id
+        assert retry.run.retry_of_run_id == original.run.id
+        assert original.run.retry_of_run_id is None
+        assert original.message.content == "Original question"
+
+        replay = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=retry_client_id,
+            question="Must not replace history",
+            scope_snapshot={},
+            retry_of_run_id=uuid.uuid4(),
+        )
+        assert replay.created is False
+        assert replay.run.id == retry.run.id
+        assert replay.message.content == "Original question"
+
+        other = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        with pytest.raises(DevPersistenceNotFound):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=other.id,
+                client_message_id=uuid.uuid4(),
+                question="Cross-conversation retry",
+                scope_snapshot={},
+                retry_of_run_id=original.run.id,
+            )
+
+
+@pytest.mark.asyncio
+async def test_transcript_is_safe_owned_retained_and_cursor_paginated(persistence):
+    maker, org_id, other_org_id, user_id, other_user_id = persistence
+    clock = Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=30
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What changed?",
+            scope_snapshot={"direct_scope": "organization"},
+        )
+        clock.value += timedelta(seconds=1)
+        answer_id = uuid.uuid4()
+        answer = await service.append_assistant_answer(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            answer_payload=_validated_answer(conversation.id, answer_id),
+            validator=_identity_validator,
+            scope_snapshot={},
+            rendered_content="Rendered content must not be returned separately.",
+        )
+        await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=accepted.run.id,
+            state="completed",
+            answer_id=answer_id,
+        )
+
+        first = await service.list_transcript_records(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            limit=1,
+        )
+        assert first.has_more is True
+        assert [record.message.role for record in first.records] == ["user"]
+        second = await service.list_transcript_records(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            limit=1,
+            after=first.records[0].message.created_at,
+            after_id=first.records[0].message.id,
+        )
+        assert second.has_more is False
+        assert [record.message.id for record in second.records] == [answer.id]
+        assert second.records[0].message.answer_payload is not None
+        assert second.records[0].message.content == (
+            "Rendered content must not be returned separately."
+        )
+
+        for wrong_org, wrong_user in (
+            (other_org_id, user_id),
+            (org_id, other_user_id),
+        ):
+            with pytest.raises(DevPersistenceNotFound):
+                await service.list_transcript_records(
+                    org_id=wrong_org,
+                    user_id=wrong_user,
+                    conversation_id=conversation.id,
+                )
+
+        ephemeral = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        with pytest.raises(DevPersistenceNotFound):
+            await service.list_transcript_records(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=ephemeral.id,
+            )
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_persists_cancelled_terminal_state(persistence):
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Will disconnect cancel this run?",
+            scope_snapshot={},
+        )
+        recorder = PersistenceRunRecorder(
+            service,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            run_id=accepted.run.id,
+            provider_source="platform",
+        )
+        cancellation = asyncio.Event()
+        error = DevError(
+            schema_version="dev_error.v1",
+            request_id=str(accepted.run.request_id),
+            code="cancelled",
+            safe_message="The request was cancelled.",
+            retryable=True,
+        )
+
+        async def run(_sink):
+            await cancellation.wait()
+            await recorder.terminal(
+                state=RunState.CANCELLED,
+                answer=None,
+                error=error,
+                usage=AgentUsage(),
+                tool_call_count=0,
+                provider_fingerprint=None,
+                model_fingerprint=None,
+                prompt_checksum=None,
+            )
+            return OrchestratorResult(
+                run_id=str(accepted.run.id),
+                state=RunState.CANCELLED,
+                answer=None,
+                error=error,
+                events=(),
+                usage=AgentUsage(),
+                tool_call_count=0,
+                provider_fingerprint=None,
+                model_fingerprint=None,
+            )
+
+        stream = stream_orchestrator(
+            run_id=str(accepted.run.id),
+            run_with_events=run,
+            cancellation=cancellation,
+        )
+        assert (await anext(stream)).event is StreamEventType.RUN_STARTED
+        await stream.aclose()
+        await session.refresh(accepted.run)
+        assert cancellation.is_set()
+        assert accepted.run.state == "cancelled"
+        assert accepted.run.safe_error_code == "cancelled"
 
 
 @pytest.mark.asyncio

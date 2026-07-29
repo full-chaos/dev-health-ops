@@ -131,6 +131,18 @@ class ConversationRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class TranscriptRecord:
+    message: DevMessage
+    run: DevRun
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptPage:
+    records: Sequence[TranscriptRecord]
+    has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
 class DevAdmissionLimits:
     active_runs_per_user: int = 1
     active_runs_per_org: int = 5
@@ -404,6 +416,106 @@ class DevPersistenceService:
             latest_answer_id=latest_answer_id,
         )
 
+    async def list_transcript_records(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        limit: int = 50,
+        after: datetime | None = None,
+        after_id: uuid.UUID | None = None,
+    ) -> TranscriptPage:
+        """Return only safe persisted user questions and validated answers."""
+
+        if limit < 1 or limit > 100:
+            raise DevPersistenceValidationError("limit must be between 1 and 100")
+        if (after is None) != (after_id is None):
+            raise DevPersistenceValidationError(
+                "after and after_id must be provided together"
+            )
+        conversation = await self.get_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        # Retention-zero conversations deliberately have no readable history,
+        # including while their accepted run is still in flight.
+        if conversation.retention_days == 0:
+            raise DevPersistenceNotFound("conversation transcript not retained")
+
+        conditions = [
+            DevMessage.conversation_id == conversation_id,
+            DevMessage.org_id == org_id,
+            DevMessage.user_id == user_id,
+        ]
+        if after is not None and after_id is not None:
+            conditions.append(
+                or_(
+                    DevMessage.created_at > after,
+                    and_(
+                        DevMessage.created_at == after,
+                        DevMessage.id > after_id,
+                    ),
+                )
+            )
+        messages = list(
+            (
+                await self.session.scalars(
+                    select(DevMessage)
+                    .where(and_(*conditions))
+                    .order_by(DevMessage.created_at, DevMessage.id)
+                    .limit(limit + 1)
+                )
+            ).all()
+        )
+        has_more = len(messages) > limit
+        messages = messages[:limit]
+        if not messages:
+            return TranscriptPage(records=(), has_more=False)
+
+        user_message_ids = [
+            message.id for message in messages if message.role == "user"
+        ]
+        answer_ids = [
+            message.answer_id
+            for message in messages
+            if message.role == "assistant" and message.answer_id is not None
+        ]
+        runs = list(
+            (
+                await self.session.scalars(
+                    select(DevRun).where(
+                        DevRun.org_id == org_id,
+                        DevRun.user_id == user_id,
+                        DevRun.conversation_id == conversation_id,
+                        or_(
+                            DevRun.user_message_id.in_(user_message_ids),
+                            DevRun.answer_id.in_(answer_ids),
+                        ),
+                    )
+                )
+            ).all()
+        )
+        by_user_message = {
+            run.user_message_id: run for run in runs if run.user_message_id is not None
+        }
+        by_answer = {run.answer_id: run for run in runs if run.answer_id is not None}
+        records: list[TranscriptRecord] = []
+        for message in messages:
+            if message.role == "user":
+                run = by_user_message.get(message.id)
+            elif message.answer_id is not None:
+                run = by_answer.get(message.answer_id)
+            else:
+                run = None
+            if run is None:
+                raise DevPersistenceConflict(
+                    "transcript message has no tenant-owned run"
+                )
+            records.append(TranscriptRecord(message=message, run=run))
+        return TranscriptPage(records=records, has_more=has_more)
+
     async def get_message_run_by_client_id(
         self,
         *,
@@ -486,6 +598,17 @@ class DevPersistenceService:
         )
         if existing is not None:
             return existing
+
+        if retry_of_run_id is not None:
+            retry_target = await self._owned_run(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=retry_of_run_id,
+            )
+            if retry_target is None or retry_target.conversation_id != conversation_id:
+                raise DevPersistenceNotFound("retry run not found")
+            if retry_target.state not in _TERMINAL_RUN_STATES:
+                raise DevPersistenceValidationError("retry run is not terminal")
 
         if admission_limits is not None:
             await self._lock_admission_scope(

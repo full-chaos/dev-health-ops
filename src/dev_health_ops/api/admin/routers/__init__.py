@@ -1,3 +1,4 @@
+from .ask_dev import router as ask_dev_router
 from .common import get_clickhouse_store, get_session, get_user_id
 from .credentials import (
     _test_github_connection,
@@ -27,6 +28,7 @@ from .users import router as users_router
 
 __all__ = [
     "credentials_router",
+    "ask_dev_router",
     "customer_push_router",
     "features_router",
     "get_clickhouse_store",

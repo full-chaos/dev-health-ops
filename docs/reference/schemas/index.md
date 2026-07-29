@@ -36,6 +36,16 @@ with `json-schema-to-typescript`. Its contract check fails when a copied
 artifact, generated declaration, manifest digest, or fixture changes without
 regeneration.
 
+`dev_conversation_transcript.v1` is the only public persisted-history shape for
+both the permanent Ask Dev window and `/dev`. It is cursor-paginated to 100
+entries and exposes only the user's bounded question and scope or a validated
+`dev_answer.v1`, together with safe run linkage. It never exposes rendered
+storage content, tool payloads, provider messages, prompts, or credentials.
+Retention-zero, deleted, expired, and non-owned conversations return the same
+not-found response. `dev_message_request.v1.retry_of_run_id` is optional and
+creates a new run linked to a terminal run in the same owned conversation; it
+does not mutate or replace the prior question, answer, or run.
+
 ### Compatibility and version changes
 
 Within `v1`, changes may add optional fields or add an enum value only after all

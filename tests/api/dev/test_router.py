@@ -32,8 +32,13 @@ from dev_health_ops.api.dev.orchestrator import (
     OrchestratorResult,
     RunState,
 )
+from dev_health_ops.api.dev.org_policy import (
+    ASK_DEV_EMERGENCY_DISABLED_KEY,
+    ASK_DEV_RETENTION_KEY,
+)
 from dev_health_ops.api.dev.persistence import DevPersistenceService
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.licensing import FeatureDecisionReason
 from dev_health_ops.llm.agent.contracts import AgentUsage
 from dev_health_ops.models.dev_persistence import (
@@ -45,6 +50,7 @@ from dev_health_ops.models.dev_persistence import (
     DevToolCall,
 )
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.settings import Setting
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -57,6 +63,7 @@ _TABLES = tables_of(
     DevToolCall,
     DevFeedback,
     DevConversationTombstone,
+    Setting,
 )
 
 
@@ -319,6 +326,14 @@ async def test_dev_capabilities_and_conversation_lifecycle(dev_api_context):
     assert capability_payload["retention_options"] == [0, 30]
     assert capability_payload["request_limits"]["model_decision_rounds"] == 4
     assert "registered_statistics" in capability_payload["supported_question_classes"]
+    assert (
+        "dev_conversation_transcript.v1"
+        in capability_payload["supported_contract_versions"]
+    )
+    assert (
+        "/api/v1/dev/conversations/{conversation_id}/transcript"
+        in dev_api_context.app.openapi()["paths"]
+    )
 
     create_response = await client.post(
         "/api/v1/dev/conversations",
@@ -406,9 +421,65 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     assert replay.text.count("event: answer.completed") == 1
     assert replay.text.count("event: done") == 1
 
+    transcript = await client.get(
+        f"/api/v1/dev/conversations/{conversation_id}/transcript",
+        params={"limit": 1},
+    )
+    assert transcript.status_code == 200
+    transcript_page = transcript.json()
+    assert transcript_page["schema_version"] == "dev_conversation_transcript.v1"
+    assert transcript_page["conversation_id"] == conversation_id
+    assert len(transcript_page["items"]) == 1
+    assert transcript_page["items"][0]["role"] == "user"
+    assert transcript_page["items"][0]["question"] == "What changed?"
+    assert transcript_page["next_cursor"] is not None
+    original_run_id = transcript_page["items"][0]["run_id"]
+
+    transcript_tail = await client.get(
+        f"/api/v1/dev/conversations/{conversation_id}/transcript",
+        params={"cursor": transcript_page["next_cursor"]},
+    )
+    assert transcript_tail.status_code == 200
+    assistant = transcript_tail.json()["items"][0]
+    assert assistant["role"] == "assistant"
+    assert assistant["question"] is None
+    assert assistant["scope"] is None
+    assert assistant["answer"]["schema_version"] == "dev_answer.v1"
+    assert "content" not in assistant
+    assert "tool_calls" not in assistant
+    assert "provider_response" not in assistant
+
+    retry_payload = {
+        **payload,
+        "request_id": "request_message_retry_01",
+        "client_message_id": "client_message_retry_01",
+        "retry_of_run_id": original_run_id,
+    }
+    retry = await client.post(
+        f"/api/v1/dev/conversations/{conversation_id}/messages",
+        json=retry_payload,
+    )
+    assert retry.status_code == 200
+    assert retry.text.count("event: answer.completed") == 1
+
+    full_transcript = await client.get(
+        f"/api/v1/dev/conversations/{conversation_id}/transcript"
+    )
+    assert full_transcript.status_code == 200
+    items = full_transcript.json()["items"]
+    assert [item["role"] for item in items] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    retry_items = items[2:]
+    assert retry_items[0]["run_id"] != original_run_id
+    assert {item["retry_of_run_id"] for item in retry_items} == {original_run_id}
+
     async with dev_api_context.maker() as session:
-        assert await session.scalar(select(func.count()).select_from(DevRun)) == 1
-        assert await session.scalar(select(func.count()).select_from(DevMessage)) == 2
+        assert await session.scalar(select(func.count()).select_from(DevRun)) == 2
+        assert await session.scalar(select(func.count()).select_from(DevMessage)) == 4
 
 
 @pytest.mark.asyncio
@@ -720,3 +791,52 @@ async def test_dev_mutations_fail_closed_when_entitlement_is_denied(
     assert response.status_code == 403
     assert response.json()["request_id"] == "request_entitlement"
     assert response.json()["code"] == "feature_not_enabled"
+
+
+@pytest.mark.asyncio
+async def test_org_policy_disables_both_surfaces_and_owns_retention(dev_api_context):
+    existing = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    assert existing.status_code == 201
+
+    async with dev_api_context.maker() as session:
+        settings = SettingsService(session, str(dev_api_context.org_id))
+        await settings.set(ASK_DEV_EMERGENCY_DISABLED_KEY, "true", category="ask_dev")
+        await session.commit()
+
+    capabilities = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert capabilities.status_code == 200
+    body = capabilities.json()
+    assert body["ask_dev"] is False
+    assert body["can_read"] is False
+    assert body["contextual_entrypoints"] is False
+
+    blocked = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["code"] == "feature_not_enabled"
+
+    cleanup = await dev_api_context.client.delete(
+        f"/api/v1/dev/conversations/{existing.json()['conversation_id']}"
+    )
+    assert cleanup.status_code == 204
+
+    async with dev_api_context.maker() as session:
+        settings = SettingsService(session, str(dev_api_context.org_id))
+        await settings.set(ASK_DEV_EMERGENCY_DISABLED_KEY, "false", category="ask_dev")
+        await settings.set(ASK_DEV_RETENTION_KEY, "0", category="ask_dev")
+        await session.commit()
+
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={
+            "current_scope": _scope_payload(dev_api_context.org_id),
+            "retention_days": 30,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["retention_days"] == 0

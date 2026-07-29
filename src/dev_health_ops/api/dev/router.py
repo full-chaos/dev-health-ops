@@ -34,6 +34,7 @@ from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.queries.client import get_global_client
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.api.services.permissions import get_user_permissions
 from dev_health_ops.licensing import evaluate_org_feature_async
 from dev_health_ops.llm.agent.contracts import AgentUsage
@@ -43,11 +44,13 @@ from .contracts import (
     DevCapabilities,
     DevConversation,
     DevConversationSummary,
+    DevConversationTranscript,
     DevError,
     DevEvidenceExpansion,
     DevFeedback,
     DevMessageRequest,
     DevScope,
+    DevTranscriptEntry,
 )
 from .entitlement import (
     AskDevEntitlementDeniedError,
@@ -55,6 +58,7 @@ from .entitlement import (
 )
 from .orchestrator import OrchestratorEvent, OrchestratorResult, RunState
 from .orchestrator_persistence import PersistenceRunRecorder
+from .org_policy import load_ask_dev_org_policy
 from .persistence.service import (
     ConversationRecord,
     DevAdmissionLimits,
@@ -64,6 +68,7 @@ from .persistence.service import (
     DevPersistenceService,
     DevPersistenceValidationError,
     DevRateLimitExceeded,
+    TranscriptRecord,
 )
 from .production_runtime import (
     build_production_runtime,
@@ -327,6 +332,24 @@ async def _require_ask_dev(
             "Ask Dev is not enabled for this organization.",
             request_id=x_request_id,
         )
+    policy = await load_ask_dev_org_policy(SettingsService(session, user.org_id))
+    if policy.emergency_disabled:
+        _raise(
+            status.HTTP_403_FORBIDDEN,
+            "feature_not_enabled",
+            "Ask Dev is disabled by an organization administrator.",
+            request_id=x_request_id,
+        )
+    return user, _service(session), x_request_id
+
+
+async def _allow_ask_dev_cleanup(
+    user: Annotated[AuthenticatedUser, Depends(_authenticated_user)],
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    x_request_id: Annotated[str | None, Header()] = None,
+) -> tuple[AuthenticatedUser, DevPersistenceService, str | None]:
+    """Keep user-owned deletion available after an entitlement or disable change."""
+
     return user, _service(session), x_request_id
 
 
@@ -454,6 +477,18 @@ def _encode_cursor(record: ConversationRecord) -> str:
     return base64.urlsafe_b64encode(payload).decode().rstrip("=")
 
 
+def _encode_transcript_cursor(record: TranscriptRecord) -> str:
+    payload = json.dumps(
+        {
+            "created_at": _aware_required(record.message.created_at).isoformat(),
+            "id": str(record.message.id),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
 def _aware(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is not None:
         return value
@@ -557,6 +592,32 @@ def _decode_cursor(
         raise AssertionError("unreachable")
 
 
+def _decode_transcript_cursor(
+    cursor: str | None, request_id: str | None
+) -> tuple[datetime | None, uuid.UUID | None]:
+    if cursor is None:
+        return None, None
+    try:
+        if len(cursor) > 512:
+            raise ValueError
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding))
+        if set(payload) != {"created_at", "id"}:
+            raise ValueError
+        created_at = datetime.fromisoformat(payload["created_at"])
+        if created_at.tzinfo is None:
+            raise ValueError
+        return created_at, uuid.UUID(payload["id"])
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        _raise(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "invalid_request",
+            "The Ask Dev cursor is invalid.",
+            request_id=request_id,
+        )
+        raise AssertionError("unreachable")
+
+
 async def _feature_allowed(session: AsyncSession, org_id: uuid.UUID, key: str) -> bool:
     try:
         return (await evaluate_org_feature_async(session, org_id, key)).allowed
@@ -576,15 +637,25 @@ async def capabilities(
     agent_context_runtime = await _feature_allowed(
         session, org_id, "agent_context_runtime"
     )
-    readiness = runtime.readiness if ask_dev else "disabled"
-    safe_failure = runtime.safe_failure_reason if ask_dev else "Ask Dev is not enabled."
+    policy = await load_ask_dev_org_policy(SettingsService(session, user.org_id))
+    effective_ask_dev = ask_dev and not policy.emergency_disabled
+    readiness = runtime.readiness if effective_ask_dev else "disabled"
+    safe_failure = (
+        runtime.safe_failure_reason
+        if effective_ask_dev
+        else (
+            "Ask Dev is disabled by an organization administrator."
+            if ask_dev and policy.emergency_disabled
+            else "Ask Dev is not enabled."
+        )
+    )
     return DevCapabilities(
         schema_version="dev_capabilities.v1",
-        ask_dev=ask_dev,
+        ask_dev=effective_ask_dev,
         byo_llm=byo_llm,
         agent_context_runtime=agent_context_runtime,
-        can_read=ask_dev and readiness == "ready",
-        can_manage=ask_dev and user.is_admin,
+        can_read=effective_ask_dev and readiness == "ready",
+        can_manage=effective_ask_dev and user.is_admin,
         effective_provider_label=runtime.effective_provider_label,
         effective_model_label=runtime.effective_model_label,
         provider_source=runtime.provider_source,
@@ -592,14 +663,15 @@ async def capabilities(
         supported_contract_versions=[
             "dev_capabilities.v1",
             "dev_conversation.v1",
+            "dev_conversation_transcript.v1",
             "dev_message_request.v1",
             "dev_answer.v1",
             "dev_evidence_expansion.v1",
             "dev_stream_event.v1",
             "dev_error.v1",
         ],
-        contextual_entrypoints=ask_dev and runtime.contextual_entrypoints,
-        evidence_resolver=ask_dev and runtime.evidence_resolver,
+        contextual_entrypoints=effective_ask_dev and runtime.contextual_entrypoints,
+        evidence_resolver=effective_ask_dev and runtime.evidence_resolver,
         administrator_safe_failure_reason=safe_failure,
     )
 
@@ -648,6 +720,9 @@ async def create_conversation(
 ) -> DevConversation:
     user, service, request_id = auth
     org_id, user_id = _owned_ids(user, request_id)
+    policy = await load_ask_dev_org_policy(
+        SettingsService(service.session, user.org_id)
+    )
     if body.current_scope.organization_id != user.org_id:
         _raise(
             status.HTTP_403_FORBIDDEN,
@@ -660,7 +735,10 @@ async def create_conversation(
             org_id=org_id,
             user_id=user_id,
             current_scope=body.current_scope.model_dump(mode="json"),
-            retention_days=body.retention_days,
+            # Organization policy owns retention for the app-shell window and
+            # full-page workspace. The legacy request field remains accepted
+            # for wire compatibility but cannot override that policy.
+            retention_days=policy.retention_days,
             title=body.title,
         )
         record = await service.get_conversation_record(
@@ -694,6 +772,79 @@ async def get_conversation(
         _raise_persistence(exc, request_id)
         raise AssertionError("unreachable")
     return _conversation_model(record)
+
+
+@router.get(
+    "/conversations/{conversation_id}/transcript",
+    response_model=DevConversationTranscript,
+)
+async def get_conversation_transcript(
+    conversation_id: uuid.UUID,
+    auth: Annotated[
+        tuple[AuthenticatedUser, DevPersistenceService, str | None],
+        Depends(_require_ask_dev),
+    ],
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> DevConversationTranscript:
+    user, service, request_id = auth
+    org_id, user_id = _owned_ids(user, request_id)
+    after, after_id = _decode_transcript_cursor(cursor, request_id)
+    try:
+        page = await service.list_transcript_records(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            limit=limit,
+            after=after,
+            after_id=after_id,
+        )
+        entries: list[DevTranscriptEntry] = []
+        for record in page.records:
+            message = record.message
+            run = record.run
+            common = {
+                "schema_version": "dev_transcript_entry.v1",
+                "message_id": str(message.id),
+                "created_at": _aware_required(message.created_at),
+                "run_id": str(run.id),
+                "retry_of_run_id": (
+                    str(run.retry_of_run_id)
+                    if run.retry_of_run_id is not None
+                    else None
+                ),
+                "run_state": run.state,
+            }
+            if message.role == "user":
+                entries.append(
+                    DevTranscriptEntry(
+                        **common,
+                        role="user",
+                        question=message.content,
+                        scope=DevScope.model_validate(message.scope_snapshot),
+                    )
+                )
+            else:
+                entries.append(
+                    DevTranscriptEntry(
+                        **common,
+                        role="assistant",
+                        answer=DevAnswer.model_validate(message.answer_payload),
+                    )
+                )
+    except Exception as exc:
+        _raise_persistence(exc, request_id)
+        raise AssertionError("unreachable")
+    return DevConversationTranscript(
+        schema_version="dev_conversation_transcript.v1",
+        conversation_id=str(conversation_id),
+        items=entries,
+        next_cursor=(
+            _encode_transcript_cursor(page.records[-1])
+            if page.has_more and page.records
+            else None
+        ),
+    )
 
 
 @router.patch("/conversations/{conversation_id}", response_model=DevConversation)
@@ -732,7 +883,7 @@ async def delete_conversation(
     conversation_id: uuid.UUID,
     auth: Annotated[
         tuple[AuthenticatedUser, DevPersistenceService, str | None],
-        Depends(_require_ask_dev),
+        Depends(_allow_ask_dev_cleanup),
     ],
 ) -> Response:
     user, service, request_id = auth
@@ -811,6 +962,11 @@ async def create_message(
             question=body.question,
             scope_snapshot=body.scope.model_dump(mode="json"),
             request_id=storage_request_id,
+            retry_of_run_id=(
+                _parse_uuid(body.retry_of_run_id, request_id)
+                if body.retry_of_run_id is not None
+                else None
+            ),
             admission_limits=DevAdmissionLimits(),
         )
         await service.session.commit()

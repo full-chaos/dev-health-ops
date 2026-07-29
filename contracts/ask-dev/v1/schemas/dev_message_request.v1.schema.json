@@ -295,6 +295,21 @@
       "title": "Requested Metric Ids",
       "type": "array"
     },
+    "retry_of_run_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retry Of Run Id"
+    },
     "schema_version": {
       "const": "dev_message_request.v1",
       "title": "Schema Version",

@@ -88,3 +88,35 @@ a separate product change and is not part of this V1 release.
 - **Rollback:** disable Ask Dev first, then roll back the application binary.
   Conversation retention and tombstone policy continue to apply to already
   admitted runs; no database downgrade is required.
+
+## Ask Dev Wave 3 administrator controls release note
+
+- **New:** organization administrators can read the safe effective provider and
+  readiness state, run deterministic certification, select the exact 0/30-day
+  retention policy, explicitly approve or deny platform fallback, inspect
+  content-free Ask Dev usage, and emergency-disable both Ask Dev surfaces.
+- **Security:** settings and readiness mutations are denied during
+  impersonation. Responses never include credentials, base URLs, prompts,
+  evidence, packets, tool payloads, or conversation content.
+- **Compatibility:** the app-shell chat window and `/dev` use the same
+  entitlement, readiness, emergency-disable, retention, conversation, and run
+  policy. Existing BYO settings and Context Fabric Validation are unchanged.
+- **Rollback:** remove the administrator UI or roll back the binary. Stored
+  policy rows are inert to older binaries; retained conversations continue to
+  follow their persisted lifecycle policy.
+
+## Ask Dev Wave 3 shared conversation release note
+
+- **New:** the permanent Ask Dev window and `/dev` can load one canonical,
+  cursor-paginated persisted transcript through
+  `dev_conversation_transcript.v1`. Only bounded user questions/scopes,
+  validated `dev_answer.v1` values, and safe run linkage are returned.
+- **Changed:** `dev_message_request.v1` adds optional `retry_of_run_id`. A retry
+  creates a distinct run linked to a terminal run in the same owned
+  conversation; existing history and idempotent replays remain immutable.
+- **Security:** retention-zero, deleted, expired, cross-tenant, and cross-user
+  transcript reads fail with the same not-found response. Tool payloads,
+  provider content, prompts, credentials, and rendered storage content are not
+  transcript fields.
+- **Reliability:** closing the browser stream signals cancellation and waits for
+  a durable `cancelled` terminal state before the stream task is released.

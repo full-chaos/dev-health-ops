@@ -25,9 +25,23 @@ Ask Dev access, BYO LLM configuration, and Agent Context Runtime access are
 separate entitlements. An administrator must not infer Ask Dev availability
 from either existing AI-related gate. A missing or false `ask_dev` decision is
 denied. The initial contract release registers `ask_dev` as disabled by default
-for every tier and does not yet ship an administrator control or user-visible
-Ask Dev surface. Future inclusion in paid plans requires separate product
-change control and is not part of the current V1 entitlement.
+for every tier. Future inclusion in paid plans requires separate product change
+control and is not part of the current V1 entitlement.
+
+The Ask Dev administration workflow controls one policy shared by the
+persistent app-shell chat window and the full `/dev` workspace. Administrators
+may select exactly 0-day ephemeral content or 30-day retained content, choose
+fail-closed behavior or explicitly approve platform fallback, and use the
+organization emergency disable. The emergency disable hides and blocks both
+interaction surfaces and new runs; it does not delete BYO credentials or change
+other LLM workflows. Existing content remains subject to its retention and
+deletion policy.
+
+Administrative reads and usage summaries are content-free. Settings changes
+and readiness tests are unavailable while impersonating. The supported API is
+`GET /api/v1/admin/ask-dev`, `PATCH /api/v1/admin/ask-dev/settings`,
+`POST /api/v1/admin/ask-dev/readiness`, and
+`GET /api/v1/admin/ask-dev/usage`.
 
 Context Fabric Validation is a platform-administrator diagnostic surface. It is
 not granted by `ask_dev`, `byo_llm`, or organization-administrator status.

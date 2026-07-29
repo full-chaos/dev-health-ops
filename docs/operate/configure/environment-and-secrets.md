@@ -100,6 +100,11 @@ Global LLM disable, the Ask Dev emergency disable, and provider/model deny rules
 must remain available during rollout. Workspace-to-platform fallback is an
 explicit policy choice; absence of that choice is fail-closed.
 
+Organization policy is stored through the dedicated Ask Dev administrator API,
+not environment variables or the generic settings endpoint. A malformed stored
+emergency-disable value fails closed. Global feature disable and explicit
+entitlement denial continue to take precedence over every organization setting.
+
 Readiness failures expose only these stable classes to users and durable state:
 disabled, provider not configured, model not supported, provider unavailable,
 invalid response, timeout, or cancelled. Inspect provider logs through the

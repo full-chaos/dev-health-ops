@@ -62,6 +62,7 @@ from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
 from .native_status_change import ClickHouseStatusChangeSource
+from .org_policy import load_ask_dev_org_policy
 from .prompts import PROMPT_VERSION
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
@@ -102,6 +103,7 @@ class ProductionProviderResolution:
     model: str
     provider_label: str
     model_label: str
+    readiness_fingerprint: str = ""
 
 
 async def resolve_production_provider(
@@ -109,6 +111,33 @@ async def resolve_production_provider(
 ) -> ProductionProviderResolution:
     settings = SettingsService(session, org_id)
     readiness = await SettingsAgentReadinessStore(settings).load()
+
+    byo, platform, policy = await _provider_candidates(settings, readiness=readiness)
+    return _resolve_provider_selection(byo=byo, platform=platform, policy=policy)
+
+
+async def resolve_certification_provider(
+    session: AsyncSession, *, org_id: str
+) -> ProductionProviderResolution:
+    """Resolve the configured candidate without requiring prior certification."""
+
+    settings = SettingsService(session, org_id)
+    byo, platform, policy = await _provider_candidates(
+        settings, readiness=None, certification=True
+    )
+    return _resolve_provider_selection(byo=byo, platform=platform, policy=policy)
+
+
+async def _provider_candidates(
+    settings: SettingsService,
+    *,
+    readiness: Any,
+    certification: bool = False,
+) -> tuple[
+    AgentProviderCandidate | None,
+    AgentProviderCandidate | None,
+    AgentProviderPolicy,
+]:
 
     byo_provider_name = (await settings.get("provider", _LLM_CATEGORY) or "").strip()
     byo_model = (await settings.get("model", _LLM_CATEGORY) or "").strip()
@@ -124,6 +153,7 @@ async def resolve_production_provider(
         credentials=byo_credentials,
         source=AgentProviderSource.BYO,
         readiness=readiness,
+        certification=certification,
     )
 
     platform_provider_name = os.getenv("LLM_PROVIDER", "").strip().lower()
@@ -142,21 +172,27 @@ async def resolve_production_provider(
         credentials=platform_credentials,
         source=AgentProviderSource.PLATFORM,
         readiness=readiness,
+        certification=certification,
     )
-    fallback_setting = (
-        (await settings.get("ask_dev_platform_fallback", _LLM_CATEGORY) or "")
-        .strip()
-        .lower()
-    )
+    org_policy = await load_ask_dev_org_policy(settings)
     policy = AgentProviderPolicy(
         ask_dev_enabled=True,
         llm_globally_disabled=platform_provider_name == "none",
         fallback=(
             AgentFallbackPolicy.ALLOW_PLATFORM
-            if fallback_setting == "true"
+            if org_policy.fallback_policy == "platform"
             else AgentFallbackPolicy.FAIL_CLOSED
         ),
     )
+    return byo, platform, policy
+
+
+def _resolve_provider_selection(
+    *,
+    byo: AgentProviderCandidate | None,
+    platform: AgentProviderCandidate | None,
+    policy: AgentProviderPolicy,
+) -> ProductionProviderResolution:
     try:
         selected = resolve_agent_provider_selection(
             policy=policy, byo=byo, platform=platform
@@ -182,6 +218,7 @@ async def resolve_production_provider(
         model=selected.model,
         provider_label="OpenAI compatible",
         model_label=selected.model.replace("\r", "").replace("\n", "")[:256],
+        readiness_fingerprint=_readiness_fingerprint(selected),
     )
 
 
@@ -192,6 +229,7 @@ def _candidate(
     credentials: LLMCredentials,
     source: AgentProviderSource,
     readiness: Any,
+    certification: bool = False,
 ) -> AgentProviderCandidate | None:
     if (
         not provider_name
@@ -209,25 +247,47 @@ def _candidate(
             source=source,
             readiness_current=False,
         )
-    provider_fingerprint = hashlib.sha256(
-        "\0".join(
-            ("openai-compatible", credentials.base_url, READINESS_VERSION)
-        ).encode()
-    ).hexdigest()[:24]
-    current = bool(
-        readiness
-        and readiness.is_current(
-            fingerprint=provider_fingerprint,
-            readiness_version=READINESS_VERSION,
-        )
-    )
-    return AgentProviderCandidate(
+    candidate = AgentProviderCandidate(
         provider=provider_name,
         model=model,
         credentials=credentials,
         source=source,
+        readiness_current=certification,
+    )
+    provider_fingerprint = _readiness_fingerprint(candidate)
+    current = bool(
+        certification
+        or (
+            readiness
+            and readiness.is_current(
+                fingerprint=provider_fingerprint,
+                readiness_version=READINESS_VERSION,
+            )
+        )
+    )
+    return AgentProviderCandidate(
+        provider=candidate.provider,
+        model=candidate.model,
+        credentials=candidate.credentials,
+        source=candidate.source,
         readiness_current=current,
     )
+
+
+def _readiness_fingerprint(candidate: AgentProviderCandidate) -> str:
+    """Fingerprint every capability input that invalidates certification."""
+
+    return hashlib.sha256(
+        "\0".join(
+            (
+                candidate.source.value,
+                candidate.provider,
+                candidate.model,
+                candidate.credentials.base_url,
+                READINESS_VERSION,
+            )
+        ).encode()
+    ).hexdigest()[:24]
 
 
 def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:

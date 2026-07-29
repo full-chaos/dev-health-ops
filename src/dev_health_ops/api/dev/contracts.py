@@ -333,6 +333,7 @@ class DevMessageRequest(ContractModel):
     request_id: OpaqueID
     client_message_id: OpaqueID
     conversation_id: OpaqueID | None = None
+    retry_of_run_id: OpaqueID | None = None
     question: Annotated[
         str,
         StringConstraints(min_length=1, max_length=8_192),
@@ -596,6 +597,82 @@ class DevAnswer(ContractModel):
         return self
 
 
+DevTranscriptRunState = Literal[
+    "accepted",
+    "resolving_scope",
+    "model_decision",
+    "tool_validation",
+    "tool_execution",
+    "answer_validation",
+    "completed",
+    "insufficient_evidence",
+    "refused",
+    "failed",
+    "cancelled",
+]
+
+
+class DevTranscriptEntry(ContractModel):
+    """One safe persisted turn artifact in the canonical conversation history."""
+
+    schema_version: Literal["dev_transcript_entry.v1"]
+    message_id: OpaqueID
+    role: Literal["user", "assistant"]
+    created_at: AwareDatetime
+    run_id: OpaqueID
+    retry_of_run_id: OpaqueID | None = None
+    run_state: DevTranscriptRunState
+    question: (
+        Annotated[
+            str,
+            StringConstraints(min_length=1, max_length=8_192),
+        ]
+        | None
+    ) = Field(default=None, json_schema_extra={"x-max-utf8-bytes": 8_192})
+    scope: DevScope | None = None
+    answer: DevAnswer | None = None
+
+    @model_validator(mode="after")
+    def validate_role_payload(self) -> Self:
+        if self.role == "user":
+            if self.question is None or self.scope is None or self.answer is not None:
+                raise ValueError(
+                    "user transcript entries require question and scope only"
+                )
+            if len(self.question.encode("utf-8")) > 8_192:
+                raise ValueError("question exceeds 8 KiB UTF-8")
+        elif self.question is not None or self.scope is not None or self.answer is None:
+            raise ValueError("assistant transcript entries require answer only")
+        return self
+
+
+class DevConversationTranscript(ContractModel):
+    """A bounded page from one retained, owned canonical conversation."""
+
+    schema_version: Literal["dev_conversation_transcript.v1"]
+    conversation_id: OpaqueID
+    items: list[DevTranscriptEntry] = Field(default_factory=list, max_length=100)
+    next_cursor: (
+        Annotated[str, StringConstraints(min_length=1, max_length=512)] | None
+    ) = None
+
+    @model_validator(mode="after")
+    def validate_page(self) -> Self:
+        message_ids = [item.message_id for item in self.items]
+        if len(message_ids) != len(set(message_ids)):
+            raise ValueError("transcript message IDs must be unique")
+        ordering = [(item.created_at, item.message_id) for item in self.items]
+        if ordering != sorted(ordering):
+            raise ValueError("transcript entries must be chronological")
+        for item in self.items:
+            if (
+                item.answer is not None
+                and item.answer.conversation_id != self.conversation_id
+            ):
+                raise ValueError("transcript answer belongs to another conversation")
+        return self
+
+
 class DevStatusFact(ContractModel):
     fact_id: OpaqueID
     text: ShortText
@@ -844,6 +921,7 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
     "dev_capabilities.v1": DevCapabilities,
     "dev_conversation.v1": DevConversation,
     "dev_conversation_summary.v1": DevConversationSummary,
+    "dev_conversation_transcript.v1": DevConversationTranscript,
     "dev_message_request.v1": DevMessageRequest,
     "dev_answer.v1": DevAnswer,
     "dev_claim.v1": DevClaim,
@@ -867,6 +945,7 @@ __all__ = [
     "DevClaim",
     "DevConversation",
     "DevConversationSummary",
+    "DevConversationTranscript",
     "DevError",
     "DevEvidenceExpansion",
     "DevEvidenceRef",
@@ -879,5 +958,6 @@ __all__ = [
     "DevStreamEvent",
     "DevToolRequest",
     "DevToolResult",
+    "DevTranscriptEntry",
     "validate_stream",
 ]

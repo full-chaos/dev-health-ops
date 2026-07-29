@@ -50,6 +50,16 @@ that are absent from the same answer, a `complete` answer cannot carry a stale
 or unavailable required source, and a stream has exactly one terminal answer
 or error immediately followed by `done`.
 
+The permanent Ask Dev window and `/dev` read the same retained transcript from
+`GET /api/v1/dev/conversations/{conversation_id}/transcript`. The response is a
+bounded chronological page of paired persisted questions and validated
+answers; internal rendered content, tool calls, and provider payloads are not
+wire fields. A retry submits a new idempotency key and an optional
+`retry_of_run_id`; the server accepts only a terminal run owned by the same user,
+organization, and conversation, and persists a distinct linked run. Closing a
+browser stream signals cancellation and waits for the recorder to persist the
+terminal `cancelled` state.
+
 Ask Dev model decisions use `AgentLLMProvider`, not the completion-oriented
 `LLMProvider.complete` contract. Canonical messages, tools, structured final
 answers, disambiguation, refusals, usage, latency, cancellation, and safe errors

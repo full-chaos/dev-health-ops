@@ -206,11 +206,43 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
             "updated_at": NOW,
             "expires_at": "2026-08-27T12:00:00Z",
         },
+        "dev_conversation_transcript.v1": {
+            "schema_version": "dev_conversation_transcript.v1",
+            "conversation_id": "conversation_01",
+            "items": [
+                {
+                    "schema_version": "dev_transcript_entry.v1",
+                    "message_id": "message_01",
+                    "role": "user",
+                    "created_at": NOW,
+                    "run_id": "run_01",
+                    "retry_of_run_id": None,
+                    "run_state": "completed",
+                    "question": "How many items completed in this period?",
+                    "scope": _scope(),
+                    "answer": None,
+                },
+                {
+                    "schema_version": "dev_transcript_entry.v1",
+                    "message_id": "message_02",
+                    "role": "assistant",
+                    "created_at": "2026-07-28T12:00:01Z",
+                    "run_id": "run_01",
+                    "retry_of_run_id": None,
+                    "run_state": "completed",
+                    "question": None,
+                    "scope": None,
+                    "answer": _answer(),
+                },
+            ],
+            "next_cursor": None,
+        },
         "dev_message_request.v1": {
             "schema_version": "dev_message_request.v1",
             "request_id": "request_01",
             "client_message_id": "message_01",
             "conversation_id": "conversation_01",
+            "retry_of_run_id": "run_original_01",
             "question": "How many items completed in this period?",
             "question_class": "registered_statistics",
             "scope": _scope(),
@@ -373,6 +405,26 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     lambda value: value.__setitem__("direct_scope", "incident"),
                 ),
             )
+        ],
+        "dev_conversation_transcript.v1": [
+            (
+                "assistant_contains_user_question",
+                changed(
+                    "dev_conversation_transcript.v1",
+                    lambda value: value["items"][1].__setitem__(
+                        "question", "Hidden duplicate question"
+                    ),
+                ),
+            ),
+            (
+                "answer_from_another_conversation",
+                changed(
+                    "dev_conversation_transcript.v1",
+                    lambda value: value["items"][1]["answer"].__setitem__(
+                        "conversation_id", "conversation_02"
+                    ),
+                ),
+            ),
         ],
         "dev_message_request.v1": [
             (
